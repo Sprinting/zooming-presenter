@@ -32,6 +32,12 @@ pub enum Action {
     FrameTool,
     SetFrameStyle(FrameStyle),
     InsertImage,
+    InsertVideo,
+    /// Background music for the presentation.
+    InsertMusic,
+    ReplaceImage,
+    CropImage,
+    PlayPauseVideo,
     WrapInFrame,
     // Arrange
     BringForward,
@@ -97,6 +103,11 @@ impl Action {
             FrameTool => "Frame Tool (cycle style)".into(),
             SetFrameStyle(s) => format!("{} Frame", frame_name(*s)),
             InsertImage => "Image…".into(),
+            InsertVideo => "Video…".into(),
+            InsertMusic => "Background Music…".into(),
+            ReplaceImage => "Replace Image…".into(),
+            CropImage => "Crop Image".into(),
+            PlayPauseVideo => "Play / Pause Video".into(),
             WrapInFrame => "Frame Selection".into(),
             BringForward => "Bring Forward".into(),
             SendBackward => "Send Backward".into(),
@@ -147,7 +158,7 @@ impl Action {
             v.push(SetTool(t.0));
         }
         v.extend([
-            InsertImage, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
+            InsertImage, InsertVideo, InsertMusic, ReplaceImage, CropImage, PlayPauseVideo, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
             FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ToggleReduceMotion, ShowShortcuts,
             TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, ToggleAiControl, ToggleActivity,
             PauseAgents, StopAgents, FollowAgent, RevertAgent,

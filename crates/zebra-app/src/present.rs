@@ -60,6 +60,10 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
             if let Some(p) = resp.interact_pointer_pos() {
                 // Click an object to zoom to it (off-path); click empty space = next.
                 match crate::canvas::hit(app, p, false) {
+                    // Click a video to play or pause it.
+                    Some(id) if matches!(app.editor.doc.get(&id).map(|e| &e.kind), Some(zebra_core::ElementKind::Video(_))) => {
+                        crate::media_ui::toggle(app, &id);
+                    }
                     Some(id) => {
                         let _ = app.editor.view(ViewCommand::ZoomTo { id, animate: true }, H);
                     }

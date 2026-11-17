@@ -116,6 +116,11 @@ pub fn paint(
                 painter.line_segment([local(-hw, -hh), local(hw, hh)], Stroke::new(1.0, Color32::from_gray(190)));
                 painter.line_segment([local(hw, -hh), local(-hw, hh)], Stroke::new(1.0, Color32::from_gray(190)));
             }
+            ElementKind::Video(_) => {
+                painter.add(Shape::convex_polygon(quad(), Color32::from_rgb(29, 29, 31).gamma_multiply(alpha), Stroke::NONE));
+                let c = local(0.0, 0.0);
+                painter.circle_stroke(c, (hw.min(hh) as f32 * 0.22 * px).max(4.0), Stroke::new(1.5, Color32::WHITE.gamma_multiply(alpha)));
+            }
             ElementKind::Ink(k) => {
                 let mut c = col(&k.color);
                 if k.highlighter {

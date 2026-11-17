@@ -244,6 +244,14 @@ impl Ctx<'_> {
             },
         };
         let lr = local_rect(e);
+        let transform = *a
+            * Affine::translate((-w / 2.0 - c.x * fw, -h / 2.0 - c.y * fh))
+            * Affine::scale_non_uniform(fw / image.width as f64, fh / image.height as f64);
+        if self.o.ghost.as_deref() == Some(e.id.as_str()) {
+            items.push(Item::PushOpacity(0.35));
+            items.push(Item::Image { image: image.clone(), transform });
+            items.push(Item::PopOpacity);
+        }
         let clip = crop.is_some() || mask != ImageMask::Rectangle;
         if clip {
             let mut p = match mask {
@@ -254,9 +262,6 @@ impl Ctx<'_> {
             p.apply_affine(*a);
             items.push(Item::PushClip(p));
         }
-        let transform = *a
-            * Affine::translate((-w / 2.0 - c.x * fw, -h / 2.0 - c.y * fh))
-            * Affine::scale_non_uniform(fw / image.width as f64, fh / image.height as f64);
         items.push(Item::Image { image, transform });
         if clip {
             items.push(Item::PopClip);

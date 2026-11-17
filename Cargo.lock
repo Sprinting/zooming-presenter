@@ -5769,6 +5769,7 @@ name = "zebra-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arboard",
  "base64",
  "clap",
  "dirs",
@@ -5783,6 +5784,7 @@ dependencies = [
  "serde_json",
  "zebra-api",
  "zebra-core",
+ "zebra-media",
  "zebra-render",
 ]
 
@@ -5821,6 +5823,7 @@ version = "0.1.0"
 dependencies = [
  "objc2 0.6.5",
  "objc2-av-foundation",
+ "objc2-avf-audio",
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-media",

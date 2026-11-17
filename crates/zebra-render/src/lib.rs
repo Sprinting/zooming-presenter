@@ -57,6 +57,9 @@ pub struct SceneOptions {
     pub video_frames: std::collections::HashMap<ElementId, std::sync::Arc<display::ImageLevel>>,
     /// Videos playing now (no ▶ badge).
     pub playing: HashSet<ElementId>,
+    /// An image in crop mode: its whole picture is drawn faintly behind the
+    /// crop, so the person sees what they can uncrop.
+    pub ghost: Option<ElementId>,
 }
 
 pub mod display;

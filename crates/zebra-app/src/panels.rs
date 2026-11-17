@@ -35,7 +35,10 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     }
 
     let has_sel = !app.editor.view.selection.is_empty();
-    if app.show_activity || (app.show_props && has_sel) {
+    // Media: the soundtrack and voice-over settings show when nothing is
+    // selected (until the persistent inspector lands).
+    let doc_media = app.editor.doc.soundtrack.is_some() || app.selected_step.is_some();
+    if app.show_activity || (app.show_props && (has_sel || doc_media)) {
         egui::Panel::right("props")
             .exact_size(256.0)
             .resizable(false)
@@ -654,12 +657,19 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         common_actions(app, ui, p);
         return;
     }
-    let Some(e) = sel.first().and_then(|id| app.editor.doc.get(id)).cloned() else { return };
+    let Some(e) = sel.first().and_then(|id| app.editor.doc.get(id)).cloned() else {
+        crate::media_ui::document_section(app, ui);
+        if let Some(step) = app.selected_step {
+            crate::media_ui::step_section(app, ui, step);
+        }
+        return;
+    };
     let kind_name = match &e.kind {
         ElementKind::Frame(f) => format!("{} frame", frame_name(f.style)),
         ElementKind::Text(t) => format!("{:?} text", t.style),
         ElementKind::Shape(s) => format!("{:?}", s.shape),
         ElementKind::Image(_) => "Image".into(),
+        ElementKind::Video(_) => "Video".into(),
         ElementKind::Ink(_) => "Drawing".into(),
     };
     ui.horizontal(|ui| {
@@ -816,8 +826,26 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         }
         ElementKind::Image(i) => {
             section(ui, "Image", p);
+            if let Some(pa) = crate::media_ui::image_section(app, ui, &e.id, i) {
+                patch_all = Some(pa);
+            }
             let mut alt = i.alt.clone();
             ui.label("Description (alt text)");
+            let r = ui.add(egui::TextEdit::singleline(&mut alt).desired_width(220.0));
+            gesture_active |= r.has_focus();
+            if r.changed() {
+                patch_all = Some(ElementPatch { alt: Some(alt), ..Default::default() });
+            }
+        }
+        ElementKind::Video(v) => {
+            section(ui, "Video", p);
+            let (pa, dragging) = crate::media_ui::video_section(app, ui, &e.id, v);
+            gesture_active |= dragging;
+            if pa.is_some() {
+                patch_all = pa;
+            }
+            let mut alt = v.alt.clone();
+            ui.label("Description");
             let r = ui.add(egui::TextEdit::singleline(&mut alt).desired_width(220.0));
             gesture_active |= r.has_focus();
             if r.changed() {

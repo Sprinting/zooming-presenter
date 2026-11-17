@@ -17,6 +17,8 @@ path = "src/lib.rs"
 zebra-core.workspace = true
 zebra-render.workspace = true
 zebra-api.workspace = true
+zebra-media.workspace = true
+arboard = { version = "3.7", default-features = false, features = ["image-data"] }
 eframe.workspace = true
 egui.workspace = true
 egui-wgpu.workspace = true
