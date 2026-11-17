@@ -1,1 +1,587 @@
-fn main() {}
+//! zebractl: drive a running Zebra from the command line, or bridge it to
+//! an MCP client (`zebractl mcp`).
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command as Proc, Stdio};
+use std::time::Duration;
+
+use anyhow::{Context, Result, anyhow, bail};
+use clap::{Args, Parser, Subcommand};
+use serde_json::{Value, json};
+use zebra_api::client::{Client, ClientError};
+
+#[derive(Parser)]
+#[command(name = "zebractl", version, about = "Drive a running Zebra (zooming presentations) from the command line or an MCP client",
+    long_about = "Drive a running Zebra from the command line or an MCP client.\n\nStart Zebra with `zebra --api` (or `zebra --headless --api`). zebractl finds the newest running instance through its discovery file.\n\nEXAMPLES:\n  zebractl describe\n  zebractl add frame --x 0 --y 0 --name Intro --path\n  zebractl add text \"Hello\" --inside f1 --style title\n  zebractl screenshot --step 0 -o step0.png\n  zebractl apply '[{\"op\":\"auto_path\"},{\"op\":\"set_theme\",\"theme\":\"night\"}]'\n  claude mcp add zebra -- zebractl mcp")]
+struct Cli {
+    #[command(flatten)]
+    conn: Conn,
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Args, Clone)]
+struct Conn {
+    /// Connect to the instance with this pid.
+    #[arg(long, global = true)]
+    instance: Option<u32>,
+    /// Connect to this socket path.
+    #[arg(long, global = true)]
+    socket: Option<PathBuf>,
+    /// Auth token (default: from the discovery file; env ZEBRA_TOKEN).
+    #[arg(long, global = true, env = "ZEBRA_TOKEN", hide_env_values = true)]
+    token: Option<String>,
+    /// Client name shown to the human (history, status pill).
+    #[arg(long, global = true, default_value = "zebractl")]
+    name: String,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Mode, selection, camera, revision, path length...
+    State,
+    /// Text outline of the presentation (ids, text, positions, path).
+    Describe,
+    /// Run a query: '{"q":"elements","kind":"frame"}' or just 'path'.
+    Query { query: String },
+    /// Apply a command, or an array of commands as one undo step.
+    Apply {
+        /// JSON command or array (omit with -f).
+        json: Option<String>,
+        /// Read JSON from a file ('-' = stdin).
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+        /// Undo label for a batch.
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Run a view command: '{"op":"zoom_to","id":"f1"}'.
+    View { json: String },
+    /// Add an element.
+    Add {
+        #[command(subcommand)]
+        what: Add,
+    },
+    /// Move elements by a world delta (frames carry their contents).
+    Move {
+        ids: Vec<String>,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        dx: f64,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        dy: f64,
+    },
+    /// Delete elements.
+    Delete { ids: Vec<String> },
+    /// Select elements (your own selection unless you have 'full' permission).
+    Select { ids: Vec<String> },
+    /// Set text of an element.
+    SetText { id: String, text: String },
+    Undo,
+    Redo,
+    /// Start presenting (at a 0-based step).
+    Present { step: Option<usize> },
+    /// Next step/build while presenting.
+    Next,
+    /// Previous step/build while presenting.
+    Prev,
+    /// Leave present mode.
+    Stop,
+    /// Render a PNG without moving the human's camera.
+    Screenshot {
+        #[arg(long, conflicts_with_all = ["element", "overview", "viewport"])]
+        step: Option<usize>,
+        #[arg(long)]
+        element: Option<String>,
+        #[arg(long)]
+        overview: bool,
+        /// The human's window.
+        #[arg(long)]
+        viewport: bool,
+        #[arg(short, long, default_value = "zebra.png")]
+        output: PathBuf,
+        #[arg(long, default_value_t = 1280)]
+        width: u32,
+        #[arg(long, default_value_t = 800)]
+        height: u32,
+    },
+    /// Export pdf | png | json | zebra.
+    Export {
+        format: String,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        width: Option<u32>,
+        #[arg(long)]
+        height: Option<u32>,
+    },
+    /// Open a .zebra (or .json) file (needs 'full' permission).
+    Open {
+        path: PathBuf,
+        /// Discard unsaved changes.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Save (needs 'full' permission).
+    Save { path: Option<PathBuf> },
+    /// Print events as JSON lines.
+    Events {
+        /// Keep printing forever.
+        #[arg(long)]
+        follow: bool,
+        /// Stop after N events (default 1 without --follow).
+        #[arg(long)]
+        count: Option<usize>,
+        /// Only these events (comma separated).
+        #[arg(long, value_delimiter = ',')]
+        filter: Vec<String>,
+    },
+    /// Wait for: idle | step N | revision N | mode MODE.
+    Wait {
+        what: String,
+        value: Option<String>,
+        #[arg(long, default_value_t = 10_000)]
+        timeout_ms: u64,
+    },
+    /// Send a raw JSON-RPC message (id/jsonrpc added if missing); prints the response.
+    Raw { json: String },
+    /// The command catalogue.
+    Commands {
+        /// Markdown table (for docs).
+        #[arg(long)]
+        markdown: bool,
+        /// Full JSON (schemas and examples).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run an MCP stdio server bridged to Zebra.
+    Mcp {
+        /// Start a private headless Zebra for this session instead of attaching to a running one.
+        #[arg(long)]
+        spawn_headless: bool,
+        /// With --spawn-headless: open this file.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// With --spawn-headless: path of the `zebra` binary.
+        #[arg(long)]
+        zebra_bin: Option<PathBuf>,
+    },
+    /// List running instances.
+    Instances,
+}
+
+#[derive(Subcommand)]
+enum Add {
+    /// Add a text box (x,y = centre).
+    Text {
+        text: String,
+        #[arg(long, allow_hyphen_values = true)]
+        x: Option<f64>,
+        #[arg(long, allow_hyphen_values = true)]
+        y: Option<f64>,
+        /// title | subtitle | body
+        #[arg(long, default_value = "body")]
+        style: String,
+        #[arg(long)]
+        scale: Option<f64>,
+        /// Centre it inside this frame, sized to fit.
+        #[arg(long)]
+        inside: Option<String>,
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Add a frame.
+    Frame {
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        x: f64,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        y: f64,
+        #[arg(long, default_value_t = 800.0)]
+        w: f64,
+        #[arg(long, default_value_t = 600.0)]
+        h: f64,
+        /// bracket | circle | rectangle | invisible
+        #[arg(long, default_value = "bracket")]
+        style: String,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        rotation: f64,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        id: Option<String>,
+        /// Append to the path.
+        #[arg(long)]
+        path: bool,
+    },
+    /// Add an image from a file.
+    Image {
+        file: PathBuf,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        x: f64,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        y: f64,
+        /// World width (height follows aspect ratio).
+        #[arg(long)]
+        width: Option<f64>,
+        #[arg(long)]
+        alt: Option<String>,
+    },
+    /// Add a shape: rectangle | ellipse | triangle | line | arrow.
+    Shape {
+        shape: String,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        x: f64,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        y: f64,
+        #[arg(long, default_value_t = 200.0)]
+        w: f64,
+        #[arg(long, default_value_t = 200.0)]
+        h: f64,
+        #[arg(long)]
+        fill: Option<String>,
+    },
+}
+
+fn main() {
+    let cli = Cli::parse();
+    if let Err(e) = run(cli) {
+        eprintln!("zebractl: {e:#}");
+        std::process::exit(1);
+    }
+}
+
+fn abs(p: &Path) -> Result<PathBuf> {
+    if p.is_absolute() {
+        return Ok(p.to_path_buf());
+    }
+    Ok(std::env::current_dir()?.join(p))
+}
+
+fn connect(c: &Conn) -> Result<Client> {
+    Client::discover(c.instance, c.socket.as_deref(), c.token.as_deref(), &c.name)
+}
+
+fn print(v: &Value) {
+    println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
+}
+
+fn call(cl: &mut Client, method: &str, params: Value) -> Result<Value> {
+    cl.call(method, params).map_err(|e| match e {
+        ClientError::Rpc(e) => anyhow!("{e}"),
+        ClientError::Io(e) => anyhow!("{e}"),
+    })
+}
+
+fn parse_json(s: &str, what: &str) -> Result<Value> {
+    serde_json::from_str(s).with_context(|| format!("{what} is not valid JSON: {s}"))
+}
+
+fn run(cli: Cli) -> Result<()> {
+    // Commands that don't need a connection.
+    match &cli.cmd {
+        Cmd::Commands { markdown, json } => {
+            if *markdown {
+                print!("{}", zebra_api::catalogue::catalogue_markdown());
+            } else if *json {
+                print(&zebra_api::catalogue::catalogue_json());
+            } else {
+                print!("{}", zebra_api::catalogue::catalogue_text());
+            }
+            return Ok(());
+        }
+        Cmd::Instances => {
+            let list: Vec<Value> = zebra_api::discovery::list()
+                .into_iter()
+                .map(|i| json!({"pid": i.pid, "socket": i.socket, "version": i.version, "started_at": i.started_at, "headless": i.headless}))
+                .collect();
+            print(&json!(list));
+            return Ok(());
+        }
+        Cmd::Mcp { spawn_headless, file, zebra_bin } => return mcp(&cli.conn, *spawn_headless, file.clone(), zebra_bin.clone()),
+        _ => {}
+    }
+
+    let mut cl = connect(&cli.conn)?;
+    let c = &mut cl;
+    let view = |c: &mut Client, cmd: Value| call(c, "view", json!({ "command": cmd }));
+    match cli.cmd {
+        Cmd::State => print(&call(c, "state", json!({}))?),
+        Cmd::Describe => {
+            let v = call(c, "describe", json!({}))?;
+            match v.get("outline").and_then(|o| o.as_str()) {
+                Some(s) => print!("{s}"),
+                None => print(&v),
+            }
+        }
+        Cmd::Query { query } => {
+            let q = if query.trim_start().starts_with('{') { parse_json(&query, "query")? } else { json!({ "q": query }) };
+            print(&call(c, "query", json!({ "query": q }))?);
+        }
+        Cmd::Apply { json: j, file, label } => {
+            let text = match (j, file) {
+                (Some(j), None) => j,
+                (None, Some(f)) if f.as_os_str() == "-" => std::io::read_to_string(std::io::stdin())?,
+                (None, Some(f)) => std::fs::read_to_string(&f).with_context(|| format!("reading {}", f.display()))?,
+                _ => bail!("give the command JSON as an argument or with -f FILE"),
+            };
+            let mut v = parse_json(&text, "command")?;
+            absolutize_image_paths(&mut v)?;
+            let r = if v.is_array() {
+                let mut p = json!({ "commands": v });
+                if let Some(l) = label {
+                    p["label"] = json!(l);
+                }
+                call(c, "batch", p)?
+            } else {
+                call(c, "apply", json!({ "command": v }))?
+            };
+            print(&r);
+        }
+        Cmd::View { json: j } => print(&view(c, parse_json(&j, "view command")?)?),
+        Cmd::Add { what } => {
+            let cmd = match what {
+                Add::Text { text, x, y, style, scale, inside, id } => {
+                    let mut m = json!({ "op": "add_text", "text": text, "style": style });
+                    if let Some(x) = x { m["x"] = json!(x) }
+                    if let Some(y) = y { m["y"] = json!(y) }
+                    if let Some(s) = scale { m["scale"] = json!(s) }
+                    if let Some(f) = inside { m["place"] = json!({ "relative_to": f, "side": "inside" }) }
+                    if let Some(i) = id { m["id"] = json!(i) }
+                    m
+                }
+                Add::Frame { x, y, w, h, style, rotation, name, id, path } => {
+                    let mut m = json!({ "op": "add_frame", "x": x, "y": y, "w": w, "h": h, "style": style, "rotation": rotation, "add_to_path": path });
+                    if let Some(n) = name { m["name"] = json!(n) }
+                    if let Some(i) = id { m["id"] = json!(i) }
+                    m
+                }
+                Add::Image { file, x, y, width, alt } => {
+                    let mut m = json!({ "op": "add_image", "path": abs(&file)?, "x": x, "y": y });
+                    if let Some(w) = width { m["width"] = json!(w) }
+                    if let Some(a) = alt { m["alt"] = json!(a) }
+                    m
+                }
+                Add::Shape { shape, x, y, w, h, fill } => {
+                    let mut m = json!({ "op": "add_shape", "shape": shape, "x": x, "y": y, "w": w, "h": h });
+                    if let Some(f) = fill { m["fill"] = json!(f) }
+                    m
+                }
+            };
+            print(&call(c, "apply", json!({ "command": cmd }))?);
+        }
+        Cmd::Move { ids, dx, dy } => print(&call(c, "apply", json!({ "command": { "op": "move", "ids": ids, "dx": dx, "dy": dy } }))?),
+        Cmd::Delete { ids } => print(&call(c, "apply", json!({ "command": { "op": "delete", "ids": ids } }))?),
+        Cmd::Select { ids } => print(&view(c, json!({ "op": "select", "ids": ids }))?),
+        Cmd::SetText { id, text } => print(&call(c, "apply", json!({ "command": { "op": "update", "id": id, "patch": { "text": text } } }))?),
+        Cmd::Undo => print(&call(c, "undo", json!({}))?),
+        Cmd::Redo => print(&call(c, "redo", json!({}))?),
+        Cmd::Present { step } => print(&view(c, json!({ "op": "present", "step": step }))?),
+        Cmd::Next => print(&view(c, json!({ "op": "next" }))?),
+        Cmd::Prev => print(&view(c, json!({ "op": "prev" }))?),
+        Cmd::Stop => print(&view(c, json!({ "op": "exit_present" }))?),
+        Cmd::Screenshot { step, element, overview, viewport, output, width, height } => {
+            let target = if let Some(s) = step {
+                json!({ "step": s })
+            } else if let Some(e) = element {
+                json!({ "element": e })
+            } else if overview {
+                json!("overview")
+            } else if viewport {
+                json!("viewport")
+            } else {
+                Value::Null
+            };
+            let out = abs(&output)?;
+            print(&call(c, "capture", json!({ "target": target, "width": width, "height": height, "path": out }))?);
+        }
+        Cmd::Export { format, output, width, height } => {
+            let out = abs(&output)?;
+            print(&call(c, "export", json!({ "format": format, "path": out, "width": width, "height": height }))?);
+        }
+        Cmd::Open { path, force } => print(&call(c, "open", json!({ "path": abs(&path)?, "force": force }))?),
+        Cmd::Save { path } => {
+            let p = path.map(|p| abs(&p)).transpose()?;
+            print(&call(c, "save", json!({ "path": p }))?);
+        }
+        Cmd::Events { follow, count, filter } => {
+            let p = if filter.is_empty() { json!({}) } else { json!({ "events": filter }) };
+            call(c, "subscribe", p)?;
+            let limit = if follow { count } else { Some(count.unwrap_or(1)) };
+            let mut n = 0;
+            let stdout = std::io::stdout();
+            loop {
+                if limit.is_some_and(|l| n >= l) {
+                    break;
+                }
+                match c.next_event(None).map_err(|e| anyhow!("{e}"))? {
+                    Some(ev) => {
+                        let mut out = stdout.lock();
+                        writeln!(out, "{ev}")?;
+                        out.flush()?;
+                        n += 1;
+                    }
+                    None => continue,
+                }
+            }
+        }
+        Cmd::Wait { what, value, timeout_ms } => {
+            let until = match (what.as_str(), value) {
+                ("idle", _) => json!("idle"),
+                ("step", Some(v)) => json!({ "step": v.parse::<u64>().context("step must be a number")? }),
+                ("revision", Some(v)) => json!({ "revision": v.parse::<u64>().context("revision must be a number")? }),
+                ("mode", Some(v)) => json!({ "mode": v }),
+                _ => bail!("usage: zebractl wait idle | step N | revision N | mode edit|path_edit|present"),
+            };
+            print(&call(c, "wait", json!({ "until": until, "timeout_ms": timeout_ms }))?);
+        }
+        Cmd::Raw { json: j } => {
+            let mut v = parse_json(&j, "message")?;
+            if v.get("id").is_none() {
+                v["id"] = json!(1000);
+            }
+            let r = c.raw(v).map_err(|e| anyhow!("{e}"))?;
+            print(&r);
+        }
+        Cmd::Commands { .. } | Cmd::Instances | Cmd::Mcp { .. } => unreachable!(),
+    }
+    Ok(())
+}
+
+/// Make `add_image {path}` paths absolute (relative to our cwd).
+fn absolutize_image_paths(v: &mut Value) -> Result<()> {
+    match v {
+        Value::Array(a) => {
+            for x in a {
+                absolutize_image_paths(x)?;
+            }
+        }
+        Value::Object(o) => {
+            if o.get("op").and_then(|x| x.as_str()) == Some("add_image") {
+                if let Some(Value::String(p)) = o.get("path") {
+                    let ap = abs(Path::new(p))?;
+                    o.insert("path".into(), json!(ap));
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// MCP
+
+struct Headless {
+    child: Child,
+    socket: PathBuf,
+    token: String,
+}
+
+impl Drop for Headless {
+    fn drop(&mut self) {
+        // SIGTERM lets it remove its discovery file; then reap.
+        unsafe_term(self.child.id());
+        for _ in 0..50 {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn unsafe_term(pid: u32) {
+    // SAFETY: sending SIGTERM to our own child process.
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+}
+
+fn find_zebra_bin(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(p) = explicit {
+        return Ok(p);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let cand = dir.join("zebra");
+            if cand.exists() {
+                return Ok(cand);
+            }
+            // macOS app bundle: Zebra.app/Contents/MacOS/zebra next to zebractl.
+            let cand = dir.join("Zebra.app/Contents/MacOS/zebra");
+            if cand.exists() {
+                return Ok(cand);
+            }
+        }
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for d in std::env::split_paths(&path) {
+            let cand = d.join("zebra");
+            if cand.is_file() {
+                return Ok(cand);
+            }
+        }
+    }
+    bail!("cannot find the `zebra` binary next to zebractl or on PATH (use --zebra-bin)")
+}
+
+fn spawn_headless(bin: &Path, file: Option<&Path>) -> Result<Headless> {
+    let mut cmd = Proc::new(bin);
+    cmd.args(["--headless", "--api", "--agent-permission", "full"]);
+    if let Some(f) = file {
+        cmd.arg(abs(f)?);
+    }
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit()) // goes to the MCP client's log, never our stdout
+        .spawn()
+        .with_context(|| format!("starting {}", bin.display()))?;
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+    let ready = loop {
+        match lines.next() {
+            Some(Ok(l)) => {
+                if let Some(rest) = l.strip_prefix("ZEBRA_API_READY ") {
+                    break parse_json(rest, "ready line")?;
+                }
+            }
+            _ => {
+                let _ = child.kill();
+                bail!("{} exited before its API was ready", bin.display());
+            }
+        }
+    };
+    // Keep draining its stdout so it never blocks on a full pipe.
+    std::thread::spawn(move || for _ in lines {});
+    Ok(Headless {
+        child,
+        socket: PathBuf::from(ready["socket"].as_str().unwrap_or_default()),
+        token: ready["token"].as_str().unwrap_or_default().to_string(),
+    })
+}
+
+fn mcp(conn: &Conn, spawn: bool, file: Option<PathBuf>, bin: Option<PathBuf>) -> Result<()> {
+    let name = if conn.name == "zebractl" { "Claude".to_string() } else { conn.name.clone() };
+    let stdin = std::io::stdin().lock();
+    let stdout = std::io::stdout().lock();
+    if spawn {
+        let bin = find_zebra_bin(bin)?;
+        let mut headless: Option<Headless> = None;
+        let mut server = zebra_api::mcp::McpServer::new(move || -> Result<Client> {
+            let alive = headless.as_mut().is_some_and(|h| matches!(h.child.try_wait(), Ok(None)));
+            if !alive {
+                headless = Some(spawn_headless(&bin, file.as_deref())?);
+            }
+            let h = headless.as_ref().unwrap();
+            Client::connect_hello(&h.socket, &name, &h.token).map_err(|e| anyhow!("{e}"))
+        });
+        server.serve(stdin, stdout)
+    } else {
+        let conn = conn.clone();
+        let mut server =
+            zebra_api::mcp::McpServer::new(move || Client::discover(conn.instance, conn.socket.as_deref(), conn.token.as_deref(), &name));
+        server.serve(stdin, stdout)
+    }
+}
