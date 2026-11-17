@@ -736,8 +736,10 @@ impl ZebraApp {
         if self.editor.doc.path.is_empty() {
             return None;
         }
-        if let Some(s) = self.selected_step.filter(|s| *s < self.editor.doc.path.len()) {
-            return Some(s);
+        // The step the sidebar highlights: from the canvas selection, else
+        // the step clicked last.
+        if let Some(s) = crate::sidebar::selected_steps(self).first() {
+            return Some(*s);
         }
         let cam = self.editor.view.camera;
         (0..self.editor.doc.path.len()).min_by(|a, b| {
