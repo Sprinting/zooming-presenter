@@ -129,6 +129,13 @@ fn diff_with(a: &Document, b: &Document, ids: &[&ElementId]) -> Patch {
         ops.extend(json_patch::diff(&Value::Object(l), &Value::Object(r)).0);
     }
 
+    if a.soundtrack != b.soundtrack {
+        // Absent when None, so add/remove rather than replace.
+        match &b.soundtrack {
+            Some(t) => ops.push(PatchOperation::Add(AddOperation { path: ptr(&["soundtrack"]), value: to_value(t) })),
+            None => ops.push(PatchOperation::Remove(RemoveOperation { path: ptr(&["soundtrack"]) })),
+        }
+    }
     if a.z_order != b.z_order {
         list_ops(&mut ops, "z_order", &a.z_order, &b.z_order, |s| s.clone(), |s| Value::String(s.clone()));
     }
@@ -197,6 +204,13 @@ pub fn apply(doc: &mut Document, patch: &Patch) -> Result<(), String> {
     // Pruned JSON view: just those fields and elements.
     let mut view = Map::new();
     for f in &fields {
+        if f == "soundtrack" {
+            // Absent when None (add/remove ops).
+            if let Some(t) = &doc.soundtrack {
+                view.insert(f.clone(), to_value(t));
+            }
+            continue;
+        }
         let v = match f.as_str() {
             "format_version" => to_value(&doc.format_version),
             "title" => to_value(&doc.title),
@@ -231,6 +245,10 @@ pub fn apply(doc: &mut Document, patch: &Patch) -> Result<(), String> {
     let z_order: Option<Vec<ElementId>> = take(&mut view, "z_order")?;
     let path: Option<Vec<PathStep>> = take(&mut view, "path")?;
     let elements: Option<BTreeMap<ElementId, Element>> = take(&mut view, "elements")?;
+    let soundtrack: Option<crate::model::Soundtrack> = take(&mut view, "soundtrack")?;
+    if fields.contains("soundtrack") {
+        doc.soundtrack = soundtrack;
+    }
 
     if let Some(v) = format_version {
         doc.format_version = v;

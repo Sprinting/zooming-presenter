@@ -286,6 +286,9 @@ pub fn paint_content(app: &mut ZebraApp, ui: &mut Ui, rect: ERect, presenting: b
             .collect();
     }
     opts.skip = app.canvas.text.as_ref().and_then(|t| t.id.clone());
+    opts.time = Some(ed.view.now);
+    opts.async_images = true;
+    app.media.scene(&mut opts);
     let ppp = ui.ctx().pixels_per_point() as f64;
     let vp = [rect.width() as f64, rect.height() as f64];
     if let (Some(canvas), Some(rs), true) = (&mut app.gpu_canvas, &app.wgpu, app.render_ok) {
@@ -295,6 +298,10 @@ pub fn paint_content(app: &mut ZebraApp, ui: &mut Ui, rect: ERect, presenting: b
         match built {
             Ok(list) => {
                 canvas.paint(ui, rect, &list, rs);
+                // Animated GIFs on screen: repaint for their next frame only.
+                if let Some(t) = list.next_frame_in {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(t.clamp(0.01, 10.0)));
+                }
                 return;
             }
             Err(_) => {
@@ -447,6 +454,10 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     sync_viewport(app, rect, ui.ctx().content_rect().size());
     let resp = ui.interact(rect, egui::Id::unique("zebra-canvas"), Sense::click_and_drag());
     paint_content(app, ui, rect, false);
+    if crate::media_ui::crop_active(app) {
+        crate::media_ui::crop_interact(app, ui, &resp);
+        return;
+    }
 
     let ctx = ui.ctx().clone();
     let text_focus = ctx.egui_wants_keyboard_input();
@@ -926,6 +937,8 @@ fn double_click(app: &mut ZebraApp, p: Pos2) {
     match hit(app, p, false) {
         Some(id) => match app.editor.doc.get(&id).map(|e| &e.kind) {
             Some(ElementKind::Text(_)) => begin_edit_existing(app, id),
+            Some(ElementKind::Image(_)) => crate::media_ui::begin_crop(app, &id),
+            Some(ElementKind::Video(_)) => crate::media_ui::toggle(app, &id),
             Some(_) => {
                 let _ = app.editor.view(ViewCommand::ZoomTo { id, animate: true }, H);
             }

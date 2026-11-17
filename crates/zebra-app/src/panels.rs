@@ -287,7 +287,7 @@ fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             app.queued.push(Action::InsertVideo);
         }
         if menu_icon_row(ui, Icon::Note, "Audio…", false).clicked() {
-            app.queued.push(Action::InsertAudio);
+            app.queued.push(Action::InsertMusic);
         }
     });
     let _ = p;

@@ -26,4 +26,5 @@ egui-wgpu = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 
 [dev-dependencies]
+base64.workspace = true
 pollster.workspace = true

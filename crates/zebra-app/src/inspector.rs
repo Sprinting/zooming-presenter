@@ -74,10 +74,10 @@ pub type DocSectionFn = fn(&mut ZebraApp, &mut Ui);
 
 /// Sections added by other streams (media, text, presenting). Order here is
 /// the order on screen, after the built-in sections of the same tab.
-pub static EXTRA_SECTIONS: &[SectionFn] = &[crate::inspector_s3::sections, crate::inspector_s3::path_step];
+pub static EXTRA_SECTIONS: &[SectionFn] = &[crate::inspector_s3::sections, crate::inspector_s3::media, crate::inspector_s3::path_step];
 
 /// Document sections added by other streams (theme editor, autoplay...).
-pub static EXTRA_DOC_SECTIONS: &[DocSectionFn] = &[];
+pub static EXTRA_DOC_SECTIONS: &[DocSectionFn] = &[crate::media_ui::document_section];
 
 /// Which tabs an element kind offers. Other streams add their kinds here.
 pub fn tabs_for(kind: Option<&ElementKind>, multi: bool) -> Vec<Tab> {
@@ -100,7 +100,7 @@ pub struct Insp<'a> {
     pub sel: Vec<ElementId>,
     pub theme: Theme,
     patch: Option<ElementPatch>,
-    gesture: bool,
+    pub gesture: bool,
 }
 
 impl Insp<'_> {
@@ -195,7 +195,8 @@ fn finish(insp: Insp) {
         let r = app.editor.apply(Command::Update { id: el.id.clone(), patch }, H);
         app.report(r);
     }
-    if !gesture && app.editor.human_gesture_active() && matches!(app.canvas.gesture, crate::canvas::Gesture::None) {
+    // Crop mode (stream 2) keeps its own transaction open.
+    if !gesture && app.editor.human_gesture_active() && matches!(app.canvas.gesture, crate::canvas::Gesture::None) && !crate::media_ui::crop_active(app) {
         app.editor.commit();
     }
 }
@@ -210,6 +211,7 @@ fn kind_name(e: &Element) -> String {
         },
         ElementKind::Shape(s) => s.shape.label().into(),
         ElementKind::Icon(i) => format!("Icon · {}", i.name),
+        ElementKind::Video(_) => "Video".into(),
         ElementKind::Connector(_) => "Connector".into(),
         ElementKind::Image(_) => "Image".into(),
         ElementKind::Ink(_) => "Drawing".into(),

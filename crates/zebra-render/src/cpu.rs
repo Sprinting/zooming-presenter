@@ -57,7 +57,7 @@ pub fn render_pixmap(list: &DisplayList) -> Pixmap {
             }
             Item::Image { image, transform } => {
                 let img = Image {
-                    image: ImageSource::Pixmap(image.pixmap.clone()),
+                    image: ImageSource::Pixmap(image.pixmap()),
                     sampler: ImageSampler {
                         x_extend: Extend::Pad,
                         y_extend: Extend::Pad,
@@ -70,7 +70,8 @@ pub fn render_pixmap(list: &DisplayList) -> Pixmap {
                 ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, image.width as f64, image.height as f64));
             }
             Item::PushOpacity(a) => ctx.push_opacity_layer(*a),
-            Item::PopOpacity => ctx.pop_layer(),
+            Item::PopOpacity | Item::PopClip => ctx.pop_layer(),
+            Item::PushClip(path) => ctx.push_clip_layer(path),
         }
     }
     ctx.flush();

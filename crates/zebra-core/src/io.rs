@@ -78,11 +78,15 @@ fn read_zip(bytes: &[u8], map: Option<&Arc<memmap2::Mmap>>) -> ZResult<Document>
                 data.into()
             }
         };
-        // Only the header is decoded here; pixels are decoded lazily by the renderer.
+        // Only the header is read here; pixels are decoded lazily by the
+        // renderer, video and audio by the platform player.
         let (ext, w, h) = match _ext.to_ascii_lowercase().as_str() {
             // Embedded theme fonts.
             e @ ("ttf" | "otf" | "ttc") => (e.to_string(), 0, 0),
-            _ => crate::editor::image_info(&data)?,
+            _ => {
+                let m = crate::media::info(&data)?;
+                (m.ext, m.width, m.height)
+            }
         };
         doc.assets.insert(key.to_string(), Asset { ext, bytes: data, width: w, height: h });
     }

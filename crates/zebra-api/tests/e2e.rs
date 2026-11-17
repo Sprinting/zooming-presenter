@@ -360,3 +360,44 @@ fn write_png(p: &std::path::Path) {
     ];
     std::fs::write(p, PNG).unwrap();
 }
+
+/// In the app (not headless) captures render on a worker: the editor's
+/// loop keeps running, and the reply arrives once the render is done.
+#[test]
+fn app_captures_render_off_the_ui_thread() {
+    scratch();
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let woke = Arc::new(AtomicBool::new(false));
+    let w2 = woke.clone();
+    let server = zebra_api::ApiServer::start(ApiOptions { socket: None, permission: Permission::Full }, Arc::new(move || w2.store(true, Ordering::SeqCst))).unwrap();
+    let socket = server.socket_path().to_path_buf();
+    let token = server.token().to_string();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let ui = std::thread::spawn(move || {
+        let renderer = Arc::new(zebra_render::Renderer::new());
+        let mut ed = zebra_core::Editor::default();
+        ed.measure = renderer.measure();
+        let mut d = zebra_api::Dispatcher::new(renderer);
+        let mut frames = 0u64;
+        while !stop2.load(Ordering::SeqCst) {
+            d.pump(&server, &mut ed);
+            frames += 1;
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        frames
+    });
+    let mut c = Client::connect_hello(&socket, "cap", &token).unwrap();
+    c.call("apply", json!({"op":"add_frame","x":0,"y":0,"w":800,"h":600})).unwrap();
+    let v = c.call("capture", json!({"target":"overview","width":640,"height":400})).unwrap();
+    assert_eq!(v["width"], 640);
+    assert!(v["data_base64"].as_str().unwrap().len() > 100);
+    // Calls after a capture still run in order.
+    let pdf = c.call("export", json!({"format":"pdf"})).unwrap();
+    assert_eq!(pdf["mime"], "application/pdf");
+    assert!(c.call("describe", json!({})).is_ok());
+    stop.store(true, Ordering::SeqCst);
+    assert!(ui.join().unwrap() > 0);
+    assert!(woke.load(Ordering::SeqCst));
+}

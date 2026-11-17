@@ -47,9 +47,23 @@ pub struct SceneOptions {
     pub opacity: Vec<(ElementId, f32)>,
     /// Element being edited in a text box: drawn by the UI instead.
     pub skip: Option<ElementId>,
+    /// Seconds on the animation clock: animated GIFs show the frame for this
+    /// time. None shows their first frame (captures, PDF).
+    pub time: Option<f64>,
+    /// Decode pictures on worker threads, drawing a stand-in meanwhile
+    /// (windowed app). False decodes before returning (captures, tests).
+    pub async_images: bool,
+    /// The current frame of each video that has one (playing or paused).
+    pub video_frames: std::collections::HashMap<ElementId, std::sync::Arc<display::ImageLevel>>,
+    /// Videos playing now (no ▶ badge).
+    pub playing: HashSet<ElementId>,
+    /// An image in crop mode: its whole picture is drawn faintly behind the
+    /// crop, so the person sees what they can uncrop.
+    pub ghost: Option<ElementId>,
 }
 
 pub mod display;
+pub mod images;
 mod clip;
 pub use display::DisplayList;
 
@@ -62,12 +76,17 @@ pub mod gpu;
 
 pub struct Renderer {
     pub(crate) fonts: text::Fonts,
-    pub(crate) images: display::ImageCache,
+    pub(crate) images: images::ImageCache,
 }
 
 impl Renderer {
     pub fn new() -> Self {
-        Renderer { fonts: text::Fonts::new(), images: display::ImageCache::default() }
+        Renderer { fonts: text::Fonts::new(), images: images::ImageCache::default() }
+    }
+
+    /// The decoded-image cache (budget, waker for async decodes, stats).
+    pub fn images(&self) -> &images::ImageCache {
+        &self.images
     }
 
     /// The link URL under world point `p` on text element `e`, if any.
@@ -114,8 +133,13 @@ impl Renderer {
 
     /// Cache sizes for the `perf` query: name -> bytes or count.
     pub fn cache_stats(&self) -> Vec<(&'static str, u64)> {
-        let (n, bytes) = self.images.stats();
-        vec![("image_kb", bytes / 1024), ("images", n as u64), ("text_layouts", self.fonts.cached_layouts() as u64)]
+        let st = self.images.stats();
+        vec![
+            ("image_kb", st.bytes as u64 / 1024),
+            ("image_budget_kb", st.budget as u64 / 1024),
+            ("images", st.entries as u64),
+            ("text_layouts", self.fonts.cached_layouts() as u64),
+        ]
     }
 
     /// Bundled font check: (family, faces found, files bundled).

@@ -19,6 +19,7 @@ use crate::canvas::CanvasState;
 use crate::thumbs::Thumbs;
 
 const H: Origin = Origin::Human;
+pub const HUMAN: Origin = Origin::Human;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum ScrollMode {
@@ -138,6 +139,8 @@ pub struct ZebraApp {
     pub show_layouts: bool,
     #[cfg(target_os = "macos")]
     pub menu: Option<crate::menu_mac::MacMenu>,
+    /// Video and audio players, crop mode, clipboard (session state).
+    pub media: crate::media_ui::Media,
 }
 
 impl ZebraApp {
@@ -147,6 +150,9 @@ impl ZebraApp {
         crate::mac::refresh_accent();
         crate::style::apply_visuals(ctx);
         let renderer = Arc::new(Renderer::new());
+        // Pictures decode on worker threads; repaint when one lands.
+        let waker_ctx = ctx.clone();
+        renderer.images().set_waker(Some(Arc::new(move || waker_ctx.request_repaint())));
         let mut editor = Editor::default();
         editor.measure = renderer.measure();
         let recent: Vec<PathBuf> = storage.and_then(|s| eframe::get_value(s, "recent")).unwrap_or_default();
@@ -223,6 +229,7 @@ impl ZebraApp {
             last_pointer: None,
             #[cfg(target_os = "macos")]
             menu: None,
+            media: Default::default(),
         };
         let saved_ai: bool = storage.and_then(|s| eframe::get_value(s, "ai_enabled")).unwrap_or(false);
         if let Some(api_opts) = opts.api {
@@ -424,6 +431,9 @@ impl ZebraApp {
                 let ids = self.editor.expand(&self.selection(), true);
                 self.clipboard = ids.iter().filter_map(|id| self.editor.doc.get(id).cloned()).collect();
                 self.paste_count = 0;
+                if !ids.is_empty() {
+                    crate::media_ui::copied_to_system(self, &ids);
+                }
                 if a == Cut {
                     let del = self.editable_selection();
                     if !del.is_empty() {
@@ -470,6 +480,23 @@ impl ZebraApp {
             SetFrameStyle(s) => {
                 self.view_cmd(ViewCommand::SetFrameStyle { style: s });
                 self.view_cmd(ViewCommand::SetTool { tool: Tool::Frame });
+            }
+            InsertVideo => crate::media_ui::insert_video_dialog(self),
+            InsertMusic => crate::media_ui::soundtrack_dialog(self),
+            ReplaceImage => {
+                if let [id] = self.selection().as_slice() {
+                    crate::media_ui::replace_image_dialog(self, id);
+                }
+            }
+            CropImage => {
+                if let [id] = self.selection().as_slice() {
+                    crate::media_ui::begin_crop(self, id);
+                }
+            }
+            PlayPauseVideo => {
+                if let [id] = self.selection().as_slice() {
+                    crate::media_ui::toggle(self, id);
+                }
             }
             InsertImage => {
                 if let Some(p) = rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg", "webp", "gif"]).pick_file() {
@@ -585,7 +612,7 @@ impl ZebraApp {
             Settings => self.show_settings = true,
             ShapeLibrary => self.library.toggle(),
             Bold | Italic | Underline if self.canvas.text.is_some() => self.canvas.text_menu = Some(a.clone()),
-            Group | Ungroup | InsertVideo | InsertAudio | Underline => {
+            Group | Ungroup | Underline => {
                 // Placeholders: the shapes, media and rich-text streams fill
                 // these in.
                 self.toast(format!("{} isn't available in this build yet.", a.label().trim_end_matches('…')));
@@ -643,6 +670,11 @@ impl ZebraApp {
     }
 
     fn paste(&mut self) {
+        // Something newer on the system clipboard (a picture, files from
+        // Finder, text from another app) wins over Zebra's own copy.
+        if crate::media_ui::paste_from_system(self) {
+            return;
+        }
         if self.clipboard.is_empty() {
             return;
         }
@@ -802,6 +834,7 @@ impl ZebraApp {
     }
 
     pub fn after_load(&mut self) {
+        self.media.stop_all();
         self.selected_step = None;
         self.canvas = CanvasState::default();
         self.thumbs.clear();
@@ -917,6 +950,7 @@ impl ZebraApp {
         }
 
         self.handle_dropped_files(&ctx);
+        crate::media_ui::tick(self);
         self.handle_close(&ctx);
         self.sync_present_mode(&ctx);
 
@@ -1028,6 +1062,10 @@ impl ZebraApp {
                     egui::Event::Copy => self.queued.push(Action::Copy),
                     egui::Event::Cut => self.queued.push(Action::Cut),
                     egui::Event::Paste(_) => self.queued.push(Action::Paste),
+                    egui::Event::PasteImage(img) => {
+                        let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+                        crate::media_ui::paste_rgba(self, img.size[0] as u32, img.size[1] as u32, rgba);
+                    }
                     _ => {}
                 }
             }
@@ -1058,6 +1096,11 @@ impl ZebraApp {
             let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
             if ext == "zebra" {
                 self.queued.push(Action::OpenPath(p));
+                continue;
+            }
+            if !p.as_os_str().is_empty() {
+                let off = 30.0 * i as f64 / self.editor.view.camera.zoom;
+                crate::media_ui::insert_file(self, &p, at + Vec2::new(off, off));
                 continue;
             }
             match f.bytes() {

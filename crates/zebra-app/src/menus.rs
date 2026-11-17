@@ -53,7 +53,7 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
                 Sep,
                 A(InsertImage),
                 A(InsertVideo),
-                A(InsertAudio),
+                A(InsertMusic),
                 A(InsertLayout),
                 Sep,
                 A(WrapInFrame),

@@ -39,13 +39,17 @@ pub enum Action {
     SetFrameStyle(FrameStyle),
     InsertImage,
     InsertLayout,
+    /// Background music for the presentation.
+    InsertMusic,
+    ReplaceImage,
+    CropImage,
+    PlayPauseVideo,
     WrapInFrame,
     /// Opens the shapes and icons library (stream 3 fills it in).
     ShapeLibrary,
     /// Insert › Video… (stream 2 fills it in).
     InsertVideo,
     /// Insert › Audio… (stream 2 fills it in).
-    InsertAudio,
     // Format (whole text box until rich text runs land; stream 3 routes
     // these to the text selection while editing)
     Bold,
@@ -130,10 +134,13 @@ impl Action {
             SetFrameStyle(s) => format!("{} Frame", frame_name(*s)),
             InsertImage => "Image…".into(),
             InsertLayout => "Layout…".into(),
+            InsertMusic => "Background Music…".into(),
+            ReplaceImage => "Replace Image…".into(),
+            CropImage => "Crop Image".into(),
+            PlayPauseVideo => "Play / Pause Video".into(),
             WrapInFrame => "Frame Selection".into(),
             ShapeLibrary => "Shapes and Icons…".into(),
             InsertVideo => "Video…".into(),
-            InsertAudio => "Audio…".into(),
             Bold => "Bold".into(),
             Italic => "Italic".into(),
             Underline => "Underline".into(),
@@ -199,7 +206,7 @@ impl Action {
         v.extend([
             InsertImage, InsertLayout, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
             FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ShowShortcuts, Settings, ShapeLibrary,
-            InsertVideo, InsertAudio, Group, Ungroup,
+            InsertVideo, InsertMusic, ReplaceImage, CropImage, PlayPauseVideo, Group, Ungroup,
             TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, TogglePresenterView, PlaybackOptions, ToggleAiControl, ToggleActivity,
             PauseAgents, StopAgents, FollowAgent, RevertAgent, ThemeEditor,
         ]);

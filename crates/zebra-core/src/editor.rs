@@ -607,7 +607,7 @@ impl Editor {
                 };
                 let id = self.insert_element(e, out)?;
                 if add_to_path {
-                    self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None });
+                    self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, voiceover: None });
                 }
             }
             Command::AddShape { shape, x, y, w, h, rotation, fill, stroke, id } => {
@@ -664,7 +664,7 @@ impl Editor {
                     locked: false,
                     name: String::new(),
                     placeholder: false,
-                    kind: ElementKind::Image(ImageData { asset: key, alt }),
+                    kind: ElementKind::Image(ImageData { asset: key, alt, crop: None, mask: ImageMask::Rectangle }),
                 };
                 self.insert_element(e, out)?;
             }
@@ -705,6 +705,120 @@ impl Editor {
                 self.insert_element(e, out)?;
                 crate::connector::refresh(&mut self.doc);
             }
+            Command::AddVideo { data_base64, path, x, y, width, alt, poster_base64, autoplay, looping, muted, id } => {
+                let (key, info) = self.load_media(&data_base64, path.as_deref(), MediaKind::Video)?;
+                let poster = match poster_base64.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+                    Some(p) => Some(self.load_media(p, None, MediaKind::Image)?.0),
+                    None => None,
+                };
+                // Size from the file; else from the poster; else 16:9.
+                let (pw, ph) = match (info.width, info.height) {
+                    (w, h) if w > 0 && h > 0 => (w as f64, h as f64),
+                    _ => poster
+                        .as_ref()
+                        .and_then(|p| self.doc.assets.get(p))
+                        .filter(|a| a.width > 0 && a.height > 0)
+                        .map(|a| (a.width as f64, a.height as f64))
+                        .unwrap_or((640.0, 360.0)),
+                };
+                let scale = width.map(|w| w / pw).unwrap_or(1.0);
+                let e = Element {
+                    id: id.unwrap_or_default(),
+                    transform: Transform { x, y, scale, rotation: 0.0 },
+                    size: Size { w: pw, h: ph },
+                    locked: false,
+                    name: String::new(),
+                    placeholder: false,
+                    kind: ElementKind::Video(VideoData {
+                        asset: key,
+                        poster,
+                        autoplay,
+                        looping,
+                        muted,
+                        start: 0.0,
+                        end: None,
+                        duration: info.duration,
+                        alt,
+                    }),
+                };
+                self.insert_element(e, out)?;
+            }
+            Command::ReplaceImage { id, data_base64, path } => {
+                self.check_ids(std::slice::from_ref(&id))?;
+                self.check_unlocked(std::slice::from_ref(&id))?;
+                let (key, info) = self.load_media(&data_base64, path.as_deref(), MediaKind::Image)?;
+                let e = self.element_mut(&id)?;
+                let ElementKind::Image(img) = &mut e.kind else {
+                    return Err(ZError::invalid(format!("'{id}' is a {}, not an image", e.kind.type_name())));
+                };
+                img.asset = key;
+                img.crop = None;
+                // Keep the width; the height follows the new picture.
+                let (nw, nh) = (info.width.max(1) as f64, info.height.max(1) as f64);
+                let world_w = e.size.w * e.transform.scale;
+                e.size = Size { w: nw, h: nh };
+                e.transform.scale = world_w / nw;
+                out.changed.push(id);
+            }
+            Command::SetPoster { id, data_base64, path } => {
+                let poster = if data_base64.trim().is_empty() && path.is_none() {
+                    None
+                } else {
+                    Some(self.load_media(&data_base64, path.as_deref(), MediaKind::Image)?.0)
+                };
+                let e = self.element_mut(&id)?;
+                let ElementKind::Video(v) = &mut e.kind else {
+                    return Err(ZError::invalid(format!("'{id}' is a {}, not a video", e.kind.type_name())));
+                };
+                v.poster = poster;
+                out.changed.push(id);
+            }
+            Command::SetSoundtrack { data_base64, path, looping, volume, name } => {
+                let new_asset = if data_base64.trim().is_empty() && path.is_none() {
+                    None
+                } else {
+                    Some(self.load_media(&data_base64, path.as_deref(), MediaKind::Audio)?.0)
+                };
+                let file_name = path.as_deref().and_then(|p| std::path::Path::new(p).file_stem()).map(|s| s.to_string_lossy().to_string());
+                let t = match (new_asset, self.doc.soundtrack.take()) {
+                    (Some(asset), old) => Soundtrack {
+                        asset,
+                        looping: old.as_ref().map(|o| o.looping).unwrap_or(true),
+                        volume: old.as_ref().map(|o| o.volume).unwrap_or(0.6),
+                        name: file_name.unwrap_or_default(),
+                    },
+                    (None, Some(old)) => old,
+                    (None, None) => {
+                        return Err(ZError::invalid("there is no soundtrack yet").hint("give data_base64 or path"));
+                    }
+                };
+                let mut t = t;
+                if let Some(l) = looping {
+                    t.looping = l;
+                }
+                if let Some(v) = volume {
+                    if !v.is_finite() {
+                        return Err(ZError::invalid("volume must be a number from 0 to 1"));
+                    }
+                    t.volume = v.clamp(0.0, 1.0);
+                }
+                if let Some(n) = name {
+                    t.name = n;
+                }
+                self.doc.soundtrack = Some(t);
+            }
+            Command::RemoveSoundtrack => {
+                self.doc.soundtrack = None;
+            }
+            Command::SetVoiceover { index, data_base64, path } => {
+                self.check_step(index)?;
+                let v = if data_base64.trim().is_empty() && path.is_none() {
+                    None
+                } else {
+                    Some(self.load_media(&data_base64, path.as_deref(), MediaKind::Audio)?.0)
+                };
+                self.doc.path[index].voiceover = v;
+            }
             Command::AddInk { points, color, width, highlighter } => {
                 if points.len() < 2 {
                     return Err(ZError::invalid("ink needs at least 2 points"));
@@ -729,11 +843,18 @@ impl Editor {
                 // out of the frame it sits in: remember the frame first.
                 let keep_in = if patch.style.is_some() && patch.scale.is_none() { self.doc.parent_frame(&id) } else { None };
                 let frame_box = keep_in.and_then(|f| self.doc.get(&f)).map(|f| (f.world_size(), f.transform.rotation));
+                let crop_px = match (&patch.crop, &self.doc.elements[&id].kind) {
+                    (Some(_), ElementKind::Image(i)) => self.doc.assets.get(&i.asset).map(|a| (a.width as f64, a.height as f64)),
+                    _ => None,
+                };
                 let e = self.doc.elements.get_mut(&id).unwrap();
                 apply_patch(e, &patch)?;
                 if patch.text.is_some() {
                     // Typing into a placeholder makes it real content.
                     e.placeholder = false;
+                }
+                if let (Some(c), Some(px)) = (patch.crop, crop_px) {
+                    apply_crop(e, c, px);
                 }
                 measure_text(&*self.measure, &theme, e);
                 if let Some(((fw, fh), frot)) = frame_box {
@@ -945,7 +1066,7 @@ impl Editor {
                 if i > self.doc.path.len() {
                     return Err(ZError::invalid(format!("index {i} > path length {}", self.doc.path.len())));
                 }
-                self.doc.path.insert(i, PathStep { target, builds, notes, duration: None, dwell: None });
+                self.doc.path.insert(i, PathStep { target, builds, notes, duration: None, dwell: None, voiceover: None });
             }
             Command::RemoveStep { index } => {
                 self.check_step(index)?;
@@ -1001,7 +1122,7 @@ impl Editor {
                 });
                 self.doc.path = frames
                     .iter()
-                    .map(|f| PathStep { target: StepTarget::Element { id: f.id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None })
+                    .map(|f| PathStep { target: StepTarget::Element { id: f.id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, voiceover: None })
                     .collect();
             }
             Command::SetTheme { theme } => {
@@ -1069,7 +1190,7 @@ impl Editor {
                 let ids = self.add_pieces(&t.pieces, Vec2::new(0.0, 0.0), TEMPLATE_WIDTH, out)?;
                 for i in t.path {
                     if let Some(Some(id)) = ids.get(i) {
-                        self.doc.path.push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None });
+                        self.doc.path.push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, voiceover: None });
                     }
                 }
             }
@@ -1086,7 +1207,7 @@ impl Editor {
                 if add_to_path {
                     for (p, id) in pieces.iter().zip(ids) {
                         if let (crate::templates::Piece::Frame { path: true, .. }, Some(id)) = (p, id) {
-                            self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None });
+                            self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, voiceover: None });
                         }
                     }
                 }
@@ -1362,6 +1483,63 @@ impl Editor {
                 out.changed.push(m);
             }
         }
+    }
+
+    /// Load media for a command from base64 or a file path, checking it is
+    /// the wanted kind. Video and audio files are copied into the media
+    /// cache and memory-mapped, so they never sit in the heap.
+    fn load_media(&mut self, data_base64: &str, path: Option<&str>, want: MediaKind) -> ZResult<(String, crate::media::MediaInfo)> {
+        let what = match want {
+            MediaKind::Image => "an image",
+            MediaKind::Video => "a video",
+            MediaKind::Audio => "an audio file",
+        };
+        let check = |info: &crate::media::MediaInfo| -> ZResult<()> {
+            if info.kind != want {
+                return Err(ZError::invalid(format!("this file is {}, not {what}", match info.kind {
+                    MediaKind::Image => "an image",
+                    MediaKind::Video => "a video",
+                    MediaKind::Audio => "audio",
+                })));
+            }
+            Ok(())
+        };
+        if let Some(p) = path.filter(|p| !p.trim().is_empty()) {
+            let p = std::path::Path::new(p);
+            let ioe = |e: std::io::Error| ZError::new("io", format!("cannot read '{}': {e}", p.display()));
+            let f = std::fs::File::open(p).map_err(ioe)?;
+            // SAFETY: read-only and short-lived: used to sniff and hash, then
+            // dropped. The asset maps the cache copy, not this file.
+            let map = unsafe { memmap2::Mmap::map(&f) }.map_err(ioe)?;
+            let info = crate::media::info(&map)?;
+            check(&info)?;
+            let key = content_key(&map);
+            if !self.doc.assets.contains_key(&key) {
+                let bytes: AssetBytes = if want == MediaKind::Image {
+                    map.to_vec().into()
+                } else {
+                    let m = crate::media::import_file(p, &key, &info.ext).map_err(ioe)?;
+                    let len = m.len();
+                    AssetBytes::Mapped { map: std::sync::Arc::new(m), start: 0, len }
+                };
+                self.doc.assets.insert(key.clone(), Asset { ext: info.ext.clone(), bytes, width: info.width, height: info.height });
+            }
+            return Ok((key, info));
+        }
+        if data_base64.trim().is_empty() {
+            return Err(ZError::invalid(format!("give {what} as data_base64 or path")));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data_base64.trim())
+            .map_err(|e| ZError::invalid(format!("data_base64 is not valid base64: {e}")))?;
+        let info = crate::media::info(&bytes)?;
+        check(&info)?;
+        let key = content_key(&bytes);
+        self.doc
+            .assets
+            .entry(key.clone())
+            .or_insert(Asset { ext: info.ext.clone(), bytes: bytes.into(), width: info.width, height: info.height });
+        Ok((key, info))
     }
 
     /// Store image bytes as an asset; returns the key.
@@ -1808,6 +1986,7 @@ fn default_size(k: &ElementKind) -> (f64, f64) {
         ElementKind::Text(_) => (0.0, 0.0),
         ElementKind::Shape(_) => (200.0, 200.0),
         ElementKind::Image(_) => (400.0, 300.0),
+        ElementKind::Video(_) => (640.0, 360.0),
         ElementKind::Ink(_) => (100.0, 100.0),
         ElementKind::Icon(_) => (96.0, 96.0),
         ElementKind::Connector(_) => (0.0, 0.0),
@@ -1865,12 +2044,44 @@ fn validate_element(e: &Element, doc: &Document) -> ZResult<()> {
             }
         }
         ElementKind::Image(i) => {
-            if !doc.assets.contains_key(&i.asset) {
-                return Err(ZError::invalid(format!("unknown asset '{}'", i.asset)).hint("use add_image"));
+            if !doc.assets.get(&i.asset).is_some_and(|a| a.media_kind() == MediaKind::Image) {
+                return Err(ZError::invalid(format!("unknown image asset '{}'", i.asset)).hint("use add_image"));
+            }
+        }
+        ElementKind::Video(v) => {
+            if !doc.assets.get(&v.asset).is_some_and(|a| a.media_kind() == MediaKind::Video) {
+                return Err(ZError::invalid(format!("unknown video asset '{}'", v.asset)).hint("use add_video"));
+            }
+            if let Some(p) = &v.poster {
+                if !doc.assets.get(p).is_some_and(|a| a.media_kind() == MediaKind::Image) {
+                    return Err(ZError::invalid(format!("unknown poster asset '{p}'")).hint("use set_poster"));
+                }
             }
         }
     }
     Ok(())
+}
+
+/// Crop an image so the visible content stays put: the box shrinks or
+/// grows around the new crop and its centre moves with it.
+fn apply_crop(e: &mut Element, c: Crop, (pw, ph): (f64, f64)) {
+    let ElementKind::Image(img) = &mut e.kind else { return };
+    if pw <= 0.0 || ph <= 0.0 {
+        return;
+    }
+    let old = img.crop.unwrap_or(Crop::FULL);
+    let new = c.clamped();
+    // Local units per source pixel (the box may have been stretched).
+    let kx = e.size.w / (pw * old.w);
+    let ky = e.size.h / (ph * old.h);
+    let (ocx, ocy) = old.center();
+    let (ncx, ncy) = new.center();
+    let shift = Vec2::new((ncx - ocx) * pw * kx, (ncy - ocy) * ph * ky);
+    let moved = e.transform.apply(shift);
+    e.transform.x = moved.x;
+    e.transform.y = moved.y;
+    e.size = Size { w: pw * new.w * kx, h: ph * new.h * ky };
+    img.crop = if new.is_full() { None } else { Some(new) };
 }
 
 fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
@@ -2042,11 +2253,49 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
         }
     }
     if let Some(v) = &p.alt {
-        if !is("image") {
-            return Err(wrong("alt"));
+        match &mut e.kind {
+            ElementKind::Image(i) => i.alt = v.clone(),
+            ElementKind::Video(d) => d.alt = v.clone(),
+            _ => return Err(wrong("alt")),
         }
-        if let ElementKind::Image(i) = &mut e.kind {
-            i.alt = v.clone();
+    }
+    if p.crop.is_some() && !is("image") {
+        return Err(wrong("crop"));
+    }
+    if let Some(m) = p.mask {
+        let ElementKind::Image(i) = &mut e.kind else { return Err(wrong("mask")) };
+        i.mask = m;
+    }
+    if p.autoplay.is_some() || p.looping.is_some() || p.muted.is_some() || p.start.is_some() || p.end.is_some() {
+        let ElementKind::Video(v) = &mut e.kind else { return Err(wrong("autoplay/loop/muted/start/end")) };
+        if let Some(b) = p.autoplay {
+            v.autoplay = b;
+        }
+        if let Some(b) = p.looping {
+            v.looping = b;
+        }
+        if let Some(b) = p.muted {
+            v.muted = b;
+        }
+        if let Some(t) = p.start {
+            if !t.is_finite() {
+                return Err(ZError::invalid("start must be a number of seconds"));
+            }
+            v.start = t.max(0.0);
+        }
+        if let Some(t) = p.end {
+            if !t.is_finite() {
+                return Err(ZError::invalid("end must be a number of seconds"));
+            }
+            v.end = (t >= 0.0).then_some(t);
+        }
+        if let Some(end) = v.end {
+            if end <= v.start {
+                return Err(ZError::invalid(format!("end ({end}s) must be after start ({}s)", v.start)));
+            }
+        }
+        if v.duration > 0.0 && v.start >= v.duration {
+            return Err(ZError::invalid(format!("start ({}s) is past the end of the video ({}s)", v.start, v.duration)));
         }
     }
     Ok(())
@@ -2061,6 +2310,15 @@ pub fn command_label(c: &Command) -> String {
         Command::AddImage { .. } => "Insert image".into(),
         Command::AddIcon { name, .. } => format!("Add icon {name}"),
         Command::AddConnector { .. } => "Add connector".into(),
+        Command::AddVideo { .. } => "Insert video".into(),
+        Command::ReplaceImage { .. } => "Replace image".into(),
+        Command::SetPoster { .. } => "Set poster frame".into(),
+        Command::SetSoundtrack { data_base64, path, .. } if !data_base64.is_empty() || path.is_some() => "Add soundtrack".into(),
+        Command::SetSoundtrack { .. } => "Change soundtrack".into(),
+        Command::RemoveSoundtrack => "Remove soundtrack".into(),
+        Command::SetVoiceover { data_base64, path, .. } if data_base64.is_empty() && path.is_none() => "Remove voice-over".into(),
+        Command::SetVoiceover { .. } => "Add voice-over".into(),
+        Command::Update { patch, .. } if patch.crop.is_some() => "Crop".into(),
         Command::AddInk { highlighter, .. } => if *highlighter { "Highlight" } else { "Draw" }.into(),
         Command::Update { patch, .. } if patch.text.is_some() => "Edit text".into(),
         Command::FormatText { .. } => "Format text".into(),

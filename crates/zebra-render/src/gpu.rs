@@ -43,7 +43,8 @@ pub fn encode_scene(scene: &mut Scene, list: &DisplayList) {
             }
             Item::Image { image, transform } => scene.draw_image(&image.data, *transform),
             Item::PushOpacity(a) => scene.push_layer(Fill::NonZero, BlendMode::from(Mix::Normal), *a, Affine::IDENTITY, &full),
-            Item::PopOpacity => scene.pop_layer(),
+            Item::PopOpacity | Item::PopClip => scene.pop_layer(),
+            Item::PushClip(path) => scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, path),
         }
     }
 }

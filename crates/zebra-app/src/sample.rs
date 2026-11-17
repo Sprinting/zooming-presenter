@@ -115,6 +115,9 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             "settings" => app.show_settings = true,
             "sheet" => crate::sheets::request(app, crate::sheets::SheetKind::ClearPath),
             "dark" => ctx.set_theme(egui::Theme::Dark),
+            // Debug: media deck (picture, cropped circle, playing video),
+            // optionally in crop mode.
+            "media" | "mediacrop" | "mediaplay" => crate::media_ui::demo(app, part.trim()),
             // Debug: AI popover open (off), or with AI control switched on.
             "aipanel" => app.open_ai_panel = true,
             "aion" => {

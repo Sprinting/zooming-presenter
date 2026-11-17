@@ -11,6 +11,7 @@ pub mod inspector;
 pub mod inspector_s3;
 pub mod shape_library;
 pub mod mac;
+pub mod media_ui;
 pub mod menus;
 pub mod panels;
 pub mod present;

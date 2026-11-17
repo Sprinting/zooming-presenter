@@ -131,5 +131,32 @@ pub fn path_step(insp: &mut Insp, ui: &mut Ui, tab: Tab) {
     if let Some(step) = step {
         let p = crate::style::Palette::of(ui.ctx());
         crate::presenting::step_section(insp.app, ui, &p, step);
+        crate::media_ui::step_section(insp.app, ui, step);
+    }
+}
+
+/// Stream 2's image (crop, mask, replace) and video (playback, trim,
+/// poster) sections on the Style tab.
+pub fn media(insp: &mut Insp, ui: &mut Ui, tab: Tab) {
+    if tab != Tab::Style || insp.sel.len() != 1 {
+        return;
+    }
+    let id = insp.el.id.clone();
+    match insp.el.kind.clone() {
+        ElementKind::Image(i) => {
+            if let Some(p) = crate::media_ui::image_section(insp.app, ui, &id, &i) {
+                insp.set(p);
+            }
+        }
+        ElementKind::Video(v) => {
+            w::section(ui, "Video", |ui| {
+                let (p, dragging) = crate::media_ui::video_section(insp.app, ui, &id, &v);
+                insp.gesture |= dragging;
+                if let Some(p) = p {
+                    insp.set(p);
+                }
+            });
+        }
+        _ => {}
     }
 }

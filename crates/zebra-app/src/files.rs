@@ -12,26 +12,47 @@ pub fn short(s: &str, n: usize) -> String {
 pub fn export_pdf(app: &mut ZebraApp) {
     let name = format!("{}.pdf", crate::app::sanitize(&app.editor.doc.title));
     let Some(p) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name).save_file() else { return };
-    match app.renderer.export_pdf(&app.editor) {
-        Ok(bytes) => match std::fs::write(&p, bytes) {
-            Ok(()) => app.toast(format!("Exported {}", p.display())),
-            Err(e) => app.toast(format!("Export failed: {e}")),
-        },
-        Err(e) => app.toast(format!("Export failed: {}", e.message)),
-    }
+    export_in_background(app, p, |r, ed| r.export_pdf(ed));
 }
 
 pub fn export_png(app: &mut ZebraApp) {
     let name = format!("{}.png", crate::app::sanitize(&app.editor.doc.title));
     let Some(p) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name(name).save_file() else { return };
     let vp = app.editor.view.viewport;
-    let (w, h) = ((vp.x * 2.0) as u32, (vp.y * 2.0) as u32);
-    match app.renderer.capture(&app.editor, &zebra_render::CaptureTarget::Viewport, w.max(1), h.max(1)) {
-        Ok(bytes) => match std::fs::write(&p, bytes) {
-            Ok(()) => app.toast(format!("Exported {}", p.display())),
-            Err(e) => app.toast(format!("Export failed: {e}")),
-        },
-        Err(e) => app.toast(format!("Export failed: {}", e.message)),
+    let (w, h) = (((vp.x * 2.0) as u32).max(1), ((vp.y * 2.0) as u32).max(1));
+    export_in_background(app, p, move |r, ed| r.capture(ed, &zebra_render::CaptureTarget::Viewport, w, h));
+}
+
+/// Render a snapshot of the document on a worker and write it to `path`,
+/// so a big export never stalls the window. The result shows as a toast.
+pub fn export_in_background(
+    app: &mut ZebraApp,
+    path: PathBuf,
+    render: impl FnOnce(&zebra_render::Renderer, &zebra_core::Editor) -> Result<Vec<u8>, zebra_core::ZError> + Send + 'static,
+) {
+    let mut snap = zebra_core::Editor::new(app.editor.doc.clone());
+    snap.view = app.editor.view.clone();
+    snap.measure = app.renderer.measure();
+    let renderer = app.renderer.clone();
+    let ctx = app.ctx.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("zebra-export".into()).spawn(move || {
+        let msg = match render(&renderer, &snap) {
+            Ok(bytes) => match std::fs::write(&path, bytes) {
+                Ok(()) => format!("Exported {}", path.display()),
+                Err(e) => format!("Export failed: {e}"),
+            },
+            Err(e) => format!("Export failed: {}", e.message),
+        };
+        let _ = tx.send(msg);
+        ctx.request_repaint();
+    });
+    match spawned {
+        Ok(_) => {
+            app.media.background.push(rx);
+            app.toast("Exporting…");
+        }
+        Err(e) => app.toast(format!("Export failed: {e}")),
     }
 }
 

@@ -134,6 +134,7 @@ fn gpu_recovers_after_overflow() {
             color: [0, 0, 0, 255],
             stroke: Stroke::new(1.0).with_dashes(0.0, [6.0, 4.0]),
         }],
+        ..Default::default()
     };
     let res = g.render_to_rgba(&d, &q, &bad);
     eprintln!("overflow render: {:?}", res.as_ref().err());

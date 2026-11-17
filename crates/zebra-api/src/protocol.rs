@@ -405,6 +405,15 @@ pub fn parse_command(mut v: Value) -> Result<Command, RpcError> {
         }
         o.insert("data_base64".into(), Value::String(base64::engine::general_purpose::STANDARD.encode(bytes)));
     }
+    // Media commands read their file in the app (videos are copied, not
+    // loaded); the path must be absolute because the agent's working
+    // directory isn't the app's.
+    if matches!(o.get("op").and_then(|x| x.as_str()), Some("add_video" | "replace_image" | "set_poster" | "set_soundtrack" | "set_voiceover")) {
+        let op = o.get("op").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+        if let Some(p) = abs_path(o.get("path"), &op)? {
+            o.insert("path".into(), Value::String(p.to_string_lossy().into_owned()));
+        }
+    }
     let op = o.get("op").and_then(|x| x.as_str()).map(str::to_string);
     serde_json::from_value::<Command>(v).map_err(|e| {
         let ops = crate::catalogue::op_names(crate::catalogue::Kind::Command);

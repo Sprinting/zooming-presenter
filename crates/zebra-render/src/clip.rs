@@ -27,6 +27,7 @@ pub(crate) fn clip_items(items: &mut Vec<Item>, w: f64, h: f64) {
     if !items.iter().any(|it| match it {
         Item::Fill { path, .. } => needs(path, 0.0),
         Item::Stroke { path, stroke, .. } => needs(path, stroke.width),
+        Item::PushClip(path) => needs(path, 0.0),
         _ => false,
     }) {
         return;
@@ -48,6 +49,8 @@ pub(crate) fn clip_items(items: &mut Vec<Item>, w: f64, h: f64) {
                     items.push(Item::Stroke { path: p, color, stroke: s });
                 }
             }
+            // A clip region can be cut to the visible area like a fill.
+            Item::PushClip(path) if needs(&path, 0.0) => items.push(Item::PushClip(clip_fill(&path, clip))),
             other => items.push(other),
         }
     }
