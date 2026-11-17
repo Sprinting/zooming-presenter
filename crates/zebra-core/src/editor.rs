@@ -1865,6 +1865,18 @@ impl Editor {
             }
             ViewCommand::SetReduceMotion { on } => self.view.reduce_motion = on,
             ViewCommand::FollowAgent { on } => self.view.follow_agent = on,
+            ViewCommand::SetStatus { text } => {
+                let Origin::Agent { name } = &origin else {
+                    return Err(ZError::invalid("set_status is for agents"));
+                };
+                let line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                if line.is_empty() {
+                    self.view.agent_status.remove(name);
+                } else {
+                    let text = crate::model::truncate(&line, 120);
+                    self.view.agent_status.insert(name.clone(), crate::view::AgentStatus { text, time: self.view.now, dismissed: false });
+                }
+            }
             ViewCommand::PauseAgents { paused } => {
                 self.view.agent_paused = paused;
                 if paused && self.tx.as_ref().is_some_and(|t| t.origin.is_agent()) {

@@ -101,6 +101,21 @@ pub struct ViewState {
     pub agent_permission: Permission,
     /// Seconds; injected by the host each frame.
     pub now: f64,
+    /// Each agent's own one-line status ("Rewriting the intro"), set with
+    /// `set_status`. Shown in the status bar; the person can dismiss it.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub agent_status: std::collections::BTreeMap<String, AgentStatus>,
+}
+
+/// An agent's one-line status. Read-only for the person, who can hide it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentStatus {
+    pub text: String,
+    /// `now` when it was set.
+    pub time: f64,
+    /// The person hid it; a new status from the agent shows again.
+    pub dismissed: bool,
 }
 
 impl Default for ViewState {
@@ -121,6 +136,7 @@ impl Default for ViewState {
             agent_paused: false,
             agent_permission: Permission::Edit,
             now: 0.0,
+            agent_status: Default::default(),
         }
     }
 }

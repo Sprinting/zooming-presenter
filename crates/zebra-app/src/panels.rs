@@ -558,8 +558,11 @@ fn agent_status(app: &ZebraApp, ctx: &egui::Context, name: &str) -> (String, boo
     const RECENT: f64 = 30.0;
     let now = app.editor.view.now;
     let last = app.editor.activity.iter().rev().find(|a| matches!(&a.origin, Origin::Agent { name: n } if n == name)).map(|a| (a.time, a.label.clone()));
+    let note = app.editor.view.agent_status.get(name).filter(|s| !s.dismissed);
     match (app.editor.view.agent_paused, &last) {
         (true, _) => (crate::t!("status-agent-paused", name = name), false),
+        // The agent's own status line, until it clears it or the person hides it.
+        (false, _) if note.is_some() => (crate::t!("status-agent-note", name = name, note = note.map(|n| n.text.as_str()).unwrap_or_default()), true),
         (false, Some((t, l))) if now - t < RECENT => {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(RECENT - (now - t) + 0.05));
             (crate::t!("status-agent-action", name = name, action = l.as_str()), true)
@@ -572,7 +575,18 @@ fn status_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let connected = app.agent_connected();
     let name = app.agent_name();
     let (text, live) = if connected { agent_status(app, ui.ctx(), &name) } else { (crate::t!("status-no-agent"), false) };
-    let rect = ui.max_rect();
+    let mut rect = ui.max_rect();
+    // A status line the agent set: the person can hide it.
+    if connected && app.editor.view.agent_status.get(&name).is_some_and(|s| !s.dismissed) {
+        let r = Rect::from_center_size(Pos2::new(rect.right() - 10.0, rect.center().y), EVec2::splat(14.0));
+        let mut close = ui.new_child(egui::UiBuilder::new().max_rect(r));
+        if w::icon_button(&mut close, Icon::Close, 14.0, true, false).on_hover_text(crate::t!("status-hide-note")).clicked() {
+            if let Some(s) = app.editor.view.agent_status.get_mut(&name) {
+                s.dismissed = true;
+            }
+        }
+        rect.max.x -= 22.0;
+    }
     let resp = ui.interact(rect, egui::Id::unique("agent-status"), Sense::click());
     let color = if live { p.text } else { p.weak };
     let icon = Rect::from_center_size(Pos2::new(rect.left() + 7.0, rect.center().y), EVec2::splat(13.0));

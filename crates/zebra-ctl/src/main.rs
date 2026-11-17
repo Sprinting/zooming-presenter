@@ -99,6 +99,9 @@ enum Cmd {
     Prev,
     /// Leave present mode.
     Stop,
+    /// Show the person a one-line status in Zebra's status bar
+    /// ("Rewriting the intro"). No text clears it.
+    Status { text: Vec<String> },
     /// Render a PNG without moving the human's camera.
     Screenshot {
         #[arg(long, conflicts_with_all = ["element", "overview", "viewport"])]
@@ -476,6 +479,7 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Next => print(&view(c, json!({ "op": "next" }))?),
         Cmd::Prev => print(&view(c, json!({ "op": "prev" }))?),
         Cmd::Stop => print(&view(c, json!({ "op": "exit_present" }))?),
+        Cmd::Status { text } => print(&view(c, json!({ "op": "set_status", "text": text.join(" ") }))?),
         Cmd::Disconnect => print(&c.call("disconnect", json!({}))?),
         Cmd::Screenshot { step, element, overview, viewport, output, width, height } => {
             let target = if let Some(s) = step {

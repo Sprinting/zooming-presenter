@@ -684,6 +684,9 @@ pub enum ViewCommand {
     SetAgentPermission { permission: Permission },
     /// Pause or resume autoplay while presenting.
     PauseAutoplay { paused: bool },
+    /// Agents: a one-line status the person sees in the status bar
+    /// ("Rewriting the intro"). Up to 120 characters; "" clears it.
+    SetStatus { text: String },
 }
 
 /// Read-only questions.

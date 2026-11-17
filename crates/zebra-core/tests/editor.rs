@@ -462,3 +462,17 @@ fn grouped_agent_steps_count_up_through_the_labeler() {
     assert_eq!(ed.history()[0].label, "3 Änderungen");
     assert_eq!(ed.activity.back().unwrap().label, "Schritt");
 }
+
+#[test]
+fn an_agent_status_is_one_short_line_and_empty_clears_it() {
+    let mut ed = Editor::default();
+    let a = Origin::agent("beta");
+    ed.view(cmd_view(serde_json::json!({"op":"set_status","text":"Rewriting\n  the intro"})), a.clone()).unwrap();
+    assert_eq!(ed.view.agent_status["beta"].text, "Rewriting the intro");
+    let long = "x".repeat(300);
+    ed.view(cmd_view(serde_json::json!({"op":"set_status","text":long})), a.clone()).unwrap();
+    assert_eq!(ed.view.agent_status["beta"].text.chars().count(), 120);
+    ed.view(cmd_view(serde_json::json!({"op":"set_status","text":""})), a).unwrap();
+    assert!(ed.view.agent_status.is_empty());
+    assert!(ed.view(cmd_view(serde_json::json!({"op":"set_status","text":"hi"})), Origin::Human).is_err());
+}

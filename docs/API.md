@@ -364,12 +364,22 @@ Send with `apply {"command": ...}` or inside `batch {"commands": [...]}`. Undoab
 | op | params | description | example |
 |---|---|---|---|
 | `add_element` | element: NewElement | Add any element. Most callers prefer the `add_*` helpers. | `{"op":"add_element","element":{"x":0,"y":0,"kind":{"type":"shape","shape":"ellipse"},"w":150,"h":150}}` |
-| `add_text` | id?: string, place?: Placement, scale?: number, style?: TextStyle, text: string, x?: number, y?: number | Double-click-to-write: add a text box. `x`,`y` is the centre. If `scale` is omitted the text is sized to read well at the given `place` (or at scale 1). | `{"op":"add_text","text":"Hello world","x":0,"y":-200,"style":"title"}` |
+| `add_text` | id?: string, markdown?: boolean, on?: string, place?: Placement, scale?: number, style?: TextStyle, text: string, x?: number, y?: number | Double-click-to-write: add a text box. `x`,`y` is the centre. If `scale` is omitted the text is sized to read well at the given `place` (or at scale 1). | `{"op":"add_text","text":"Hello world","x":0,"y":-200,"style":"title"}` |
 | `add_frame` | add_to_path?: boolean, h?: number, id?: string, name?: string, rotation?: number, style?: FrameStyle, w?: number, x?: number, y?: number | Add a frame. `w`,`h` are world units at scale 1 (default 800x600). | `{"op":"add_frame","x":0,"y":0,"w":800,"h":600,"style":"bracket","name":"Intro","add_to_path":true}` |
 | `add_shape` | fill?: string, h?: number, id?: string, rotation?: number, shape: ShapeKind, stroke?: string, w?: number, x?: number, y?: number |  | `{"op":"add_shape","shape":"arrow","x":500,"y":0,"w":300,"h":60,"fill":"theme:accent"}` |
 | `add_image` | alt?: string, data_base64: string, id?: string, width?: number, x?: number, y?: number (or path: string, an absolute file path, instead of data_base64) | Insert an image from bytes (base64). The API also accepts `path`. | `{"op":"add_image","path":"/Users/me/logo.png","x":0,"y":300,"width":400,"alt":"Logo"}` |
+| `add_icon` | color?: string, id?: string, name: string, size?: number, x?: number, y?: number | A line icon from the built-in library, centred at x, y. Find names with the `icons` query. | `{"op":"add_icon","name":"lightbulb","x":0,"y":-300,"size":120,"color":"theme:accent"}` |
+| `add_connector` | color?: string, end?: Arrowhead, from: EndSpec, id?: string, label?: string, route?: Route, start?: Arrowhead, to: EndSpec, width?: number | A connector: a line or arrow from one place to another. An end with `element` sticks to that element's edge and follows it when it moves; otherwise it sits at x, y. | `{"op":"add_connector","from":{"element":"s1"},"to":{"element":"s2"},"route":"elbow","end":"arrow","label":"then"}` |
+| `add_video` | alt?: string, autoplay?: boolean, data_base64?: string, id?: string, loop?: boolean, muted?: boolean, path?: string, poster_base64?: string, width?: number, x?: number, y?: number (or path: string, an absolute file path, instead of data_base64) | Insert a video (mp4/mov, H.264 or HEVC). Give `path` (a file on this computer; it is copied, never read into memory) or `data_base64`. It shows `poster_base64` (PNG/JPEG) until played. | `{"op":"add_video","path":"/Users/me/demo.mp4","x":0,"y":0,"width":960,"alt":"Product demo","loop":false}` |
+| `replace_image` | data_base64?: string, id: string, path?: string (or path: string, an absolute file path, instead of data_base64) | Swap the picture of an image, keeping its place and width. The height follows the new picture; crop is reset, the mask is kept. | `{"op":"replace_image","id":"i1","path":"/Users/me/new-logo.png"}` |
+| `set_poster` | data_base64?: string, id: string, path?: string (or path: string, an absolute file path, instead of data_base64) | Set a video's poster picture. No data and no path clears it. | `{"op":"set_poster","id":"v1","path":"/Users/me/poster.jpg"}` |
+| `set_soundtrack` | data_base64?: string, loop?: boolean, name?: string, path?: string, volume?: number (or path: string, an absolute file path, instead of data_base64) | Background music for the presentation. With data or a path the track is replaced; without, only the given settings change. | `{"op":"set_soundtrack","path":"/Users/me/music.m4a","volume":0.4,"loop":true}` |
+| `remove_soundtrack` |  |  | `{"op":"remove_soundtrack"}` |
+| `set_voiceover` | data_base64?: string, index: integer, path?: string (or path: string, an absolute file path, instead of data_base64) | Voice-over for a path step (plays when the step is reached). No data and no path removes it. | `{"op":"set_voiceover","index":0,"path":"/Users/me/step1.m4a"}` |
 | `add_ink` | color?: string, highlighter?: boolean, points: number[][], width?: number | Freehand pen / highlighter stroke in world coordinates. | `{"op":"add_ink","points":[[0,0],[50,40],[120,10]],"color":"theme:accent","width":6}` |
 | `update` | id: string, patch: ElementPatch | Change properties of one element. Only given fields change. | `{"op":"update","id":"t1","patch":{"text":"New text","bold":true,"color":"#cc3333"}}` |
+| `format_text` | end?: integer, find?: string, format: SpanFormat, id: string, start?: integer | Format part of a text box: bold, italic, underline, strike, colour, link or relative size on characters `start..end` (counted in characters), or on every occurrence of `find`. With neither, the whole text. Unset fields in `format` are left as they are; `false` or `""` turns a property off. | `{"op":"format_text","id":"t1","find":"zebras","format":{"bold":true,"color":"theme:accent"}}` |
+| `format_paragraphs` | align?: Align, first?: integer, id: string, indent?: integer, indent_by?: integer, last?: integer, list?: ListKind | Paragraph formatting in a text box: list kind (none, bullet, number), indent level (0-8, or `indent_by` +1/-1) and alignment. `first`..=`last` are paragraph indices (0-based; default all). | `{"op":"format_paragraphs","id":"t1","first":1,"last":3,"list":"bullet","indent_by":1}` |
 | `move` | dx: number, dy: number, ids: string[], with_contents?: boolean | Move elements by a world delta. Frames carry their contents. | `{"op":"move","ids":["f1"],"dx":200,"dy":0}` |
 | `scale` | about?: array, factor: number, ids: string[], with_contents?: boolean | Scale elements about a world point (default: their common centre). | `{"op":"scale","ids":["t1"],"factor":0.5}` |
 | `rotate` | about?: array, degrees: number, ids: string[], with_contents?: boolean | Rotate elements by degrees (clockwise) about a point. | `{"op":"rotate","ids":["f2"],"degrees":-15}` |
@@ -379,14 +389,22 @@ Send with `apply {"command": ...}` or inside `batch {"commands": [...]}`. Undoab
 | `wrap_in_frame` | add_to_path?: boolean, ids: string[], padding?: number, style?: FrameStyle | Draw a frame around existing elements. | `{"op":"wrap_in_frame","ids":["t1","t2"],"style":"circle","add_to_path":true}` |
 | `arrange` | gap?: number, ids: string[], layout: Layout | Arrange elements in a row, column, grid or circle. | `{"op":"arrange","ids":["f1","f2","f3"],"layout":"row"}` |
 | `align` | edge: AlignEdge, ids: string[] | Align elements (snapping helper). | `{"op":"align","ids":["t1","t2"],"edge":"left"}` |
+| `group` | id?: string, ids: string[] | Group elements (at least two): selecting one selects them all. Members of existing groups join the new one. Returns the group id. | `{"op":"group","ids":["s1","t2","n1"]}` |
+| `ungroup` | ids: string[] | Dissolve the groups these elements belong to. | `{"op":"ungroup","ids":["s1"]}` |
 | `add_step` | builds?: string[], index?: integer, notes?: string, target: StepTarget | Insert a step (default: at the end). | `{"op":"add_step","target":{"kind":"element","id":"f1"},"builds":["t2","t3"],"notes":"Say hi"}` |
 | `remove_step` | index: integer |  | `{"op":"remove_step","index":2}` |
 | `move_step` | from: integer, to: integer |  | `{"op":"move_step","from":3,"to":0}` |
-| `update_step` | builds?: array, duration?: number, index: integer, notes?: string, target?: StepTarget |  | `{"op":"update_step","index":0,"notes":"Open with a question","duration":2.5}` |
+| `update_step` | builds?: array, duration?: number, dwell?: number, hide_builds?: boolean, index: integer, notes?: string, target?: StepTarget |  | `{"op":"update_step","index":0,"notes":"Open with a question","duration":2.5,"dwell":8}` |
 | `clear_path` |  |  | `{"op":"clear_path"}` |
 | `auto_path` |  | Replace the path with every frame in reading order (top-left to bottom-right, larger frames first). | `{"op":"auto_path"}` |
 | `set_theme` | theme: string |  | `{"op":"set_theme","theme":"chalkboard"}` |
 | `set_title` | title: string |  | `{"op":"set_title","title":"Quarterly review"}` |
+| `set_playback` | autoplay?: number, loop?: boolean | Autoplay and loop for the whole presentation. Only given fields change. | `{"op":"set_playback","autoplay":10,"loop":true}` |
+| `save_theme` | apply?: boolean, theme: Theme | Add or replace a custom theme in this document (the theme editor's Save). Built-in ids can't be replaced: copy one under a new id. Fonts that aren't bundled are embedded in the file automatically. | `{"op":"save_theme","apply":true,"theme":{"id":"my-theme","name":"My theme","background":"#101820","title":{"font":"Avenir Next","color":"#ffffff","size":72},"subtitle":{"font":"Sans","color":"#f2aa4c","size":40},"body":{"font":"Sans","color":"#dddddd","size":24},"frame":"#f2aa4c","frame_fill":"#1b2733","accent":"#f2aa4c","shapes":["#f2aa4c","#5fb3b3","#ffffff","#888888"],"layers":[{"asset":"<key from add_asset>","depth":0.2}]}}` |
+| `delete_theme` | id: string | Remove a custom theme. If it's in use, its base built-in (or classic) takes over. | `{"op":"delete_theme","id":"my-theme"}` |
+| `add_asset` | data_base64: string (or path: string, an absolute file path, instead of data_base64) | Store an image (base64) for use as a theme background or 3D layer. The new asset key is returned in `assets`. | `{"op":"add_asset","data_base64":"iVBORw0KGgo..."}` |
+| `apply_template` | replace?: boolean, template: string | Start from a template (see the `templates` query): frames, placeholder text, a path and a theme. Needs an empty canvas unless `replace`. | `{"op":"apply_template","template":"big_picture"}` |
+| `add_layout` | add_to_path?: boolean, layout: string, width?: number, x?: number, y?: number | Insert a layout (see the `templates` query): a frame arrangement with placeholder text, centred at `x`,`y`, `width` world units wide. | `{"op":"add_layout","layout":"two_columns","x":4000,"y":0,"width":1600}` |
 
 ### View commands
 
@@ -419,6 +437,8 @@ Send with `view {"command": ...}`. Session state, not undoable.
 | `follow_agent` | on: boolean |  | `{"op":"follow_agent","on":true}` |
 | `pause_agents` | paused: boolean |  | `{"op":"pause_agents","paused":true}` |
 | `set_agent_permission` | permission: Permission |  | `{"op":"set_agent_permission","permission":"full"}` |
+| `pause_autoplay` | paused: boolean | Pause or resume autoplay while presenting. | `{"op":"pause_autoplay","paused":true}` |
+| `set_status` | text: string | Agents: a one-line status the person sees in the status bar ("Rewriting the intro"). Up to 120 characters; "" clears it. | `{"op":"set_status","text":"Rewriting the intro"}` |
 
 ### Queries
 
@@ -435,7 +455,12 @@ Send with `query {"query": ...}`. Read-only.
 | `hit_test_screen` | x: number, y: number | Topmost element at a screen point of the human's window. | `{"q":"hit_test_screen","x":640,"y":400}` |
 | `path` |  |  | `{"q":"path"}` |
 | `themes` |  |  | `{"q":"themes"}` |
+| `icons` | limit?: integer, query?: string | Search the icon library by name or keyword (e.g. "idea", "arrow right"). Empty query lists names only. | `{"q":"icons","query":"idea","limit":10}` |
+| `shapes` |  | The shape kinds with their human names. | `{"q":"shapes"}` |
 | `history` |  |  | `{"q":"history"}` |
 | `lint` |  | Layout lint: overlaps, text unreadable at its step, empty steps... | `{"q":"lint"}` |
+| `templates` |  | Templates and layouts that `apply_template` / `add_layout` accept. | `{"q":"templates"}` |
+| `fonts` |  | Font families installed on this machine (any can be used in a theme). | `{"q":"fonts"}` |
+| `perf` |  | Memory and speed: heap in use, cache sizes, frame times, repaints. | `{"q":"perf"}` |
 
 <!-- END GENERATED -->
