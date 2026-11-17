@@ -34,13 +34,25 @@ impl ThemeEditor {
                 n += 1;
             }
             draft.id = format!("custom-{n}");
-            draft.name = format!("{} (custom)", draft.name);
+            draft.name = crate::t!("theme-editor-custom-name", name = draft.name.as_str());
         }
         let mut families = app.editor.measure.font_families();
         for b in ["Sans", "Serif", "Mono", "Hand"].iter().rev() {
             families.insert(0, b.to_string());
         }
         ThemeEditor { draft, families, font_query: Default::default(), last_change: None, status: None }
+    }
+}
+
+/// The name shown for a font family: the four built-in families are
+/// translated, installed fonts keep their own names.
+fn font_label(f: &str) -> String {
+    match f {
+        "Sans" => crate::t!("theme-editor-font-sans"),
+        "Serif" => crate::t!("theme-editor-font-serif"),
+        "Mono" => crate::t!("theme-editor-font-mono"),
+        "Hand" => crate::t!("theme-editor-font-hand"),
+        f => f.to_string(),
     }
 }
 
@@ -60,7 +72,8 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
     let mut open = true;
     let mut changed = false;
     let mut close = false;
-    egui::Window::new("Theme")
+    egui::Window::new(crate::t!("theme-editor-window-title"))
+        .id(egui::Id::unique("theme-editor"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -95,7 +108,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
 
 fn apply_draft(app: &mut ZebraApp, te: &mut ThemeEditor, now: f64) {
     if !app.editor.in_transaction() {
-        let _ = app.editor.begin("Edit theme", H);
+        let _ = app.editor.begin(crate::t!("theme-editor-undo-edit"), H);
     }
     let r = app.editor.apply(Command::SaveTheme { theme: te.draft.clone(), apply: true }, H);
     if app.report(r).is_some() {
@@ -111,12 +124,12 @@ fn apply_draft(app: &mut ZebraApp, te: &mut ThemeEditor, now: f64) {
 fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        ui.label("Name");
+        ui.label(crate::t!("theme-editor-name"));
         changed |= ui.text_edit_singleline(&mut te.draft.name).lost_focus();
     });
     ui.horizontal(|ui| {
-        ui.label("Start from");
-        ui.menu_button("Choose a theme…", |ui| {
+        ui.label(crate::t!("theme-editor-start-from"));
+        ui.menu_button(crate::t!("theme-editor-choose-theme"), |ui| {
             let all: Vec<Theme> = Theme::builtins().into_iter().chain(app.editor.doc.themes.iter().cloned()).collect();
             for t in all {
                 if t.id != te.draft.id && ui.selectable_label(false, &t.name).clicked() {
@@ -130,20 +143,21 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
         });
     });
 
-    section(ui, "Colours");
+    section(ui, &crate::t!("theme-editor-section-colours"));
     egui::Grid::new("theme-colours").num_columns(4).spacing([10.0, 6.0]).show(ui, |ui| {
         let d = &mut te.draft;
-        let mut rows: Vec<(&str, &mut String)> = vec![
-            ("Background", &mut d.background),
-            ("Title", &mut d.title.color),
-            ("Subtitle", &mut d.subtitle.color),
-            ("Body text", &mut d.body.color),
-            ("Frames", &mut d.frame),
-            ("Frame fill", &mut d.frame_fill),
-            ("Accent", &mut d.accent),
+        let mut rows: Vec<(String, &mut String)> = vec![
+            (crate::t!("theme-editor-colour-background"), &mut d.background),
+            (crate::t!("theme-editor-colour-title"), &mut d.title.color),
+            (crate::t!("theme-editor-colour-subtitle"), &mut d.subtitle.color),
+            (crate::t!("theme-editor-colour-body-text"), &mut d.body.color),
+            (crate::t!("theme-editor-colour-frames"), &mut d.frame),
+            (crate::t!("theme-editor-colour-frame-fill"), &mut d.frame_fill),
+            (crate::t!("theme-editor-colour-accent"), &mut d.accent),
         ];
+        let shape_names = [crate::t!("theme-editor-colour-1"), crate::t!("theme-editor-colour-2"), crate::t!("theme-editor-colour-3"), crate::t!("theme-editor-colour-4")];
         for (i, s) in d.shapes.iter_mut().enumerate() {
-            rows.push((["Colour 1", "Colour 2", "Colour 3", "Colour 4"][i], s));
+            rows.push((shape_names[i].clone(), s));
         }
         for (i, (label, hex)) in rows.into_iter().enumerate() {
             let mut c = hex_to_c32(hex);
@@ -158,69 +172,70 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
         }
     });
 
-    section(ui, "Fonts");
+    section(ui, &crate::t!("theme-editor-section-fonts"));
     let families = te.families.clone();
-    for (i, label) in ["Title", "Subtitle", "Body"].into_iter().enumerate() {
+    let font_tip = crate::t!("theme-editor-font-tip");
+    for (i, label) in [crate::t!("theme-editor-font-title"), crate::t!("theme-editor-font-subtitle"), crate::t!("theme-editor-font-body")].into_iter().enumerate() {
         let st = match i {
             0 => &mut te.draft.title,
             1 => &mut te.draft.subtitle,
             _ => &mut te.draft.body,
         };
         ui.horizontal(|ui| {
-            ui.label(RichText::new(label).size(12.0)).on_hover_text("Any installed font. It's embedded in the file when you save, so it shows on other Macs too.");
+            ui.label(RichText::new(label).size(12.0)).on_hover_text(&font_tip);
             let shown = match st.font.as_str() {
-                "Sans" => "Sans (Inter)".to_string(),
-                "Serif" => "Serif (Lora)".to_string(),
-                "Mono" => "Mono (JetBrains Mono)".to_string(),
-                "Hand" => "Handwriting (Caveat)".to_string(),
+                "Sans" => crate::t!("theme-editor-font-sans-shown"),
+                "Serif" => crate::t!("theme-editor-font-serif-shown"),
+                "Mono" => crate::t!("theme-editor-font-mono-shown"),
+                "Hand" => crate::t!("theme-editor-font-hand-shown"),
                 f => f.to_string(),
             };
             egui::ComboBox::from_id_salt(("font", i)).selected_text(shown).width(170.0).height(320.0).show_ui(ui, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut te.font_query[i]).hint_text("Search fonts"));
+                ui.add(egui::TextEdit::singleline(&mut te.font_query[i]).hint_text(crate::t!("theme-editor-search-fonts")));
                 let q = te.font_query[i].to_lowercase();
                 for f in families.iter().filter(|f| q.is_empty() || f.to_lowercase().contains(&q)).take(400) {
-                    if ui.selectable_label(st.font == *f, f).clicked() {
+                    if ui.selectable_label(st.font == *f, font_label(f)).clicked() {
                         st.font = f.clone();
                         changed = true;
                     }
                 }
             });
-            let r = ui.add(egui::DragValue::new(&mut st.size).range(8.0..=400.0).speed(0.5).suffix(" pt"));
+            let r = ui.add(egui::DragValue::new(&mut st.size).range(8.0..=400.0).speed(0.5).suffix(format!(" {}", crate::t!("theme-editor-unit-pt"))));
             changed |= r.drag_stopped() || (r.changed() && !r.dragged());
         });
     }
     if !te.draft.fonts.is_empty() {
         let names: Vec<&str> = te.draft.fonts.keys().map(|s| s.as_str()).collect();
-        ui.label(RichText::new(format!("Embedded in the file: {}", names.join(", "))).size(11.0).weak());
+        ui.label(RichText::new(crate::t!("theme-editor-embedded-fonts", fonts = names.join(", "))).size(11.0).weak());
     }
 
-    section(ui, "Background");
+    section(ui, &crate::t!("theme-editor-section-background"));
     ui.horizontal(|ui| {
-        ui.label("Picture");
-        if ui.button(if te.draft.background_image.is_some() { "Replace…" } else { "Choose…" }).clicked() {
+        ui.label(crate::t!("theme-editor-picture"));
+        if ui.button(if te.draft.background_image.is_some() { crate::t!("theme-editor-replace") } else { crate::t!("theme-editor-choose") }).clicked() {
             if let Some(key) = pick_image(app) {
                 te.draft.background_image = Some(key);
                 changed = true;
             }
         }
-        if te.draft.background_image.is_some() && ui.button("Remove").clicked() {
+        if te.draft.background_image.is_some() && ui.button(crate::t!("theme-editor-remove")).clicked() {
             te.draft.background_image = None;
             changed = true;
         }
     });
 
     ui.add_space(4.0);
-    ui.label(RichText::new("3D background").font(style::bold(12.0)))
-        .on_hover_text("Up to three pictures behind the canvas that move slower than it as you zoom and pan, for depth.");
+    ui.label(RichText::new(crate::t!("theme-editor-3d-background")).font(style::bold(12.0)))
+        .on_hover_text(crate::t!("theme-editor-3d-background-tip"));
     let mut remove = None;
     for (i, l) in te.draft.layers.iter_mut().enumerate() {
         ui.horizontal(|ui| {
-            ui.label(format!("Layer {}", i + 1));
-            let r = ui.add(egui::Slider::new(&mut l.depth, 0.0..=1.0).show_value(false).text("depth")).on_hover_text("Left: far away, barely moves. Right: moves with the canvas.");
+            ui.label(crate::t!("theme-editor-layer", number = (i + 1)));
+            let r = ui.add(egui::Slider::new(&mut l.depth, 0.0..=1.0).show_value(false).text(crate::t!("theme-editor-depth"))).on_hover_text(crate::t!("theme-editor-depth-tip"));
             changed |= r.drag_stopped() || (r.changed() && !r.dragged());
-            let r = ui.add(egui::Slider::new(&mut l.opacity, 0.1..=1.0).show_value(false).text("opacity"));
+            let r = ui.add(egui::Slider::new(&mut l.opacity, 0.1..=1.0).show_value(false).text(crate::t!("theme-editor-opacity")));
             changed |= r.drag_stopped() || (r.changed() && !r.dragged());
-            if ui.small_button("✕").on_hover_text("Remove layer").clicked() {
+            if ui.small_button("✕").on_hover_text(crate::t!("theme-editor-remove-layer")).clicked() {
                 remove = Some(i);
             }
         });
@@ -229,7 +244,7 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
         te.draft.layers.remove(i);
         changed = true;
     }
-    if te.draft.layers.len() < MAX_LAYERS && ui.button("Add Layer…").clicked() {
+    if te.draft.layers.len() < MAX_LAYERS && ui.button(crate::t!("theme-editor-add-layer")).clicked() {
         if let Some(asset) = pick_image(app) {
             // New layers come nearer than the ones behind them.
             let depth = 0.15 + 0.25 * te.draft.layers.len() as f64;
@@ -245,14 +260,14 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
 fn footer(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor, close: &mut bool) {
     ui.separator();
     ui.horizontal(|ui| {
-        if ui.button("Save as Theme…").on_hover_text("Keep this theme for other presentations").clicked() {
+        if ui.button(crate::t!("theme-editor-save-as-theme")).on_hover_text(crate::t!("theme-editor-save-as-theme-tip")).clicked() {
             te.status = Some(match crate::library::themes_dir().map(|d| crate::library::save_theme(&app.editor.doc, &te.draft, &d)) {
-                Some(Ok(p)) => format!("Saved “{}” to My Themes.", p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
-                Some(Err(e)) => format!("Couldn't save the theme: {}", e.message),
-                None => "Couldn't find the themes folder.".into(),
+                Some(Ok(p)) => crate::t!("theme-editor-saved", name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
+                Some(Err(e)) => crate::t!("theme-editor-save-failed", error = e.message.as_str()),
+                None => crate::t!("theme-editor-no-themes-folder"),
             });
         }
-        if ui.button("Done").clicked() {
+        if ui.button(crate::t!("theme-editor-done")).clicked() {
             *close = true;
         }
     });
@@ -273,7 +288,7 @@ fn pick_image(app: &mut ZebraApp) -> Option<String> {
     let bytes = match std::fs::read(&p) {
         Ok(b) => b,
         Err(e) => {
-            app.toast(format!("Couldn't read {}: {e}", p.display()));
+            app.toast(crate::t!("theme-editor-read-failed", path = p.display().to_string(), error = e.to_string()));
             return None;
         }
     };

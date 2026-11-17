@@ -603,6 +603,16 @@ impl Num {
     }
 }
 
+/// The unit after a number, translated: " pt" and " s" are words in some
+/// languages; symbols such as "°" and "%" stay as they are.
+fn unit_text(suffix: &str) -> String {
+    match suffix {
+        " pt" => format!(" {}", crate::t!("widgets-unit-pt")),
+        " s" => format!(" {}", crate::t!("widgets-unit-seconds")),
+        s => s.to_string(),
+    }
+}
+
 /// A number field with an NSStepper beside it. Typing commits on Return or
 /// when focus leaves; the stepper arrows add or subtract `step`; dragging
 /// vertically on the stepper scrubs. `changed()` fires on every committed
@@ -610,7 +620,8 @@ impl Num {
 pub fn number_field(ui: &mut Ui, value: &mut f64, opt: Num) -> Response {
     let p = pal(ui);
     let id = ui.next_auto_id();
-    let fmt = |v: f64| format!("{:.*}{}", opt.decimals, v * opt.display_scale, opt.suffix);
+    let suffix = unit_text(opt.suffix);
+    let fmt = |v: f64| format!("{:.*}{}", opt.decimals, v * opt.display_scale, suffix);
     let total = Vec2::new(opt.width + 15.0, H_REGULAR);
     let (outer, _) = ui.allocate_exact_size(total, Sense::hover());
     let field = Rect::from_min_size(outer.min, Vec2::new(opt.width, H_REGULAR));
@@ -741,7 +752,7 @@ pub fn swatch_grid(ui: &mut Ui, swatches: &[Swatch], selected: &str) -> Option<S
 pub fn color_well(ui: &mut Ui, id_salt: impl std::hash::Hash + std::fmt::Debug, color: Color32) -> Option<Color32> {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(44.0, H_REGULAR), Sense::hover());
     let resp = ui.interact(rect, ui.scope_id().with(("well", id_salt)), Sense::click());
-    resp.widget_info(|| WidgetInfo::labeled(Role::ColorWell, ui.is_enabled(), "Colour"));
+    resp.widget_info(|| WidgetInfo::labeled(Role::ColorWell, ui.is_enabled(), crate::t!("widgets-colour-well")));
     paint_bezel(ui, rect, resp.is_pointer_button_down_on(), ui.is_enabled());
     ui.painter().rect(rect.shrink2(Vec2::new(5.0, 4.0)), 2.0, color, Stroke::new(0.6, Color32::from_black_alpha(50)), StrokeKind::Inside);
     let mut out = None;
