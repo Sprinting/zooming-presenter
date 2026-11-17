@@ -314,7 +314,11 @@ impl ZebraApp {
                 self.api = Some(s);
                 self.api_error = None;
             }
-            Err(e) => self.api_error = Some(crate::t!("app-ai-start-failed", error = e.to_string())),
+            Err(e) => {
+                // Also on stderr: with --background nobody may see the window.
+                eprintln!("zebra: AI control could not start: {e}");
+                self.api_error = Some(crate::t!("app-ai-start-failed", error = e.to_string()));
+            }
         }
     }
 
