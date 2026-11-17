@@ -119,6 +119,10 @@ pub struct TextEditState {
     /// New text typed on this shape: kept centred on it, and grouped with
     /// it on commit.
     pub host: Option<ElementId>,
+    /// Misspelled words, checked when the text changes.
+    pub spell: crate::spell::Cache,
+    /// The misspelled word the spelling menu is open for (chars).
+    pub spell_word: Option<std::ops::Range<usize>>,
 }
 
 pub struct CanvasState {
@@ -1109,6 +1113,8 @@ pub fn begin_new_text(app: &mut ZebraApp, p: Pos2) {
         link_draft: None,
         wrap: None,
         host: None,
+        spell: Default::default(),
+        spell_word: None,
     });
     let _ = app.editor.view(ViewCommand::ClearSelection, H);
 }
@@ -1158,6 +1164,8 @@ pub fn begin_text_on_shape(app: &mut ZebraApp, shape: ElementId) {
         link_draft: None,
         wrap: Some(wrap),
         host: Some(shape.clone()),
+        spell: Default::default(),
+        spell_word: None,
     });
     app.select(vec![shape]);
 }
@@ -1200,6 +1208,8 @@ pub fn begin_edit_existing(app: &mut ZebraApp, id: ElementId) {
         link_draft: None,
         wrap: t.fixed_width.then_some(e.size.w),
         host: None,
+        spell: Default::default(),
+        spell_word: None,
     });
     app.select(vec![id]);
 }
@@ -1564,6 +1574,75 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                 ui.painter().text(egui::pos2(p0.x, out.galley_pos.y + c.center().y), Align2::LEFT_CENTER, marker, font.clone(), color);
             }
             at += p.chars().count() + 1;
+        }
+        // Spelling: a red dotted line under each misspelled word, except
+        // the one being typed (the cursor is at its end).
+        let caret = t.sel.0 == t.sel.1;
+        let bad: Vec<std::ops::Range<usize>> = crate::spell::misspelled(&t.buf, &mut t.spell).iter().filter(|r| !(caret && r.end == t.sel.1)).cloned().collect();
+        let red = Color32::from_rgb(0xff, 0x3b, 0x30);
+        let dot = (size * 0.07).clamp(1.0, 3.0);
+        for r in &bad {
+            // One run per row the word sits on.
+            let mut i = r.start;
+            while i < r.end {
+                let a = out.galley.pos_from_cursor(egui::text::CCursor::new(i));
+                let mut j = i + 1;
+                while j < r.end && (out.galley.pos_from_cursor(egui::text::CCursor::new(j)).min.y - a.min.y).abs() < 0.5 {
+                    j += 1;
+                }
+                let b = out.galley.pos_from_cursor(egui::text::CCursor::new(j));
+                let y = out.galley_pos.y + a.max.y + dot;
+                let x1 = if (b.min.y - a.min.y).abs() < 0.5 { b.min.x } else { a.min.x + (j - i) as f32 * size * 0.5 };
+                let mut x = out.galley_pos.x + a.min.x;
+                while x < out.galley_pos.x + x1 {
+                    ui.painter().circle_filled(egui::pos2(x + dot * 0.5, y), dot * 0.5, red);
+                    x += dot * 2.0;
+                }
+                i = j;
+            }
+        }
+        // Right-click a marked word: its suggestions, Learn and Ignore.
+        if resp.secondary_clicked() {
+            t.spell_word = resp.interact_pointer_pos().and_then(|p| {
+                let c = usize::from(out.galley.cursor_from_pos(p - out.galley_pos).index);
+                bad.iter().find(|r| r.start <= c && c <= r.end).cloned()
+            });
+        }
+        if let Some(word) = t.spell_word.clone() {
+            let mut keep = false;
+            resp.context_menu(|ui| {
+                keep = true;
+                let text: String = t.buf.chars().skip(word.start).take(word.end - word.start).collect();
+                let guesses = crate::spell::guesses(&t.buf, word.clone());
+                if guesses.is_empty() {
+                    ui.label(egui::RichText::new(crate::t!("spell-no-guesses")).weak());
+                }
+                for g in guesses {
+                    if ui.button(&g).clicked() {
+                        let b0 = t.buf.char_indices().nth(word.start).map_or(t.buf.len(), |(b, _)| b);
+                        let b1 = t.buf.char_indices().nth(word.end).map_or(t.buf.len(), |(b, _)| b);
+                        t.buf.replace_range(b0..b1, &g);
+                        t.spell_word = None;
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button(crate::t!("spell-learn")).clicked() {
+                    crate::spell::learn(&text);
+                    crate::spell::invalidate(&mut t.spell);
+                    t.spell_word = None;
+                    ui.close();
+                }
+                if ui.button(crate::t!("spell-ignore")).clicked() {
+                    crate::spell::ignore(&text);
+                    crate::spell::invalidate(&mut t.spell);
+                    t.spell_word = None;
+                    ui.close();
+                }
+            });
+            if !keep {
+                t.spell_word = None;
+            }
         }
         let r = resp.rect.expand(4.0);
         ui.painter().add(Shape::dashed_line(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], Stroke::new(1.0, style::accent()), 4.0, 3.0));

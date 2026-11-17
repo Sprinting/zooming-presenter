@@ -1170,3 +1170,8 @@ template-name-lesson = Lesson
 template-description-lesson = Objectives, three chapters with details to zoom into, and a recap.
 template-name-story = Story
 template-description-story = Beginning, middle and end, each zooming deeper into the last.
+
+## Spelling menu (right-click a word with a red dotted line)
+spell-no-guesses = No Guesses Found
+spell-learn = Learn Spelling
+spell-ignore = Ignore Spelling

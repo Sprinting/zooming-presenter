@@ -22,6 +22,7 @@ pub mod sample;
 pub mod settings;
 pub mod sheets;
 pub mod sidebar;
+pub mod spell;
 pub mod style;
 pub mod theme_editor;
 pub mod thumbs;
