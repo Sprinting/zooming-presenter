@@ -92,7 +92,8 @@ impl Thumbs {
                 self.shown_rev = ed.revision;
             }
         } else if self.sent_rev != ed.revision {
-            self.ctx.request_repaint_after(std::time::Duration::from_millis(300));
+            // Wake once the edit burst has gone quiet, not on a poll.
+            self.ctx.request_repaint_after(std::time::Duration::from_secs_f64((0.6 - (now - self.seen_at)).max(0.05)));
         }
     }
 

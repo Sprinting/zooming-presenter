@@ -333,3 +333,41 @@ fn connectors_stick_to_elements_and_survive_deletion() {
     assert_eq!(ends(&ed).1, Vec2::new(-300.0, -300.0));
     assert!(ed.apply(cmd(serde_json::json!({"op":"add_connector","from":{"element":"c"},"to":{"x":0,"y":0}})), h).is_err());
 }
+
+#[test]
+fn frame_style_is_visual_only() {
+    let mut ed = Editor::default();
+    ed.apply(cmd(serde_json::json!({"op":"add_frame","id":"f","x":0,"y":0,"w":480,"h":220})), Origin::Human).unwrap();
+    for style in ["circle", "bracket"] {
+        ed.apply(cmd(serde_json::json!({"op":"update","id":"f","patch":{"frame_style":style}})), Origin::Human).unwrap();
+        let f = ed.doc.get("f").unwrap();
+        assert_eq!((f.size.w, f.size.h), (480.0, 220.0), "box kept after {style}");
+    }
+    // As a circle, it is drawn, hit and contains things inscribed in the box.
+    ed.apply(cmd(serde_json::json!({"op":"update","id":"f","patch":{"frame_style":"circle"}})), Origin::Human).unwrap();
+    let f = ed.doc.get("f").unwrap().clone();
+    assert_eq!(f.visual_size(), (220.0, 220.0));
+    assert!(f.hit(Vec2::new(110.0, 0.0), 1.0, false), "rim");
+    assert!(!f.hit(Vec2::new(200.0, 0.0), 1.0, false), "outside the circle, inside the box");
+    assert!(!f.hit(Vec2::new(0.0, 0.0), 1.0, false), "interior is not the rim");
+    assert!(f.hit(Vec2::new(0.0, 0.0), 1.0, true));
+}
+
+#[test]
+fn overview_shows_later_fade_ins_dimmed() {
+    let mut ed = sample();
+    ed.apply(cmd(serde_json::json!({"op":"add_step","target":{"kind":"overview"},"index":0})), Origin::Human).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"update_step","index":1,"builds":["t1"]})), Origin::Human).unwrap();
+    ed.view(cmd_view(serde_json::json!({"op":"present","step":0})), Origin::Human).unwrap();
+    assert!(ed.hidden_builds().contains("t1"));
+    assert!(ed.dimmed_builds().contains("t1"), "dimmed in the overview");
+    ed.apply(cmd(serde_json::json!({"op":"update_step","index":0,"hide_builds":true})), Origin::Human).unwrap();
+    assert!(ed.dimmed_builds().is_empty(), "the step can opt out");
+    ed.apply(cmd(serde_json::json!({"op":"update_step","index":0,"hide_builds":false})), Origin::Human).unwrap();
+    ed.view(cmd_view(serde_json::json!({"op":"next"})), Origin::Human).unwrap();
+    assert!(ed.dimmed_builds().is_empty(), "not dimmed on a normal step");
+}
+
+fn cmd_view(j: serde_json::Value) -> ViewCommand {
+    serde_json::from_value(j).unwrap()
+}

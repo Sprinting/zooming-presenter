@@ -104,7 +104,7 @@ pub fn notes_editor(app: &mut ZebraApp, ui: &mut Ui, step: usize, rows: usize, i
 pub fn commit_notes(app: &mut ZebraApp) {
     let Some((step, text, _)) = app.stage.notes_buf.take() else { return };
     if app.editor.doc.path.get(step).is_some_and(|s| s.notes != text) {
-        app.apply(Command::UpdateStep { index: step, target: None, builds: None, notes: Some(text), duration: None, dwell: None });
+        app.apply(Command::UpdateStep { index: step, target: None, builds: None, notes: Some(text), duration: None, dwell: None, hide_builds: None });
     }
 }
 
@@ -184,7 +184,7 @@ pub fn step_section(app: &mut ZebraApp, ui: &mut Ui, p: &Palette, step: usize) {
 
 fn set_step_timing(app: &mut ZebraApp, step: usize, duration: Option<f64>, dwell: Option<f64>) {
     let r = app.editor.apply_batch(
-        vec![Command::UpdateStep { index: step, target: None, builds: None, notes: None, duration, dwell }],
+        vec![Command::UpdateStep { index: step, target: None, builds: None, notes: None, duration, dwell, hide_builds: None }],
         Some("Change step timing".into()),
         H,
     );

@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use kurbo::{Affine, BezPath, Cap, Ellipse, Join, Point, Rect, RoundedRect, Shape, Stroke};
+use kurbo::{Affine, BezPath, Cap, Join, Point, Rect, RoundedRect, Shape, Stroke};
 use zebra_core::{
     Camera, Dash, Editor, Element, ElementKind, FrameStyle, ShapeKind, Theme, Vec2,
 };
@@ -400,7 +400,9 @@ impl Ctx<'_> {
                     }
                     FrameStyle::Circle => {
                         let color = accent.unwrap_or_else(|| th.color(&th.frame_fill));
-                        fill(items, &Ellipse::from_rect(lr), a, color);
+                        // Inscribed in the box (shorter side, centred).
+                        let r = lr.width().min(lr.height()) / 2.0;
+                        fill(items, &kurbo::Circle::new(lr.center(), r), a, color);
                     }
                     FrameStyle::Rectangle => {
                         let color = accent.unwrap_or_else(|| th.color(&th.frame_fill));

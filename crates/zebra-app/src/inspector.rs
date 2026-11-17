@@ -626,7 +626,7 @@ fn path_tab(insp: &mut Insp, ui: &mut Ui, _p: &Palette) {
                     } else {
                         b.retain(|x| *x != id);
                     }
-                    insp.app.apply(Command::UpdateStep { index: si, target: None, builds: Some(b), notes: None, duration: None, dwell: None });
+                    insp.app.apply(Command::UpdateStep { index: si, target: None, builds: Some(b), notes: None, duration: None, dwell: None, hide_builds: None });
                 }
             });
         }

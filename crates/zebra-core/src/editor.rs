@@ -163,6 +163,8 @@ pub struct Editor {
     pub flashes: Vec<(ElementId, f64)>,
     /// Where the agent last acted (world), for the agent cursor.
     pub agent_cursor: Option<Vec2>,
+    /// `view.now` when the agent cursor last moved.
+    pub agent_cursor_time: f64,
     pub file_path: Option<std::path::PathBuf>,
     events: Vec<Event>,
     /// Frame times and cache sizes reported by the host (`perf` query).
@@ -195,6 +197,7 @@ impl Editor {
             activity: VecDeque::new(),
             flashes: vec![],
             agent_cursor: None,
+            agent_cursor_time: 0.0,
             file_path: None,
             events: vec![],
             perf: Default::default(),
@@ -396,6 +399,7 @@ impl Editor {
             }
             if let Some(c) = out.touched().last().and_then(|id| self.doc.get(id)) {
                 self.agent_cursor = Some(c.bounds().center());
+                self.agent_cursor_time = now;
             }
             self.flashes.retain(|(_, t)| now - *t < 2.0);
         }
@@ -607,7 +611,7 @@ impl Editor {
                 };
                 let id = self.insert_element(e, out)?;
                 if add_to_path {
-                    self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None });
+                    self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false });
                 }
             }
             Command::AddShape { shape, x, y, w, h, rotation, fill, stroke, id } => {
@@ -945,7 +949,7 @@ impl Editor {
                 if i > self.doc.path.len() {
                     return Err(ZError::invalid(format!("index {i} > path length {}", self.doc.path.len())));
                 }
-                self.doc.path.insert(i, PathStep { target, builds, notes, duration: None, dwell: None });
+                self.doc.path.insert(i, PathStep { target, builds, notes, duration: None, dwell: None, hide_builds: false });
             }
             Command::RemoveStep { index } => {
                 self.check_step(index)?;
@@ -957,7 +961,7 @@ impl Editor {
                 let s = self.doc.path.remove(from);
                 self.doc.path.insert(to, s);
             }
-            Command::UpdateStep { index, target, builds, notes, duration, dwell } => {
+            Command::UpdateStep { index, target, builds, notes, duration, dwell, hide_builds } => {
                 self.check_step(index)?;
                 if let Some(t) = &target {
                     self.validate_target(t)?;
@@ -983,6 +987,9 @@ impl Editor {
                 if let Some(d) = dwell {
                     s.dwell = if d <= 0.0 || !d.is_finite() { None } else { Some(d.min(MAX_SECONDS)) };
                 }
+                if let Some(h) = hide_builds {
+                    s.hide_builds = h;
+                }
             }
             Command::ClearPath => self.doc.path.clear(),
             Command::AutoPath => {
@@ -1001,7 +1008,7 @@ impl Editor {
                 });
                 self.doc.path = frames
                     .iter()
-                    .map(|f| PathStep { target: StepTarget::Element { id: f.id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None })
+                    .map(|f| PathStep { target: StepTarget::Element { id: f.id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false })
                     .collect();
             }
             Command::SetTheme { theme } => {
@@ -1069,7 +1076,7 @@ impl Editor {
                 let ids = self.add_pieces(&t.pieces, Vec2::new(0.0, 0.0), TEMPLATE_WIDTH, out)?;
                 for i in t.path {
                     if let Some(Some(id)) = ids.get(i) {
-                        self.doc.path.push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None });
+                        self.doc.path.push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false });
                     }
                 }
             }
@@ -1086,7 +1093,7 @@ impl Editor {
                 if add_to_path {
                     for (p, id) in pieces.iter().zip(ids) {
                         if let (crate::templates::Piece::Frame { path: true, .. }, Some(id)) = (p, id) {
-                            self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None });
+                            self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false });
                         }
                     }
                 }
@@ -1664,7 +1671,7 @@ impl Editor {
     // Camera helpers
 
     pub fn camera_for_element(&self, e: &Element) -> Camera {
-        let (w, h) = e.world_size();
+        let (w, h) = e.visual_world_size();
         let margin = if e.is_frame() { 0.04 } else { 0.12 };
         Camera::fit(
             &ViewRect { cx: e.transform.x, cy: e.transform.y, width: w, height: h, rotation: e.transform.rotation },
@@ -1711,6 +1718,32 @@ impl Editor {
             }
         }
         hidden
+    }
+
+    /// While presenting an overview step (or before the first step), the
+    /// fade-ins still to come are shown dimmed rather than hidden, unless the
+    /// step says otherwise (critique 14). These are a subset of
+    /// [`Editor::hidden_builds`]; draw them at low opacity instead.
+    pub fn dimmed_builds(&self) -> HashSet<ElementId> {
+        if self.view.mode != Mode::Present {
+            return HashSet::new();
+        }
+        let p = &self.view.present;
+        let overview = match p.step {
+            Some(i) => self.doc.path.get(i).is_some_and(|s| matches!(s.target, StepTarget::Overview) && !s.hide_builds),
+            None => true,
+        };
+        if !overview {
+            return HashSet::new();
+        }
+        let cur = p.step;
+        self.doc
+            .path
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| cur.is_none_or(|c| *i > c))
+            .flat_map(|(_, s)| s.builds.iter().cloned())
+            .collect()
     }
 
     /// Hidden elements for a capture of step `i` with `build` builds shown.
@@ -2035,11 +2068,8 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
     }
     if let Some(v) = p.frame_style {
         let ElementKind::Frame(f) = &mut e.kind else { return Err(wrong("frame_style")) };
+        // Visual only: the box stays; a circle is drawn inscribed in it.
         f.style = v;
-        if v == FrameStyle::Circle {
-            let d = e.size.w.max(e.size.h);
-            e.size = Size { w: d, h: d };
-        }
     }
     if let Some(v) = &p.alt {
         if !is("image") {
