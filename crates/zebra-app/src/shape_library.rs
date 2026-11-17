@@ -71,7 +71,7 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
     let mut lib = std::mem::take(&mut app.library);
     let mut open = true;
     let canvas = app.canvas.rect;
-    egui::Window::new(if lib.replace.is_some() { "Replace Icon" } else { "Shapes & Icons" })
+    egui::Window::new(if lib.replace.is_some() { crate::t!("library-window-replace-icon") } else { crate::t!("library-window-title") })
         .id(egui::Id::unique("library"))
         .open(&mut open)
         .collapsible(false)
@@ -83,12 +83,12 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
             if lib.replace.is_none() {
                 let before = lib.tab;
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut lib.tab, Tab::Shapes, "Shapes");
-                    ui.selectable_value(&mut lib.tab, Tab::Icons, "Icons");
+                    ui.selectable_value(&mut lib.tab, Tab::Shapes, crate::t!("library-tab-shapes"));
+                    ui.selectable_value(&mut lib.tab, Tab::Icons, crate::t!("library-tab-icons"));
                 });
                 lib.focus_search |= lib.tab != before;
             }
-            let hint = if lib.tab == Tab::Shapes { "Search shapes" } else { "Search icons: idea, chart, arrow…" };
+            let hint = if lib.tab == Tab::Shapes { crate::t!("library-search-shapes-hint") } else { crate::t!("library-search-icons-hint") };
             let r = ui.add(egui::TextEdit::singleline(&mut lib.query).hint_text(hint).desired_width(f32::INFINITY));
             if lib.focus_search {
                 r.request_focus();
@@ -123,7 +123,7 @@ fn shapes_grid(app: &mut ZebraApp, lib: &mut Library, ui: &mut egui::Ui, p: &Pal
     let q = lib.query.to_lowercase();
     let kinds: Vec<ShapeKind> = ShapeKind::ALL.iter().copied().filter(|k| q.is_empty() || k.label().to_lowercase().contains(q.trim())).collect();
     if kinds.is_empty() {
-        ui.label(RichText::new("No shapes match.").color(p.weak));
+        ui.label(RichText::new(crate::t!("library-no-shapes")).color(p.weak));
         return;
     }
     let line = ui.visuals().text_color();
@@ -146,7 +146,7 @@ fn shapes_grid(app: &mut ZebraApp, lib: &mut Library, ui: &mut egui::Ui, p: &Pal
 fn icons_grid(app: &mut ZebraApp, lib: &mut Library, ui: &mut egui::Ui, p: &Palette) {
     let icons = zebra_core::icons::search(&lib.query, usize::MAX);
     if icons.is_empty() {
-        ui.label(RichText::new("No icons match.").color(p.weak));
+        ui.label(RichText::new(crate::t!("library-no-icons")).color(p.weak));
         return;
     }
     let color = ui.visuals().text_color();
@@ -166,7 +166,7 @@ fn icons_grid(app: &mut ZebraApp, lib: &mut Library, ui: &mut egui::Ui, p: &Pale
         }
     });
     ui.add_space(2.0);
-    ui.label(RichText::new(format!("{} icons · Lucide (ISC licence)", icons.len())).size(11.0).color(p.weak));
+    ui.label(RichText::new(crate::t!("library-icons-count", count = icons.len())).size(11.0).color(p.weak));
 }
 
 /// Centre of the view, fanned out a little for each insert.

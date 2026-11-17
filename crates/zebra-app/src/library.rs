@@ -22,7 +22,7 @@ pub fn templates_dir() -> Option<PathBuf> {
 pub fn file_stem(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
     let s = s.trim().to_string();
-    if s.is_empty() { "Untitled".into() } else { s }
+    if s.is_empty() { crate::t!("library-file-untitled") } else { s }
 }
 
 /// Save a theme (with its pictures and fonts) as a theme file.
