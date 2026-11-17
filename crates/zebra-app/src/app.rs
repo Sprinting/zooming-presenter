@@ -80,7 +80,7 @@ pub struct ZebraApp {
     pub show_activity: bool,
     pub palette: Option<(String, usize)>,
     pub show_shortcuts: bool,
-    pub library: crate::library::Library,
+    pub library: crate::shape_library::Library,
     pub show_about: bool,
     pub selected_step: Option<usize>,
     pub clipboard: Vec<Element>,

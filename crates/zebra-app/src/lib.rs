@@ -8,7 +8,7 @@ pub mod files;
 pub mod icons;
 pub mod inspector;
 pub mod inspector_s3;
-pub mod library;
+pub mod shape_library;
 pub mod mac;
 pub mod menus;
 pub mod panels;

@@ -170,7 +170,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             "library" | "iconlib" => {
                 app.library.toggle();
                 if part.trim() == "iconlib" {
-                    app.library.tab = crate::library::Tab::Icons;
+                    app.library.tab = crate::shape_library::Tab::Icons;
                     app.library.query = "chart".into();
                 }
             }

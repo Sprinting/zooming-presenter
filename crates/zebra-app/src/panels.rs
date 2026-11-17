@@ -74,7 +74,7 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     let rect = app.canvas.rect;
     floating(app, &ctx, rect, &p);
     crate::sheets::ui(app, &ctx);
-    crate::library::ui(app, &ctx, &p);
+    crate::shape_library::ui(app, &ctx, &p);
     dialogs(app, &ctx, &p);
 }
 
