@@ -25,7 +25,13 @@ app-file-filter-image = Image
 app-file-filter-video = Video
 app-file-filter-audio = Audio
 app-ai-start-failed = Couldn't start AI control: { $error }
-app-toast-error-with-hint = { $message } — { $hint }
+# When something a person did can't be done (details go to the log).
+app-error-locked = It's locked. Unlock it first.
+app-error-busy = An agent is in the middle of a change. Try again in a moment.
+app-error-io = Couldn't read or write the file.
+app-error-not-empty = The canvas isn't empty.
+app-error-not-found = That's no longer there.
+app-error-other = Couldn't do that.
 app-toast-nothing-to-play = Nothing to play yet. Double-click the canvas to write something first.
 app-toast-presenter-view-on = Presenter view will open when you present.
 app-toast-presenter-view-off = Presenter view is off.

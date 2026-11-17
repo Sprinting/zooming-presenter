@@ -317,11 +317,11 @@ impl ZebraApp {
         match r {
             Ok(v) => Some(v),
             Err(e) => {
-                let msg = match &e.hint {
-                    Some(h) => crate::t!("app-toast-error-with-hint", message = e.message.as_str(), hint = h.as_str()),
-                    None => e.message.clone(),
-                };
-                self.toast(msg);
+                // Core's messages and hints are written for agents ("unlock it
+                // first: update {patch:...}"). Log them; show the person a
+                // translated line for the kind of error.
+                eprintln!("zebra: {}: {}{}", e.code, e.message, e.hint.as_ref().map(|h| format!(" ({h})")).unwrap_or_default());
+                self.toast(crate::words::error(&e.code));
                 None
             }
         }

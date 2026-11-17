@@ -62,6 +62,18 @@ pub fn layout_description(i: &zebra_core::templates::Info) -> String {
     named("layout-description", i.id, i.description)
 }
 
+/// What a person reads when a command they gave fails, by error code.
+pub fn error(code: &str) -> String {
+    match code {
+        "locked" => t!("app-error-locked"),
+        "busy" => t!("app-error-busy"),
+        "io" => t!("app-error-io"),
+        "not_empty" => t!("app-error-not-empty"),
+        "not_found" => t!("app-error-not-found"),
+        _ => t!("app-error-other"),
+    }
+}
+
 fn command(c: &Command) -> String {
     match c {
         Command::AddElement { element } => t!("history-add-element", kind = type_name(&element.kind)),
