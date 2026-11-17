@@ -107,6 +107,51 @@ impl ApiServer {
 }
 
 /// Runs on the thread that owns the `Editor` (main thread in the app).
+/// One open document, as agents see it in `documents`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DocInfo {
+    /// Stable for as long as the document is open ("d1", "d2", ...).
+    pub id: String,
+    /// The file name without extension, or the title of an unsaved one.
+    pub name: String,
+    pub path: Option<PathBuf>,
+    /// The document the person is looking at; calls without `document` go here.
+    pub front: bool,
+    /// Unsaved changes.
+    pub edited: bool,
+}
+
+/// The host's open documents.
+pub trait Documents {
+    /// Every open document, front one included.
+    fn list(&self) -> Vec<DocInfo>;
+    /// The editor of the document with this id.
+    fn editor(&mut self, id: &str) -> Option<&mut zebra_core::Editor>;
+}
+
+/// A host with a single document.
+pub struct One<'a>(pub &'a mut zebra_core::Editor);
+
+impl Documents for One<'_> {
+    fn list(&self) -> Vec<DocInfo> {
+        vec![doc_info("d1", self.0, true)]
+    }
+    fn editor(&mut self, id: &str) -> Option<&mut zebra_core::Editor> {
+        (id == "d1").then_some(&mut *self.0)
+    }
+}
+
+/// [`DocInfo`] for `editor`, named after its file or title.
+pub fn doc_info(id: &str, editor: &zebra_core::Editor, front: bool) -> DocInfo {
+    let name = editor
+        .file_path
+        .as_ref()
+        .and_then(|p| p.file_stem())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| editor.doc.title.clone());
+    DocInfo { id: id.to_string(), name, path: editor.file_path.clone(), front, edited: editor.dirty() }
+}
+
 pub struct Dispatcher {
     pub renderer: Arc<zebra_render::Renderer>,
     /// Set by [`run_headless`]: enables the `quit` method.
@@ -117,8 +162,10 @@ pub struct Dispatcher {
     /// control off (drop the [`ApiServer`]) once replies are flushed.
     pub disconnect_requested: bool,
     events: Vec<Event>,
-    initialized: bool,
-    tx_owner: Option<u64>,
+    /// Documents whose agent permission has been set from the server's.
+    initialized: std::collections::HashSet<String>,
+    /// Who has a transaction open, per document id.
+    tx_owner: std::collections::HashMap<String, u64>,
     waits: Vec<dispatch::Wait>,
     deferred: std::collections::VecDeque<dispatch::Pending>,
     jobs: Vec<dispatch::Job>,
@@ -128,8 +175,16 @@ impl Dispatcher {
     /// Call before dropping the server when AI control is switched off:
     /// rolls back a transaction an agent left open.
     pub fn shutdown(&mut self, editor: &mut zebra_core::editor::Editor) {
-        if self.tx_owner.take().is_some() && editor.in_transaction() {
-            editor.abort();
+        self.shutdown_docs(&mut One(editor));
+    }
+    /// [`Dispatcher::shutdown`] for every open document.
+    pub fn shutdown_docs(&mut self, docs: &mut dyn Documents) {
+        for (id, _) in std::mem::take(&mut self.tx_owner) {
+            if let Some(e) = docs.editor(&id) {
+                if e.in_transaction() {
+                    e.abort();
+                }
+            }
         }
         self.waits.clear();
         self.deferred.clear();
@@ -141,8 +196,8 @@ impl Dispatcher {
             quit_requested: false,
             disconnect_requested: false,
             events: vec![],
-            initialized: false,
-            tx_owner: None,
+            initialized: Default::default(),
+            tx_owner: Default::default(),
             waits: vec![],
             deferred: Default::default(),
             jobs: vec![],
@@ -153,7 +208,12 @@ impl Dispatcher {
     ///
     /// Drains `editor.drain_events()`; get them with [`Dispatcher::take_events`].
     pub fn pump(&mut self, server: &ApiServer, editor: &mut zebra_core::Editor) -> bool {
-        self.pump_impl(server, editor)
+        self.pump_impl(server, &mut One(editor))
+    }
+    /// [`Dispatcher::pump`] for a host with several open documents: a call
+    /// naming a `document` goes to that one, every other call to the front one.
+    pub fn pump_docs(&mut self, server: &ApiServer, docs: &mut dyn Documents) -> bool {
+        self.pump_impl(server, docs)
     }
     /// Every editor event drained since the last call (human and agent).
     pub fn take_events(&mut self) -> Vec<Event> {

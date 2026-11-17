@@ -13,7 +13,7 @@ use zebra_render::CaptureTarget;
 
 /// Every method the server understands, in documentation order.
 pub const METHODS: &[&str] = &[
-    "hello", "ping", "methods", "commands", "schema", "subscribe", "unsubscribe", "state", "describe", "query",
+    "hello", "ping", "methods", "commands", "schema", "subscribe", "unsubscribe", "documents", "state", "describe", "query",
     "apply", "batch", "begin", "commit", "abort", "undo", "redo", "view", "capture", "wait", "open", "save",
     "export", "disconnect", "quit",
 ];
@@ -128,6 +128,8 @@ pub enum Call {
     Query(Query),
     Describe,
     State,
+    /// The open documents (front one first).
+    Documents,
     Capture(CaptureReq),
     Undo,
     Redo,
@@ -314,6 +316,7 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
         }
         "describe" => Call::Describe,
         "state" => Call::State,
+        "documents" => Call::Documents,
         "capture" => Call::Capture(parse_capture(&p)?),
         "undo" => Call::Undo,
         "redo" => Call::Redo,

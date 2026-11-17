@@ -415,3 +415,62 @@ fn a_labelled_apply_is_its_own_named_undo_step() {
     let e = rpc_err(c.call("apply", json!({"label":5,"command":{"op":"add_text","text":"x","x":0,"y":0}})));
     assert!(e.message.contains("label"), "{e}");
 }
+
+/// A host with two open documents: "Pitch" in front and "Notes" behind.
+struct TwoDocs {
+    eds: Vec<(String, zebra_core::Editor)>,
+}
+
+impl zebra_api::Documents for TwoDocs {
+    fn list(&self) -> Vec<zebra_api::DocInfo> {
+        self.eds.iter().enumerate().map(|(i, (id, e))| zebra_api::doc_info(id, e, i == 0)).collect()
+    }
+    fn editor(&mut self, id: &str) -> Option<&mut zebra_core::Editor> {
+        self.eds.iter_mut().find(|(i, _)| i == id).map(|(_, e)| e)
+    }
+}
+
+#[test]
+fn agents_list_documents_and_address_one_by_name_or_id() {
+    scratch();
+    use std::sync::Arc;
+    let waker: zebra_api::Waker = Arc::new(|| {});
+    let server = zebra_api::ApiServer::start(ApiOptions { socket: None, permission: Permission::Full }, waker).unwrap();
+    let (socket, token) = (server.socket_path(), server.token().to_string());
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let host = std::thread::spawn(move || {
+        let named = |t: &str| {
+            let mut e = zebra_core::Editor::default();
+            e.doc.title = t.into();
+            e
+        };
+        let mut docs = TwoDocs { eds: vec![("d1".into(), named("Pitch")), ("d2".into(), named("Notes"))] };
+        let mut d = zebra_api::Dispatcher::new(Arc::new(zebra_render::Renderer::new()));
+        while !stop2.load(std::sync::atomic::Ordering::SeqCst) {
+            d.pump_docs(&server, &mut docs);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        docs.eds.iter().map(|(_, e)| e.doc.elements.len()).collect::<Vec<_>>()
+    });
+    let mut c = Client::connect_hello(&socket, "multi", &token).unwrap();
+    let list = c.call("documents", json!({})).unwrap();
+    let names: Vec<&str> = list["documents"].as_array().unwrap().iter().map(|d| d["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Pitch", "Notes"]);
+    assert_eq!(list["documents"][0]["front"], true);
+
+    // No document named: the front one.
+    c.call("apply", json!({"command":{"op":"add_frame"}})).unwrap();
+    // By name, and by id.
+    c.call("apply", json!({"document":"Notes","command":{"op":"add_frame"}})).unwrap();
+    c.call("apply", json!({"document":"d2","op":"add_frame"})).unwrap();
+    let st = c.call("state", json!({"document":"notes"})).unwrap();
+    assert_eq!(st["document"]["id"], "d2");
+    let e = rpc_err(c.call("describe", json!({"document":"Nope"})));
+    assert_eq!(e.kind(), "not_found");
+    assert!(e.to_string().contains("Pitch"), "{e}");
+    let e = rpc_err(c.call("state", json!({"document": 3})));
+    assert_eq!(e.kind(), "invalid_params");
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(host.join().unwrap(), vec![1, 2]);
+}

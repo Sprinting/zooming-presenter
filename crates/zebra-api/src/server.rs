@@ -19,7 +19,7 @@ use crate::protocol::{self, Call, Local, Parsed, RpcError, codes};
 use crate::{ApiOptions, ClientInfo, Permission, Waker, discovery};
 
 pub(crate) enum Inbound {
-    Call { client: u64, id: Option<Value>, origin: Origin, call: Call },
+    Call { client: u64, id: Option<Value>, origin: Origin, call: Call, document: Option<String> },
     Disconnected { client: u64 },
 }
 
@@ -260,7 +260,19 @@ fn connection(id: u64, stream: UnixStream, shared: Arc<Shared>, tx: Sender<Inbou
             ));
             continue;
         };
-        let params = msg.get("params").cloned().unwrap_or(Value::Null);
+        let mut params = msg.get("params").cloned().unwrap_or(Value::Null);
+        // Any call can name the document it is for; the rest of the params
+        // are the method's own.
+        let document = match params.as_object_mut().and_then(|o| o.remove("document")) {
+            None | Some(Value::Null) => None,
+            Some(Value::String(d)) => Some(d),
+            Some(_) => {
+                if let Some(i) = &rid {
+                    reply(protocol::response_err(i, &RpcError::invalid("`document` must be a string: a document's id or name").hint("call `documents` to list them")));
+                }
+                continue;
+            }
+        };
         let respond = |r: Result<Value, RpcError>| {
             if let Some(i) = &rid {
                 reply(match r {
@@ -328,7 +340,7 @@ fn connection(id: u64, stream: UnixStream, shared: Arc<Shared>, tx: Sender<Inbou
             }
             Parsed::Call(call) => {
                 let o = origin.clone().unwrap();
-                if tx.send(Inbound::Call { client: id, id: rid.clone(), origin: o, call }).is_err() {
+                if tx.send(Inbound::Call { client: id, id: rid.clone(), origin: o, call, document }).is_err() {
                     respond(Err(RpcError::app("shutting_down", "the app is shutting down")));
                     break;
                 }

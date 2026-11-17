@@ -35,7 +35,7 @@ fn tools() -> Value {
     let cmd_defs = catalogue::defs_with_root(&[Kind::Command]);
     let view_defs = catalogue::defs_with_root(&[Kind::View]);
     let query_defs = catalogue::defs_with_root(&[Kind::Query]);
-    json!([
+    let mut v = json!([
         {
             "name": "describe",
             "title": "Describe presentation",
@@ -122,8 +122,25 @@ fn tools() -> Value {
             "description": "Every document command, view command and query with parameters, descriptions and a one-line example, plus the value types (styles, shapes, layouts...).",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true }
+        },
+        {
+            "name": "list_documents",
+            "title": "Open documents",
+            "description": "The presentations open in Zebra: id, name, path, which one is in front, unsaved changes. Every other tool takes an optional `document` (id or name); without it, tools act on the front document.",
+            "inputSchema": { "type": "object", "properties": {} },
+            "annotations": { "readOnlyHint": true }
         }
-    ])
+    ]);
+    // Every tool that reaches a document can name one.
+    for t in v.as_array_mut().into_iter().flatten() {
+        if matches!(t["name"].as_str(), Some("list_commands" | "list_documents")) {
+            continue;
+        }
+        if let Some(props) = t["inputSchema"]["properties"].as_object_mut() {
+            props.insert("document".into(), json!({ "type": "string", "description": "Id or name of the document (see list_documents). Default: the front one." }));
+        }
+    }
+    v
 }
 
 /// Connection to the app, made lazily so `initialize`/`tools/list` work
@@ -141,6 +158,8 @@ impl<F: FnMut() -> anyhow::Result<Client>> Connector for F {
 pub struct McpServer<C: Connector> {
     connector: C,
     client: Option<Client>,
+    /// The `document` of the tool call being handled.
+    document: Option<String>,
 }
 
 enum ToolOut {
@@ -150,7 +169,7 @@ enum ToolOut {
 
 impl<C: Connector> McpServer<C> {
     pub fn new(connector: C) -> Self {
-        McpServer { connector, client: None }
+        McpServer { connector, client: None, document: None }
     }
 
     /// Serve until EOF on `input`.
@@ -212,7 +231,10 @@ impl<C: Connector> McpServer<C> {
     }
 
     /// Call the app, reconnecting once if the connection dropped.
-    fn rpc(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    fn rpc(&mut self, method: &str, mut params: Value) -> Result<Value, String> {
+        if let (Some(d), Some(o)) = (&self.document, params.as_object_mut()) {
+            o.insert("document".into(), json!(d));
+        }
         for attempt in 0..2 {
             if self.client.is_none() {
                 match self.connector.connect() {
@@ -236,7 +258,9 @@ impl<C: Connector> McpServer<C> {
 
     fn call_tool(&mut self, name: &str, args: &Value) -> Result<ToolOut, Value> {
         let text = |v: Value| ToolOut::Content(vec![json!({ "type": "text", "text": pretty(&v) })]);
+        self.document = args.get("document").and_then(|d| d.as_str()).map(str::to_string);
         let out = match name {
+            "list_documents" => self.rpc("documents", json!({})).map(text),
             "list_commands" => Ok(ToolOut::Content(vec![json!({ "type": "text", "text": catalogue::catalogue_text() })])),
             "describe" => self.rpc("describe", json!({})).map(|v| {
                 let s = v.get("outline").and_then(|o| o.as_str()).map(str::to_string).unwrap_or_else(|| pretty(&v));
@@ -314,7 +338,7 @@ impl<C: Connector> McpServer<C> {
             }
             _ => {
                 return Err(json!({ "code": -32602, "message": format!("unknown tool '{name}'"),
-                    "data": { "valid_values": ["describe","get_state","apply_commands","view","query","capture","undo","list_commands"] } }));
+                    "data": { "valid_values": ["describe","get_state","apply_commands","view","query","capture","undo","list_commands","list_documents"] } }));
             }
         };
         Ok(match out {

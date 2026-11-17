@@ -35,6 +35,10 @@ struct Conn {
     /// Auth token (default: from the discovery file; env ZEBRA_TOKEN).
     #[arg(long, global = true, env = "ZEBRA_TOKEN", hide_env_values = true)]
     token: Option<String>,
+    /// The open document to act on, by id or name (see `zebractl
+    /// documents`). Default: the one in front.
+    #[arg(long, global = true)]
+    document: Option<String>,
     /// Client name shown to the human (history, status bar).
     #[arg(long, global = true, default_value = "zebractl")]
     name: String,
@@ -183,6 +187,8 @@ enum Cmd {
     },
     /// List running instances.
     Instances,
+    /// List the documents open in Zebra (id, name, which is in front).
+    Documents,
     /// Internal: the per-agent background relay that holds this agent's one
     /// connection to Zebra (started by the first command).
     #[command(name = "__relay", hide = true)]
@@ -346,7 +352,13 @@ fn print(v: &Value) {
     println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
 }
 
-fn call(cl: &mut Client, method: &str, params: Value) -> Result<Value> {
+/// `--document`, sent with every call.
+static DOCUMENT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+fn call(cl: &mut Client, method: &str, mut params: Value) -> Result<Value> {
+    if let (Some(Some(d)), Some(o)) = (DOCUMENT.get(), params.as_object_mut()) {
+        o.insert("document".into(), json!(d));
+    }
     cl.call(method, params).map_err(|e| match e {
         ClientError::Rpc(e) => anyhow!("{e}"),
         ClientError::Io(e) => anyhow!("{e}"),
@@ -358,6 +370,7 @@ fn parse_json(s: &str, what: &str) -> Result<Value> {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let _ = DOCUMENT.set(cli.conn.document.clone());
     // Commands that don't need a connection.
     match &cli.cmd {
         Cmd::Commands { markdown, json } => {
@@ -394,6 +407,7 @@ fn run(cli: Cli) -> Result<()> {
     let view = |c: &mut Client, cmd: Value| call(c, "view", json!({ "command": cmd }));
     match cli.cmd {
         Cmd::State => print(&call(c, "state", json!({}))?),
+        Cmd::Documents => print(&call(c, "documents", json!({}))?),
         Cmd::Describe => {
             let v = call(c, "describe", json!({}))?;
             match v.get("outline").and_then(|o| o.as_str()) {

@@ -12,7 +12,7 @@ use zebra_render::CaptureTarget;
 
 use crate::protocol::{self, Call, CaptureReq, ExportFormat, RpcError, WaitUntil};
 use crate::server::Inbound;
-use crate::{ApiServer, Dispatcher};
+use crate::{ApiServer, Dispatcher, Documents};
 
 /// How long a mutating call waits for a human gesture (drag, typing) to end
 /// before failing with `busy`.
@@ -24,15 +24,50 @@ pub(crate) struct Pending {
     id: Option<Value>,
     origin: Origin,
     call: Call,
+    /// The `document` the call named (id or name); None = the front one.
+    document: Option<String>,
     deadline: Instant,
 }
 
+/// The id of the document a call is for: the one it names (by id, then by
+/// name or path), else the front one.
+fn resolve(docs: &dyn Documents, want: Option<&str>) -> Result<String, RpcError> {
+    let list = docs.list();
+    let Some(w) = want else {
+        return list.iter().find(|d| d.front).or(list.first()).map(|d| d.id.clone()).ok_or_else(|| RpcError::app("not_found", "no document is open"));
+    };
+    if let Some(d) = list.iter().find(|d| d.id == w) {
+        return Ok(d.id.clone());
+    }
+    let mut hits: Vec<&crate::DocInfo> = list.iter().filter(|d| d.name == w || d.path.as_ref().is_some_and(|p| p.as_os_str() == w)).collect();
+    if hits.is_empty() {
+        hits = list.iter().filter(|d| d.name.eq_ignore_ascii_case(w)).collect();
+    }
+    match hits.as_slice() {
+        [d] => Ok(d.id.clone()),
+        [] => Err(RpcError::app("not_found", format!("no open document is called '{w}'"))
+            .hint("call `documents` for the open documents; pass an id or a name")
+            .values(list.iter().flat_map(|d| [d.id.clone(), d.name.clone()]).collect())),
+        _ => Err(RpcError::invalid(format!("{} open documents are called '{w}'", hits.len()))
+            .hint("pass the document's id instead")
+            .values(hits.iter().map(|d| d.id.clone()).collect())),
+    }
+}
+
+fn gesture(docs: &mut dyn Documents, want: Option<&str>) -> bool {
+    resolve(docs, want).ok().and_then(|id| docs.editor(&id).map(|e| e.human_gesture_active())).unwrap_or(false)
+}
+
 impl Dispatcher {
-    pub(crate) fn pump_impl(&mut self, server: &ApiServer, editor: &mut Editor) -> bool {
+    pub(crate) fn pump_impl(&mut self, server: &ApiServer, docs: &mut dyn Documents) -> bool {
         let inner = &server.inner;
-        if !self.initialized {
-            self.initialized = true;
-            editor.view.agent_permission = inner.permission;
+        for d in docs.list() {
+            if !self.initialized.contains(&d.id) {
+                if let Some(e) = docs.editor(&d.id) {
+                    e.view.agent_permission = inner.permission;
+                }
+                self.initialized.insert(d.id);
+            }
         }
         let mut handled = false;
 
@@ -40,12 +75,12 @@ impl Dispatcher {
         let mut still = VecDeque::new();
         while let Some(p) = self.deferred.pop_front() {
             let blocked_client = still.iter().any(|q: &Pending| q.client == p.client) || self.jobs.iter().any(|j| j.client == p.client);
-            if blocked_client || (editor.human_gesture_active() && Instant::now() < p.deadline) {
+            if blocked_client || (gesture(docs, p.document.as_deref()) && Instant::now() < p.deadline) {
                 still.push_back(p);
                 continue;
             }
             handled = true;
-            self.run(server, editor, p);
+            self.run(server, docs, p);
         }
         self.deferred = still;
 
@@ -56,24 +91,27 @@ impl Dispatcher {
             handled = true;
             match msg {
                 Inbound::Disconnected { client } => {
-                    if self.tx_owner == Some(client) {
-                        self.tx_owner = None;
-                        if editor.in_transaction() && !editor.human_gesture_active() {
-                            editor.abort();
+                    let owned: Vec<String> = self.tx_owner.iter().filter(|(_, c)| **c == client).map(|(d, _)| d.clone()).collect();
+                    for d in owned {
+                        self.tx_owner.remove(&d);
+                        if let Some(editor) = docs.editor(&d) {
+                            if editor.in_transaction() && !editor.human_gesture_active() {
+                                editor.abort();
+                            }
                         }
                     }
                     self.waits.retain(|w| w.client != client);
                     self.deferred.retain(|w| w.client != client);
                 }
-                Inbound::Call { client, id, origin, call } => {
-                    let p = Pending { client, id, origin, call, deadline: Instant::now() + HUMAN_GRACE };
+                Inbound::Call { client, id, origin, call, document } => {
+                    let p = Pending { client, id, origin, call, document, deadline: Instant::now() + HUMAN_GRACE };
                     let must_queue = self.deferred.iter().any(|q| q.client == client)
                         || self.jobs.iter().any(|j| j.client == client)
-                        || (p.call.mutates() && editor.human_gesture_active());
+                        || (p.call.mutates() && gesture(docs, p.document.as_deref()));
                     if must_queue {
                         self.deferred.push_back(p);
                     } else {
-                        self.run(server, editor, p);
+                        self.run(server, docs, p);
                     }
                 }
             }
@@ -101,36 +139,46 @@ impl Dispatcher {
         let mut i = 0;
         while i < self.waits.len() {
             let w = &self.waits[i];
-            let done = condition_holds(editor, &w.until);
-            if done || now >= w.deadline {
-                let w = self.waits.remove(i);
-                let r = if done {
-                    Ok(wait_result(editor))
-                } else {
-                    Err(RpcError::app("timeout", format!("timed out waiting for {:?}", w.until))
-                        .hint("increase timeout_ms, or check `state`"))
-                };
-                reply(server, w.client, &w.id, r);
-                handled = true;
-            } else {
-                i += 1;
+            let state = docs.editor(&w.doc).map(|e| (condition_holds(e, &w.until), e));
+            let r = match state {
+                None => Some(Err(RpcError::app("not_found", "the document was closed while waiting"))),
+                Some((true, e)) => Some(Ok(wait_result(e))),
+                Some((false, _)) if now >= w.deadline => Some(Err(RpcError::app("timeout", format!("timed out waiting for {:?}", w.until))
+                    .hint("increase timeout_ms, or check `state`"))),
+                Some((false, _)) => None,
+            };
+            match r {
+                Some(r) => {
+                    let w = self.waits.remove(i);
+                    reply(server, w.client, &w.id, r);
+                    handled = true;
+                }
+                None => i += 1,
             }
         }
 
         // 5. Events nobody has drained yet (e.g. human edits).
-        self.flush_events(server, editor);
+        self.flush_events(server, docs);
 
         inner.shared.poll.store(!self.waits.is_empty() || !self.deferred.is_empty() || !self.jobs.is_empty(), std::sync::atomic::Ordering::SeqCst);
         handled
     }
 
-    fn flush_events(&mut self, server: &ApiServer, editor: &mut Editor) {
-        let evs = editor.drain_events();
-        for e in evs {
-            let v = serde_json::to_value(&e).unwrap_or(Value::Null);
-            let name = v.get("event").and_then(|n| n.as_str()).unwrap_or("").to_string();
-            server.inner.shared.broadcast_event(&name, &v);
-            self.events.push(e);
+    fn flush_events(&mut self, server: &ApiServer, docs: &mut dyn Documents) {
+        let several = docs.list().len() > 1;
+        for d in docs.list() {
+            let Some(editor) = docs.editor(&d.id) else { continue };
+            for e in editor.drain_events() {
+                let mut v = serde_json::to_value(&e).unwrap_or(Value::Null);
+                let name = v.get("event").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                if several {
+                    if let Some(o) = v.as_object_mut() {
+                        o.insert("document".into(), json!(d.id));
+                    }
+                }
+                server.inner.shared.broadcast_event(&name, &v);
+                self.events.push(e);
+            }
         }
         if self.events.len() > MAX_HOST_EVENTS {
             let extra = self.events.len() - MAX_HOST_EVENTS;
@@ -138,12 +186,24 @@ impl Dispatcher {
         }
     }
 
-    fn run(&mut self, server: &ApiServer, editor: &mut Editor, p: Pending) {
+    fn run(&mut self, server: &ApiServer, docs: &mut dyn Documents, p: Pending) {
+        if let Call::Documents = &p.call {
+            reply(server, p.client, &p.id, Ok(json!({ "documents": docs.list() })));
+            return;
+        }
+        let doc = match resolve(docs, p.document.as_deref()) {
+            Ok(d) => d,
+            Err(e) => return reply(server, p.client, &p.id, Err(e)),
+        };
+        let info = docs.list().into_iter().find(|d| d.id == doc);
+        let Some(editor) = docs.editor(&doc) else {
+            return reply(server, p.client, &p.id, Err(RpcError::app("not_found", "that document was just closed")));
+        };
         if let Call::Wait { until, timeout } = &p.call {
             if condition_holds(editor, until) {
                 reply(server, p.client, &p.id, Ok(wait_result(editor)));
             } else {
-                self.waits.push(Wait { client: p.client, id: p.id, until: until.clone(), deadline: Instant::now() + *timeout });
+                self.waits.push(Wait { client: p.client, id: p.id, doc, until: until.clone(), deadline: Instant::now() + *timeout });
             }
             return;
         }
@@ -175,13 +235,18 @@ impl Dispatcher {
             }
             return;
         }
-        let r = self.execute(server, editor, p.client, &p.origin, p.call);
+        let is_state = matches!(p.call, Call::State);
+        let mut r = self.execute(server, editor, &doc, p.client, &p.origin, p.call);
+        // `state` says which document it describes.
+        if let (true, Ok(Value::Object(o)), Some(info)) = (is_state, &mut r, info) {
+            o.insert("document".into(), json!(info));
+        }
         // Events caused by this call go out before its reply.
-        self.flush_events(server, editor);
+        self.flush_events(server, docs);
         reply(server, p.client, &p.id, r);
     }
 
-    fn execute(&mut self, _server: &ApiServer, editor: &mut Editor, client: u64, origin: &Origin, call: Call) -> Result<Value, RpcError> {
+    fn execute(&mut self, _server: &ApiServer, editor: &mut Editor, doc: &str, client: u64, origin: &Origin, call: Call) -> Result<Value, RpcError> {
         let perm = editor.view.agent_permission;
         let limited = perm != Permission::Full;
         Ok(match call {
@@ -197,19 +262,19 @@ impl Dispatcher {
                 to_value(editor.apply_batch(commands, label, origin.clone())?)
             }
             Call::Begin { label } => {
-                if let Some(owner) = self.tx_owner {
+                if let Some(&owner) = self.tx_owner.get(doc) {
                     if owner != client && editor.in_transaction() {
                         return Err(RpcError::app("busy", "another client has a transaction open").hint("retry after it commits"));
                     }
                 }
                 editor.begin(label, origin.clone())?;
-                self.tx_owner = Some(client);
+                self.tx_owner.insert(doc.to_string(), client);
                 json!({ "ok": true, "revision": editor.revision })
             }
             Call::Commit | Call::Abort => {
                 let is_commit = matches!(call, Call::Commit);
-                if self.tx_owner != Some(client) || !editor.in_transaction() {
-                    self.tx_owner = None;
+                if self.tx_owner.get(doc) != Some(&client) || !editor.in_transaction() {
+                    self.tx_owner.remove(doc);
                     return Err(RpcError::app("no_transaction", "you have no open transaction").hint("call `begin {\"label\": ...}` first"));
                 }
                 if is_commit {
@@ -217,7 +282,7 @@ impl Dispatcher {
                 } else {
                     editor.abort();
                 }
-                self.tx_owner = None;
+                self.tx_owner.remove(doc);
                 json!({ "ok": true, "revision": editor.revision })
             }
             Call::View(cmd) => editor.view(cmd, origin.clone())?,
@@ -248,7 +313,7 @@ impl Dispatcher {
                 json!({ "ok": true, "path": path })
             }
             Call::Export { format, path, capture } => Self::export(&self.renderer, editor, format, path, &capture, limited)?,
-            Call::Wait { .. } => unreachable!("handled in run"),
+            Call::Wait { .. } | Call::Documents => unreachable!("handled in run"),
             Call::Disconnect => {
                 // Any agent may switch AI control off; only the human can turn
                 // it back on (there is deliberately no API to enable it).
@@ -344,6 +409,8 @@ pub(crate) struct Job {
 pub(crate) struct Wait {
     client: u64,
     id: Option<Value>,
+    /// The document whose state is awaited.
+    doc: String,
     until: WaitUntil,
     deadline: Instant,
 }

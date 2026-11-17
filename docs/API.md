@@ -113,6 +113,19 @@ call takes no params.
 | `commands` | – | the catalogue: every command, view command and query, each with its description, params, an example and its JSON schema |
 | `schema` | – | full JSON Schemas for `Command`, `ViewCommand`, `Query` and capture targets, plus the event and method lists |
 | `methods` | – | the method names |
+| `documents` | – | `{"documents": [{"id": "d1", "name": "Pitch", "path": …, "front": true, "edited": false}, …]}`: the open documents |
+
+#### Several open documents
+
+Every method that reads or changes a document takes an optional
+`"document"` param: a document's `id` from `documents`, its name, or its
+path. Without it, the call goes to the document in front, the one the
+person is looking at. `state` says which document it describes. With more
+than one document open, events carry the `document` id they come from.
+
+```json
+→ {"jsonrpc":"2.0","id":3,"method":"apply","params":{"document":"Notes","command":{"op":"add_frame"}}}
+```
 
 ```json
 → {"jsonrpc":"2.0","id":2,"method":"query","params":{"query":{"q":"elements","kind":"frame"}}}
@@ -240,6 +253,7 @@ never blocked.
 
 ```
 zebractl instances                          # running instances
+zebractl documents                          # open documents; --document <id|name> on any command picks one
 zebractl state | describe
 zebractl query '{"q":"elements","kind":"text"}'     # or: zebractl query path
 zebractl apply '{"op":"set_theme","theme":"night"}'
