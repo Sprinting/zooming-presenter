@@ -26,6 +26,8 @@ const H: Origin = Origin::Human;
 pub const TITLE_ROW: f32 = if cfg!(target_os = "macos") { 28.0 } else { 0.0 };
 /// Toolbar row under it: 44 pt items plus padding.
 pub const TOOLBAR_ROW: f32 = 50.0;
+/// Status bar at the bottom while AI control is on (Finder-style).
+pub const STATUS_ROW: f32 = 22.0;
 /// Path sidebar width.
 pub const SIDEBAR_W: f32 = 220.0;
 
@@ -46,6 +48,15 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
                 toolbar(app, ui, &p);
                 app.editor.perf.record_part("toolbar", t.elapsed().as_secs_f32() * 1000.0);
             });
+
+    // Full window width, like Finder's status bar.
+    if app.api.is_some() || app.demo_agent.is_some() {
+        egui::Panel::bottom("agent-status")
+            .exact_size(STATUS_ROW)
+            .resizable(false)
+            .frame(egui::Frame::new().fill(p.toolbar).inner_margin(egui::Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, p.border)))
+            .show(ui, |ui| status_bar(app, ui, &p));
+    }
 
     if app.show_sidebar {
         egui::Panel::left("path")
@@ -383,13 +394,8 @@ fn ai_item(app: &mut ZebraApp, ui: &mut Ui, _p: &Palette) {
     let on = app.api.is_some() || app.demo_agent.is_some();
     let connected = app.agent_connected();
     let paused = app.editor.view.agent_paused;
-    let label = if app.api_error.is_some() {
-        "AI: Error".to_string()
-    } else if connected {
-        crate::files::short(&app.agent_name(), 12)
-    } else {
-        "AI".to_string()
-    };
+    // The agent's name and what it is doing live in the status bar.
+    let label = if app.api_error.is_some() { "AI: Error".to_string() } else { "AI".to_string() };
     let tint = if app.api_error.is_some() {
         Some(Color32::from_rgb(0xff, 0x3b, 0x30))
     } else if connected && !paused {
@@ -539,6 +545,42 @@ fn copy_box(ui: &mut Ui, text: &str, id: &str) {
 
 // ----------------------------------------------------------------------
 // Over the canvas: empty-document hint, Back to Content, HUD, recovery
+
+/// The bottom status bar while AI control is on: which agent is connected
+/// and its latest change, fading to idle. Click: the Activity pane.
+fn status_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
+    const RECENT: f64 = 30.0;
+    let now = app.editor.view.now;
+    let connected = app.agent_connected();
+    let name = app.agent_name();
+    let last = app.editor.activity.iter().rev().find(|a| a.origin.is_agent()).map(|a| (a.time, a.label.clone()));
+    let (text, live) = match (connected, app.editor.view.agent_paused, &last) {
+        (true, true, _) => (format!("{name}: paused"), false),
+        (true, false, Some((t, l))) if now - t < RECENT => {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(RECENT - (now - t) + 0.05));
+            (format!("{name}: {l}"), true)
+        }
+        (true, false, _) => (format!("{name}: idle"), false),
+        (false, _, _) => ("No agent".to_string(), false),
+    };
+    let rect = ui.max_rect();
+    let resp = ui.interact(rect, egui::Id::unique("agent-status"), Sense::click());
+    let color = if live { p.text } else { p.weak };
+    let icon = Rect::from_center_size(Pos2::new(rect.left() + 7.0, rect.center().y), EVec2::splat(13.0));
+    paint_icon(ui.painter(), icon, Icon::Sparkles, if connected { AGENT } else { p.weak });
+    let max_w = rect.width() - 30.0;
+    let mut job = egui::text::LayoutJob::simple_singleline(text, style::ui_font(11.5), color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_w);
+    let galley = ui.painter().layout_job(job);
+    ui.painter().galley(Pos2::new(icon.right() + 6.0, rect.center().y - galley.size().y / 2.0), galley, color);
+    let tip = match Action::ToggleActivity.shortcut_text() {
+        Some(k) => format!("Activity  {k}"),
+        None => "Activity".to_string(),
+    };
+    if resp.on_hover_text(tip).clicked() {
+        app.show_activity = !app.show_activity;
+    }
+}
 
 fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
     // Empty-document hint (full-strength secondary text, 13 pt minimum).

@@ -290,7 +290,7 @@ fn connection(id: u64, stream: UnixStream, shared: Arc<Shared>, tx: Sender<Inbou
                     c.name = Some(name.clone());
                 }
                 origin = Some(Origin::Agent { name: name.clone() });
-                (shared.waker)(); // status pill: a client connected
+                (shared.waker)(); // status bar: a client connected
                 respond(Ok(json!({
                     "server": "zebra",
                     "version": env!("CARGO_PKG_VERSION"),

@@ -35,7 +35,7 @@ struct Conn {
     /// Auth token (default: from the discovery file; env ZEBRA_TOKEN).
     #[arg(long, global = true, env = "ZEBRA_TOKEN", hide_env_values = true)]
     token: Option<String>,
-    /// Client name shown to the human (history, status pill).
+    /// Client name shown to the human (history, status bar).
     #[arg(long, global = true, default_value = "zebractl")]
     name: String,
 }
@@ -179,6 +179,15 @@ enum Cmd {
     },
     /// List running instances.
     Instances,
+    /// Internal: the per-agent background relay that holds this agent's one
+    /// connection to Zebra (started by the first command).
+    #[command(name = "__relay", hide = true)]
+    Relay {
+        #[arg(long)]
+        zebra_socket: PathBuf,
+        #[arg(long)]
+        relay_socket: PathBuf,
+    },
     /// Switch AI control off in Zebra (only the person can switch it back on)
     Disconnect,
 }
@@ -274,6 +283,58 @@ fn connect(c: &Conn) -> Result<Client> {
     Client::discover(c.instance, c.socket.as_deref(), c.token.as_deref(), &c.name)
 }
 
+/// Connect through this agent's relay, starting it if needed (see
+/// `zebra_api::relay`). Falls back to a direct connection.
+/// `ZEBRACTL_DIRECT=1` skips the relay.
+fn connect_agent(c: &Conn, direct: bool) -> Result<Client> {
+    if direct || std::env::var_os("ZEBRACTL_DIRECT").is_some() {
+        return connect(c);
+    }
+    let (sock, tok) = match (&c.socket, &c.token) {
+        (Some(s), Some(t)) => (s.clone(), t.clone()),
+        _ => {
+            let inst = zebra_api::discovery::find(c.instance, c.socket.as_deref())?;
+            (inst.socket, c.token.clone().unwrap_or(inst.token))
+        }
+    };
+    let rs = zebra_api::relay::socket_for(&sock, &c.name);
+    if let Ok(cl) = Client::connect_hello(&rs, &c.name, &tok) {
+        return Ok(cl);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("__relay")
+            .arg("--zebra-socket")
+            .arg(&sock)
+            .arg("--relay-socket")
+            .arg(&rs)
+            .arg("--name")
+            .arg(&c.name)
+            .env("ZEBRA_TOKEN", &tok)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // Its own session: outlives this command and the agent's shell.
+        // SAFETY: setsid is async-signal-safe.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        if cmd.spawn().is_ok() {
+            for _ in 0..40 {
+                if let Ok(cl) = Client::connect_hello(&rs, &c.name, &tok) {
+                    return Ok(cl);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+    Client::connect_hello(&sock, &c.name, &tok).map_err(|e| anyhow!("{e}"))
+}
+
 fn print(v: &Value) {
     println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
 }
@@ -310,11 +371,18 @@ fn run(cli: Cli) -> Result<()> {
             print(&json!(list));
             return Ok(());
         }
+        Cmd::Relay { zebra_socket, relay_socket } => {
+            let token = cli.conn.token.clone().unwrap_or_default();
+            return zebra_api::relay::run(zebra_socket, &token, &cli.conn.name, relay_socket);
+        }
         Cmd::Mcp { spawn_headless, file, zebra_bin } => return mcp(&cli.conn, *spawn_headless, file.clone(), zebra_bin.clone()),
         _ => {}
     }
 
-    let mut cl = connect(&cli.conn)?;
+    // Event streams hold their own connection; everything else goes
+    // through the agent's relay so Zebra sees one steady connection.
+    let direct = matches!(cli.cmd, Cmd::Events { .. });
+    let mut cl = connect_agent(&cli.conn, direct)?;
     let c = &mut cl;
     let view = |c: &mut Client, cmd: Value| call(c, "view", json!({ "command": cmd }));
     match cli.cmd {
@@ -464,7 +532,7 @@ fn run(cli: Cli) -> Result<()> {
             let r = c.raw(v).map_err(|e| anyhow!("{e}"))?;
             print(&r);
         }
-        Cmd::Commands { .. } | Cmd::Instances | Cmd::Mcp { .. } => unreachable!(),
+        Cmd::Commands { .. } | Cmd::Instances | Cmd::Mcp { .. } | Cmd::Relay { .. } => unreachable!(),
     }
     Ok(())
 }

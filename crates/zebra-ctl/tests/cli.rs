@@ -33,6 +33,9 @@ fn zebractl_end_to_end() {
     assert!(ok, "{err}");
     let (ok, out, _) = ctl(&h, &data, &["describe"]);
     assert!(ok && out.contains("Hello CLI"), "{out}");
+    // Calls go through one relay holding this agent's single connection.
+    let relay = zebra_api::relay::socket_for(&h.socket, "zebractl");
+    assert!(relay.exists(), "relay socket {}", relay.display());
     let (ok, out, _) = ctl(&h, &data, &["apply", r#"[{"op":"set_title","title":"T"},{"op":"auto_path"}]"#, "--label", "Two"]);
     assert!(ok, "{out}");
     let (ok, out, _) = ctl(&h, &data, &["query", "history"]);

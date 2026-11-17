@@ -44,6 +44,7 @@ mod dispatch;
 mod headless;
 pub mod mcp;
 pub mod protocol;
+pub mod relay;
 mod server;
 
 pub use dispatch::EVENT_NAMES;
@@ -65,7 +66,7 @@ impl Default for ApiOptions {
     }
 }
 
-/// A connected (authenticated) client, for the agent status pill.
+/// A connected (authenticated) client, for the agent status bar.
 #[derive(Debug, Clone)]
 pub struct ClientInfo {
     pub id: u64,

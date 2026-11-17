@@ -1884,7 +1884,7 @@ pub fn draw_agent_presence(app: &ZebraApp, painter: &Painter) -> Option<ERect> {
                 painter.add(Shape::convex_polygon(pts, agent, Stroke::new(1.5, white)));
                 let galley = painter.layout_no_wrap(name, style::ui_font(12.0), white);
                 let r = ERect::from_min_size(p + egui::vec2(12.0, 16.0), galley.size() + egui::vec2(12.0, 6.0));
-                painter.rect_filled(r, 6.0, agent);
+                painter.rect_filled(r, 3.0, agent);
                 painter.galley(r.min + egui::vec2(6.0, 3.0), galley, white);
             } else {
                 // Edge arrow + label pointing to off-screen agent edits;
@@ -1907,7 +1907,7 @@ pub fn draw_agent_presence(app: &ZebraApp, painter: &Painter) -> Option<ERect> {
                     (inner.min.x - r.min.x).max(0.0) + (inner.max.x - r.max.x).min(0.0),
                     (inner.min.y - r.min.y).max(0.0) + (inner.max.y - r.max.y).min(0.0),
                 ));
-                painter.rect_filled(r, r.height() / 2.0, agent);
+                painter.rect_filled(r, 3.0, agent);
                 painter.galley(r.min + egui::vec2(7.0, 3.0), galley, white);
                 edge = Some(r);
             }

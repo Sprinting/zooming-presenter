@@ -65,6 +65,22 @@ impl Client {
         Ok(c)
     }
 
+    /// True once the server has closed the connection (checked without
+    /// blocking or consuming anything).
+    pub fn peer_closed(&self) -> bool {
+        use std::os::fd::AsRawFd;
+        if !self.reader.buffer().is_empty() {
+            return false;
+        }
+        let mut b = [0u8; 1];
+        // SAFETY: valid fd and buffer; MSG_PEEK leaves the byte unread.
+        let n = unsafe { libc::recv(self.writer.as_raw_fd(), b.as_mut_ptr().cast(), 1, libc::MSG_PEEK | libc::MSG_DONTWAIT) };
+        if n == 0 {
+            return true;
+        }
+        n < 0 && !matches!(std::io::Error::last_os_error().kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted)
+    }
+
     /// Find a running instance via discovery (newest, or by pid / socket),
     /// connect and say hello. `token` overrides the discovery file's.
     pub fn discover(pid: Option<u32>, socket: Option<&Path>, token: Option<&str>, name: &str) -> anyhow::Result<Client> {
