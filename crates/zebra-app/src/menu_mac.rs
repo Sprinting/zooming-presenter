@@ -270,6 +270,24 @@ fn pasteboard_text() -> Option<String> {
     Some(s.to_string())
 }
 
+/// Menu clicks, delivered here and waking the app: with no window open,
+/// nothing else would wake it to act on them.
+fn next_event(ctx: &egui::Context) -> Option<MenuEvent> {
+    use std::sync::mpsc::{Receiver, channel};
+    use std::sync::{Mutex, OnceLock};
+    static RX: OnceLock<Mutex<Receiver<MenuEvent>>> = OnceLock::new();
+    let rx = RX.get_or_init(|| {
+        let (tx, rx) = channel();
+        let c = ctx.clone();
+        MenuEvent::set_event_handler(Some(move |e| {
+            let _ = tx.send(e);
+            c.request_repaint();
+        }));
+        Mutex::new(rx)
+    });
+    rx.lock().ok()?.try_recv().ok()
+}
+
 pub fn poll(app: &mut ZebraApp, ctx: &egui::Context) {
     // AppKit menus exist only on the main thread. Test harnesses run the
     // app on worker threads: they get egui's own shortcuts instead.
@@ -302,7 +320,7 @@ pub fn poll(app: &mut ZebraApp, ctx: &egui::Context) {
         m.sync(app);
         app.menu = Some(m);
     }
-    while let Ok(ev) = MenuEvent::receiver().try_recv() {
+    while let Some(ev) = next_event(ctx) {
         let Some(a) = app.menu.as_ref().and_then(|m| m.ids.get(ev.id().0.as_str()).cloned()) else { continue };
         // Settings › Keyboard is recording: a key the menu bar owns was
         // pressed. Hand its keys to the recorder instead of acting.

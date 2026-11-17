@@ -95,3 +95,17 @@ fn a_window_with_unsaved_changes_asks_before_closing() {
     assert_eq!(h.state().windows.len(), 2, "still open");
     assert!(h.state().windows[1].sheet_showing(), "Save Changes is asked");
 }
+
+#[test]
+fn closing_the_last_window_keeps_zebra_running() {
+    let mut h = harness();
+    add_frame(&mut h.state_mut().windows[0]);
+    h.state_mut().windows[0].editor.mark_saved(None);
+    h.state_mut().windows[0].queued.push(Action::Close);
+    h.run_steps(3);
+    let s = h.state();
+    assert!(s.empty, "like Keynote: no window, still running");
+    assert_eq!(s.windows.len(), 1);
+    assert!(s.windows[0].is_pristine(), "a new document waits in the hidden window");
+    assert!(!s.windows[0].force_quit);
+}

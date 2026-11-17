@@ -125,6 +125,12 @@ pub struct Shell {
     dispatcher: Option<zebra_api::Dispatcher>,
     next_id: u32,
     quitting: bool,
+    /// Every document is closed: the root window is hidden and Zebra runs
+    /// with only its menu bar, like Keynote.
+    pub empty: bool,
+    /// A window made by the tab bar's + button: (new window, the window
+    /// whose tab group it joins) until AppKit has both.
+    tab_into: Option<(String, String)>,
 }
 
 /// The placeholder title a new window is created with, so its NSWindow
@@ -139,7 +145,8 @@ impl Shell {
         first.front = true;
         first.doc_id = "d1".into();
         let dispatcher = first.dispatcher.take();
-        Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false }
+        crate::mac::install_reopen_hook(&first.ctx);
+        Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None }
     }
 
     /// After window `i` ran: if it changed a shared setting, every window
@@ -186,9 +193,27 @@ impl Shell {
     /// another document moves into it instead.
     fn close_window(&mut self, ctx: &egui::Context, i: usize) {
         if self.windows.len() == 1 {
-            // The last window: quit, as Zebra always has.
-            self.windows[0].force_quit = true;
-            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+            if self.quitting {
+                self.windows[0].force_quit = true;
+                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+                return;
+            }
+            // The last window: like Keynote, Zebra keeps running with only
+            // its menu bar. The hidden root window waits with a new document.
+            let id = format!("d{}", self.next_id);
+            self.next_id += 1;
+            let mut fresh = self.windows[0].new_window(id);
+            fresh.front = true;
+            #[cfg(target_os = "macos")]
+            {
+                fresh.menu = self.windows[0].menu.take();
+                fresh.mac_sync = std::mem::take(&mut self.windows[0].mac_sync);
+            }
+            self.shared.write(&mut fresh);
+            self.windows[0] = fresh;
+            self.front = 0;
+            self.empty = true;
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(false));
             return;
         }
         if i == 0 {
@@ -313,8 +338,36 @@ impl zebra_api::Documents for Docs<'_> {
     }
 }
 
+impl Shell {
+    /// No window open: the menu bar and a Dock click bring one back.
+    fn logic_empty(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        crate::menu_mac::poll(&mut self.windows[0], ctx);
+        let w = &mut self.windows[0];
+        if w.queued.contains(&Action::Quit) {
+            w.force_quit = true;
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+            return;
+        }
+        let reopen = crate::mac::take_reopen();
+        if reopen && w.queued.is_empty() {
+            // Like a fresh launch: the template chooser.
+            w.welcome = Some(crate::welcome::Welcome::new());
+        }
+        if reopen || !w.queued.is_empty() {
+            self.empty = false;
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+            ctx.request_repaint();
+        }
+    }
+}
+
 impl eframe::App for Shell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.empty {
+            self.logic_empty(ctx);
+        }
         for i in 0..self.windows.len() {
             self.windows[i].logic(ctx);
             self.sync_from(i);
@@ -376,6 +429,24 @@ impl eframe::App for Shell {
             self.set_front(i);
         }
         self.handle_requests(&ctx);
+
+        // The + in a tab bar: a new document as the next tab.
+        if crate::mac::take_new_tab() {
+            let parent = self.windows[self.front].doc_id.clone();
+            self.open_window(Action::New);
+            self.tab_into = Some((self.windows[self.front].doc_id.clone(), parent));
+        }
+        if let Some((child, parent)) = self.tab_into.clone() {
+            let find = |id: &str| self.windows.iter().position(|w| w.doc_id == id);
+            match (find(&child), find(&parent)) {
+                (Some(c), Some(p)) => {
+                    if crate::mac::add_tab(&self.windows[p], &self.windows[c]) {
+                        self.tab_into = None;
+                    }
+                }
+                _ => self.tab_into = None,
+            }
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

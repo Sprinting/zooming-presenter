@@ -145,7 +145,10 @@ mod imp {
         if s.title == title && s.edited == edited && s.url == url {
             return;
         }
-        let Some(win) = frame.and_then(ns_window).or_else(|| s.window.clone()) else { return };
+        if s.window.is_none() {
+            s.window = frame.and_then(ns_window);
+        }
+        let Some(win) = s.window.clone() else { return };
         if s.title != title {
             win.setTitle(&NSString::from_str(&title));
             s.title = title;
@@ -164,6 +167,110 @@ mod imp {
 
 #[cfg(target_os = "macos")]
 pub use imp::WindowSync;
+
+/// Clicking the Dock icon while no window is open asks for one (like
+/// Keynote). Call once; [`take_reopen`] then says when it happened.
+pub fn install_reopen_hook(ctx: &egui::Context) {
+    #[cfg(target_os = "macos")]
+    reopen::install(ctx);
+    #[cfg(not(target_os = "macos"))]
+    let _ = ctx;
+}
+
+/// True once after the + button in a window's tab bar was clicked.
+pub fn take_new_tab() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        reopen::NEW_TAB.swap(false, std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// Put `child` into `parent`'s tab group, after its current tab.
+pub fn add_tab(app_parent: &crate::app::ZebraApp, child: &crate::app::ZebraApp) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let (Some(p), Some(c)) = (&app_parent.mac_sync.window, &child.mac_sync.window) else { return false };
+        p.addTabbedWindow_ordered(c, objc2_app_kit::NSWindowOrderingMode::Above);
+        c.makeKeyAndOrderFront(None);
+        true
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app_parent, child);
+        true
+    }
+}
+
+/// True once after the Dock icon was clicked with no window open.
+pub fn take_reopen() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        reopen::REOPEN.swap(false, std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod reopen {
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
+    use objc2::{Encode, sel};
+
+    pub static REOPEN: AtomicBool = AtomicBool::new(false);
+    pub static NEW_TAB: AtomicBool = AtomicBool::new(false);
+
+    /// The + in the tab bar: AppKit shows it when someone answers this.
+    unsafe extern "C-unwind" fn new_window_for_tab(_this: *mut AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
+        NEW_TAB.store(true, Ordering::SeqCst);
+        if let Some(c) = WAKE.get() {
+            c.request_repaint();
+        }
+    }
+    static WAKE: OnceLock<egui::Context> = OnceLock::new();
+
+    unsafe extern "C-unwind" fn should_reopen(_this: *mut AnyObject, _cmd: Sel, _app: *mut AnyObject, has_visible: Bool) -> Bool {
+        if !has_visible.as_bool() {
+            REOPEN.store(true, Ordering::SeqCst);
+            if let Some(c) = WAKE.get() {
+                c.request_repaint();
+            }
+        }
+        Bool::YES
+    }
+
+    /// winit's app delegate doesn't answer
+    /// `applicationShouldHandleReopen:hasVisibleWindows:`; add it.
+    pub fn install(ctx: &egui::Context) {
+        if WAKE.set(ctx.clone()).is_err() {
+            return;
+        }
+        let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+        let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        let Some(delegate) = app.delegate() else { return };
+        let obj: &AnyObject = delegate.as_ref();
+        let cls: &AnyClass = obj.class();
+        let types = std::ffi::CString::new(format!("{}@:@{}", Bool::ENCODING, Bool::ENCODING)).unwrap_or_default();
+        // SAFETY: the function matches the selector's signature and the
+        // type string; adding a method to a live class is what the
+        // runtime API is for. A class that already has it keeps its own.
+        unsafe {
+            let imp: Imp = std::mem::transmute(should_reopen as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, Bool) -> Bool);
+            objc2::ffi::class_addMethod(cls as *const AnyClass as *mut AnyClass, sel!(applicationShouldHandleReopen:hasVisibleWindows:), imp, types.as_ptr());
+            let types = std::ffi::CString::new("v@:@").unwrap_or_default();
+            let imp: Imp = std::mem::transmute(new_window_for_tab as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject));
+            objc2::ffi::class_addMethod(cls as *const AnyClass as *mut AnyClass, sel!(newWindowForTab:), imp, types.as_ptr());
+        }
+    }
+}
 
 /// Off macOS there is nothing to sync.
 #[cfg(not(target_os = "macos"))]
