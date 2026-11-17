@@ -132,3 +132,10 @@ impl Transform {
         (p - self.center()).rotate_deg(-self.rotation) * (1.0 / self.scale)
     }
 }
+
+/// Width and height of the axis-aligned box around a `w`×`h` box turned by
+/// `rotation` degrees.
+pub fn rotated_extent(w: f64, h: f64, rotation: f64) -> (f64, f64) {
+    let (s, c) = rotation.to_radians().sin_cos();
+    (w * c.abs() + h * s.abs(), w * s.abs() + h * c.abs())
+}

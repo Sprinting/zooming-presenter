@@ -872,6 +872,49 @@ pub fn truncate(s: &str, n: usize) -> String {
 }
 
 impl Document {
+    /// The centre nearest `at` where a `w`×`h` box (world units, axis
+    /// aligned) overlaps nothing, with a small gap around it. A box wholly
+    /// inside a bigger object, such as a background frame, is fine as long
+    /// as it overlaps nothing else. Gives `at` back when no space turns up
+    /// within a few box sizes.
+    pub fn free_spot(&self, at: Vec2, w: f64, h: f64) -> Vec2 {
+        if !(w > 0.0 && h > 0.0 && at.x.is_finite() && at.y.is_finite()) {
+            return at;
+        }
+        let gap = w.min(h) * 0.1;
+        let boxes: Vec<Rect> = self.ordered().map(|e| e.bounds()).collect();
+        let fits = |c: Vec2| {
+            let r = Rect { x0: c.x - w / 2.0, y0: c.y - h / 2.0, x1: c.x + w / 2.0, y1: c.y + h / 2.0 }.inflate(gap);
+            boxes.iter().all(|o| !o.intersects(&r) || o.contains_rect(&r))
+        };
+        if fits(at) {
+            return at;
+        }
+        // Rings of a grid around `at`, nearest first; stop once a ring can't
+        // beat the best spot found.
+        let step = w.min(h) / 4.0;
+        let rings = ((4.0 * w.max(h)) / step).ceil() as i64;
+        let mut best: Option<(f64, Vec2)> = None;
+        for k in 1..=rings {
+            if best.is_some_and(|(d, _)| d < k as f64 * step) {
+                break;
+            }
+            for i in -k..=k {
+                for j in -k..=k {
+                    if i.abs() != k && j.abs() != k {
+                        continue;
+                    }
+                    let c = Vec2::new(at.x + i as f64 * step, at.y + j as f64 * step);
+                    let d = (c - at).len();
+                    if best.is_none_or(|(b, _)| d < b) && fits(c) {
+                        best = Some((d, c));
+                    }
+                }
+            }
+        }
+        best.map(|(_, c)| c).unwrap_or(at)
+    }
+
     pub fn get(&self, id: &str) -> Option<&Element> {
         self.elements.get(id)
     }

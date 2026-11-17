@@ -512,6 +512,7 @@ impl ZebraApp {
                 self.view_cmd(ViewCommand::SetFrameStyle { style: s });
                 self.view_cmd(ViewCommand::SetTool { tool: Tool::Frame });
             }
+            InsertFrame => crate::canvas::insert_frame(self),
             InsertVideo => crate::media_ui::insert_video_dialog(self),
             InsertMusic => crate::media_ui::soundtrack_dialog(self),
             ReplaceImage => {

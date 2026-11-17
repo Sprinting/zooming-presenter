@@ -37,6 +37,8 @@ pub enum Action {
     SetTool(Tool),
     FrameTool,
     SetFrameStyle(FrameStyle),
+    /// A frame in the nearest empty space.
+    InsertFrame,
     InsertImage,
     InsertLayout,
     /// Background music for the presentation.
@@ -131,6 +133,7 @@ impl Action {
             Deselect => crate::t!("action-deselect"),
             SetTool(t) => crate::t!("action-set-tool", tool = tool_name(*t)),
             FrameTool => crate::t!("action-frame-tool"),
+            InsertFrame => crate::t!("action-insert-frame"),
             SetFrameStyle(s) => crate::t!("action-set-frame-style", style = frame_name(*s)),
             InsertImage => crate::t!("action-insert-image"),
             InsertLayout => crate::t!("action-insert-layout"),
@@ -204,7 +207,7 @@ impl Action {
             v.push(SetTool(t.0));
         }
         v.extend([
-            InsertImage, InsertLayout, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
+            InsertFrame, InsertImage, InsertLayout, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
             FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ShowShortcuts, Settings, ShapeLibrary,
             InsertVideo, InsertMusic, ReplaceImage, CropImage, PlayPauseVideo, Group, Ungroup,
             TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, TogglePresenterView, PlaybackOptions, ToggleAiControl, ToggleActivity,

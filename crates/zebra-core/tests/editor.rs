@@ -476,3 +476,24 @@ fn an_agent_status_is_one_short_line_and_empty_clears_it() {
     assert!(ed.view.agent_status.is_empty());
     assert!(ed.view(cmd_view(serde_json::json!({"op":"set_status","text":"hi"})), Origin::Human).is_err());
 }
+
+#[test]
+fn a_frame_asked_to_find_space_lands_beside_what_is_there() {
+    let mut ed = Editor::default();
+    let a = Origin::agent("test");
+    ed.apply(cmd(serde_json::json!({"op":"add_frame","id":"big","x":0,"y":0,"w":4000,"h":3000})), a.clone()).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"add_frame","id":"a","x":0,"y":0,"w":800,"h":600})), a.clone()).unwrap();
+    // Asked for the same spot: moves off "a" but stays inside "big".
+    ed.apply(cmd(serde_json::json!({"op":"add_frame","id":"b","x":0,"y":0,"w":800,"h":600,"find_space":true})), a.clone()).unwrap();
+    let (fa, fb) = (ed.doc.elements["a"].bounds(), ed.doc.elements["b"].bounds());
+    assert!(!fa.intersects(&fb), "{fa:?} {fb:?}");
+    assert!(ed.doc.elements["big"].bounds().contains_rect(&fb));
+    let c = fb.center();
+    assert!(c.x.hypot(c.y) < 1400.0, "too far: {c:?}");
+    // Free spot asked for: kept exactly.
+    ed.apply(cmd(serde_json::json!({"op":"add_frame","id":"c","x":9000,"y":9000,"find_space":true})), a.clone()).unwrap();
+    assert_eq!((ed.doc.elements["c"].transform.x, ed.doc.elements["c"].transform.y), (9000.0, 9000.0));
+    // Without the flag, frames still go exactly where asked.
+    ed.apply(cmd(serde_json::json!({"op":"add_frame","id":"d","x":0,"y":0,"w":800,"h":600})), a).unwrap();
+    assert_eq!(ed.doc.elements["d"].transform.x, 0.0);
+}

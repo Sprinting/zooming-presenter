@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::camera::Camera;
 use crate::command::*;
 use crate::error::{ZError, ZResult};
-use crate::geom::{Rect, Transform, Vec2};
+use crate::geom::{rotated_extent, Rect, Transform, Vec2};
 use crate::model::*;
 use crate::theme::{valid_color, Theme};
 use crate::view::{Mode, Permission, ViewState};
@@ -668,8 +668,15 @@ impl Editor {
                     self.apply_inner(Command::Group { ids: vec![h.id, new], id: None }, out)?;
                 }
             }
-            Command::AddFrame { style, x, y, w, h, rotation, name, id, add_to_path } => {
+            Command::AddFrame { style, x, y, w, h, rotation, name, id, add_to_path, find_space } => {
                 let (w, h) = if style == FrameStyle::Circle { (w.max(h), w.max(h)) } else { (w, h) };
+                let (x, y) = if find_space {
+                    let (bw, bh) = rotated_extent(w, h, rotation);
+                    let c = self.doc.free_spot(Vec2::new(x, y), bw, bh);
+                    (c.x, c.y)
+                } else {
+                    (x, y)
+                };
                 let e = Element {
                     id: id.unwrap_or_default(),
                     transform: Transform { x, y, scale: 1.0, rotation },
@@ -1127,7 +1134,7 @@ impl Editor {
                     (r.width(), r.height())
                 };
                 self.apply_inner(
-                    Command::AddFrame { style, x: c.x, y: c.y, w, h, rotation: 0.0, name: None, id: None, add_to_path },
+                    Command::AddFrame { style, x: c.x, y: c.y, w, h, rotation: 0.0, name: None, id: None, add_to_path, find_space: false },
                     out,
                 )?;
             }

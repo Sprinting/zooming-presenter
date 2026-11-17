@@ -61,6 +61,10 @@ pub enum Command {
         /// Also append the new frame to the end of the path.
         #[serde(default)]
         add_to_path: bool,
+        /// If the frame would overlap other objects at `x`,`y`, put it in
+        /// the nearest empty space instead.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        find_space: bool,
     },
     AddShape {
         shape: ShapeKind,

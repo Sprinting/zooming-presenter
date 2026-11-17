@@ -923,6 +923,37 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
     }
 }
 
+/// Size on screen of a frame placed with a click.
+fn frame_size(style: FrameStyle) -> (f64, f64) {
+    match style {
+        FrameStyle::Circle => (360.0, 360.0),
+        _ => (480.0, 320.0),
+    }
+}
+
+/// Insert › New Frame: a frame of the current style in the nearest empty
+/// space, beside the selection or else in the middle of the view.
+pub fn insert_frame(app: &mut ZebraApp) {
+    let cam = app.editor.view.target_camera();
+    let style = app.editor.view.frame_style;
+    let (w, h) = frame_size(style);
+    let s = 1.0 / cam.zoom;
+    let (bw, bh) = zebra_core::geom::rotated_extent(w * s, h * s, cam.rotation);
+    let sel = app.selection();
+    let at = if sel.is_empty() {
+        app.canvas_center_world()
+    } else {
+        let b = app.editor.bounds_of(&sel);
+        Vec2::new(b.x1 + bw / 2.0 + bw.min(bh) * 0.15, b.center().y)
+    };
+    let at = app.editor.doc.free_spot(at, bw, bh);
+    let el = NewElement { id: None, x: at.x, y: at.y, scale: s, rotation: cam.rotation, w: Some(w), h: Some(h), name: String::new(), kind: ElementKind::Frame(FrameData { style, color: None }) };
+    if let Some(out) = app.apply(Command::AddElement { element: el }) {
+        app.select(out.created);
+        reveal_selection(app);
+    }
+}
+
 fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
     let zoom = app.editor.view.camera.zoom;
     let rot = app.editor.view.camera.rotation;
@@ -936,10 +967,7 @@ fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
     let line = matches!(tool, Tool::Line | Tool::Arrow);
     if !dragged {
         let (dw, dh) = match tool {
-            Tool::Frame => match app.editor.view.frame_style {
-                FrameStyle::Circle => (360.0, 360.0),
-                _ => (480.0, 320.0),
-            },
+            Tool::Frame => frame_size(app.editor.view.frame_style),
             Tool::Ellipse => (140.0, 140.0),
             Tool::Line | Tool::Arrow => (160.0, 0.0),
             _ => (160.0, 110.0),
@@ -1002,6 +1030,12 @@ fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
         }
     };
     let is_frame = matches!(kind, ElementKind::Frame(_));
+    // A clicked frame that would cover other objects moves to the nearest
+    // empty space; a drawn one stays where it was drawn.
+    if is_frame && !dragged {
+        let (bw, bh) = zebra_core::geom::rotated_extent(w * s, h * s, rotation);
+        center = app.editor.doc.free_spot(center, bw, bh);
+    }
     let el = NewElement { id: None, x: center.x, y: center.y, scale: s, rotation, w: Some(w), h: Some(h), name: String::new(), kind };
     if let Some(out) = app.apply(Command::AddElement { element: el }) {
         app.select(out.created.clone());

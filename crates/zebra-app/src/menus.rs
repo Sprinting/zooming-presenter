@@ -45,6 +45,7 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
             crate::t!("menu-insert"),
             vec![
                 A(SetTool(Tool::Text)),
+                A(InsertFrame),
                 Sub(crate::t!("menu-frame"), FrameStyle::ALL.iter().map(|s| A(SetFrameStyle(*s))).collect()),
                 Sub(crate::t!("menu-shape"), vec![A(SetTool(Tool::Rectangle)), A(SetTool(Tool::Ellipse)), Sep, A(ShapeLibrary)]),
                 A(SetTool(Tool::Line)),
