@@ -48,7 +48,7 @@ raw-window-handle = "0.6"
 winit = "0.30"
 
 [dev-dependencies]
-egui_kittest = { workspace = true, features = ["eframe"] }
+egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { workspace = true, features = ["x11", "wayland"] }
