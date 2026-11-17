@@ -31,6 +31,12 @@ dirs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda.workspace = true
+# Window-level AppKit calls only (title, edited dot, proxy icon, accent
+# colour, Reduce Motion, App Nap). Never controls inside the egui UI.
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+raw-window-handle = "0.6"
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["eframe"] }

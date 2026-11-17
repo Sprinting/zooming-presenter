@@ -207,6 +207,10 @@ impl Editor {
     pub fn undo_label(&self) -> Option<String> {
         self.undo.last().map(|h| format!("{} ({})", h.label, h.origin.display()))
     }
+    /// The entry Redo would re-apply (for "Redo Rotate" in the Edit menu).
+    pub fn redo_entry(&self) -> Option<&HistoryEntry> {
+        self.redo.last()
+    }
     pub fn in_transaction(&self) -> bool {
         self.tx.is_some()
     }

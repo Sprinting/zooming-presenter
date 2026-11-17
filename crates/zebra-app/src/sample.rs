@@ -109,6 +109,12 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
     for part in which.split(',') {
         match part.trim() {
             "sample" => {}
+            // Debug: every chrome icon, large and at toolbar size.
+            "icons" => app.show_icon_sheet = true,
+            // Debug: the Settings window, a sheet, the inspector on text.
+            "settings" => app.show_settings = true,
+            "sheet" => crate::sheets::request(app, crate::sheets::SheetKind::ClearPath),
+            "dark" => ctx.set_theme(egui::Theme::Dark),
             // Debug: AI popover open (off), or with AI control switched on.
             "aipanel" => app.open_ai_panel = true,
             "aion" => {

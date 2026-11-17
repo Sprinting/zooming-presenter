@@ -626,7 +626,7 @@ fn update_gesture(app: &mut ZebraApp, p: Pos2, delta: egui::Vec2, shift: bool, a
         }
         Gesture::Move { ids, origin, applied, start_bounds, moving } => {
             let raw = world - *origin;
-            let (d, guides) = if alt { (raw, vec![]) } else { snap_move(app, moving, start_bounds, raw, 6.0 / zoom) };
+            let (d, guides) = if alt || !app.snapping { (raw, vec![]) } else { snap_move(app, moving, start_bounds, raw, 6.0 / zoom) };
             app.canvas.guides = guides;
             let inc = d - *applied;
             if inc.x != 0.0 || inc.y != 0.0 {
