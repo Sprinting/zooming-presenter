@@ -129,10 +129,10 @@ impl CameraFlight {
     pub fn sample(&self, now: f64, viewport: Vec2) -> Camera {
         let t = ease_in_out(self.progress(now));
         if t >= 1.0 {
-            return self.to;
+            return Camera { zoom: sane_zoom(self.to.zoom), ..self.to };
         }
         if t <= 0.0 {
-            return self.from;
+            return Camera { zoom: sane_zoom(self.from.zoom), ..self.from };
         }
         let rot = lerp_angle(self.from.rotation, self.to.rotation, t);
         let z0 = sane_zoom(self.from.zoom);
@@ -287,9 +287,7 @@ mod tests {
         assert!(f.duration.is_finite());
         for i in 0..=10 {
             let c = f.sample(f.duration * i as f64 / 10.0, vp);
-            if i < 10 {
-                assert!(c.cx.is_finite() && c.cy.is_finite() && c.zoom.is_finite() && c.zoom > 0.0);
-            }
+            assert!(c.cx.is_finite() && c.cy.is_finite() && c.zoom.is_finite() && c.zoom > 0.0);
         }
         let z = CameraFlight::new(Camera::default(), Camera::default(), 0.0, vp, false).with_duration(f64::NAN);
         assert_eq!(z.duration, 0.0);
