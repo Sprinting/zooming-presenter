@@ -64,6 +64,7 @@ pub struct SceneOptions {
 
 pub mod display;
 pub mod images;
+pub mod svg;
 mod clip;
 pub use display::DisplayList;
 

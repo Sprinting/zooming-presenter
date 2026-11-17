@@ -210,6 +210,8 @@ struct Job {
     ext: String,
     bytes: AssetBytes,
     size: (u32, u32),
+    /// SVG symbols: how to draw them.
+    svg: Option<crate::svg::SvgStyle>,
 }
 
 /// Thread-safe decoded-image cache; see the module docs.
@@ -281,6 +283,17 @@ impl ImageCache {
     /// While a worker decodes, returns the nearest cached level instead, or
     /// None if there is none yet.
     pub fn get(&self, asset: &str, ext: &str, bytes: &AssetBytes, size: (u32, u32), level: u8, sync: bool) -> Option<Decoded> {
+        self.get_styled(asset, ext, bytes, size, level, sync, None)
+    }
+
+    /// An SVG symbol drawn with `style`. Each style is its own cache entry,
+    /// keyed `key` (the asset key plus the style).
+    pub fn get_svg(&self, key: &str, bytes: &AssetBytes, size: (u32, u32), level: u8, sync: bool, style: crate::svg::SvgStyle) -> Option<Decoded> {
+        self.get_styled(key, "svg", bytes, size, level, sync, Some(style))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn get_styled(&self, asset: &str, ext: &str, bytes: &AssetBytes, size: (u32, u32), level: u8, sync: bool, svg: Option<crate::svg::SvgStyle>) -> Option<Decoded> {
         let g = self.shared.generation.load(Ordering::Relaxed);
         let key: Key = (asset.to_string(), level);
         {
@@ -296,7 +309,7 @@ impl ImageCache {
                 if !i.pending.contains(&key) {
                     i.pending.insert(key.clone());
                     drop(i);
-                    self.enqueue(Job { key, ext: ext.to_string(), bytes: bytes.clone(), size });
+                    self.enqueue(Job { key, ext: ext.to_string(), bytes: bytes.clone(), size, svg });
                     i = lock(&self.shared.inner);
                 }
                 // Nearest cached level: prefer sharper, then blurrier.
@@ -311,7 +324,7 @@ impl ImageCache {
                 });
             }
         }
-        let out = decode_job(&Job { key: key.clone(), ext: ext.to_string(), bytes: bytes.clone(), size });
+        let out = decode_job(&Job { key: key.clone(), ext: ext.to_string(), bytes: bytes.clone(), size, svg });
         insert(&self.shared, key, out, g)
     }
 
@@ -389,6 +402,20 @@ fn decode_job(job: &Job) -> Vec<(u8, Decoded)> {
     let last = last_level(w, h);
     let level = job.key.1.min(last);
     let asset = job.key.0.as_str();
+    if job.ext == "svg" {
+        // Drawn at each level's size, so it is sharp at any zoom.
+        let style = job.svg.unwrap_or_default();
+        let make = |l: u8| {
+            let (lw, lh) = level_size(w, h, l);
+            crate::svg::rasterize(&job.bytes, &style, lw, lh).map(|px| Decoded::Still(Arc::new(ImageLevel::from_premultiplied(asset, lw, lh, px))))
+        };
+        let Some(first) = make(level) else { return vec![] };
+        let mut out = vec![(job.key.1, first)];
+        if level != last {
+            out.extend(make(last).map(|d| (last, d)));
+        }
+        return out;
+    }
     if job.ext == "gif" {
         if let Some(a) = decode_gif(asset, &job.bytes, (w, h), level) {
             return vec![(job.key.1, a)];

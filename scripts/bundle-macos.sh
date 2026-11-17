@@ -35,6 +35,15 @@ done
 sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
 [ -f packaging/macos/Zebra.icns ] && cp packaging/macos/Zebra.icns "$APP/Contents/Resources/"
 cp assets/icons/LICENSE-lucide.txt "$APP/Contents/Resources/"
+# The clip-art library (Insert > Symbols & Shapes). Not in git: unzip
+# zebra-symbols.zip into assets/symbols, or rebuild it with
+# tools/symbols/build_pack.py. Without it the Symbols tab says so.
+if [ -f assets/symbols/sets.json ]; then
+  mkdir -p "$APP/Contents/Resources/Symbols"
+  cp -L assets/symbols/sets.json assets/symbols/*.idx assets/symbols/*.dat "$APP/Contents/Resources/Symbols/"
+else
+  echo "warning: assets/symbols is missing; the app will have no symbols"
+fi
 
 ID=${SIGN_ID:--}
 if [ "${APPSTORE:-0}" = 1 ]; then

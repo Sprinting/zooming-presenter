@@ -631,6 +631,29 @@ pub struct ImageData {
     /// Outline the picture is clipped to.
     #[serde(default, skip_serializing_if = "is_default")]
     pub mask: ImageMask,
+    /// Set when the picture is a symbol from the clip-art library (Insert ›
+    /// Symbols & Shapes). Its SVG is the asset, so it draws without the
+    /// library.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<SymbolLook>,
+}
+
+/// Where a symbol came from and how it is drawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct SymbolLook {
+    /// Library set and name, e.g. "noto" and "rocket" (see the `symbols` query).
+    pub set: String,
+    pub name: String,
+    /// One-colour symbols: their colour (a theme slot follows the theme).
+    /// None for symbols drawn in their own colours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorRef>,
+    /// Two-colour symbols (IconPark): the fill colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color2: Option<ColorRef>,
+    /// A white outline and a soft shadow, like a sticker.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sticker: bool,
 }
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {

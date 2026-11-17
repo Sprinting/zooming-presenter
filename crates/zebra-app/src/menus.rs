@@ -56,6 +56,8 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
                 A(InsertVideo),
                 A(InsertMusic),
                 A(InsertLayout),
+                A(InsertDiagram),
+                A(InsertSymbols),
                 Sep,
                 A(WrapInFrame),
             ],
@@ -92,7 +94,7 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
             crate::t!("menu-agent"),
             vec![A(ToggleAiControl), Sep, A(PauseAgents), A(StopAgents), A(FollowAgent), Sep, A(RevertAgent)],
         ),
-        (crate::t!("menu-help"), vec![A(ShowShortcuts), A(CommandPalette)]),
+        (crate::t!("menu-help"), vec![A(ShowShortcuts), A(CommandPalette), Sep, A(Acknowledgements)]),
     ]
 }
 

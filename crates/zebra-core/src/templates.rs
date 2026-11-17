@@ -31,6 +31,9 @@ pub enum Piece {
         /// A path step (layouts); templates list their path separately.
         #[serde(default, skip_serializing_if = "is_false")]
         path: bool,
+        /// Frame colour (default: the theme's).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
     },
     /// Text scaled to fit inside `w`×`h`. `ph`: a placeholder, not content.
     Text {
@@ -46,6 +49,9 @@ pub enum Piece {
         align: Align,
         #[serde(default, skip_serializing_if = "is_false")]
         ph: bool,
+        /// The fill the text sits on: white text on a dark fill.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on: Option<String>,
     },
     Shape {
         shape: ShapeKind,
@@ -59,6 +65,18 @@ pub enum Piece {
         fill: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stroke: Option<String>,
+        /// Stroke width in units (default 0.004).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sw: Option<f64>,
+        #[serde(default, skip_serializing_if = "crate::model::Dash::is_solid")]
+        dash: crate::model::Dash,
+    },
+    /// A drawn line through points (unit coordinates), e.g. an arc.
+    Ink {
+        points: Vec<[f64; 2]>,
+        /// Line width in units.
+        width: f64,
+        color: String,
     },
 }
 

@@ -20,6 +20,8 @@ pub mod media;
 pub mod model;
 pub mod perf;
 pub mod rich;
+pub mod symbols;
+pub mod diagrams;
 pub mod templates;
 pub mod theme;
 pub mod view;

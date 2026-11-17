@@ -36,7 +36,8 @@ impl Previews {
                 let jobs = TEMPLATES
                     .iter()
                     .map(|t| (format!("t:{}", t.id), Command::ApplyTemplate { template: t.id.clone(), replace: false }))
-                    .chain(LAYOUTS.iter().map(|l| (format!("l:{}", l.id), Command::AddLayout { layout: l.id.clone(), x: 0.0, y: 0.0, width: Some(1600.0), add_to_path: false })));
+                    .chain(LAYOUTS.iter().map(|l| (format!("l:{}", l.id), Command::AddLayout { layout: l.id.clone(), x: 0.0, y: 0.0, width: Some(1600.0), add_to_path: false })))
+                    .chain(zebra_core::diagrams::ALL.iter().map(|d| (format!("d:{}", d.key), Command::AddDiagram { diagram: d.key.to_string(), x: 0.0, y: 0.0, width: Some(1600.0) })));
                 for (key, cmd) in jobs {
                     let mut ed = Editor::new(Document::default());
                     ed.measure = renderer.measure();
@@ -290,6 +291,60 @@ pub fn layout_gallery(app: &mut ZebraApp, ctx: &egui::Context) {
         open = false;
     }
     app.show_layouts = open;
+}
+
+/// The diagram gallery (Insert › Diagram…): click one to insert it in the
+/// middle of the view.
+pub fn diagram_gallery(app: &mut ZebraApp, ctx: &egui::Context) {
+    if !app.show_diagrams {
+        return;
+    }
+    previews(app, ctx);
+    let p = Palette::of(ctx);
+    let mut open = true;
+    let mut pick: Option<&'static str> = None;
+    egui::Window::new(crate::t!("diagrams-title")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, EVec2::ZERO).show(ctx, |ui| {
+        ui.label(RichText::new(crate::t!("diagrams-caption")).size(12.0).color(p.weak));
+        ui.add_space(6.0);
+        let tex = app.previews.as_ref().map(|p| &p.textures);
+        let h = (ctx.content_rect().height() - 160.0).max(240.0);
+        egui::ScrollArea::vertical().max_height(h).min_scrolled_height(h.min(600.0)).show(ui, |ui| {
+            egui::Grid::new("diagrams").spacing([10.0, 10.0]).show(ui, |ui| {
+                for (i, d) in zebra_core::diagrams::ALL.iter().enumerate() {
+                    if card(ui, tex.and_then(|m| m.get(&format!("d:{}", d.key))), &crate::words::diagram_name(d), false, &p).on_hover_text(crate::words::diagram_description(d)).clicked() {
+                        pick = Some(d.key);
+                    }
+                    if i % 5 == 4 {
+                        ui.end_row();
+                    }
+                }
+            });
+        });
+    });
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        open = false;
+    }
+    if let Some(key) = pick {
+        insert_diagram(app, key);
+        open = false;
+    }
+    app.show_diagrams = open;
+}
+
+/// Insert a diagram centred in the view, sized to 80% of its width, and
+/// select it.
+pub fn insert_diagram(app: &mut ZebraApp, key: &str) {
+    let c = app.canvas_center_world();
+    let width = app.editor.view.viewport.x / app.editor.view.camera.zoom * 0.8;
+    let r = app.editor.apply(Command::AddDiagram { diagram: key.into(), x: c.x, y: c.y, width: Some(width) }, H);
+    if let Some(out) = app.report(r) {
+        // A grouped diagram: select it all. A zooming one: its outer frame.
+        let frames: Vec<_> = out.created.iter().filter(|i| app.editor.doc.get(i).is_some_and(|e| e.is_frame())).cloned().collect();
+        match frames.first() {
+            Some(f) => app.select(vec![f.clone()]),
+            None => app.select(out.created.clone()),
+        }
+    }
 }
 
 /// Insert a layout centred in the view, sized to 80% of its width.

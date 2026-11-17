@@ -172,6 +172,7 @@ pub fn media(insp: &mut Insp, ui: &mut Ui, tab: Tab) {
     }
     let id = insp.el.id.clone();
     match insp.el.kind.clone() {
+        ElementKind::Image(zebra_core::ImageData { symbol: Some(look), .. }) => crate::symbols_ui::inspector(insp, ui, &look),
         ElementKind::Image(i) => {
             if let Some(p) = crate::media_ui::image_section(insp.app, ui, &id, &i) {
                 insp.set(p);

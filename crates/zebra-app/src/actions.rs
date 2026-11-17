@@ -41,6 +41,10 @@ pub enum Action {
     InsertFrame,
     InsertImage,
     InsertLayout,
+    /// Insert › Diagram…: the diagram gallery.
+    InsertDiagram,
+    /// Insert › Symbols & Shapes…: the library on its Symbols tab.
+    InsertSymbols,
     /// Background music for the presentation.
     InsertMusic,
     ReplaceImage,
@@ -102,6 +106,8 @@ pub enum Action {
     SetTheme(String),
     ThemeEditor,
     About,
+    /// Credits and licences of the clip art, icons and fonts.
+    Acknowledgements,
 }
 
 impl Action {
@@ -137,6 +143,8 @@ impl Action {
             SetFrameStyle(s) => crate::t!("action-set-frame-style", style = frame_name(*s)),
             InsertImage => crate::t!("action-insert-image"),
             InsertLayout => crate::t!("action-insert-layout"),
+            InsertDiagram => crate::t!("action-insert-diagram"),
+            InsertSymbols => crate::t!("action-insert-symbols"),
             InsertMusic => crate::t!("action-insert-music"),
             ReplaceImage => crate::t!("action-replace-image"),
             CropImage => crate::t!("action-crop-image"),
@@ -188,6 +196,7 @@ impl Action {
             SetTheme(t) => crate::t!("action-set-theme", name = crate::words::theme_name(&zebra_core::Theme::resolve(t))),
             ThemeEditor => crate::t!("action-theme-editor"),
             About => crate::t!("action-about"),
+            Acknowledgements => crate::t!("action-acknowledgements"),
         }
     }
 
@@ -207,11 +216,11 @@ impl Action {
             v.push(SetTool(t.0));
         }
         v.extend([
-            InsertFrame, InsertImage, InsertLayout, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
+            InsertFrame, InsertImage, InsertLayout, InsertDiagram, InsertSymbols, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
             FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ShowShortcuts, Settings, ShapeLibrary,
             InsertVideo, InsertMusic, ReplaceImage, CropImage, PlayPauseVideo, Group, Ungroup,
             TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, TogglePresenterView, PlaybackOptions, ToggleAiControl, ToggleActivity,
-            PauseAgents, StopAgents, FollowAgent, RevertAgent, ThemeEditor,
+            PauseAgents, StopAgents, FollowAgent, RevertAgent, ThemeEditor, Acknowledgements,
         ]);
         for t in zebra_core::Theme::ids() {
             v.push(SetTheme(t));

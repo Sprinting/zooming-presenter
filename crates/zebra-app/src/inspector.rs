@@ -214,6 +214,7 @@ fn kind_name(e: &Element) -> String {
         ElementKind::Icon(i) => crate::t!("inspector-kind-icon", name = i.name.as_str()),
         ElementKind::Video(_) => crate::t!("inspector-kind-video"),
         ElementKind::Connector(_) => crate::t!("inspector-kind-connector"),
+        ElementKind::Image(i) if i.symbol.is_some() => crate::t!("inspector-kind-symbol"),
         ElementKind::Image(_) => crate::t!("inspector-kind-image"),
         ElementKind::Ink(_) => crate::t!("inspector-kind-drawing"),
         #[allow(unreachable_patterns)]
@@ -394,7 +395,8 @@ fn style_tab(insp: &mut Insp, ui: &mut Ui) {
                 });
             });
         }
-        ElementKind::Image(i) => {
+        // Symbols show their description in their own section.
+        ElementKind::Image(i) if i.symbol.is_none() => {
             w::section(ui, &crate::t!("inspector-section-image"), |ui| {
                 let mut alt = i.alt.clone();
                 w::row(ui, &crate::t!("inspector-description"), |ui| {

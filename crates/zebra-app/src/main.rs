@@ -59,6 +59,10 @@ fn main() -> anyhow::Result<()> {
     for v in zebra_api::discovery::ignored_overrides() {
         eprintln!("zebra: {v} is ignored by this build (only developer builds use it)");
     }
+    // The clip-art index takes a moment to read: do it before anyone asks.
+    let _ = std::thread::Builder::new().name("zebra-symbols".into()).spawn(|| {
+        let _ = zebra_core::symbols::library();
+    });
     let granted = zebra_api::discovery::human_has_granted();
     const NOT_GRANTED: &str = "AI control stays off until a person switches it on in Zebra once (the AI button in the toolbar). After that, --api and --headless work.";
     if cli.headless {

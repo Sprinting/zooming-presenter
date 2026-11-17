@@ -1,3 +1,4 @@
 /target
 *.zebra.tmp
 /out
+/assets/symbols

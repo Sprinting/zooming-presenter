@@ -318,6 +318,24 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                 "licence": "Lucide icons, ISC licence",
             })
         }
+        Query::Symbols { query, set, limit } => match crate::symbols::library() {
+            None => json!({ "installed": false, "sets": [] }),
+            Some(lib) => {
+                if query.trim().is_empty() && set.is_none() {
+                    json!({ "installed": true, "total": lib.total(), "sets": lib.sets().map(|s| json!({
+                        "set": s.key, "name": s.name, "group": s.group, "count": s.count, "licence": s.licence,
+                        "colour": match s.tint { crate::symbols::Tint::Mono => "one", crate::symbols::Tint::Two => "two", crate::symbols::Tint::None => "own" },
+                    })).collect::<Vec<_>>() })
+                } else {
+                    let only: Option<Vec<u16>> = set.as_deref().map(|k| lib.set_index(k).into_iter().collect());
+                    let hits = lib.search(&query, only.as_deref(), limit);
+                    json!({ "installed": true, "symbols": hits.iter().map(|r| json!({
+                        "set": lib.set(r.set).map(|s| s.key.as_str()), "name": lib.name(*r), "keywords": lib.keywords(*r),
+                    })).collect::<Vec<_>>() })
+                }
+            }
+        },
+        Query::Diagrams => json!(crate::diagrams::ALL.iter().map(|d| json!({ "diagram": d.key, "name": d.name, "description": d.description, "adds_to_path": d.path })).collect::<Vec<_>>()),
         Query::Shapes => json!(crate::model::ShapeKind::ALL
             .iter()
             .map(|k| json!({ "shape": k, "name": k.label(), "line": k.is_line() }))

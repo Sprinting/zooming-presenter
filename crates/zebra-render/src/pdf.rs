@@ -193,7 +193,21 @@ fn draw_list(s: &mut Surface<'_>, list: &DisplayList, editor: &Editor, res: &mut
                             _ => None,
                         }
                     })
-                    .clone();
+                    .clone()
+                    // SVG symbols (and anything else without a file PDF can
+                    // embed): the pixels drawn for the page.
+                    .or_else(|| {
+                        let mut px = image.data.data.data().to_vec();
+                        for p in px.chunks_exact_mut(4) {
+                            let a = p[3] as u32;
+                            if a != 0 && a != 255 {
+                                for c in &mut p[..3] {
+                                    *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+                                }
+                            }
+                        }
+                        Some(krilla::image::Image::from_rgba8(px, image.width, image.height))
+                    });
                 let Some(img) = img else { continue };
                 if let Some(sz) = Size::from_wh(image.width as f32, image.height as f32) {
                     s.push_transform(&tf(transform));

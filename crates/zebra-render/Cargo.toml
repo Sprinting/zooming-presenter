@@ -19,6 +19,7 @@ parley.workspace = true
 vello_cpu.workspace = true
 krilla.workspace = true
 image.workspace = true
+resvg.workspace = true
 vello = { workspace = true, optional = true }
 eframe = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }

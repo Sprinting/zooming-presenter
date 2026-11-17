@@ -83,6 +83,11 @@ fn read_zip(bytes: &[u8], map: Option<&Arc<memmap2::Mmap>>) -> ZResult<Document>
         let (ext, w, h) = match _ext.to_ascii_lowercase().as_str() {
             // Embedded theme fonts.
             e @ ("ttf" | "otf" | "ttc") => (e.to_string(), 0, 0),
+            // Symbols from the clip-art library.
+            "svg" => {
+                let (w, h) = crate::symbols::svg_pixels(&data);
+                ("svg".to_string(), w, h)
+            }
             _ => {
                 let m = crate::media::info(&data)?;
                 (m.ext, m.width, m.height)

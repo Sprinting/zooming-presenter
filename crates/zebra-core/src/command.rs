@@ -440,6 +440,49 @@ pub enum Command {
         #[serde(default = "yes")]
         add_to_path: bool,
     },
+    /// A symbol from the clip-art library (Insert › Symbols & Shapes),
+    /// centred at x, y. Find sets and names with the `symbols` query. The
+    /// drawing is copied into the document.
+    AddSymbol {
+        set: String,
+        name: String,
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
+        /// World width; height follows the symbol's shape. Default 200.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f64>,
+        /// One-colour and two-colour sets only. Default `theme:body`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<ColorRef>,
+        /// Two-colour sets only: the fill colour. Default `theme:accent`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color2: Option<ColorRef>,
+        /// White outline and soft shadow.
+        #[serde(default, skip_serializing_if = "is_false")]
+        sticker: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<ElementId>,
+    },
+    /// Insert a diagram (see the `diagrams` query): frames, arrows and
+    /// placeholder text in theme colours, grouped, centred at `x`,`y`,
+    /// `width` world units wide. Diagrams made for zooming add their frames
+    /// to the path.
+    AddDiagram {
+        diagram: String,
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
+        /// Default 1600.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f64>,
+    },
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn yes() -> bool {
@@ -654,6 +697,12 @@ pub struct ElementPatch {
     pub crop: Option<Crop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<ImageMask>,
+    /// Two-colour symbols: the fill colour (`color` is the outline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color2: Option<ColorRef>,
+    /// Symbols: white outline and soft shadow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sticker: Option<bool>,
     // video
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autoplay: Option<bool>,
@@ -770,6 +819,19 @@ pub enum Query {
     },
     /// The shape kinds with their human names.
     Shapes,
+    /// Search the clip-art library (sets, then symbols by name or keyword).
+    /// With no `query` and no `set`, lists the sets.
+    Symbols {
+        #[serde(default)]
+        query: String,
+        /// Only this set (its key, e.g. "noto").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        set: Option<String>,
+        #[serde(default = "d_icon_limit")]
+        limit: usize,
+    },
+    /// The diagrams `add_diagram` accepts.
+    Diagrams,
     History,
     /// Layout lint: overlaps, text unreadable at its step, empty steps...
     Lint,

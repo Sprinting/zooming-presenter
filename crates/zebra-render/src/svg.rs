@@ -1,0 +1,249 @@
+//! Drawing SVG symbols (Insert › Symbols & Shapes) to pixels, with the
+//! symbol's colours and the sticker look applied.
+use resvg::{tiny_skia, usvg};
+
+/// How to draw one symbol. Colours are straight RGBA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct SvgStyle {
+    /// One-colour symbols: replaces `currentColor`. Two-colour symbols:
+    /// the outline colour.
+    pub color: Option<[u8; 4]>,
+    /// Two-colour symbols (IconPark): the fill colour.
+    pub color2: Option<[u8; 4]>,
+    /// White outline and soft shadow.
+    pub sticker: bool,
+}
+
+impl SvgStyle {
+    /// Part of the image cache key.
+    pub fn key(&self) -> String {
+        let hex = |c: Option<[u8; 4]>| c.map_or(String::from("-"), |c| format!("{:02x}{:02x}{:02x}{:02x}", c[0], c[1], c[2], c[3]));
+        format!("{}{}{}", hex(self.color), hex(self.color2), if self.sticker { "s" } else { "" })
+    }
+
+    pub fn is_plain(&self) -> bool {
+        *self == SvgStyle::default()
+    }
+}
+
+/// Margin round a sticker for its outline and shadow, as a fraction of the
+/// long side.
+pub const STICKER_MARGIN: f64 = 0.07;
+
+fn hex(c: [u8; 4]) -> String {
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+}
+
+/// The SVG text with the style's colours put in.
+fn recolour(svg: &str, style: &SvgStyle) -> String {
+    let mut s = svg.to_string();
+    if let Some(c) = style.color {
+        let h = hex(c);
+        s = s.replace("currentColor", &h);
+        if style.color2.is_some() {
+            for k in ["\"#000\"", "\"#000000\""] {
+                s = s.replace(k, &format!("\"{h}\""));
+            }
+        }
+    }
+    if let Some(c) = style.color2 {
+        let h = format!("\"{}\"", hex(c));
+        for k in ["\"#2F88FF\"", "\"#2f88ff\"", "\"#43CCF8\"", "\"#43ccf8\""] {
+            s = s.replace(k, &h);
+        }
+    }
+    // Colour alpha becomes the symbol's opacity.
+    match style.color.map(|c| c[3]) {
+        Some(a) if a < 255 => s.replacen("<svg ", &format!("<svg opacity=\"{:.3}\" ", a as f64 / 255.0), 1),
+        _ => s,
+    }
+}
+
+/// Draw `svg` into a `w` x `h` picture (premultiplied RGBA8), fitted and
+/// centred. None when the SVG can't be read.
+pub fn rasterize(svg: &[u8], style: &SvgStyle, w: u32, h: u32) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(svg).ok()?;
+    let text = if style.color.is_some() || style.color2.is_some() { recolour(text, style) } else { text.to_string() };
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_str(&text, &opt).ok()?;
+    let mut pm = tiny_skia::Pixmap::new(w.max(1), h.max(1))?;
+    let margin = if style.sticker { STICKER_MARGIN * w.max(h) as f64 } else { 0.0 };
+    let size = tree.size();
+    let (bw, bh) = (w as f64 - 2.0 * margin, h as f64 - 2.0 * margin);
+    let k = (bw / size.width() as f64).min(bh / size.height() as f64);
+    if !(k.is_finite() && k > 0.0) {
+        return None;
+    }
+    let (dx, dy) = ((w as f64 - size.width() as f64 * k) / 2.0, (h as f64 - size.height() as f64 * k) / 2.0);
+    let t = tiny_skia::Transform::from_row(k as f32, 0.0, 0.0, k as f32, dx as f32, dy as f32);
+    resvg::render(&tree, t, &mut pm.as_mut());
+    let mut px = pm.take();
+    if style.sticker {
+        sticker(&mut px, w as usize, h as usize, (w.max(h) as f64 * 0.028).max(1.5));
+    }
+    Some(px)
+}
+
+/// Squared distance from each pixel to the nearest pixel where `inside`
+/// is true (Felzenszwalb and Huttenlocher, separable).
+fn distance_sq(inside: &[bool], w: usize, h: usize) -> Vec<f64> {
+    const INF: f64 = 1e20;
+    let n = w.max(h);
+    let mut d: Vec<f64> = inside.iter().map(|&b| if b { 0.0 } else { INF }).collect();
+    let (mut f, mut out, mut v, mut z) = (vec![0f64; n], vec![0f64; n], vec![0usize; n], vec![0f64; n + 1]);
+    let mut pass = |f: &[f64], n: usize, out: &mut [f64]| {
+        let sect = |q: usize, p: usize| ((f[q] + (q * q) as f64) - (f[p] + (p * p) as f64)) / (2.0 * (q as f64 - p as f64));
+        let mut k = 0usize;
+        v[0] = 0;
+        z[0] = -INF;
+        z[1] = INF;
+        for q in 1..n {
+            let mut s = sect(q, v[k]);
+            while s <= z[k] && k > 0 {
+                k -= 1;
+                s = sect(q, v[k]);
+            }
+            k += 1;
+            v[k] = q;
+            z[k] = s;
+            z[k + 1] = INF;
+        }
+        k = 0;
+        for (q, o) in out.iter_mut().enumerate().take(n) {
+            while z[k + 1] < q as f64 {
+                k += 1;
+            }
+            let p = v[k];
+            *o = (q as f64 - p as f64).powi(2) + f[p];
+        }
+    };
+    for x in 0..w {
+        for y in 0..h {
+            f[y] = d[y * w + x];
+        }
+        pass(&f, h, &mut out);
+        for y in 0..h {
+            d[y * w + x] = out[y];
+        }
+    }
+    for y in 0..h {
+        f[..w].copy_from_slice(&d[y * w..y * w + w]);
+        pass(&f, w, &mut out);
+        d[y * w..y * w + w].copy_from_slice(&out[..w]);
+    }
+    d
+}
+
+/// Three box blurs of an alpha plane (about a Gaussian).
+fn blur(a: &mut [f32], w: usize, h: usize, r: usize) {
+    if r == 0 {
+        return;
+    }
+    let mut tmp = vec![0f32; a.len()];
+    for _ in 0..3 {
+        for y in 0..h {
+            let row = &a[y * w..y * w + w];
+            let mut s: f32 = row[..r.min(w)].iter().sum();
+            for x in 0..w {
+                if x + r < w {
+                    s += row[x + r];
+                }
+                if x > r {
+                    s -= row[x - r - 1];
+                }
+                tmp[y * w + x] = s / (2 * r + 1) as f32;
+            }
+        }
+        for x in 0..w {
+            let mut s: f32 = (0..r.min(h)).map(|y| tmp[y * w + x]).sum();
+            for y in 0..h {
+                if y + r < h {
+                    s += tmp[(y + r) * w + x];
+                }
+                if y > r {
+                    s -= tmp[(y - r - 1) * w + x];
+                }
+                a[y * w + x] = s / (2 * r + 1) as f32;
+            }
+        }
+    }
+}
+
+/// Put a white outline `r` pixels wide and a soft shadow under the
+/// picture (premultiplied RGBA8, in place).
+fn sticker(px: &mut [u8], w: usize, h: usize, r: f64) {
+    let inside: Vec<bool> = px.chunks_exact(4).map(|p| p[3] > 24).collect();
+    let d = distance_sq(&inside, w, h);
+    let outline: Vec<f32> = d.iter().map(|&dd| (r - dd.sqrt() + 0.5).clamp(0.0, 1.0) as f32).collect();
+    let r = r as f32;
+    let mut shadow = outline.clone();
+    blur(&mut shadow, w, h, (r * 0.6).round().max(1.0) as usize);
+    let off = (r * 0.5).round() as usize;
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let sh = if y >= off { shadow[(y - off) * w + x] * 0.35 } else { 0.0 };
+            let ol = outline[i];
+            // Back to front: shadow (black), outline (white), symbol.
+            let mut c = [0f32; 4];
+            c[3] = sh;
+            let over = |c: &mut [f32; 4], src: [f32; 4]| {
+                let k = 1.0 - src[3];
+                for j in 0..4 {
+                    c[j] = src[j] + c[j] * k;
+                }
+            };
+            over(&mut c, [ol, ol, ol, ol]);
+            let p = &px[i * 4..i * 4 + 4];
+            over(&mut c, [p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0, p[3] as f32 / 255.0]);
+            for j in 0..4 {
+                px[i * 4 + j] = (c[j] * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DOT: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="currentColor"/></svg>"#;
+
+    fn at(px: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * w + x) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2], px[i + 3]]
+    }
+
+    #[test]
+    fn one_colour_symbols_take_the_colour() {
+        let px = rasterize(DOT, &SvgStyle { color: Some([200, 0, 0, 255]), ..Default::default() }, 40, 40).unwrap();
+        assert_eq!(at(&px, 40, 20, 20), [200, 0, 0, 255]);
+        assert_eq!(at(&px, 40, 1, 1)[3], 0);
+    }
+
+    #[test]
+    fn a_sticker_has_a_white_edge_and_a_shadow() {
+        let style = SvgStyle { color: Some([0, 0, 200, 255]), sticker: true, ..Default::default() };
+        let px = rasterize(DOT, &style, 100, 100).unwrap();
+        assert_eq!(at(&px, 100, 50, 50), [0, 0, 200, 255]);
+        // Just outside the dot (radius 4/10 of the drawn box): white.
+        let edge = at(&px, 100, 50, 50 - 36);
+        assert!(edge[0] > 200 && edge[3] > 200, "{edge:?}");
+        // Corners stay clear.
+        assert_eq!(at(&px, 100, 0, 0)[3], 0);
+    }
+
+    #[test]
+    fn two_colour_symbols_swap_outline_and_fill() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="5" height="10" fill="#2F88FF"/><rect x="5" width="5" height="10" fill="#000"/></svg>"##;
+        let style = SvgStyle { color: Some([10, 20, 30, 255]), color2: Some([200, 100, 0, 255]), sticker: false };
+        let px = rasterize(svg, &style, 20, 20).unwrap();
+        assert_eq!(at(&px, 20, 2, 10), [200, 100, 0, 255]);
+        assert_eq!(at(&px, 20, 17, 10), [10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn unreadable_svg_is_none() {
+        assert!(rasterize(b"<svg", &SvgStyle::default(), 10, 10).is_none());
+    }
+}

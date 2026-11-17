@@ -54,8 +54,9 @@ const TEXT_MATCHING: &[&str] = &["contains", "starts_with", "ends_with", "strip_
 
 const SAMPLE_CONTENT: &[&str] = &["sample.rs"];
 
-/// Words that are names, not copy: product, font families, folders.
-const NAMES: &[&str] = &["Zebra", "JetBrains Mono"];
+/// Words that are names, not copy: product, font families, folders, and
+/// the people and projects credited in Help › Acknowledgements.
+const NAMES: &[&str] = &["Zebra", "JetBrains Mono", "The Inter Project Authors", "The Lora Project Authors", "The Caveat Project Authors", "The JetBrains Mono Project Authors", "Lucide Contributors"];
 
 const KEY_SYMBOLS: &[char] = &['⌘', '⇧', '⌥', '⌃', '⌫', '↵', '⇥'];
 

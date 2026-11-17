@@ -434,6 +434,8 @@ Send with `apply {"command": ...}` or inside `batch {"commands": [...]}`. Undoab
 | `add_asset` | data_base64: string (or path: string, an absolute file path, instead of data_base64) | Store an image (base64) for use as a theme background or 3D layer. The new asset key is returned in `assets`. | `{"op":"add_asset","data_base64":"iVBORw0KGgo..."}` |
 | `apply_template` | replace?: boolean, template: string | Start from a template (see the `templates` query): frames, placeholder text, a path and a theme. Needs an empty canvas unless `replace`. | `{"op":"apply_template","template":"big_picture"}` |
 | `add_layout` | add_to_path?: boolean, layout: string, width?: number, x?: number, y?: number | Insert a layout (see the `templates` query): a frame arrangement with placeholder text, centred at `x`,`y`, `width` world units wide. | `{"op":"add_layout","layout":"two_columns","x":4000,"y":0,"width":1600}` |
+| `add_symbol` | color?: string, color2?: string, id?: string, name: string, set: string, sticker?: boolean, width?: number, x?: number, y?: number | A symbol from the clip-art library (Insert › Symbols & Shapes), centred at x, y. Find sets and names with the `symbols` query. The drawing is copied into the document. | `{"op":"add_symbol","set":"noto","name":"rocket","x":300,"y":0,"width":200}` |
+| `add_diagram` | diagram: string, width?: number, x?: number, y?: number | Insert a diagram (see the `diagrams` query): frames, arrows and placeholder text in theme colours, grouped, centred at `x`,`y`, `width` world units wide. Diagrams made for zooming add their frames to the path. | `{"op":"add_diagram","diagram":"process","x":0,"y":1200,"width":1600}` |
 
 ### View commands
 
@@ -486,6 +488,8 @@ Send with `query {"query": ...}`. Read-only.
 | `themes` |  |  | `{"q":"themes"}` |
 | `icons` | limit?: integer, query?: string | Search the icon library by name or keyword (e.g. "idea", "arrow right"). Empty query lists names only. | `{"q":"icons","query":"idea","limit":10}` |
 | `shapes` |  | The shape kinds with their human names. | `{"q":"shapes"}` |
+| `symbols` | limit?: integer, query?: string, set?: string | Search the clip-art library (sets, then symbols by name or keyword). With no `query` and no `set`, lists the sets. | `{"q":"symbols"}` |
+| `diagrams` |  | The diagrams `add_diagram` accepts. | `{"q":"diagrams"}` |
 | `history` |  |  | `{"q":"history"}` |
 | `lint` |  | Layout lint: overlaps, text unreadable at its step, empty steps... | `{"q":"lint"}` |
 | `templates` |  | Templates and layouts that `apply_template` / `add_layout` accept. | `{"q":"templates"}` |

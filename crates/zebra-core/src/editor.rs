@@ -771,6 +771,82 @@ impl Editor {
                 };
                 self.insert_element(e, out)?;
             }
+            Command::AddSymbol { set, name, x, y, width, color, color2, sticker, id } => {
+                let lib = crate::symbols::library().ok_or_else(|| ZError::new("unavailable", "the symbol library isn't installed"))?;
+                let r = lib.find(&set, &name).ok_or_else(|| {
+                    let near: Vec<String> = lib.search(&name.replace('-', " "), lib.set_index(&set).map(|s| vec![s]).as_deref(), 8).iter().map(|r| lib.name(*r).to_string()).collect();
+                    ZError::new("not_found", format!("no symbol '{name}' in set '{set}'")).hint("search with the symbols query").values(near)
+                })?;
+                let tint = lib.set(r.set).map(|s| s.tint).unwrap_or_default();
+                let w = width.unwrap_or(200.0);
+                if !(w.is_finite() && w > 0.0 && x.is_finite() && y.is_finite()) {
+                    return Err(ZError::invalid("x, y and width must be finite, width > 0"));
+                }
+                for c in color.iter().chain(&color2) {
+                    if !valid_color(c) {
+                        return Err(ZError::invalid(format!("bad colour '{c}'")).values(Theme::COLOR_SLOTS.iter().map(|s| s.to_string()).collect()));
+                    }
+                }
+                use crate::symbols::Tint;
+                if tint == Tint::None && color.is_some() {
+                    return Err(ZError::invalid(format!("symbols in '{set}' keep their own colours")));
+                }
+                if tint != Tint::Two && color2.is_some() {
+                    return Err(ZError::invalid(format!("only two-colour sets take color2; '{set}' doesn't")));
+                }
+                let svg = lib.svg(r).map_err(|e| ZError::new("io", format!("can't read the symbol: {e}")))?;
+                let key = self.add_svg_asset(svg.to_vec());
+                let a = &self.doc.assets[&key];
+                let (pw, ph) = (a.width as f64, a.height as f64);
+                let look = SymbolLook {
+                    set,
+                    name: name.clone(),
+                    color: (tint != Tint::None).then(|| color.unwrap_or_else(|| "theme:body".into())),
+                    color2: (tint == Tint::Two).then(|| color2.unwrap_or_else(|| "theme:accent".into())),
+                    sticker,
+                };
+                let e = Element {
+                    id: id.unwrap_or_default(),
+                    transform: Transform { x, y, scale: w / pw, rotation: 0.0 },
+                    size: Size { w: pw, h: ph },
+                    locked: false,
+                    name: String::new(),
+                    placeholder: false,
+                    group: None,
+                    kind: ElementKind::Image(ImageData { asset: key, alt: name, crop: None, mask: ImageMask::Rectangle, symbol: Some(look) }),
+                };
+                self.insert_element(e, out)?;
+            }
+            Command::AddDiagram { diagram, x, y, width } => {
+                let Some(d) = crate::diagrams::get(&diagram) else {
+                    return Err(ZError::invalid(format!("unknown diagram '{diagram}'")).values(crate::diagrams::ALL.iter().map(|d| d.key.to_string()).collect()));
+                };
+                let w = width.unwrap_or(1600.0);
+                if !(w.is_finite() && w > 0.0 && x.is_finite() && y.is_finite()) {
+                    return Err(ZError::invalid("x, y and width must be finite, width > 0"));
+                }
+                let pieces = (d.build)();
+                let ids = self.add_pieces(&pieces, Vec2::new(x, y), w, out)?;
+                let ids: Vec<ElementId> = ids.into_iter().flatten().collect();
+                // Frames carry their contents and can't be grouped, so only
+                // diagrams without frames become one group.
+                let has_frame = ids.iter().any(|id| matches!(self.doc.elements.get(id).map(|e| &e.kind), Some(ElementKind::Frame(_))));
+                if ids.len() > 1 && !has_frame {
+                    let g = self.doc.alloc_group_id();
+                    for id in &ids {
+                        if let Some(e) = self.doc.elements.get_mut(id) {
+                            e.group = Some(g.clone());
+                        }
+                    }
+                }
+                if d.path {
+                    for (p, id) in pieces.iter().zip(&ids) {
+                        if let crate::templates::Piece::Frame { path: true, .. } = p {
+                            self.doc.path.push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
+                        }
+                    }
+                }
+            }
             Command::AddImage { data_base64, x, y, width, alt, id } => {
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(data_base64.trim())
@@ -787,7 +863,7 @@ impl Editor {
                     name: String::new(),
                     placeholder: false,
                     group: None,
-                    kind: ElementKind::Image(ImageData { asset: key, alt, crop: None, mask: ImageMask::Rectangle }),
+                    kind: ElementKind::Image(ImageData { asset: key, alt, crop: None, mask: ImageMask::Rectangle, symbol: None }),
                 };
                 self.insert_element(e, out)?;
             }
@@ -1565,7 +1641,7 @@ impl Editor {
         let mut ids = vec![];
         for p in pieces {
             let e = match p {
-                Piece::Frame { style, x, y, w, h, rot, name, .. } => Element {
+                Piece::Frame { style, x, y, w, h, rot, name, color, .. } => Element {
                     id: String::new(),
                     transform: Transform { x: at.x + x * width, y: at.y + y * width, scale: 1.0, rotation: *rot },
                     size: Size { w: w * width, h: h * width },
@@ -1573,9 +1649,9 @@ impl Editor {
                     name: name.to_string(),
                     placeholder: false,
                     group: None,
-                    kind: ElementKind::Frame(FrameData { style: *style, color: None }),
+                    kind: ElementKind::Frame(FrameData { style: *style, color: color.clone() }),
                 },
-                Piece::Text { style, text, x, y, w, h, bullets, align, ph } => {
+                Piece::Text { style, text, x, y, w, h, bullets, align, ph, on } => {
                     let mut e = Element {
                         id: String::new(),
                         transform: Transform { x: at.x + x * width, y: at.y + y * width, scale: 1.0, rotation: 0.0 },
@@ -1584,14 +1660,47 @@ impl Editor {
                         name: String::new(),
                         placeholder: *ph,
                         group: None,
-                        kind: ElementKind::Text(TextData { text: text.to_string(), style: *style, bullets: *bullets, align: *align, ..Default::default() }),
+                        kind: ElementKind::Text(TextData {
+                            text: text.to_string(),
+                            style: *style,
+                            bullets: *bullets,
+                            align: *align,
+                            // On a fill: white or the body colour, whichever reads better
+                            // (a style's own colour may be the fill's colour).
+                            color: on.as_ref().map(|f| theme.text_on(Some(f)).unwrap_or_else(|| "theme:body".into())),
+                            ..Default::default()
+                        }),
                     };
                     measure_text(&*self.measure, &theme, &mut e);
                     let k = (w * width / e.size.w.max(1e-9)).min(h * width / e.size.h.max(1e-9));
                     e.transform.scale = if k.is_finite() && k > 0.0 { k } else { 1.0 };
                     e
                 }
-                Piece::Shape { shape, x, y, w, h, rot, fill, stroke } => Element {
+                Piece::Ink { points, width: lw, color } => {
+                    let pts: Vec<Vec2> = points.iter().map(|p| Vec2::new(p[0] * width, p[1] * width)).collect();
+                    let (mut lo, mut hi) = (Vec2::new(f64::MAX, f64::MAX), Vec2::new(f64::MIN, f64::MIN));
+                    for p in &pts {
+                        lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
+                        hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
+                    }
+                    let c = Vec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0);
+                    Element {
+                        id: String::new(),
+                        transform: Transform { x: at.x + c.x, y: at.y + c.y, scale: 1.0, rotation: 0.0 },
+                        size: Size { w: hi.x - lo.x, h: hi.y - lo.y },
+                        locked: false,
+                        name: String::new(),
+                        placeholder: false,
+                        group: None,
+                        kind: ElementKind::Ink(InkData {
+                            points: pts.iter().map(|p| Vec2::new(p.x - c.x, p.y - c.y)).collect(),
+                            color: color.clone(),
+                            width: lw * width,
+                            highlighter: false,
+                        }),
+                    }
+                }
+                Piece::Shape { shape, x, y, w, h, rot, fill, stroke, sw, dash } => Element {
                     id: String::new(),
                     transform: Transform { x: at.x + x * width, y: at.y + y * width, scale: 1.0, rotation: *rot },
                     size: Size { w: w * width, h: h * width },
@@ -1603,7 +1712,8 @@ impl Editor {
                         shape: *shape,
                         fill: fill.clone(),
                         stroke: stroke.clone(),
-                        stroke_width: (width * 0.004).max(1.0),
+                        stroke_width: (width * sw.unwrap_or(0.004)).max(1.0),
+                        dash: *dash,
                         ..Default::default()
                     }),
                 },
@@ -1820,6 +1930,14 @@ impl Editor {
             .entry(key.clone())
             .or_insert(Asset { ext: info.ext.clone(), bytes: bytes.into(), width: info.width, height: info.height });
         Ok((key, info))
+    }
+
+    /// Store an SVG (a symbol) as an asset; returns the key.
+    pub fn add_svg_asset(&mut self, bytes: Vec<u8>) -> String {
+        let (w, h) = crate::symbols::svg_pixels(&bytes);
+        let key = content_key(&bytes);
+        self.doc.assets.entry(key.clone()).or_insert(Asset { ext: "svg".into(), bytes: bytes.into(), width: w, height: h });
+        key
     }
 
     /// Store image bytes as an asset; returns the key.
@@ -2497,6 +2615,8 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
             ElementKind::Icon(i) => i.color = c.unwrap_or_else(|| "theme:body".into()),
             ElementKind::Connector(k) => k.color = c.unwrap_or_else(|| "theme:body".into()),
             ElementKind::Shape(s) => s.fill = c,
+            ElementKind::Image(ImageData { symbol: Some(SymbolLook { color: Some(sc), .. }), .. }) => *sc = c.unwrap_or_else(|| "theme:body".into()),
+            ElementKind::Image(ImageData { symbol: Some(_), .. }) => return Err(ZError::invalid("this symbol keeps its own colours")),
             _ => return Err(wrong("color")),
         }
     }
@@ -2587,6 +2707,19 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
         let ElementKind::Image(i) = &mut e.kind else { return Err(wrong("mask")) };
         i.mask = m;
     }
+    if let Some(c) = &p.color2 {
+        let c = color(c)?;
+        match &mut e.kind {
+            ElementKind::Image(ImageData { symbol: Some(SymbolLook { color2: Some(sc), .. }), .. }) => *sc = c.unwrap_or_else(|| "theme:accent".into()),
+            _ => return Err(ZError::invalid("'color2' only applies to two-colour symbols")),
+        }
+    }
+    if let Some(b) = p.sticker {
+        match &mut e.kind {
+            ElementKind::Image(ImageData { symbol: Some(sl), .. }) => sl.sticker = b,
+            _ => return Err(ZError::invalid("'sticker' only applies to symbols")),
+        }
+    }
     if p.autoplay.is_some() || p.looping.is_some() || p.muted.is_some() || p.start.is_some() || p.end.is_some() {
         let ElementKind::Video(v) = &mut e.kind else { return Err(wrong("autoplay/loop/muted/start/end")) };
         if let Some(b) = p.autoplay {
@@ -2672,6 +2805,8 @@ pub fn command_label(c: &Command) -> String {
         Command::AddAsset { .. } => "Add picture".into(),
         Command::ApplyTemplate { template, .. } => format!("Template: {template}"),
         Command::AddLayout { layout, .. } => format!("Insert layout: {layout}"),
+        Command::AddSymbol { name, .. } => format!("Insert symbol {name}"),
+        Command::AddDiagram { diagram, .. } => format!("Insert diagram: {diagram}"),
     }
 }
 

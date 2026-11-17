@@ -392,6 +392,7 @@ inspector-kind-icon = Icon · { $name }
 inspector-kind-video = Video
 inspector-kind-connector = Connector
 inspector-kind-image = Image
+inspector-kind-symbol = Symbol
 inspector-kind-drawing = Drawing
 inspector-kind-object = Object
 inspector-group-of = Group of { $count }
@@ -565,12 +566,14 @@ inspector-section-video = Video
 
 
 ## ---- shape_library.rs ----
-library-window-title = Shapes & Icons
+library-window-title = Symbols & Shapes
 library-window-replace-icon = Replace Icon
 library-tab-shapes = Shapes
 library-tab-icons = Icons
+library-tab-symbols = Symbols
 library-search-shapes-hint = Search shapes
 library-search-icons-hint = Search icons: idea, chart, arrow…
+library-search-symbols-hint = Search symbols: rocket, cat, trophy…
 library-no-shapes = No shapes match.
 library-no-icons = No icons match.
 library-icons-count = { $count ->
@@ -697,6 +700,8 @@ action-frame-tool = Frame Tool (cycle style)
 action-insert-frame = New Frame
 action-insert-image = Image…
 action-insert-layout = Layout…
+action-insert-diagram = Diagram…
+action-insert-symbols = Symbols & Shapes…
 action-insert-music = Background Music…
 action-replace-image = Replace Image…
 action-crop-image = Crop Image
@@ -1138,6 +1143,8 @@ history-delete-theme = Delete theme
 history-add-picture = Add picture
 history-template = Template: { $template }
 history-insert-layout = Insert layout: { $layout }
+history-insert-symbol = Insert symbol { $name }
+history-insert-diagram = Insert diagram: { $diagram }
 history-changes = { $count } changes
 
 ## Built-in themes, layouts and templates (names and descriptions)
@@ -1187,3 +1194,85 @@ template-description-story = Beginning, middle and end, each zooming deeper into
 spell-no-guesses = No Guesses Found
 spell-learn = Learn Spelling
 spell-ignore = Ignore Spelling
+
+## Help › Acknowledgements
+action-acknowledgements = Acknowledgements
+credits-title = Acknowledgements
+credits-clip-art = Symbols
+credits-icons = Icons
+credits-fonts = Fonts
+credits-by = { $author } · { $licence }
+credits-licence-text = Licence text
+
+## Symbols tab (Insert › Symbols & Shapes)
+symbols-not-installed = The symbol library isn't installed.
+symbols-all-sets = All sets
+symbols-group-emoji = Emoji
+symbols-group-colour = Colour icons
+symbols-group-drawn = Hand-drawn
+symbols-group-people = People
+symbols-group-mono = One colour
+symbols-group-classic = Classic clip art
+symbols-pick-a-set = Choose a set or search { $count } symbols.
+symbols-none-match = No symbols match.
+symbols-count = { $count ->
+    [one] { $count } symbol
+   *[other] { $count } symbols
+}
+symbols-count-many = First { $count } symbols
+symbols-sticker = Sticker
+symbols-sticker-tip = White outline and a soft shadow
+symbols-outline-colour = Outline Colour
+symbols-fill-colour = Fill Colour
+symbols-swatch-dark = Dark
+symbols-swatch-white = White
+
+## Insert › Diagram
+diagrams-title = Diagrams
+diagrams-caption = Click a diagram to add it to the middle of the view.
+diagram-name-process = Process
+diagram-description-process = Steps in a row joined by arrows.
+diagram-name-cycle = Circular process
+diagram-description-cycle = Steps round a loop, the last feeding back to the first.
+diagram-name-timeline = Timeline
+diagram-description-timeline = Dated points along one line, labels above and below.
+diagram-name-perspective = Perspective
+diagram-description-perspective = Frames shrinking toward a vanishing point. Its frames join the path.
+diagram-name-funnel = Funnel
+diagram-description-funnel = Many inputs narrowing to one outcome.
+diagram-name-iceberg = Iceberg
+diagram-description-iceberg = A small tip above the waterline, the larger part below.
+diagram-name-org-chart = Org chart
+diagram-description-org-chart = A top-down tree.
+diagram-name-block-list = Block list
+diagram-description-block-list = Side-by-side blocks, each with a heading.
+diagram-name-numbered-list = Numbered list
+diagram-description-numbered-list = Rows with a numbered marker.
+diagram-name-chevrons = Chevron process
+diagram-description-chevrons = Interlocking arrows.
+diagram-name-step-up = Step-up
+diagram-description-step-up = Rising steps toward a goal.
+diagram-name-segmented-ring = Segmented ring
+diagram-description-segmented-ring = A ring in four parts around a centre idea.
+diagram-name-tree = Tree
+diagram-description-tree = Branches out to the right, for breakdowns and decisions.
+diagram-name-venn2 = Venn, two circles
+diagram-description-venn2 = Two overlapping sets.
+diagram-name-venn3 = Venn, three circles
+diagram-description-venn3 = Three overlapping sets.
+diagram-name-target = Target
+diagram-description-target = Rings from the outer context to the inner focus.
+diagram-name-inverted-pyramid = Inverted pyramid
+diagram-description-inverted-pyramid = Wide at the top, narrowing to one point.
+diagram-name-mind-map = Mind map
+diagram-description-mind-map = Branches from a central topic.
+diagram-name-fishbone = Fishbone
+diagram-description-fishbone = Causes branching into one effect.
+diagram-name-columns = Columns
+diagram-description-columns = Cards sorted into to do, doing and done.
+diagram-name-zoom-nest = Zoom-in nest
+diagram-description-zoom-nest = Frames inside frames. Its frames join the path.
+diagram-name-orbit = Orbit
+diagram-description-orbit = Frames round a centre. Its frames join the path.
+diagram-name-big-picture = Big picture
+diagram-description-big-picture = An overview frame with detail frames inside. Its frames join the path.

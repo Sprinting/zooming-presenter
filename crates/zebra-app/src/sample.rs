@@ -207,6 +207,58 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             // presenter view (embedded so a screenshot shows it), 3D background.
             "welcome" => app.welcome = Some(crate::welcome::Welcome::new()),
             "layouts" => app.show_layouts = true,
+            "diagrams" => app.show_diagrams = true,
+            "credits" => app.show_credits = true,
+            "symbols" => app.library.open_symbols(),
+            t if t.starts_with("symset=") => {
+                app.symbols.set = zebra_core::symbols::library().and_then(|l| l.set_index(&t[7..]));
+            }
+            t if t.starts_with("symq=") => app.library.query = t[5..].replace('+', " "),
+            t if t.starts_with("diagram=") => {
+                app.editor.view.camera = app.editor.fit_all_camera();
+                crate::welcome::insert_diagram(app, &t[8..]);
+                let ids = app.selection();
+                let b = app.editor.bounds_of(&ids);
+                app.editor.view.camera = zebra_core::Camera::fit_rect(&b, app.editor.view.viewport, 0.1);
+            }
+            "symboldeck" => {
+                // Debug: one symbol from several kinds of set, plain, tinted
+                // and as stickers.
+                app.editor.load(Document::default(), None);
+                app.after_load();
+                let picks = [
+                    ("noto", "rocket", None, false),
+                    ("fluent-emoji", "trophy", None, true),
+                    ("ph", "lightbulb-duotone", Some("theme:accent"), false),
+                    ("ph", "lightbulb-duotone", Some("#ffffff"), true),
+                    ("icon-park", "rocket", None, false),
+                    ("game-icons", "rocket", Some("theme:shape2"), true),
+                    ("humaaans", "", None, false),
+                    ("open-doodles", "coffee", None, false),
+                    ("tango", "", None, false),
+                    ("openclipart", "", None, false),
+                    ("notionists", "notionists 3", None, true),
+                    ("streamline-freehand", "", None, false),
+                ];
+                let lib = zebra_core::symbols::library();
+                for (i, (set, name, color, sticker)) in picks.into_iter().enumerate() {
+                    let name = if name.is_empty() {
+                        lib.and_then(|l| l.set_index(set)).and_then(|s| lib.and_then(|l| l.all_in(s).nth(7).map(|r| l.name(r).to_string()))).unwrap_or_default()
+                    } else {
+                        name.to_string()
+                    };
+                    let (col, row) = ((i % 6) as f64, (i / 6) as f64);
+                    let r = app.editor.apply(
+                        Command::AddSymbol { set: set.into(), name, x: col * 260.0, y: row * 280.0, width: Some(200.0), color: color.map(String::from), color2: None, sticker, id: Some(format!("y{i}")) },
+                        H,
+                    );
+                    if let Err(e) = r {
+                        eprintln!("symboldeck {set}: {}", e.message);
+                    }
+                }
+                let _ = app.editor.view(ViewCommand::FitAll { animate: false }, H);
+                app.select(vec!["y3".into()]);
+            }
             "themeeditor" => app.theme_ed = Some(crate::theme_editor::ThemeEditor::open(app)),
             "playback" => app.stage.show_playback = true,
             t if t.starts_with("template=") => crate::welcome::new_from_template(app, &t[9..]),

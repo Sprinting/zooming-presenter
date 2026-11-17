@@ -177,6 +177,12 @@ pub struct ZebraApp {
     /// Template and layout previews (rendered once, on demand).
     pub previews: Option<crate::welcome::Previews>,
     pub show_layouts: bool,
+    /// Insert › Diagram… gallery.
+    pub show_diagrams: bool,
+    /// Help › Acknowledgements.
+    pub show_credits: bool,
+    /// The Symbols tab's tiles and search.
+    pub symbols: crate::symbols_ui::Symbols,
     #[cfg(target_os = "macos")]
     pub menu: Option<crate::menu_mac::MacMenu>,
     /// Video and audio players, crop mode, clipboard (session state).
@@ -258,6 +264,9 @@ impl ZebraApp {
             welcome: None,
             previews: None,
             show_layouts: false,
+            show_diagrams: false,
+            show_credits: false,
+            symbols: Default::default(),
             show_sidebar: true,
             show_props: true,
             inspector_tab: crate::inspector::Tab::default(),
@@ -517,6 +526,8 @@ impl ZebraApp {
             NewFromTemplateFile(p) => crate::welcome::new_from_template_file(self, &p),
             SaveAsTemplate => crate::welcome::save_as_template(self),
             InsertLayout => self.show_layouts = true,
+            InsertDiagram => self.show_diagrams = true,
+            InsertSymbols => self.library.open_symbols(),
             ThemeEditor => self.theme_ed = Some(crate::theme_editor::ThemeEditor::open(self)),
             NewFromSample => {
                 let doc = crate::sample::build(&*self.renderer);
@@ -819,6 +830,7 @@ impl ZebraApp {
                 }
             }
             About => self.show_about = true,
+            Acknowledgements => self.show_credits = true,
         }
     }
 
@@ -1182,6 +1194,8 @@ impl ZebraApp {
             crate::presenting::playback_window(self, &ctx);
             crate::theme_editor::window(self, &ctx);
             crate::welcome::layout_gallery(self, &ctx);
+            crate::welcome::diagram_gallery(self, &ctx);
+            crate::credits::window(self, &ctx);
             crate::welcome::window(self, &ctx);
         }
         crate::presenting::presenter_window(self, &ctx);

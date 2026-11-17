@@ -13,6 +13,7 @@ pub enum Tab {
     #[default]
     Shapes,
     Icons,
+    Symbols,
 }
 
 #[derive(Default)]
@@ -23,7 +24,7 @@ pub struct Library {
     /// Swap this icon element instead of inserting.
     pub replace: Option<ElementId>,
     /// Inserts since opening, to fan new items out instead of stacking them.
-    inserted: u32,
+    pub inserted: u32,
     focus_search: bool,
 }
 
@@ -33,6 +34,18 @@ impl Library {
         self.replace = None;
         self.focus_search = self.open;
         self.inserted = 0;
+    }
+    /// Insert › Symbols & Shapes: open on the Symbols tab.
+    pub fn open_symbols(&mut self) {
+        self.open = true;
+        self.tab = Tab::Symbols;
+        self.replace = None;
+        self.focus_search = true;
+        self.inserted = 0;
+    }
+    /// Centre of the view, fanned out a little for each insert.
+    pub fn drop_point(&self, app: &ZebraApp) -> (f64, f64) {
+        drop_point(app, self)
     }
     pub fn open_replace(&mut self, id: ElementId) {
         self.open = true;
@@ -85,10 +98,15 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut lib.tab, Tab::Shapes, crate::t!("library-tab-shapes"));
                     ui.selectable_value(&mut lib.tab, Tab::Icons, crate::t!("library-tab-icons"));
+                    ui.selectable_value(&mut lib.tab, Tab::Symbols, crate::t!("library-tab-symbols"));
                 });
                 lib.focus_search |= lib.tab != before;
             }
-            let hint = if lib.tab == Tab::Shapes { crate::t!("library-search-shapes-hint") } else { crate::t!("library-search-icons-hint") };
+            let hint = match lib.tab {
+                Tab::Shapes => crate::t!("library-search-shapes-hint"),
+                Tab::Icons => crate::t!("library-search-icons-hint"),
+                Tab::Symbols => crate::t!("library-search-symbols-hint"),
+            };
             let r = ui.add(egui::TextEdit::singleline(&mut lib.query).hint_text(hint).desired_width(f32::INFINITY));
             if lib.focus_search {
                 r.request_focus();
@@ -98,6 +116,7 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
             match lib.tab {
                 Tab::Shapes => shapes_grid(app, &mut lib, ui, p),
                 Tab::Icons => icons_grid(app, &mut lib, ui, p),
+                Tab::Symbols => crate::symbols_ui::grid(app, &mut lib, ui, p),
             }
         });
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {

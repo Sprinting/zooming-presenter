@@ -61,6 +61,12 @@ pub fn layout_name(i: &zebra_core::templates::Info) -> String {
 pub fn layout_description(i: &zebra_core::templates::Info) -> String {
     named("layout-description", &i.id, &i.description)
 }
+pub fn diagram_name(d: &zebra_core::diagrams::Diagram) -> String {
+    named("diagram-name", d.key, d.name)
+}
+pub fn diagram_description(d: &zebra_core::diagrams::Diagram) -> String {
+    named("diagram-description", d.key, d.description)
+}
 
 /// What a person reads when a command they gave fails, by error code.
 pub fn error(code: &str) -> String {
@@ -124,6 +130,8 @@ fn command(c: &Command) -> String {
         Command::AddAsset { .. } => t!("history-add-picture"),
         Command::ApplyTemplate { template, .. } => t!("history-template", template = template.as_str()),
         Command::AddLayout { layout, .. } => t!("history-insert-layout", layout = layout.as_str()),
+        Command::AddSymbol { name, .. } => t!("history-insert-symbol", name = name.as_str()),
+        Command::AddDiagram { diagram, .. } => t!("history-insert-diagram", diagram = zebra_core::diagrams::get(diagram).map(diagram_name).unwrap_or_else(|| diagram.clone())),
     }
 }
 

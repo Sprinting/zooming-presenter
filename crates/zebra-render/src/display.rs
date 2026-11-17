@@ -316,7 +316,8 @@ impl Ctx<'_> {
 
     /// Draw a picture asset filling `e`'s box (through `crop`, clipped to
     /// `mask`). False when it can't be drawn yet.
-    fn picture(&self, asset: &str, crop: Option<Crop>, mask: ImageMask, e: &Element, a: &Affine, items: &mut Vec<Item>) -> bool {
+    #[allow(clippy::too_many_arguments)]
+    fn picture(&self, asset: &str, crop: Option<Crop>, mask: ImageMask, e: &Element, a: &Affine, items: &mut Vec<Item>, svg: Option<crate::svg::SvgStyle>) -> bool {
         let Some(src) = self.editor.doc.assets.get(asset) else { return false };
         let (w, h) = (e.size.w, e.size.h);
         let c = crop.unwrap_or(Crop::FULL);
@@ -325,7 +326,14 @@ impl Ctx<'_> {
         let on_screen = fw * affine_scale(a);
         let level = if self.full_res_images { 0 } else { level_for(src.width, src.height, on_screen) };
         let sync = !self.o.async_images || self.full_res_images;
-        let Some(decoded) = self.r.images.get(asset, &src.ext, &src.bytes, (src.width, src.height), level, sync) else {
+        let got = if src.ext == "svg" {
+            let style = svg.unwrap_or_default();
+            let key = if style.is_plain() { asset.to_string() } else { format!("{asset}#{}", style.key()) };
+            self.r.images.get_svg(&key, &src.bytes, (src.width, src.height), level, sync, style)
+        } else {
+            self.r.images.get(asset, &src.ext, &src.bytes, (src.width, src.height), level, sync)
+        };
+        let Some(decoded) = got else {
             self.pending.set(true);
             return false;
         };
@@ -594,7 +602,12 @@ impl Ctx<'_> {
                 stroke(items, &*path, &ia, th.color(&icon.color), st);
             }
             ElementKind::Image(img) => {
-                if !self.picture(&img.asset, img.crop, img.mask, e, a, items) {
+                let svg = img.symbol.as_ref().map(|l| crate::svg::SvgStyle {
+                    color: l.color.as_ref().map(|c| th.color(c)),
+                    color2: l.color2.as_ref().map(|c| th.color(c)),
+                    sticker: l.sticker,
+                });
+                if !self.picture(&img.asset, img.crop, img.mask, e, a, items, svg) {
                     placeholder(items, &lr, a, w.min(h), !self.r.images.is_failed(&img.asset));
                 }
             }
@@ -605,7 +618,7 @@ impl Ctx<'_> {
                         * Affine::translate((-w / 2.0, -h / 2.0))
                         * Affine::scale_non_uniform(w / frame.width as f64, h / frame.height as f64);
                     items.push(Item::Image { image: frame.clone(), transform });
-                } else if !v.poster.as_ref().is_some_and(|p| self.picture(p, None, ImageMask::Rectangle, e, a, items)) {
+                } else if !v.poster.as_ref().is_some_and(|p| self.picture(p, None, ImageMask::Rectangle, e, a, items, None)) {
                     fill(items, &RoundedRect::from_rect(lr, w.min(h) * 0.02), a, [29, 29, 31, 255]);
                 }
                 if !playing {
