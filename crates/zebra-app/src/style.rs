@@ -168,10 +168,14 @@ pub fn install_fonts(ctx: &egui::Context) {
     add("jbm-italic", font!("jetbrains-mono/JetBrainsMono-Italic.ttf"));
     add("jbm-bolditalic", font!("jetbrains-mono/JetBrainsMono-BoldItalic.ttf"));
 
-    let fallbacks: Vec<String> = defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    // Inter is the first fallback everywhere: SF Pro and the theme fonts
+    // lack some of the symbols the chrome uses (⇤ ↵ ⌫ ⎋ …), and egui's own
+    // fonts have none of them, so without it they drew as empty boxes.
+    let mut fallbacks: Vec<String> = vec!["inter".into()];
+    fallbacks.extend(defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default());
     let fam = |defs: &mut FontDefinitions, name: &str, primary: &str| {
         let mut v = vec![primary.to_string()];
-        v.extend(fallbacks.iter().cloned());
+        v.extend(fallbacks.iter().filter(|f| *f != primary).cloned());
         defs.families.insert(FontFamily::Name(name.into()), v);
     };
     // Chrome font: SF Pro (the system font, read from the Mac at runtime,
@@ -204,7 +208,11 @@ pub fn install_fonts(ctx: &egui::Context) {
             fam(&mut defs, &format!("doc:{base}{suffix}"), &f);
         }
     }
-    defs.families.get_mut(&FontFamily::Proportional).unwrap().insert(0, ui_regular.into());
+    let prop = defs.families.get_mut(&FontFamily::Proportional).unwrap();
+    prop.insert(0, ui_regular.into());
+    if ui_regular != "inter" {
+        prop.insert(1, "inter".into());
+    }
     ctx.set_fonts(defs);
 }
 

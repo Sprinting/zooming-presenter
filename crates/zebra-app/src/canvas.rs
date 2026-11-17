@@ -1599,10 +1599,12 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                 if ui.selectable_label(cur_list == ListKind::Number, "1.").on_hover_text("Numbered list").clicked() {
                     fx.push(Fx::List(if cur_list == ListKind::Number { ListKind::None } else { ListKind::Number }));
                 }
-                if ui.button("⇤").on_hover_text("Decrease indent (⇧⇥)").clicked() {
+                // Drawn icons, not ⇤/⇥ characters: the UI fonts may not
+                // have those glyphs (egui would draw an empty box).
+                if crate::widgets::icon_button(ui, crate::icons::Icon::Outdent, 22.0, true, false).on_hover_text("Decrease indent (⇧⇥)").clicked() {
                     fx.push(Fx::Indent(-1));
                 }
-                if ui.button("⇥").on_hover_text("Increase indent (⇥)").clicked() {
+                if crate::widgets::icon_button(ui, crate::icons::Icon::Indent, 22.0, true, false).on_hover_text("Increase indent (⇥)").clicked() {
                     fx.push(Fx::Indent(1));
                 }
                 ui.separator();

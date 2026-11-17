@@ -58,6 +58,9 @@ pub enum Icon {
     AlignCenter,
     AlignRight,
     List,
+    /// Text toolbar: decrease / increase the list indent.
+    Outdent,
+    Indent,
     Bold,
     Italic,
     Underline,
@@ -352,6 +355,16 @@ pub fn paint_icon(painter: &Painter, r: Rect, icon: Icon, c: Color32) {
                 painter.circle_filled(p(-6.5, y), 1.4 * u, c);
                 painter.line_segment([p(-3.0, y), p(8.0, y)], s);
             }
+        }
+        Icon::Outdent | Icon::Indent => {
+            // Lines on the right, a small arrow on the left pointing the
+            // way the paragraph moves.
+            painter.line_segment([p(-8.0, -7.0), p(8.0, -7.0)], s);
+            painter.line_segment([p(0.0, -2.3), p(8.0, -2.3)], s);
+            painter.line_segment([p(0.0, 2.3), p(8.0, 2.3)], s);
+            painter.line_segment([p(-8.0, 7.0), p(8.0, 7.0)], s);
+            let pts = if icon == Icon::Indent { [(-8.0, -3.5), (-3.5, 0.0), (-8.0, 3.5)] } else { [(-3.5, -3.5), (-8.0, 0.0), (-3.5, 3.5)] };
+            painter.add(line(&pts));
         }
         Icon::Bold => {
             painter.text(m, egui::Align2::CENTER_CENTER, "B", crate::style::semibold(15.0 * u), c);
