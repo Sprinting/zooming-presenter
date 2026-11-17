@@ -62,21 +62,64 @@ pub fn autosave_path(file: &Path) -> PathBuf {
     file.with_file_name(format!(".{name}.autosave"))
 }
 
-fn untitled_autosave() -> Option<PathBuf> {
-    // app_dir: the same folder as before on macOS (Application Support/
-    // Zebra), and tests can point it at a scratch folder (ZEBRA_DATA_DIR)
-    // instead of overwriting the person's real untitled autosave.
-    Some(zebra_api::discovery::app_dir().join("Untitled.zebra.autosave"))
+/// Where autosaves of untitled documents live: one file per window, so
+/// several untitled windows never overwrite each other. In app_dir, so
+/// tests can point it at a scratch folder (ZEBRA_DATA_DIR).
+pub fn untitled_dir() -> PathBuf {
+    zebra_api::discovery::app_dir().join("Autosave")
+}
+
+/// A fresh name for a window's untitled autosave.
+pub fn new_autosave_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    format!("Untitled-{t:x}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed))
+}
+
+fn untitled_autosave(app: &ZebraApp) -> PathBuf {
+    untitled_dir().join(format!("{}.zebra.autosave", app.autosave_name))
 }
 
 pub fn remove_autosave(file: &Path) {
     let _ = std::fs::remove_file(autosave_path(file));
 }
 
-pub fn remove_autosave_untitled() {
-    if let Some(p) = untitled_autosave() {
-        let _ = std::fs::remove_file(p);
+/// Forget this window's untitled autosave (saved, or the person chose
+/// Don't Save).
+pub fn remove_autosave_untitled(app: &ZebraApp) {
+    let _ = std::fs::remove_file(untitled_autosave(app));
+}
+
+/// The person chose Don't Save: their unsaved changes are meant to go,
+/// so the autosave holding them goes too.
+pub fn discard_autosave(app: &ZebraApp) {
+    match &app.editor.file_path {
+        Some(f) => remove_autosave(f),
+        None => remove_autosave_untitled(app),
     }
+}
+
+/// Untitled documents left from the last run (it crashed, or was killed
+/// before the person chose Save or Don't Save), oldest first. An autosave
+/// from before there was one per window is moved in with the rest.
+pub fn leftover_untitled() -> Vec<PathBuf> {
+    let dir = untitled_dir();
+    let legacy = zebra_api::discovery::app_dir().join("Untitled.zebra.autosave");
+    if legacy.is_file() {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::rename(&legacy, dir.join(format!("{}.zebra.autosave", new_autosave_name())));
+    }
+    let mut v: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.to_string_lossy().ends_with(".zebra.autosave"))
+        .map(|p| (std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), p))
+        .collect();
+    v.sort();
+    v.into_iter().map(|(_, p)| p).collect()
 }
 
 /// A sidecar newer than the file, if any (offer to restore it).
@@ -108,7 +151,7 @@ pub fn autosave_tick(app: &mut ZebraApp) {
     app.autosaved_rev = app.editor.revision;
     let path = match &app.editor.file_path {
         Some(f) => Some(autosave_path(f)),
-        None => untitled_autosave(),
+        None => Some(untitled_autosave(app)),
     };
     if let Some(p) = path {
         if let Some(dir) = p.parent() {

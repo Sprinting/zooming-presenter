@@ -141,6 +141,11 @@ pub struct ZebraApp {
     pub last_autosave: f64,
     pub autosaved_rev: u64,
     pub recovered: Option<PathBuf>,
+    /// This window's untitled autosave is `<name>.zebra.autosave`.
+    pub autosave_name: String,
+    /// Untitled documents from the last run to reopen, each in its own
+    /// window (the first in this one).
+    pub reopen_untitled: Vec<PathBuf>,
     pub was_presenting: bool,
     pub force_quit: bool,
     pub title_buf: Option<String>,
@@ -192,6 +197,7 @@ impl ZebraApp {
     }
 
     fn build(ctx: &Context, wgpu: Option<egui_wgpu::RenderState>, storage: Option<&dyn eframe::Storage>, opts: AppOptions, shared: Option<Arc<Renderer>>) -> Self {
+        let is_root = shared.is_none();
         let renderer = match shared {
             Some(r) => r,
             None => {
@@ -278,6 +284,8 @@ impl ZebraApp {
             last_autosave: 0.0,
             autosaved_rev: 0,
             recovered: None,
+            autosave_name: crate::files::new_autosave_name(),
+            reopen_untitled: vec![],
             was_presenting: false,
             force_quit: false,
             title_buf: None,
@@ -316,7 +324,19 @@ impl ZebraApp {
         if let Some(p) = opts.open {
             app.open_path(&p);
         }
-        // Like Keynote: a fresh launch offers the template chooser.
+        // Like Keynote: untitled documents the last run left unsaved come
+        // back, still unsaved. Otherwise a fresh launch offers the
+        // template chooser.
+        if launch_welcome && is_root {
+            let mut left = crate::files::leftover_untitled();
+            if !left.is_empty() {
+                let first = left.remove(0);
+                if app.reopen_autosave(&first) {
+                    app.reopen_untitled = left;
+                    return app;
+                }
+            }
+        }
         if launch_welcome && app.recovered.is_none() && storage.and_then(|s| s.get_string("welcome_at_launch")).is_none_or(|v| v != "false") {
             app.welcome = Some(crate::welcome::Welcome::new());
         }
@@ -1004,6 +1024,27 @@ impl ZebraApp {
         self.editor.file_path.is_none() && !self.editor.dirty() && self.editor.doc.elements.is_empty() && self.editor.revision == 0
     }
 
+    /// Open an untitled document's autosave in this window, as the same
+    /// untitled, unsaved document (it keeps writing to that autosave).
+    pub fn reopen_autosave(&mut self, path: &std::path::Path) -> bool {
+        let doc = match zebra_core::io::load(path) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("zebra: could not reopen {}: {e}", path.display());
+                return false;
+            }
+        };
+        self.editor.load(doc, None);
+        self.after_load();
+        // Unsaved work: the document shows as edited and asks before closing.
+        self.editor.revision += 1;
+        self.autosaved_rev = self.editor.revision;
+        self.welcome = None;
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        self.autosave_name = name.strip_suffix(".zebra.autosave").unwrap_or(&name).to_string();
+        true
+    }
+
     pub fn after_load(&mut self) {
         self.media.stop_all();
         self.selected_step = None;
@@ -1038,7 +1079,7 @@ impl ZebraApp {
             Ok(()) => {
                 self.editor.mark_saved(Some(path.to_path_buf()));
                 crate::files::remove_autosave(path);
-                crate::files::remove_autosave_untitled();
+                crate::files::remove_autosave_untitled(self);
                 self.push_recent(path.to_path_buf());
                 true
             }

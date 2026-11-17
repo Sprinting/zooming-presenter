@@ -96,6 +96,7 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
                     app.queued.push(action);
                 }
             } else if label == crate::t!("sheet-dont-save") {
+                crate::files::discard_autosave(app);
                 app.force_quit = true;
                 app.queued.push(action);
             }

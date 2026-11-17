@@ -146,7 +146,19 @@ impl Shell {
         first.doc_id = "d1".into();
         let dispatcher = first.dispatcher.take();
         crate::mac::install_reopen_hook(&first.ctx);
-        Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None }
+        let reopen = std::mem::take(&mut first.reopen_untitled);
+        let mut shell = Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None };
+        // More untitled documents from the last run: a window each.
+        for p in reopen {
+            let id = format!("d{}", shell.next_id);
+            let mut w = shell.windows[0].new_window(id);
+            if w.reopen_autosave(&p) {
+                shell.next_id += 1;
+                shell.shared.write(&mut w);
+                shell.windows.push(w);
+            }
+        }
+        shell
     }
 
     /// After window `i` ran: if it changed a shared setting, every window
