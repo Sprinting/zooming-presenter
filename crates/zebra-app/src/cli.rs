@@ -42,10 +42,7 @@ fn quote(s: &str) -> String {
 
 /// The text a person pastes into any agent's chat.
 pub fn agent_prompt(ctl: &str) -> String {
-    format!(
-        "Zebra (a zooming presentation app) is open on my Mac and I've allowed AI control. \
-         Run `{ctl} --help` to learn how to drive it, then `{ctl} describe` to see what's on the canvas."
-    )
+    crate::t!("cli-agent-prompt", ctl = ctl)
 }
 
 /// An MCP server entry for apps that take a JSON config.
@@ -67,18 +64,17 @@ pub fn install_state() -> Option<bool> {
 /// Symlink the bundled zebractl into /usr/local/bin, asking for an admin
 /// password through the standard macOS prompt.
 pub fn install() -> anyhow::Result<()> {
-    let b = bundled().ok_or_else(|| anyhow::anyhow!("zebractl isn't inside this copy of Zebra"))?;
+    let b = bundled().ok_or_else(|| anyhow::anyhow!(crate::t!("cli-error-not-bundled")))?;
     let path = b.display().to_string().replace('\\', "\\\\").replace('"', "\\\"").replace('\'', "'\\''");
-    let script = format!(
-        "do shell script \"mkdir -p /usr/local/bin && ln -sf '{path}' {LINK}\" with administrator privileges with prompt \"Zebra wants to install the zebractl command so AI agents can use it.\""
-    );
+    let prompt = crate::t!("cli-install-prompt").replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!("do shell script \"mkdir -p /usr/local/bin && ln -sf '{path}' {LINK}\" with administrator privileges with prompt \"{prompt}\"");
     let out = std::process::Command::new("/usr/bin/osascript").arg("-e").arg(script).output()?;
     if out.status.success() {
         Ok(())
     } else {
         let e = String::from_utf8_lossy(&out.stderr);
         if e.contains("-128") {
-            anyhow::bail!("cancelled");
+            anyhow::bail!(crate::t!("cli-error-cancelled"));
         }
         anyhow::bail!("{}", e.trim())
     }

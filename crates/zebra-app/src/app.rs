@@ -297,7 +297,7 @@ impl ZebraApp {
                 self.api = Some(s);
                 self.api_error = None;
             }
-            Err(e) => self.api_error = Some(format!("Couldn't start AI control: {e}")),
+            Err(e) => self.api_error = Some(crate::t!("app-ai-start-failed", error = e.to_string())),
         }
     }
 
@@ -307,7 +307,7 @@ impl ZebraApp {
             Ok(v) => Some(v),
             Err(e) => {
                 let msg = match &e.hint {
-                    Some(h) => format!("{} — {}", e.message, h),
+                    Some(h) => crate::t!("app-toast-error-with-hint", message = e.message.as_str(), hint = h.as_str()),
                     None => e.message.clone(),
                 };
                 self.toast(msg);
@@ -358,7 +358,7 @@ impl ZebraApp {
                 Origin::Agent { name } => Some(name.clone()),
                 _ => None,
             })
-            .unwrap_or_else(|| "Agent".into())
+            .unwrap_or_else(|| crate::t!("app-agent-default-name"))
     }
 
     // ------------------------------------------------------------------
@@ -405,7 +405,7 @@ impl ZebraApp {
                 self.after_load();
             }
             Open => {
-                if let Some(p) = rfd::FileDialog::new().add_filter("Zebra presentation", &["zebra"]).pick_file() {
+                if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-zebra"), &["zebra"]).pick_file() {
                     self.open_path(&p);
                 }
             }
@@ -504,7 +504,7 @@ impl ZebraApp {
                 }
             }
             InsertImage => {
-                if let Some(p) = rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg", "webp", "gif"]).pick_file() {
+                if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), &["png", "jpg", "jpeg", "webp", "gif"]).pick_file() {
                     let c = self.canvas_center_world();
                     self.insert_image_file(&p, c);
                 }
@@ -530,7 +530,7 @@ impl ZebraApp {
                         .into_iter()
                         .map(|id| Command::Update { id, patch: zebra_core::ElementPatch { locked: Some(lock), ..Default::default() } })
                         .collect();
-                    let r = self.editor.apply_batch(cmds, Some(if lock { "Lock" } else { "Unlock" }.into()), H);
+                    let r = self.editor.apply_batch(cmds, Some(if lock { crate::t!("app-undo-lock") } else { crate::t!("app-undo-unlock") }), H);
                     self.report(r);
                 }
             }
@@ -573,7 +573,7 @@ impl ZebraApp {
             }
             PresentStart | PresentCurrent if self.editor.doc.elements.is_empty() => {
                 // The Play button is disabled; this covers the shortcut.
-                self.toast("Nothing to play yet. Double-click the canvas to write something first.".to_string());
+                self.toast(crate::t!("app-toast-nothing-to-play"));
             }
             PresentStart => self.view_cmd(ViewCommand::Present { step: None }),
             PresentCurrent => {
@@ -582,7 +582,7 @@ impl ZebraApp {
             }
             TogglePresenterView => {
                 self.stage.presenter_view = !self.stage.presenter_view;
-                self.toast(if self.stage.presenter_view { "Presenter view will open when you present." } else { "Presenter view is off." });
+                self.toast(if self.stage.presenter_view { crate::t!("app-toast-presenter-view-on") } else { crate::t!("app-toast-presenter-view-off") });
             }
             PlaybackOptions => self.stage.show_playback = true,
             ToggleAiControl => {
@@ -596,7 +596,7 @@ impl ZebraApp {
             }
             StopAgents => {
                 self.view_cmd(ViewCommand::PauseAgents { paused: true });
-                self.toast("Agent stopped. Resume it from the AI button in the toolbar.");
+                self.toast(crate::t!("app-toast-agent-stopped"));
             }
             FollowAgent => {
                 let on = !self.editor.view.follow_agent;
@@ -751,7 +751,7 @@ impl ZebraApp {
                 }
             })
             .collect();
-        let r = self.editor.apply_batch(cmds, Some("Paste".into()), H);
+        let r = self.editor.apply_batch(cmds, Some(crate::t!("app-undo-paste")), H);
         if let Some(out) = self.report(r) {
             let top = self.top_level(&out.created);
             self.select(top);
@@ -768,7 +768,7 @@ impl ZebraApp {
         let cmds: Vec<Command> =
             top.into_iter().map(|id| Command::AddStep { target: StepTarget::Element { id }, index: None, builds: vec![], notes: String::new() }).collect();
         let n = cmds.len();
-        let r = self.editor.apply_batch(cmds, Some("Add to path".into()), H);
+        let r = self.editor.apply_batch(cmds, Some(crate::t!("app-undo-add-to-path")), H);
         if self.report(r).is_some() {
             // Show the change itself: the new step's row highlights.
             let last = self.editor.doc.path.len() - 1;
@@ -794,7 +794,7 @@ impl ZebraApp {
                 kind: ElementKind::Frame(zebra_core::FrameData { style: zebra_core::FrameStyle::Invisible, color: None }),
             },
         };
-        let r = self.editor.apply_batch(vec![cmd], Some("Add current view".into()), H);
+        let r = self.editor.apply_batch(vec![cmd], Some(crate::t!("app-undo-add-current-view")), H);
         if let Some(out) = self.report(r) {
             if let Some(id) = out.created.first().cloned() {
                 self.apply(Command::AddStep { target: StepTarget::Element { id }, index: None, builds: vec![], notes: String::new() });
@@ -833,7 +833,7 @@ impl ZebraApp {
     pub fn insert_image_file(&mut self, p: &std::path::Path, at: Vec2) {
         match std::fs::read(p) {
             Ok(bytes) => self.insert_image_bytes(bytes, at, p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
-            Err(e) => self.toast(format!("Could not read {}: {e}", p.display())),
+            Err(e) => self.toast(crate::t!("app-toast-read-failed", path = p.display().to_string(), error = e.to_string())),
         }
     }
 
@@ -862,17 +862,15 @@ impl ZebraApp {
                 // Keep technical details out of the toast; log them instead.
                 eprintln!("zebra: could not open {}: {e}", p.display());
                 let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
-                let why = match e.code {
-                    "bad_file" if e.message.contains("newer") => "it was made by a newer version of Zebra",
-                    "bad_file" => "it isn't a Zebra presentation, or it is damaged",
-                    _ if e.message.contains("No such file") => "the file no longer exists",
-                    _ if e.message.contains("ermission") => "you don't have permission to read it",
-                    _ => "the file couldn't be read",
+                let message = match e.code {
+                    "bad_file" if e.message.contains("newer") => crate::t!("app-open-failed-newer"),
+                    "bad_file" => crate::t!("app-open-failed-not-zebra"),
+                    _ if e.message.contains("No such file") => crate::t!("app-open-failed-missing"),
+                    _ if e.message.contains("ermission") => crate::t!("app-open-failed-permission"),
+                    _ => crate::t!("app-open-failed-unreadable"),
                 };
-                let title = format!("The document \u{201c}{name}\u{201d} could not be opened.");
-                let mut why = why.to_string();
-                why[..1].make_ascii_uppercase();
-                crate::sheets::request(self, crate::sheets::SheetKind::Alert { title, message: format!("{why}.") });
+                let title = crate::t!("app-open-failed-title", name = name.as_str());
+                crate::sheets::request(self, crate::sheets::SheetKind::Alert { title, message });
             }
         }
     }
@@ -897,7 +895,7 @@ impl ZebraApp {
         let path = match (&self.editor.file_path, save_as) {
             (Some(p), false) => Some(p.clone()),
             _ => rfd::FileDialog::new()
-                .add_filter("Zebra presentation", &["zebra"])
+                .add_filter(crate::t!("app-file-filter-zebra"), &["zebra"])
                 .set_file_name(format!("{}.zebra", sanitize(&self.editor.doc.title)))
                 .save_file()
                 .map(|p| if p.extension().is_none() { p.with_extension("zebra") } else { p }),
@@ -919,7 +917,7 @@ impl ZebraApp {
                 let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                 crate::sheets::request(
                     self,
-                    crate::sheets::SheetKind::Alert { title: format!("The document \u{201c}{name}\u{201d} could not be saved."), message: e.message.clone() },
+                    crate::sheets::SheetKind::Alert { title: crate::t!("app-save-failed-title", name = name.as_str()), message: e.message.clone() },
                 );
                 false
             }
@@ -936,7 +934,7 @@ impl ZebraApp {
         if cfg!(target_os = "macos") {
             name
         } else {
-            format!("{name}{}", if self.editor.dirty() { " — Edited" } else { "" })
+            if self.editor.dirty() { crate::t!("app-window-title-edited", name = name.as_str()) } else { name }
         }
     }
 
@@ -977,7 +975,7 @@ impl ZebraApp {
             if self.now() >= t {
                 let name = self.agent_name();
                 self.set_ai_control(false);
-                self.toast(format!("{name} switched AI control off. Turn it back on from the AI button."));
+                self.toast(crate::t!("app-toast-agent-switched-ai-off", name = name.as_str()));
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_secs_f64((t - self.now()).max(0.016)));
             }
@@ -1147,7 +1145,7 @@ impl ZebraApp {
         }
         let cam = self.editor.view.camera;
         let w = Vec2::new(sx, sy).rotate_deg(cam.rotation) * (1.0 / cam.zoom);
-        let r = self.editor.apply_batch(vec![Command::Move { ids, dx: w.x, dy: w.y, with_contents: true }], Some("Nudge".into()), H);
+        let r = self.editor.apply_batch(vec![Command::Move { ids, dx: w.x, dy: w.y, with_contents: true }], Some(crate::t!("app-undo-nudge")), H);
         self.report(r);
     }
 
@@ -1175,7 +1173,7 @@ impl ZebraApp {
                     let off = 30.0 * i as f64 / self.editor.view.camera.zoom;
                     self.insert_image_bytes(bytes, at + Vec2::new(off, off), p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
                 }
-                Err(e) => self.toast(format!("Could not read dropped file: {e}")),
+                Err(e) => self.toast(crate::t!("app-toast-read-dropped-failed", error = e.to_string())),
             }
         }
     }
@@ -1248,7 +1246,7 @@ pub fn parse_permission(s: &str) -> zebra_core::view::Permission {
 pub fn sanitize(s: &str) -> String {
     let t: String = s.chars().map(|c| if c.is_alphanumeric() || " -_".contains(c) { c } else { '_' }).collect();
     let t = t.trim().to_string();
-    if t.is_empty() { "Untitled".into() } else { t }
+    if t.is_empty() { crate::t!("app-untitled") } else { t }
 }
 
 impl eframe::App for ZebraApp {
