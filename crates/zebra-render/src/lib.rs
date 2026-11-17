@@ -52,7 +52,7 @@ pub struct SceneOptions {
 pub mod display;
 pub use display::DisplayList;
 
-mod text;
+pub mod text;
 mod cpu;
 mod pdf;
 #[cfg(feature = "gpu")]
@@ -60,11 +60,12 @@ pub mod gpu;
 
 pub struct Renderer {
     pub(crate) fonts: text::Fonts,
+    pub(crate) images: display::ImageCache,
 }
 
 impl Renderer {
     pub fn new() -> Self {
-        Renderer { fonts: text::Fonts::new() }
+        Renderer { fonts: text::Fonts::new(), images: display::ImageCache::default() }
     }
 
     /// Text measurer to install in `Editor::measure`.
@@ -88,6 +89,12 @@ impl Renderer {
     /// Off-screen render to PNG. `width`x`height` in pixels.
     pub fn capture(&self, editor: &Editor, target: &CaptureTarget, width: u32, height: u32) -> Result<Vec<u8>, zebra_core::ZError> {
         cpu::capture(self, editor, target, width, height)
+    }
+
+    /// Bundled font check: (family, faces found, files bundled).
+    #[doc(hidden)]
+    pub fn font_report(&self) -> Vec<(&'static str, usize, usize)> {
+        self.fonts.bundled_report()
     }
 
     /// One page per path step (overview if the path is empty).

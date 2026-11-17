@@ -1,0 +1,200 @@
+mod common;
+
+use common::*;
+use zebra_core::*;
+use zebra_render::{CaptureTarget, Renderer, SceneOptions};
+
+fn decode(png: &[u8]) -> image::RgbaImage {
+    image::load_from_memory(png).unwrap().to_rgba8()
+}
+
+fn px(img: &image::RgbaImage, x: u32, y: u32) -> [u8; 4] {
+    img.get_pixel(x, y).0
+}
+
+fn close(a: [u8; 4], b: [u8; 4], tol: i32) -> bool {
+    a.iter().zip(b.iter()).all(|(x, y)| (*x as i32 - *y as i32).abs() <= tol)
+}
+
+#[test]
+fn samples_for_review() {
+    let r = Renderer::new();
+    for theme in Theme::ids() {
+        let ed = sample(&r, &theme);
+        let png = r.capture(&ed, &CaptureTarget::Overview, 1280, 800).unwrap();
+        std::fs::write(out_dir().join(format!("overview_{theme}.png")), &png).unwrap();
+        let img = decode(&png);
+        let bg = Theme::resolve(&theme).color(&Theme::resolve(&theme).background);
+        let non_bg = img.pixels().filter(|p| !close(p.0, bg, 3)).count();
+        assert!(non_bg > 10_000, "{theme}: capture looks blank ({non_bg} non-background pixels)");
+    }
+    let ed = sample(&r, "classic");
+    for i in 0..ed.doc.path.len() {
+        let png = r.capture(&ed, &CaptureTarget::Step { index: i, build: None }, 960, 600).unwrap();
+        std::fs::write(out_dir().join(format!("step_{i}.png")), &png).unwrap();
+    }
+}
+
+#[test]
+fn frame_and_shape_pixels() {
+    let r = Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    ed.view.viewport = Vec2::new(400.0, 300.0);
+    let th = Theme::resolve("classic");
+    // Rectangle frame filled with frame_fill, a red square on top, a bracket frame.
+    add(&mut ed, "f", 0.0, 0.0, 300.0, 200.0, 1.0, 0.0, frame(FrameStyle::Rectangle));
+    add(&mut ed, "s", 0.0, 0.0, 40.0, 40.0, 1.0, 0.0, shape(ShapeKind::Rectangle, Some("#ff0000"), None, 0.0));
+    add(&mut ed, "b", 0.0, 0.0, 380.0, 280.0, 1.0, 0.0, frame(FrameStyle::Bracket));
+    let cam = Camera { cx: 0.0, cy: 0.0, zoom: 1.0, rotation: 0.0 };
+    let png = r.capture(&ed, &CaptureTarget::Camera { camera: cam }, 400, 300).unwrap();
+    std::fs::write(out_dir().join("pixels.png"), &png).unwrap();
+    let img = decode(&png);
+    assert!(close(px(&img, 200, 150), [255, 0, 0, 255], 2), "centre is the red square");
+    assert!(close(px(&img, 200 - 100, 150), th.color(&th.frame_fill), 2), "inside frame is frame_fill");
+    assert!(close(px(&img, 5, 5), th.color(&th.background), 2), "corner gap is background");
+    // Bracket: left bar at x = 10 + t/2 (t = 280*0.012 = 3.36), at mid height.
+    let frame_c = th.color(&th.frame);
+    assert!(close(px(&img, 11, 150), frame_c, 10), "left bracket bar: {:?}", px(&img, 11, 150));
+    assert!(close(px(&img, 388, 150), frame_c, 10), "right bracket bar: {:?}", px(&img, 388, 150));
+    // Top arm on the left exists, but the middle of the top edge is open.
+    assert!(close(px(&img, 20, 11), frame_c, 10), "top-left arm: {:?}", px(&img, 20, 11));
+    assert!(close(px(&img, 200, 11), th.color(&th.background), 2), "top edge open between brackets");
+}
+
+#[test]
+fn rotation_is_clockwise() {
+    let r = Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    ed.view.viewport = Vec2::new(200.0, 200.0);
+    // A long thin bar rotated 45deg clockwise (y down): it should run from
+    // top-left to bottom-right.
+    add(&mut ed, "s", 0.0, 0.0, 200.0, 10.0, 1.0, 45.0, shape(ShapeKind::Rectangle, Some("#000000"), None, 0.0));
+    let cam = Camera { cx: 0.0, cy: 0.0, zoom: 1.0, rotation: 0.0 };
+    let img = decode(&r.capture(&ed, &CaptureTarget::Camera { camera: cam }, 200, 200).unwrap());
+    assert!(close(px(&img, 50, 50), [0, 0, 0, 255], 5));
+    assert!(close(px(&img, 150, 150), [0, 0, 0, 255], 5));
+    assert!(close(px(&img, 150, 50), [255, 255, 255, 255], 5));
+    // A camera rolled by 45 shows the bar horizontal.
+    let cam = Camera { cx: 0.0, cy: 0.0, zoom: 1.0, rotation: 45.0 };
+    let img = decode(&r.capture(&ed, &CaptureTarget::Camera { camera: cam }, 200, 200).unwrap());
+    assert!(close(px(&img, 20, 100), [0, 0, 0, 255], 5));
+    assert!(close(px(&img, 100, 20), [255, 255, 255, 255], 5));
+}
+
+#[test]
+fn deep_zoom_is_stable() {
+    let r = Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    ed.view.viewport = Vec2::new(200.0, 200.0);
+    // A tiny square far from the origin, viewed at zoom 1e4.
+    let (x, y) = (1.0e6 + 0.123, -2.0e6 + 0.456);
+    add(&mut ed, "s", x, y, 0.01, 0.01, 1.0, 0.0, shape(ShapeKind::Rectangle, Some("#00ff00"), None, 0.0));
+    let cam = Camera { cx: x, cy: y, zoom: 1.0e4, rotation: 0.0 };
+    let img = decode(&r.capture(&ed, &CaptureTarget::Camera { camera: cam }, 200, 200).unwrap());
+    // 0.01 world * 1e4 = 100 px square centred.
+    assert!(close(px(&img, 100, 100), [0, 255, 0, 255], 2));
+    assert!(close(px(&img, 52, 100), [0, 255, 0, 255], 2));
+    assert!(close(px(&img, 48, 100), [255, 255, 255, 255], 2));
+    assert!(close(px(&img, 148, 148), [0, 255, 0, 255], 2));
+    assert!(close(px(&img, 152, 152), [255, 255, 255, 255], 2));
+}
+
+#[test]
+fn culling_and_options() {
+    let r = Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    add(&mut ed, "a", 0.0, 0.0, 100.0, 100.0, 1.0, 0.0, shape(ShapeKind::Rectangle, None, None, 0.0));
+    add(&mut ed, "far", 1.0e5, 0.0, 100.0, 100.0, 1.0, 0.0, shape(ShapeKind::Rectangle, None, None, 0.0));
+    add(&mut ed, "tiny", 0.0, 0.0, 1.0e-4, 1.0e-4, 1.0, 0.0, shape(ShapeKind::Rectangle, None, None, 0.0));
+    add(&mut ed, "inv", 0.0, 0.0, 200.0, 200.0, 1.0, 0.0, frame(FrameStyle::Invisible));
+    let cam = Camera::default();
+    let vp = [400.0, 300.0];
+    let n = |o: &SceneOptions| r.build_display_list(&ed, &cam, vp, 2.0, o).items.len();
+    let edit = SceneOptions::default();
+    // "a" (one fill) + invisible frame dashed outline; "far" and "tiny" culled.
+    assert_eq!(n(&edit), 2);
+    let list = r.build_display_list(&ed, &cam, vp, 2.0, &edit);
+    assert_eq!((list.width_px, list.height_px), (800, 600));
+    let present = SceneOptions { presenting: true, ..Default::default() };
+    assert_eq!(n(&present), 1, "invisible frame hidden when presenting");
+    let mut hidden = SceneOptions { presenting: true, ..Default::default() };
+    hidden.hidden.insert("a".into());
+    assert_eq!(n(&hidden), 0);
+    let skip = SceneOptions { skip: Some("a".into()), ..Default::default() };
+    assert_eq!(n(&skip), 1);
+    let fade = SceneOptions { opacity: vec![("a".into(), 0.5)], ..Default::default() };
+    assert_eq!(n(&fade), 4, "push opacity + fill + pop + frame");
+    // Rebasing: far-away content near the camera still gives small device coords.
+    let cam = Camera { cx: 1.0e5, cy: 0.0, zoom: 1.0, rotation: 0.0 };
+    let list = r.build_display_list(&ed, &cam, vp, 1.0, &edit);
+    assert_eq!(list.items.len(), 1);
+    if let zebra_render::display::Item::Fill { path, .. } = &list.items[0] {
+        let b = kurbo::Shape::bounding_box(path);
+        assert!((b.x0 - 150.0).abs() < 1e-6 && (b.y1 - 200.0).abs() < 1e-6, "{b:?}");
+    } else {
+        panic!("expected fill");
+    }
+}
+
+#[test]
+fn measure_matches_draw() {
+    let r = Renderer::new();
+    let m = r.measure();
+    let th = Theme::resolve("paper");
+    let t = TextData { text: "Hello world, this wraps around".into(), style: TextStyle::Title, ..Default::default() };
+    let (w, h) = m.measure(&t, &th, None);
+    assert!(w > 300.0 && (h - 72.0 * 1.25).abs() < 0.5, "single line: {w}x{h}");
+    let (w2, h2) = m.measure(&t, &th, Some(400.0));
+    assert_eq!(w2, 400.0);
+    assert!(h2 > h * 1.9, "wraps to several lines: {h2}");
+    // Ink bounding box of drawn glyphs lies inside the measured box.
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    ed.doc.theme = "paper".into();
+    add(&mut ed, "t", 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, ElementKind::Text(t.clone()));
+    let e = ed.doc.get("t").unwrap();
+    assert_eq!((e.size.w, e.size.h), (w, h));
+    let cam = Camera { cx: 0.0, cy: 0.0, zoom: 1.0, rotation: 0.0 };
+    let list = r.build_display_list(&ed, &cam, [1400.0, 400.0], 1.0, &SceneOptions::default());
+    let zebra_render::display::Item::Text { layout, .. } = &list.items[0] else { panic!() };
+    assert_eq!((layout.width, layout.height), (w, h));
+    let max_x = layout.runs.iter().flat_map(|r| r.glyphs.iter()).map(|g| g.x + g.advance).fold(0.0f32, f32::max);
+    assert!((max_x as f64 - w).abs() < 1.0, "glyph extent {max_x} vs measured {w}");
+    // Bullets and alignment change the measurement consistently.
+    let b = TextData { bullets: true, ..t.clone() };
+    let (wb, _) = m.measure(&b, &th, None);
+    assert!(wb > w);
+}
+
+#[test]
+fn bundled_fonts_registered() {
+    let r = Renderer::new();
+    for (fam, n, files) in r.font_report() {
+        assert_eq!(n, files, "family {fam}");
+    }
+}
+
+#[test]
+fn capture_errors_and_no_state_change() {
+    let r = Renderer::new();
+    let ed = sample(&r, "night");
+    let before = (ed.view.camera, ed.revision);
+    assert!(r.capture(&ed, &CaptureTarget::Step { index: 99, build: None }, 100, 100).is_err());
+    assert!(r.capture(&ed, &CaptureTarget::Element { id: "nope".into() }, 100, 100).is_err());
+    assert!(r.capture(&ed, &CaptureTarget::Overview, 0, 100).is_err());
+    for t in [
+        CaptureTarget::Viewport,
+        CaptureTarget::AgentView,
+        CaptureTarget::Element { id: "f2".into() },
+        CaptureTarget::Step { index: 2, build: Some(0) },
+    ] {
+        let png = r.capture(&ed, &t, 320, 200).unwrap();
+        let img = decode(&png);
+        assert_eq!(img.dimensions(), (320, 200));
+    }
+    assert_eq!(before, (ed.view.camera, ed.revision));
+}
