@@ -35,6 +35,10 @@ struct Cli {
     /// Debug: start in a demo state (sample,select,pathedit,present,agent,text).
     #[arg(long, hide = true)]
     demo: Option<String>,
+    /// Open without taking focus (for agents that launch Zebra; also
+    /// ZEBRA_BACKGROUND=1). On macOS: `open -g -a Zebra --args --background`.
+    #[arg(long)]
+    background: bool,
     /// Debug: window size WxH.
     #[arg(long, hide = true, default_value = "1440x900")]
     size: String,
@@ -59,6 +63,7 @@ fn main() -> anyhow::Result<()> {
     let (w, h) = cli.size.split_once('x').and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))).unwrap_or((1440.0, 900.0));
     let opts = AppOptions { open: cli.file, api: cli.api.then_some(api_opts), screenshot, demo: cli.demo };
 
+    let background = cli.background || std::env::var_os("ZEBRA_BACKGROUND").is_some_and(|v| v != "0");
     let native = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
@@ -67,6 +72,7 @@ fn main() -> anyhow::Result<()> {
             .with_inner_size([w, h])
             .with_min_inner_size([760.0, 480.0])
             .with_drag_and_drop(true)
+            .with_active(!background)
             // Unified title bar: the content runs under a transparent title
             // bar, so the traffic lights and title sit in our 28 pt title
             // row above the toolbar (panels::TITLE_ROW).
@@ -74,6 +80,12 @@ fn main() -> anyhow::Result<()> {
             .with_titlebar_shown(!cfg!(target_os = "macos")),
         // Each run starts at the requested size (debug screenshots need it).
         persist_window: false,
+        // winit activates the app at launch unless told not to.
+        #[cfg(target_os = "macos")]
+        event_loop_builder: Some(Box::new(move |b| {
+            use winit::platform::macos::EventLoopBuilderExtMacOS;
+            b.with_activate_ignoring_other_apps(!background);
+        })),
         ..Default::default()
     };
     eframe::run_native(
