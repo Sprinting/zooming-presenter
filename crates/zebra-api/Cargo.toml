@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 zebra-core.workspace = true
-zebra-render = { workspace = true, default-features = false }
+zebra-render = { path = "../zebra-render", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
