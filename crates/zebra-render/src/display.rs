@@ -153,7 +153,7 @@ pub(crate) fn build_with(
         }
         let mut opacity = o.opacity.iter().rev().find(|(id, _)| *id == e.id).map(|(_, a)| a.clamp(0.0, 1.0)).unwrap_or(1.0);
         if e.placeholder {
-            opacity *= PLACEHOLDER_OPACITY;
+            opacity *= if on_fill(editor, e) { PLACEHOLDER_ON_FILL_OPACITY } else { PLACEHOLDER_OPACITY };
         }
         if opacity <= 0.0 {
             continue;
@@ -235,6 +235,24 @@ fn with_alpha(mut c: Rgba, k: f32) -> Rgba {
 
 /// How strongly layout placeholders show while editing.
 pub const PLACEHOLDER_OPACITY: f32 = 0.45;
+/// Placeholder text on a filled shape (diagram boxes): its colour was
+/// picked to read on the fill, and fading it as much loses it.
+pub const PLACEHOLDER_ON_FILL_OPACITY: f32 = 0.8;
+
+/// Text centred on a filled shape of its group (the text inside a box).
+fn on_fill(editor: &Editor, t: &Element) -> bool {
+    let (ElementKind::Text(_), Some(g)) = (&t.kind, &t.group) else { return false };
+    let c = t.transform.center();
+    editor.doc.elements.values().any(|s| match &s.kind {
+        ElementKind::Shape(sd) => {
+            s.group.as_ref() == Some(g)
+                && !sd.shape.is_line()
+                && sd.fill.as_deref().is_some_and(|f| !f.is_empty())
+                && (s.transform.center() - c).len() <= (s.size.w.min(s.size.h) * s.transform.scale * 0.01).max(0.5)
+        }
+        _ => false,
+    })
+}
 
 impl Ctx<'_> {
     /// The theme's background picture (fixed to the screen, scaled to
