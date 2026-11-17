@@ -53,6 +53,13 @@ fn one_line(ed: &Editor, e: &Element) -> String {
         ElementKind::Icon(i) => {
             let _ = write!(s, " {}", i.name);
         }
+        ElementKind::Connector(c) => {
+            let end = |e: &crate::model::Endpoint| e.element.clone().unwrap_or_else(|| "point".into());
+            let _ = write!(s, " {} -> {}", end(&c.from), end(&c.to));
+            if !c.label.is_empty() {
+                let _ = write!(s, " label={:?}", truncate(&c.label, 30));
+            }
+        }
         ElementKind::Image(i) if !i.alt.is_empty() => {
             let _ = write!(s, " alt={:?}", truncate(&i.alt, 40));
         }

@@ -343,6 +343,8 @@ impl Editor {
                 return Err(e);
             }
         }
+        // Connectors follow whatever they are stuck to.
+        crate::connector::refresh(&mut self.doc);
         if self.doc == before {
             out.revision = self.revision;
             return Ok(out);
@@ -632,6 +634,42 @@ impl Editor {
                     kind: ElementKind::Image(ImageData { asset: key, alt }),
                 };
                 self.insert_element(e, out)?;
+            }
+            Command::AddConnector { from, to, route, start, end, color, width, label, id } => {
+                for end in [&from, &to] {
+                    if let Some(t) = &end.element {
+                        let te = self.doc.get(t).ok_or_else(|| ZError::not_found(t, std::iter::empty()))?;
+                        if matches!(te.kind, ElementKind::Connector(_)) {
+                            return Err(ZError::invalid("a connector can't attach to another connector"));
+                        }
+                    } else if !(end.x.is_finite() && end.y.is_finite()) {
+                        return Err(ZError::invalid("connector ends need an element or finite x, y"));
+                    }
+                }
+                if !(width.is_finite() && width > 0.0) {
+                    return Err(ZError::invalid("width must be > 0"));
+                }
+                let ep = |s: &crate::command::EndSpec| Endpoint { element: s.element.clone(), x: s.x, y: s.y, dir: Vec2::ZERO };
+                let e = Element {
+                    id: id.unwrap_or_default(),
+                    transform: Transform::at(0.0, 0.0),
+                    size: Size { w: 0.0, h: 0.0 },
+                    locked: false,
+                    name: String::new(),
+                    kind: ElementKind::Connector(ConnectorData {
+                        from: ep(&from),
+                        to: ep(&to),
+                        route,
+                        start,
+                        end,
+                        color: color.unwrap_or_else(|| "theme:body".into()),
+                        width,
+                        dash: Dash::Solid,
+                        label,
+                    }),
+                };
+                self.insert_element(e, out)?;
+                crate::connector::refresh(&mut self.doc);
             }
             Command::AddInk { points, color, width, highlighter } => {
                 if points.len() < 2 {
@@ -1468,6 +1506,7 @@ fn default_size(k: &ElementKind) -> (f64, f64) {
         ElementKind::Image(_) => (400.0, 300.0),
         ElementKind::Ink(_) => (100.0, 100.0),
         ElementKind::Icon(_) => (96.0, 96.0),
+        ElementKind::Connector(_) => (0.0, 0.0),
     }
 }
 
@@ -1509,6 +1548,12 @@ fn validate_element(e: &Element, doc: &Document) -> ZResult<()> {
         }
         ElementKind::Frame(d) => check(&d.color)?,
         ElementKind::Ink(d) => check(&Some(d.color.clone()))?,
+        ElementKind::Connector(d) => {
+            check(&Some(d.color.clone()))?;
+            if !(d.width.is_finite() && d.width > 0.0) {
+                return Err(ZError::invalid("width must be > 0"));
+            }
+        }
         ElementKind::Icon(d) => {
             check(&Some(d.color.clone()))?;
             if crate::icons::get(&d.name).is_none() {
@@ -1611,11 +1656,44 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
             ElementKind::Frame(f) => f.color = c,
             ElementKind::Ink(i) => i.color = c.unwrap_or_else(|| "theme:accent".into()),
             ElementKind::Icon(i) => i.color = c.unwrap_or_else(|| "theme:body".into()),
+            ElementKind::Connector(k) => k.color = c.unwrap_or_else(|| "theme:body".into()),
             ElementKind::Shape(s) => s.fill = c,
             _ => return Err(wrong("color")),
         }
     }
-    if let ElementKind::Icon(i) = &mut e.kind {
+    let connector_only = p.from.is_some() || p.to.is_some() || p.route.is_some() || p.start_head.is_some() || p.end_head.is_some() || p.label.is_some();
+    if let ElementKind::Connector(k) = &mut e.kind {
+        if p.shape.is_some() || p.fill.is_some() || p.stroke.is_some() || p.corner_radius.is_some() || p.icon.is_some() {
+            return Err(wrong("shape/fill/stroke/corner_radius/icon"));
+        }
+        let tf = e.transform;
+        for (spec, end) in [(&p.from, &mut k.from), (&p.to, &mut k.to)] {
+            if let Some(s) = spec {
+                let l = tf.inverse(Vec2::new(s.x, s.y));
+                *end = Endpoint { element: s.element.clone(), x: l.x, y: l.y, dir: Vec2::ZERO };
+            }
+        }
+        if let Some(v) = p.route {
+            k.route = v;
+        }
+        if let Some(v) = p.start_head {
+            k.start = v;
+        }
+        if let Some(v) = p.end_head {
+            k.end = v;
+        }
+        if let Some(v) = &p.label {
+            k.label = v.clone();
+        }
+        if let Some(v) = p.stroke_width {
+            k.width = v.max(0.1);
+        }
+        if let Some(v) = p.dash {
+            k.dash = v;
+        }
+    } else if connector_only {
+        return Err(wrong("from/to/route/start_head/end_head/label"));
+    } else if let ElementKind::Icon(i) = &mut e.kind {
         if p.shape.is_some() || p.fill.is_some() || p.stroke.is_some() || p.corner_radius.is_some() || p.dash.is_some() {
             return Err(wrong("shape/fill/stroke/corner_radius/dash"));
         }
@@ -1678,6 +1756,7 @@ pub fn command_label(c: &Command) -> String {
         Command::AddShape { shape, .. } => format!("Add {}", serde_json::to_value(shape).unwrap().as_str().unwrap_or("shape")),
         Command::AddImage { .. } => "Insert image".into(),
         Command::AddIcon { name, .. } => format!("Add icon {name}"),
+        Command::AddConnector { .. } => "Add connector".into(),
         Command::AddInk { highlighter, .. } => if *highlighter { "Highlight" } else { "Draw" }.into(),
         Command::Update { patch, .. } if patch.text.is_some() => "Edit text".into(),
         Command::FormatText { .. } => "Format text".into(),

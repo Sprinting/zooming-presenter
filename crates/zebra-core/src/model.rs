@@ -148,6 +148,8 @@ pub enum ElementKind {
     Ink(InkData),
     /// A line icon from the built-in library (see `icons`).
     Icon(IconData),
+    /// A line or arrow whose ends can stick to other elements.
+    Connector(ConnectorData),
 }
 
 impl ElementKind {
@@ -159,6 +161,7 @@ impl ElementKind {
             ElementKind::Image(_) => "image",
             ElementKind::Ink(_) => "ink",
             ElementKind::Icon(_) => "icon",
+            ElementKind::Connector(_) => "connector",
         }
     }
     pub fn id_prefix(&self) -> &'static str {
@@ -169,6 +172,7 @@ impl ElementKind {
             ElementKind::Image(_) => "i",
             ElementKind::Ink(_) => "k",
             ElementKind::Icon(_) => "n",
+            ElementKind::Connector(_) => "c",
         }
     }
 }
@@ -435,6 +439,84 @@ fn default_icon_stroke() -> f64 {
     2.0
 }
 
+/// One end of a connector.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct Endpoint {
+    /// Stuck to this element: the end follows it around and sits on its edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element: Option<ElementId>,
+    /// Where the end is, relative to the connector's centre (kept up to date
+    /// for attached ends too).
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    /// Direction the line leaves this end (unit vector, maintained by the
+    /// editor; used for curves and elbows).
+    #[serde(default, skip_serializing_if = "is_zero_vec")]
+    pub dir: Vec2,
+}
+
+fn is_zero_vec(v: &Vec2) -> bool {
+    v.x == 0.0 && v.y == 0.0
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Route {
+    #[default]
+    Straight,
+    /// Right angles only.
+    Elbow,
+    Curved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Arrowhead {
+    #[default]
+    None,
+    /// Filled triangle.
+    Arrow,
+    /// Open V.
+    Open,
+    Dot,
+}
+
+impl Arrowhead {
+    pub fn is_none(&self) -> bool {
+        *self == Arrowhead::None
+    }
+}
+
+fn default_end_head() -> Arrowhead {
+    Arrowhead::Arrow
+}
+
+fn default_connector_width() -> f64 {
+    3.0
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConnectorData {
+    pub from: Endpoint,
+    pub to: Endpoint,
+    #[serde(default)]
+    pub route: Route,
+    #[serde(default, skip_serializing_if = "Arrowhead::is_none")]
+    pub start: Arrowhead,
+    #[serde(default = "default_end_head")]
+    pub end: Arrowhead,
+    pub color: ColorRef,
+    #[serde(default = "default_connector_width")]
+    pub width: f64,
+    #[serde(default, skip_serializing_if = "Dash::is_solid")]
+    pub dash: Dash,
+    /// Short text drawn at the middle of the line.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+}
+
 fn default_stroke_width() -> f64 {
     4.0
 }
@@ -523,6 +605,7 @@ impl Element {
                 let edge = tol.max(self.size.w.min(self.size.h) * 0.04);
                 l.x.abs() >= hw - edge || l.y.abs() >= hh - edge
             }
+            ElementKind::Connector(c) => crate::connector::distance(c, l) <= tol + c.width / 2.0 + 2.0,
             _ => true,
         }
     }

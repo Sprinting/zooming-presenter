@@ -103,6 +103,10 @@ pub fn paint(
                     }
                 }
             }
+            ElementKind::Connector(c) => {
+                let pts: Vec<Pos2> = zebra_core::connector::local_route(c).sample().iter().map(|q| local(q.x, q.y)).collect();
+                painter.add(Shape::line(pts, Stroke::new((c.width as f32 * px).max(1.0), col(&c.color))));
+            }
             ElementKind::Icon(i) => {
                 if let Some(path) = zebra_render::shapes::icon_path(&i.name) {
                     let mut p = (*path).clone();

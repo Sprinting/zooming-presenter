@@ -361,3 +361,35 @@ fn library_inserts_shapes_and_icons_and_replaces_an_icon() {
         k => panic!("{k:?}"),
     }
 }
+
+#[test]
+fn arrow_drawn_between_two_shapes_sticks_to_both() {
+    let mut h = harness(Some("empty"));
+    for (id, x) in [("a", -300.0), ("b", 300.0)] {
+        h.state_mut()
+            .editor
+            .apply(Command::AddShape { shape: ShapeKind::Rectangle, x, y: 0.0, w: 160.0, h: 120.0, rotation: 0.0, fill: None, stroke: None, id: Some(id.into()) }, Origin::Human)
+            .unwrap();
+    }
+    h.run_steps(2);
+    let (pa, pb) = {
+        let app = h.state();
+        (app.canvas.w2s(&app.editor, zebra_core::Vec2::new(-300.0, 0.0)), app.canvas.w2s(&app.editor, zebra_core::Vec2::new(300.0, 0.0)))
+    };
+    let _ = h.state_mut().editor.view(zebra_core::ViewCommand::SetTool { tool: Tool::Arrow }, Origin::Human);
+    drag(&mut h, pa, pb);
+    h.run_steps(2);
+    let app = h.state();
+    let c = app.editor.doc.ordered().find_map(|e| match &e.kind {
+        ElementKind::Connector(c) => Some(c.clone()),
+        _ => None,
+    });
+    let c = c.expect("an arrow between two shapes becomes a connector");
+    assert_eq!((c.from.element.as_deref(), c.to.element.as_deref()), (Some("a"), Some("b")));
+    // Moving b keeps it attached.
+    drop(app);
+    h.state_mut().editor.apply(Command::Move { ids: vec!["b".into()], dx: 0.0, dy: 300.0, with_contents: false }, Origin::Human).unwrap();
+    let app = h.state();
+    let e = app.editor.doc.ordered().find(|e| matches!(e.kind, ElementKind::Connector(_))).unwrap();
+    assert!(e.bounds().y1 > 200.0, "the connector followed b down: {:?}", e.bounds());
+}

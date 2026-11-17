@@ -166,6 +166,8 @@ fn overhang(e: &Element) -> f64 {
         ElementKind::Ink(i) => i.width,
         ElementKind::Shape(s) => s.stroke_width,
         ElementKind::Icon(i) => i.stroke_width * e.size.w.min(e.size.h) / 24.0,
+        // Arrowheads and the label reach past the route's box.
+        ElementKind::Connector(c) => (c.width * 4.0).max(10.0) + if c.label.is_empty() { 0.0 } else { 200.0 },
         _ => 0.0,
     };
     local * e.transform.scale
@@ -422,6 +424,87 @@ impl Ctx<'_> {
                             fill(items, &p, a, c);
                         }
                     }
+                }
+            }
+            ElementKind::Connector(c) => {
+                let color = th.color(&c.color);
+                let sw = c.width;
+                let r = zebra_core::connector::local_route(c);
+                let head = (sw * 4.0).max(10.0);
+                // Pull the line back from filled arrowheads so its square end
+                // doesn't poke through the tip.
+                let mut path = BezPath::new();
+                let pt = |v: Vec2| Point::new(v.x, v.y);
+                let back = |h: zebra_core::Arrowhead| if h == zebra_core::Arrowhead::Arrow { head * 0.8 } else { 0.0 };
+                let (t0, t1) = (r.tangent(false), r.tangent(true));
+                match &r {
+                    zebra_core::connector::RoutePath::Poly(p) => {
+                        let mut p = p.clone();
+                        let n = p.len();
+                        if n >= 2 {
+                            p[0] = p[0] - t0 * back(c.start);
+                            p[n - 1] = p[n - 1] - t1 * back(c.end);
+                        }
+                        for (i, q) in p.iter().enumerate() {
+                            if i == 0 {
+                                path.move_to(pt(*q));
+                            } else {
+                                path.line_to(pt(*q));
+                            }
+                        }
+                    }
+                    zebra_core::connector::RoutePath::Cubic([a, b, cc, d]) => {
+                        path.move_to(pt(*a - t0 * back(c.start)));
+                        path.curve_to(pt(*b), pt(*cc), pt(*d - t1 * back(c.end)));
+                    }
+                }
+                let st = Stroke::new(sw).with_caps(Cap::Round).with_join(Join::Round);
+                let st = match c.dash {
+                    Dash::Solid => st,
+                    Dash::Dashed => st.with_caps(Cap::Butt).with_dashes(0.0, [sw * 3.0, sw * 2.0]),
+                    Dash::Dotted => st.with_dashes(0.0, [0.0, sw * 2.0]),
+                };
+                stroke(items, &path, a, color, st);
+                let samples = r.sample();
+                let ends = [(c.start, samples.first().copied(), t0), (c.end, samples.last().copied(), t1)];
+                for (kind, at, dir) in ends {
+                    let Some(tip) = at else { continue };
+                    let side = Vec2::new(-dir.y, dir.x);
+                    let base = tip - dir * head;
+                    match kind {
+                        zebra_core::Arrowhead::None => {}
+                        zebra_core::Arrowhead::Arrow => {
+                            let p = BezPath::from_vec(vec![
+                                kurbo::PathEl::MoveTo(pt(tip)),
+                                kurbo::PathEl::LineTo(pt(base + side * (head * 0.55))),
+                                kurbo::PathEl::LineTo(pt(base - side * (head * 0.55))),
+                                kurbo::PathEl::ClosePath,
+                            ]);
+                            fill(items, &p, a, color);
+                        }
+                        zebra_core::Arrowhead::Open => {
+                            let mut p = BezPath::new();
+                            p.move_to(pt(base + side * (head * 0.55)));
+                            p.line_to(pt(tip));
+                            p.line_to(pt(base - side * (head * 0.55)));
+                            stroke(items, &p, a, color, Stroke::new(sw).with_caps(Cap::Round).with_join(Join::Round));
+                        }
+                        zebra_core::Arrowhead::Dot => {
+                            fill(items, &kurbo::Circle::new(pt(tip), (sw * 1.8).max(4.0)), a, color);
+                        }
+                    }
+                }
+                if !c.label.is_empty() {
+                    let t = zebra_core::TextData { text: c.label.clone(), style: zebra_core::TextStyle::Body, ..Default::default() };
+                    let layout = self.r.fonts.layout(&t, th, None);
+                    let m = r.midpoint();
+                    let (lw, lh) = (layout.width, layout.height);
+                    let pad = lh * 0.25;
+                    let bg = RoundedRect::new(m.x - lw / 2.0 - pad, m.y - lh / 2.0 - pad * 0.5, m.x + lw / 2.0 + pad, m.y + lh / 2.0 + pad * 0.5, lh * 0.3);
+                    fill(items, &bg, a, th.color(&th.background));
+                    let tc = th.color(&th.text_style(zebra_core::TextStyle::Body).color);
+                    let transform = *a * Affine::translate((m.x - lw / 2.0, m.y - lh / 2.0));
+                    items.push(Item::Text { layout, transform, color: tc, run_colors: Arc::from([]) });
                 }
             }
             ElementKind::Icon(icon) => {

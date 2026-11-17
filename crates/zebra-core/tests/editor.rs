@@ -292,3 +292,44 @@ fn icons_and_library_shapes_via_commands() {
     assert_eq!(q.as_array().unwrap().len(), ShapeKind::ALL.len());
     assert!(describe::describe(&ed).contains("icon rocket"));
 }
+
+#[test]
+fn connectors_stick_to_elements_and_survive_deletion() {
+    let mut ed = Editor::default();
+    let h = Origin::Human;
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"a","shape":"rectangle","x":0,"y":0,"w":100,"h":100})), h.clone()).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"b","shape":"ellipse","x":400,"y":0,"w":100,"h":100})), h.clone()).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"add_connector","id":"c","from":{"element":"a"},"to":{"element":"b"},"label":"leads to"})), h.clone()).unwrap();
+    let ends = |ed: &Editor| {
+        let e = ed.doc.get("c").unwrap();
+        let ElementKind::Connector(c) = &e.kind else { panic!() };
+        (e.transform.apply(Vec2::new(c.from.x, c.from.y)), e.transform.apply(Vec2::new(c.to.x, c.to.y)))
+    };
+    let (p, q) = ends(&ed);
+    assert!((p.x - 50.0).abs() < 1e-9 && p.y.abs() < 1e-9, "starts on a's right edge: {p:?}");
+    assert!((q.x - 350.0).abs() < 1e-9 && q.y.abs() < 1e-9, "ends on b's left edge: {q:?}");
+    // Moving b drags the end along, in the same undo step.
+    ed.apply(cmd(serde_json::json!({"op":"move","ids":["b"],"dx":0,"dy":400})), h.clone()).unwrap();
+    let (_, q) = ends(&ed);
+    let d = (q - Vec2::new(400.0, 400.0)).len();
+    assert!((d - 50.0).abs() < 1e-6, "on the circle's edge: {q:?}");
+    assert!(ed.doc.get("c").unwrap().bounds().contains(q));
+    ed.undo(h.clone()).unwrap();
+    assert!((ends(&ed).1.x - 350.0).abs() < 1e-9);
+    // Elbow routes leave from side midpoints.
+    ed.apply(cmd(serde_json::json!({"op":"update","id":"c","patch":{"route":"elbow","end_head":"dot"}})), h.clone()).unwrap();
+    // Hit test follows the line, not the box.
+    let c = ed.doc.get("c").unwrap().clone();
+    assert!(c.hit(Vec2::new(200.0, 0.0), 1.0, false));
+    // Deleting b frees that end where it was.
+    ed.apply(cmd(serde_json::json!({"op":"delete","ids":["b"]})), h.clone()).unwrap();
+    let e = ed.doc.get("c").unwrap();
+    let ElementKind::Connector(k) = &e.kind else { panic!() };
+    assert_eq!(k.to.element, None);
+    assert!((ends(&ed).1.x - 350.0).abs() < 1e-9);
+    assert!(describe::describe(&ed).contains("connector a -> point"));
+    // Free ends can be moved.
+    ed.apply(cmd(serde_json::json!({"op":"update","id":"c","patch":{"to":{"x":-300,"y":-300}}})), h.clone()).unwrap();
+    assert_eq!(ends(&ed).1, Vec2::new(-300.0, -300.0));
+    assert!(ed.apply(cmd(serde_json::json!({"op":"add_connector","from":{"element":"c"},"to":{"x":0,"y":0}})), h).is_err());
+}

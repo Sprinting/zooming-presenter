@@ -107,6 +107,27 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<ElementId>,
     },
+    /// A connector: a line or arrow from one place to another. An end with
+    /// `element` sticks to that element's edge and follows it when it moves;
+    /// otherwise it sits at x, y.
+    AddConnector {
+        from: EndSpec,
+        to: EndSpec,
+        #[serde(default)]
+        route: Route,
+        #[serde(default)]
+        start: Arrowhead,
+        #[serde(default = "d_arrowhead")]
+        end: Arrowhead,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<ColorRef>,
+        #[serde(default = "d_connector_width")]
+        width: f64,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<ElementId>,
+    },
     /// Freehand pen / highlighter stroke in world coordinates.
     AddInk {
         points: Vec<[f64; 2]>,
@@ -257,6 +278,24 @@ fn d_frame_h() -> f64 {
 fn d_shape() -> f64 {
     200.0
 }
+fn d_arrowhead() -> Arrowhead {
+    Arrowhead::Arrow
+}
+fn d_connector_width() -> f64 {
+    3.0
+}
+
+/// One end of a new connector: stuck to `element`, or at world x, y.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct EndSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element: Option<ElementId>,
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+}
+
 fn d_icon() -> f64 {
     96.0
 }
@@ -410,6 +449,20 @@ pub struct ElementPatch {
     pub corner_radius: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dash: Option<Dash>,
+    /// Connectors: move or re-attach an end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<EndSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<EndSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<Route>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_head: Option<Arrowhead>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_head: Option<Arrowhead>,
+    /// Connectors: text at the middle of the line ("" removes it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// Icons: swap to another library icon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,

@@ -57,6 +57,39 @@ pub enum Gesture {
     Badge {
         step: usize,
     },
+    /// Dragging one end of a connector (`to_end`: the arrow end).
+    ConnectorEnd {
+        id: ElementId,
+        to_end: bool,
+    },
+}
+
+/// World positions of a connector's two ends.
+pub fn connector_ends(app: &ZebraApp, id: &str) -> Option<[Vec2; 2]> {
+    let e = app.editor.doc.get(id)?;
+    let ElementKind::Connector(c) = &e.kind else { return None };
+    Some([e.transform.apply(Vec2::new(c.from.x, c.from.y)), e.transform.apply(Vec2::new(c.to.x, c.to.y))])
+}
+
+/// The element a connector end dropped at `w` would stick to: the topmost
+/// non-connector under the point (frames by their border).
+pub fn attach_target(app: &ZebraApp, w: Vec2, exclude: Option<&str>) -> Option<ElementId> {
+    let ed = &app.editor;
+    let tol = 5.0 / ed.view.camera.zoom;
+    ed.doc
+        .ordered()
+        .rev()
+        .filter(|e| Some(e.id.as_str()) != exclude && !matches!(e.kind, ElementKind::Connector(_)))
+        .find(|e| e.hit(w, tol, false))
+        .map(|e| e.id.clone())
+}
+
+/// The selected connector, when exactly one is selected.
+fn sole_connector(app: &ZebraApp) -> Option<ElementId> {
+    match app.editor.view.selection.as_slice() {
+        [one] if app.editor.doc.get(one).is_some_and(|e| matches!(e.kind, ElementKind::Connector(_)) && !e.locked) => Some(one.clone()),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -542,9 +575,20 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
         }
         _ => {}
     }
-    // Select tool: handles first.
+    // Select tool: connector end handles first.
+    if let Some(id) = sole_connector(app) {
+        if let Some(ends) = connector_ends(app, &id) {
+            for (i, w) in ends.iter().enumerate() {
+                if app.canvas.w2s(&app.editor, *w).distance(start) < 9.0 && app.editor.begin("Move connector end", H).is_ok() {
+                    app.canvas.gesture = Gesture::ConnectorEnd { id, to_end: i == 1 };
+                    return;
+                }
+            }
+        }
+    }
+    // Then the transform handles.
     let sel = app.selection();
-    if let Some(sb) = selection_box(app, &sel) {
+    if let Some(sb) = selection_box(app, &sel).filter(|_| sole_connector(app).is_none()) {
         match hit_handle(&sb, start) {
             Some(Handle::Rotate) => {
                 let ids = app.editable_selection();
@@ -668,6 +712,11 @@ fn update_gesture(app: &mut ZebraApp, p: Pos2, delta: egui::Vec2, shift: bool, a
                 points.push(world);
             }
         }
+        Gesture::ConnectorEnd { id, to_end } => {
+            let spec = zebra_core::command::EndSpec { element: None, x: world.x, y: world.y };
+            let patch = if *to_end { ElementPatch { to: Some(spec), ..Default::default() } } else { ElementPatch { from: Some(spec), ..Default::default() } };
+            let _ = app.editor.apply(Command::Update { id: id.clone(), patch }, H);
+        }
         _ => {}
     }
     app.canvas.gesture = g;
@@ -713,6 +762,14 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
                 app.toast(format!("Step {} now points here", step + 1));
             }
         }
+        Gesture::ConnectorEnd { id, to_end } => {
+            if let Some(t) = attach_target(app, world, Some(&id)) {
+                let spec = zebra_core::command::EndSpec { element: Some(t), x: world.x, y: world.y };
+                let patch = if to_end { ElementPatch { to: Some(spec), ..Default::default() } } else { ElementPatch { from: Some(spec), ..Default::default() } };
+                let _ = app.editor.apply(Command::Update { id, patch }, H);
+            }
+            app.editor.commit();
+        }
         Gesture::Pan | Gesture::None => {}
     }
 }
@@ -752,6 +809,28 @@ fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
             let style = app.editor.view.frame_style;
             let (w, h) = if style == FrameStyle::Circle { (w.max(h), w.max(h)) } else { (w, h) };
             (ElementKind::Frame(FrameData { style, color: None }), rot, w, h)
+        }
+        Tool::Line | Tool::Arrow if dragged && (attach_target(app, a, None).is_some() || attach_target(app, b, None).is_some()) => {
+            // A line drawn from or to an object sticks to it.
+            let end = |w: Vec2| zebra_core::command::EndSpec { element: attach_target(app, w, None), x: w.x, y: w.y };
+            let (from, to) = (end(a), end(b));
+            let head = if tool == Tool::Arrow { zebra_core::Arrowhead::Arrow } else { zebra_core::Arrowhead::None };
+            let cmd = Command::AddConnector {
+                from,
+                to,
+                route: zebra_core::Route::Straight,
+                start: zebra_core::Arrowhead::None,
+                end: head,
+                color: Some("theme:shape1".into()),
+                width: 3.0 / zoom,
+                label: String::new(),
+                id: None,
+            };
+            if let Some(out) = app.apply(cmd) {
+                app.select(out.created);
+            }
+            let _ = app.editor.view(ViewCommand::SetTool { tool: Tool::Select }, H);
+            return;
         }
         Tool::Line | Tool::Arrow => {
             let (len, ang) = if dragged {
@@ -1570,7 +1649,9 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
 
     // Selection + zebra transform tool.
     if !path_mode && app.canvas.text.is_none() {
-        if let Some(sb) = selection_box(app, &ed.view.selection.clone()) {
+        if let Some(id) = sole_connector(app) {
+            draw_connector_handles(app, painter, &id);
+        } else if let Some(sb) = selection_box(app, &ed.view.selection.clone()) {
             draw_transform_tool(app, painter, &sb);
         }
     }
@@ -1628,6 +1709,20 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
         }
         _ => {}
     }
+    // Where a line end would stick: outline the object under the pointer.
+    let sticking = match &app.canvas.gesture {
+        Gesture::ConnectorEnd { id, .. } => Some(Some(id.clone())),
+        Gesture::Create { tool: Tool::Line | Tool::Arrow, .. } => Some(None),
+        _ => None,
+    };
+    if let (Some(exclude), Some(cur)) = (sticking, painter.ctx().input(|i| i.pointer.hover_pos())) {
+        let w = app.canvas.s2w(&app.editor, cur);
+        if let Some(t) = attach_target(app, w, exclude.as_deref()).and_then(|t| app.editor.doc.get(&t)) {
+            let mut q = quad_screen(app, t.corners());
+            q.push(q[0]);
+            painter.add(Shape::line(q, Stroke::new(2.0, ACCENT)));
+        }
+    }
     let _ = zoom;
 }
 
@@ -1657,6 +1752,19 @@ fn draw_transform_tool(app: &ZebraApp, painter: &Painter, sb: &SelBox) {
     for c in sb.screen {
         let r = ERect::from_center_size(c, egui::vec2(9.0, 9.0));
         painter.rect(r, 2.0, Color32::WHITE, Stroke::new(1.5, col), egui::StrokeKind::Middle);
+    }
+}
+
+/// A selected connector: its route highlighted, with a round handle at each
+/// end (filled when the end is stuck to something).
+fn draw_connector_handles(app: &ZebraApp, painter: &Painter, id: &str) {
+    let Some(e) = app.editor.doc.get(id) else { return };
+    let ElementKind::Connector(c) = &e.kind else { return };
+    let pts: Vec<Pos2> = zebra_core::connector::local_route(c).sample().iter().map(|p| app.canvas.w2s(&app.editor, e.transform.apply(*p))).collect();
+    painter.add(Shape::line(pts, Stroke::new(1.5, ACCENT.gamma_multiply(0.6))));
+    for (end, attached) in [(&c.from, c.from.element.is_some()), (&c.to, c.to.element.is_some())] {
+        let p = app.canvas.w2s(&app.editor, e.transform.apply(Vec2::new(end.x, end.y)));
+        painter.circle(p, 5.5, if attached { ACCENT } else { Color32::WHITE }, Stroke::new(1.5, ACCENT));
     }
 }
 

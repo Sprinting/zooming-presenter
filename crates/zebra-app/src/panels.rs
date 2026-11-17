@@ -671,6 +671,7 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         ElementKind::Image(_) => "Image".into(),
         ElementKind::Ink(_) => "Drawing".into(),
         ElementKind::Icon(_) => "Icon".into(),
+        ElementKind::Connector(_) => "Connector".into(),
     };
     ui.horizontal(|ui| {
         ui.heading(kind_name);
@@ -815,6 +816,68 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                     }
                 }
             });
+        }
+        ElementKind::Connector(c) => {
+            use zebra_core::{Arrowhead, Route};
+            section(ui, "Connector", p);
+            ui.horizontal(|ui| {
+                for (r, l) in [(Route::Straight, "Straight"), (Route::Elbow, "Elbow"), (Route::Curved, "Curved")] {
+                    if ui.selectable_label(c.route == r, l).clicked() {
+                        patch_all = Some(ElementPatch { route: Some(r), ..Default::default() });
+                    }
+                }
+            });
+            let heads = [(Arrowhead::None, "None"), (Arrowhead::Arrow, "Arrow"), (Arrowhead::Open, "Open arrow"), (Arrowhead::Dot, "Dot")];
+            for (label, cur, is_end) in [("Start", c.start, false), ("End", c.end, true)] {
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    let name = heads.iter().find(|h| h.0 == cur).map(|h| h.1).unwrap_or("None");
+                    egui::ComboBox::from_id_salt(("head", is_end)).selected_text(name).show_ui(ui, |ui| {
+                        for (h, l) in heads {
+                            if ui.selectable_label(cur == h, l).clicked() {
+                                patch_all = Some(if is_end { ElementPatch { end_head: Some(h), ..Default::default() } } else { ElementPatch { start_head: Some(h), ..Default::default() } });
+                            }
+                        }
+                    });
+                });
+            }
+            let mut label = c.label.clone();
+            ui.horizontal(|ui| {
+                ui.label("Label");
+                let r = ui.add(egui::TextEdit::singleline(&mut label).hint_text("Text on the line").desired_width(160.0));
+                gesture_active |= r.has_focus();
+                if r.changed() {
+                    patch_all = Some(ElementPatch { label: Some(label.clone()), ..Default::default() });
+                }
+            });
+            section(ui, "Colour", p);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for slot in ["theme:body", "theme:title", "theme:accent", "theme:shape1", "theme:shape2", "theme:shape3", "theme:shape4", "theme:frame"] {
+                    if swatch(ui, style::c32(theme.color(&slot.to_string())), c.color == slot, slot) {
+                        patch_all = Some(ElementPatch { color: Some(slot.into()), ..Default::default() });
+                    }
+                }
+            });
+            let mut w = c.width;
+            ui.horizontal(|ui| {
+                ui.label("Width");
+                let r = ui.add(egui::DragValue::new(&mut w).speed(0.1).range(0.1..=200.0).max_decimals(1));
+                gesture_active |= r.dragged() || r.has_focus();
+                if r.changed() {
+                    patch_all = Some(ElementPatch { stroke_width: Some(w), ..Default::default() });
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Line");
+                for (d, l) in [(zebra_core::Dash::Solid, "Solid"), (zebra_core::Dash::Dashed, "Dashed"), (zebra_core::Dash::Dotted, "Dotted")] {
+                    if ui.selectable_label(c.dash == d, l).clicked() {
+                        patch_all = Some(ElementPatch { dash: Some(d), ..Default::default() });
+                    }
+                }
+            });
+            let ends = [&c.from, &c.to].iter().filter(|e| e.element.is_some()).count();
+            ui.label(RichText::new(format!("{ends} of 2 ends attached. Drag an end onto an object to stick it there.")).size(11.5).color(p.weak));
         }
         ElementKind::Icon(i) => {
             section(ui, "Icon", p);

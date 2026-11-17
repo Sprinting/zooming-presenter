@@ -39,6 +39,7 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::Command, r#"{"op":"add_frame","x":0,"y":0,"w":800,"h":600,"style":"bracket","name":"Intro","add_to_path":true}"#),
     (Kind::Command, r#"{"op":"add_shape","shape":"arrow","x":500,"y":0,"w":300,"h":60,"fill":"theme:accent"}"#),
     (Kind::Command, r#"{"op":"add_shape","shape":"speech_bubble","x":0,"y":0,"w":260,"h":160}"#),
+    (Kind::Command, r#"{"op":"add_connector","from":{"element":"s1"},"to":{"element":"s2"},"route":"elbow","end":"arrow","label":"then"}"#),
     (Kind::Command, r#"{"op":"add_icon","name":"lightbulb","x":0,"y":-300,"size":120,"color":"theme:accent"}"#),
     (Kind::Command, r#"{"op":"add_image","path":"/Users/me/logo.png","x":0,"y":300,"width":400,"alt":"Logo"}"#),
     (Kind::Command, r#"{"op":"add_ink","points":[[0,0],[50,40],[120,10]],"color":"theme:accent","width":6}"#),

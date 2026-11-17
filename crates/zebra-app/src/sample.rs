@@ -168,6 +168,26 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                     app.library.query = "chart".into();
                 }
             }
+            "connectors" => {
+                app.editor.load(Document::default(), None);
+                app.after_load();
+                let add = |app: &mut ZebraApp, j: serde_json::Value| {
+                    let _ = app.editor.apply(serde_json::from_value(j).unwrap(), H);
+                };
+                add(app, serde_json::json!({"op":"add_shape","id":"idea","shape":"rounded_rect","x":-420,"y":-120,"w":220,"h":120,"fill":"theme:shape1"}));
+                add(app, serde_json::json!({"op":"add_shape","id":"test","shape":"diamond","x":0,"y":-120,"w":200,"h":150,"fill":"theme:shape2"}));
+                add(app, serde_json::json!({"op":"add_shape","id":"ship","shape":"ellipse","x":420,"y":-120,"w":180,"h":180,"fill":"theme:shape3"}));
+                add(app, serde_json::json!({"op":"add_shape","id":"note","shape":"sticky_note","x":0,"y":230,"w":200,"h":200}));
+                add(app, serde_json::json!({"op":"add_connector","from":{"element":"idea"},"to":{"element":"test"},"label":"try it"}));
+                add(app, serde_json::json!({"op":"add_connector","from":{"element":"test"},"to":{"element":"ship"},"route":"curved","end":"open"}));
+                add(app, serde_json::json!({"op":"add_connector","from":{"element":"test"},"to":{"element":"note"},"route":"elbow","start":"dot","dash":"dashed"}));
+                add(app, serde_json::json!({"op":"add_connector","from":{"element":"note"},"to":{"element":"idea"},"route":"elbow","width":4}));
+                let _ = app.editor.view(ViewCommand::FitAll { animate: false }, H);
+                let id = app.editor.doc.ordered().find(|e| matches!(e.kind, ElementKind::Connector(_))).map(|e| e.id.clone());
+                if let Some(id) = id {
+                    app.select(vec![id]);
+                }
+            }
             "shapes" => {
                 // Gallery of every shape plus a row of icons.
                 app.editor.load(Document::default(), None);
