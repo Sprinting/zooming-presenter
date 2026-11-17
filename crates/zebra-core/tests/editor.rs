@@ -430,3 +430,35 @@ fn text_typed_on_a_shape_is_centred_wrapped_and_grouped() {
     ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"l","shape":"line","x":0,"y":0,"w":100,"h":0})), h.clone()).unwrap();
     assert!(ed.apply(cmd(serde_json::json!({"op":"add_text","text":"x","on":"l"})), h.clone()).is_err());
 }
+
+#[test]
+fn a_delete_entry_keeps_the_ids_it_deleted() {
+    let mut ed = Editor::default();
+    let h = Origin::Human;
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"a","shape":"rectangle","x":0,"y":0,"w":100,"h":100})), h.clone()).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"b","shape":"rectangle","x":300,"y":0,"w":100,"h":100})), h.clone()).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"delete","ids":["a","b"]})), Origin::agent("beta")).unwrap();
+    let e = ed.history().last().unwrap();
+    assert_eq!(e.label, "Delete 2 objects");
+    assert_eq!(e.ids.len(), 2, "{:?}", e.ids);
+    assert_eq!(ed.activity.back().unwrap().ids.len(), 2);
+}
+
+#[test]
+fn grouped_agent_steps_count_up_through_the_labeler() {
+    fn words(p: Phrase) -> Option<String> {
+        match p {
+            Phrase::Changes(n) => Some(format!("{n} Änderungen")),
+            Phrase::Command(_) => Some("Schritt".into()),
+        }
+    }
+    let mut ed = Editor::default();
+    ed.labeler = Some(words);
+    let a = Origin::agent("beta");
+    for i in 0..3 {
+        ed.apply(cmd(serde_json::json!({"op":"add_frame","x":i * 1000,"y":0,"w":800,"h":600})), a.clone()).unwrap();
+    }
+    assert_eq!(ed.history().len(), 1);
+    assert_eq!(ed.history()[0].label, "3 Änderungen");
+    assert_eq!(ed.activity.back().unwrap().label, "Schritt");
+}

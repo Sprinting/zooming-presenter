@@ -210,7 +210,7 @@ fn kind_name(e: &Element) -> String {
             TextStyle::Subtitle => crate::t!("inspector-kind-subtitle"),
             TextStyle::Body => crate::t!("inspector-kind-text"),
         },
-        ElementKind::Shape(s) => s.shape.label().into(),
+        ElementKind::Shape(s) => crate::words::shape_name(s.shape),
         ElementKind::Icon(i) => crate::t!("inspector-kind-icon", name = i.name.as_str()),
         ElementKind::Video(_) => crate::t!("inspector-kind-video"),
         ElementKind::Connector(_) => crate::t!("inspector-kind-connector"),
@@ -313,7 +313,7 @@ fn style_tab(insp: &mut Insp, ui: &mut Ui) {
                 }
                 let mut name = el.name.clone();
                 w::row(ui, &crate::t!("inspector-name"), |ui| {
-                    let r = w::text_field(ui, &mut name, ui.available_width(), &el.label(&insp.app.editor.doc));
+                    let r = w::text_field(ui, &mut name, ui.available_width(), &crate::words::element_label(&el, &insp.app.editor.doc));
                     insp.track(&r);
                     if r.changed() {
                         insp.set(ElementPatch { name: Some(name.clone()), ..Default::default() });
@@ -347,9 +347,9 @@ fn style_tab(insp: &mut Insp, ui: &mut Ui) {
                 // All 39 library shapes (stream 3); lines stay lines.
                 let wdt = ui.available_width();
                 let mut picked = None;
-                w::popup_button(ui, "shape-kind", s.shape.label(), wdt, |ui| {
+                w::popup_button(ui, "shape-kind", &crate::words::shape_name(s.shape), wdt, |ui| {
                     for &k in ShapeKind::ALL.iter().filter(|k| k.is_line() == s.shape.is_line()) {
-                        if ui.selectable_label(s.shape == k, k.label()).clicked() {
+                        if ui.selectable_label(s.shape == k, crate::words::shape_name(k)).clicked() {
                             picked = Some(k);
                         }
                     }

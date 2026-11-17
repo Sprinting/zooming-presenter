@@ -190,7 +190,7 @@ The available events are:
 
 | Event | Fields |
 |---|---|
-| `document_changed` | revision, origin (`{"kind":"human"}` or `{"kind":"agent","name":…}`), label, ids |
+| `document_changed` | revision, origin (`{"kind":"human"}` or `{"kind":"agent","name":…}`), label (as the person reads it, in Zebra's language), ids (created, changed and deleted) |
 | `selection_changed` | selection |
 | `mode_changed` | mode |
 | `step_changed` | step, build |

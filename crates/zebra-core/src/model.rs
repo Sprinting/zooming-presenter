@@ -838,23 +838,25 @@ impl Element {
     }
     /// Short human label: name, else first text line, else type.
     pub fn label(&self, doc: &Document) -> String {
+        self.own_label(doc).unwrap_or_else(|| self.kind.type_name().into())
+    }
+
+    /// The label from the element's own words (name, first text line, alt
+    /// text), or `None` when only its type would describe it. The app
+    /// shows a translated type name in that case.
+    pub fn own_label(&self, doc: &Document) -> Option<String> {
         if !self.name.is_empty() {
-            return self.name.clone();
+            return Some(self.name.clone());
         }
         match &self.kind {
-            ElementKind::Text(t) => truncate(t.text.lines().next().unwrap_or(""), 40),
-            ElementKind::Frame(_) => doc
-                .frame_contents(&self.id)
-                .iter()
-                .filter_map(|id| doc.elements.get(id))
-                .find_map(|e| match &e.kind {
-                    ElementKind::Text(t) => Some(truncate(t.text.lines().next().unwrap_or(""), 40)),
-                    _ => None,
-                })
-                .unwrap_or_else(|| "frame".into()),
-            ElementKind::Image(i) if !i.alt.is_empty() => truncate(&i.alt, 40),
-            ElementKind::Video(v) if !v.alt.is_empty() => truncate(&v.alt, 40),
-            k => k.type_name().into(),
+            ElementKind::Text(t) => Some(truncate(t.text.lines().next().unwrap_or(""), 40)),
+            ElementKind::Frame(_) => doc.frame_contents(&self.id).iter().filter_map(|id| doc.elements.get(id)).find_map(|e| match &e.kind {
+                ElementKind::Text(t) => Some(truncate(t.text.lines().next().unwrap_or(""), 40)),
+                _ => None,
+            }),
+            ElementKind::Image(i) if !i.alt.is_empty() => Some(truncate(&i.alt, 40)),
+            ElementKind::Video(v) if !v.alt.is_empty() => Some(truncate(&v.alt, 40)),
+            _ => None,
         }
     }
 }

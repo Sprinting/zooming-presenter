@@ -25,6 +25,7 @@ pub mod style;
 pub mod theme_editor;
 pub mod thumbs;
 pub mod widgets;
+pub mod words;
 pub mod welcome;
 #[cfg(target_os = "macos")]
 pub mod menu_mac;

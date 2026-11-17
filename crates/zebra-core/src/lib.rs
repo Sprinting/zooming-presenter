@@ -25,7 +25,7 @@ pub mod view;
 
 pub use camera::{Camera, CameraFlight};
 pub use command::{Command, ElementPatch, NewElement, Query, QueryResult, ViewCommand, ZOrderOp};
-pub use editor::{Editor, HistoryEntry, Origin, Outcome, TextMeasure};
+pub use editor::{command_label, Editor, HistoryEntry, Labeler, Origin, Outcome, Phrase, TextMeasure};
 pub use error::{ZError, ZResult};
 pub use geom::{Rect, Transform, Vec2};
 pub use model::*;

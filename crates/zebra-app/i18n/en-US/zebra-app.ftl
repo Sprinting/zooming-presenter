@@ -167,7 +167,10 @@ activity-follow-tip = Move your view to wherever the agent is working
 activity-empty = No agent changes yet.
 activity-seconds-ago = { $seconds } s ago
 activity-minutes-ago = { $minutes } min ago
-activity-item-meta = { $origin } · { $when } · { $count } object(s)
+activity-item-meta = { $origin } · { $when } · { $count ->
+        [one] 1 object
+       *[other] { $count } objects
+    }
 activity-item-tip = Click to show these objects
 palette-hint = Type a command
 shortcuts-title = Keyboard Shortcuts
@@ -1002,3 +1005,107 @@ mac-activity-presenting = Presenting
 
 
 ## ---- end thumbs.rs ----
+
+## Shape names (shape library, inspector, history)
+shape-rectangle = Rectangle
+shape-rounded-rect = Rounded Rectangle
+shape-ellipse = Oval
+shape-triangle = Triangle
+shape-right-triangle = Right Triangle
+shape-diamond = Diamond
+shape-pentagon = Pentagon
+shape-hexagon = Hexagon
+shape-octagon = Octagon
+shape-parallelogram = Parallelogram
+shape-trapezoid = Trapezoid
+shape-star = Star
+shape-sparkle = Four-Point Star
+shape-burst = Burst
+shape-heart = Heart
+shape-plus = Plus
+shape-ring = Ring
+shape-moon = Moon
+shape-lightning = Lightning
+shape-cloud = Cloud
+shape-speech-bubble = Speech Bubble
+shape-callout = Callout
+shape-thought-bubble = Thought Bubble
+shape-sticky-note = Sticky Note
+shape-document = Document
+shape-cylinder = Cylinder
+shape-cube = Cube
+shape-pill = Pill
+shape-delay = Half Round
+shape-chevron = Chevron
+shape-tag = Tag
+shape-block-arrow-right = Block Arrow Right
+shape-block-arrow-left = Block Arrow Left
+shape-block-arrow-up = Block Arrow Up
+shape-block-arrow-down = Block Arrow Down
+shape-block-arrow-both = Block Arrow Both Ways
+shape-line = Line
+shape-arrow = Arrow
+shape-double-arrow = Double Arrow
+
+## Object types, where an object has no name or text of its own
+element-frame = frame
+element-text = text
+element-shape = shape
+element-image = image
+element-video = video
+element-ink = drawing
+element-icon = icon
+element-connector = connector
+
+## History: the Edit menu's Undo/Redo, the Activity panel, the status bar
+history-add-element = Add { $kind }
+history-add-text = Add text "{ $text }"
+history-add-frame = Add frame
+history-add-shape = Add { $shape }
+history-insert-image = Insert image
+history-add-icon = Add icon { $name }
+history-add-connector = Add connector
+history-insert-video = Insert video
+history-replace-image = Replace image
+history-set-poster = Set poster frame
+history-add-soundtrack = Add soundtrack
+history-change-soundtrack = Change soundtrack
+history-remove-soundtrack = Remove soundtrack
+history-remove-voiceover = Remove voice-over
+history-add-voiceover = Add voice-over
+history-crop = Crop
+history-highlight = Highlight
+history-draw = Draw
+history-edit-text = Edit text
+history-format-text = Format text
+history-format-paragraphs = Format paragraphs
+history-change-properties = Change properties
+history-move = Move
+history-resize = Resize
+history-rotate = Rotate
+history-delete = Delete { $count ->
+        [one] 1 object
+       *[other] { $count } objects
+    }
+history-duplicate = Duplicate
+history-change-order = Change order
+history-frame-selection = Frame selection
+history-arrange = Arrange
+history-align = Align
+history-group = Group
+history-ungroup = Ungroup
+history-add-step = Add path step
+history-remove-step = Remove path step
+history-reorder-path = Reorder path
+history-edit-step = Edit path step
+history-clear-path = Clear path
+history-path-from-frames = Path from frames
+history-theme = Theme: { $theme }
+history-rename = Rename
+history-change-autoplay = Change autoplay
+history-edit-theme = Edit theme
+history-delete-theme = Delete theme
+history-add-picture = Add picture
+history-template = Template: { $template }
+history-insert-layout = Insert layout: { $layout }
+history-changes = { $count } changes

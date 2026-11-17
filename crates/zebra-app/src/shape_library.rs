@@ -121,7 +121,7 @@ fn tile(ui: &mut egui::Ui, tip: &str, p: &Palette) -> (Rect, egui::Response) {
 
 fn shapes_grid(app: &mut ZebraApp, lib: &mut Library, ui: &mut egui::Ui, p: &Palette) {
     let q = lib.query.to_lowercase();
-    let kinds: Vec<ShapeKind> = ShapeKind::ALL.iter().copied().filter(|k| q.is_empty() || k.label().to_lowercase().contains(q.trim())).collect();
+    let kinds: Vec<ShapeKind> = ShapeKind::ALL.iter().copied().filter(|k| q.is_empty() || crate::words::shape_name(*k).to_lowercase().contains(q.trim())).collect();
     if kinds.is_empty() {
         ui.label(RichText::new(crate::t!("library-no-shapes")).color(p.weak));
         return;
@@ -130,7 +130,7 @@ fn shapes_grid(app: &mut ZebraApp, lib: &mut Library, ui: &mut egui::Ui, p: &Pal
     egui::ScrollArea::vertical().max_height(330.0).show(ui, |ui| {
         egui::Grid::new("shape-grid").spacing([4.0, 4.0]).show(ui, |ui| {
             for (i, &k) in kinds.iter().enumerate() {
-                let (r, resp) = tile(ui, k.label(), p);
+                let (r, resp) = tile(ui, &crate::words::shape_name(k), p);
                 paint_shape(ui.painter(), r.shrink(9.0), k, line);
                 if resp.clicked() {
                     insert_shape(app, lib, k);

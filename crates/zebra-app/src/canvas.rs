@@ -600,7 +600,7 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
             let chip = app.canvas.frame_chip.clone().filter(|(r, _)| r.contains(p));
             match chip {
                 Some((_, id)) if !app.canvas.chip_chevron.is_some_and(|c| c.contains(p)) => {
-                    let name = app.editor.doc.get(&id).map(|e| e.label(&app.editor.doc)).unwrap_or_default();
+                    let name = app.editor.doc.get(&id).map(|e| crate::words::element_label(e, &app.editor.doc)).unwrap_or_default();
                     app.canvas.renaming = Some((id, name, false));
                 }
                 Some(_) => {}
@@ -670,7 +670,7 @@ fn rename_overlay(app: &mut ZebraApp, ui: &mut Ui) {
         return;
     }
     if resp.lost_focus() && focused {
-        let current = e.label(&app.editor.doc);
+        let current = crate::words::element_label(e, &app.editor.doc);
         if text.trim() != current {
             let patch = zebra_core::ElementPatch { name: Some(text.trim().to_string()), ..Default::default() };
             if app.editor.apply(Command::Update { id, patch }, H).is_err() {
@@ -1993,7 +1993,7 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
     if let (Some(fid), false) = (chip_frame, path_mode) {
         if let Some(e) = ed.doc.get(&fid) {
             let tl = app.canvas.w2s(ed, e.corners()[0]);
-            let galley = painter.layout_no_wrap(e.label(&ed.doc), style::ui_font(11.5), p.text);
+            let galley = painter.layout_no_wrap(crate::words::element_label(e, &ed.doc), style::ui_font(11.5), p.text);
             let chev_w = 20.0;
             let r = ERect::from_min_size(tl + egui::vec2(0.0, -24.0), egui::vec2(galley.size().x + 14.0 + chev_w, galley.size().y.max(14.0) + 8.0));
             let chev = ERect::from_min_max(egui::pos2(r.max.x - chev_w, r.min.y), r.max);

@@ -161,6 +161,7 @@ impl ZebraApp {
         let waker_ctx = ctx.clone();
         renderer.images().set_waker(Some(Arc::new(move || waker_ctx.request_repaint())));
         let mut editor = Editor::default();
+        editor.labeler = Some(crate::words::phrase);
         editor.measure = renderer.measure();
         let recent: Vec<PathBuf> = storage.and_then(|s| eframe::get_value(s, "recent")).unwrap_or_default();
         let scroll_mode = storage.and_then(|s| eframe::get_value(s, "scroll_mode")).unwrap_or_default();

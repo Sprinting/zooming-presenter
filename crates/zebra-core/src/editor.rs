@@ -97,7 +97,23 @@ pub struct HistoryEntry {
     /// explicitly labelled batches and transactions never merge.
     #[serde(skip)]
     mergeable: bool,
+    /// Commands in this entry, counting grouped agent steps ("3 changes").
+    #[serde(skip)]
+    steps: usize,
 }
+
+/// History wording a person reads (Edit menu, Activity panel, status
+/// bar). The app supplies it through [`Editor::labeler`] so it can be
+/// translated; without one, the English of [`command_label`] is used.
+#[derive(Debug, Clone, Copy)]
+pub enum Phrase<'a> {
+    Command(&'a Command),
+    /// Several commands in one entry.
+    Changes(usize),
+}
+
+/// Words for a [`Phrase`], or `None` for the built-in English.
+pub type Labeler = fn(Phrase) -> Option<String>;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct Outcome {
@@ -120,6 +136,12 @@ impl Outcome {
     fn touched(&self) -> Vec<ElementId> {
         let mut v = self.created.clone();
         v.extend(self.changed.iter().cloned());
+        v
+    }
+    /// Touched plus deleted: what a history entry is about.
+    fn affected(&self) -> Vec<ElementId> {
+        let mut v = self.touched();
+        v.extend(self.deleted.iter().cloned());
         v
     }
 }
@@ -172,6 +194,8 @@ pub struct Editor {
     events: Vec<Event>,
     /// Frame times and cache sizes reported by the host (`perf` query).
     pub perf: crate::perf::PerfStats,
+    /// Translated history wording; see [`Phrase`].
+    pub labeler: Option<Labeler>,
 }
 
 impl Default for Editor {
@@ -204,7 +228,16 @@ impl Editor {
             file_path: None,
             events: vec![],
             perf: Default::default(),
+            labeler: None,
         }
+    }
+
+    /// The words for `p`: the app's, else the built-in English.
+    pub fn phrase(&self, p: Phrase) -> String {
+        self.labeler.and_then(|f| f(p)).unwrap_or_else(|| match p {
+            Phrase::Command(c) => command_label(c),
+            Phrase::Changes(n) => format!("{n} changes"),
+        })
     }
 
     pub fn theme(&self) -> Theme {
@@ -302,7 +335,7 @@ impl Editor {
             return;
         }
         let ids: Vec<_> = tx.ids.into_iter().collect();
-        self.record(tx.label, tx.origin, tx.before, ids, false);
+        self.record(tx.label, tx.origin, tx.before, ids, false, 1);
     }
 
     /// Abort: restore the document as it was at `begin`.
@@ -342,7 +375,7 @@ impl Editor {
     // Applying commands
 
     pub fn apply(&mut self, cmd: Command, origin: Origin) -> ZResult<Outcome> {
-        let label = command_label(&cmd);
+        let label = self.phrase(Phrase::Command(&cmd));
         self.apply_batch_inner(vec![cmd], Some(label), origin, true)
     }
 
@@ -361,9 +394,10 @@ impl Editor {
                 return Err(busy());
             }
         }
+        let steps = cmds.len();
         let label = label.unwrap_or_else(|| match cmds.as_slice() {
-            [c] => command_label(c),
-            _ => format!("{} changes", cmds.len()),
+            [c] => self.phrase(Phrase::Command(c)),
+            _ => self.phrase(Phrase::Changes(steps)),
         });
         let before = self.doc.clone();
         let mut out = Outcome::default();
@@ -387,13 +421,14 @@ impl Editor {
         self.view.selection.retain(|id| doc.elements.contains_key(id));
         self.view.agent_selection.retain(|id| doc.elements.contains_key(id));
 
-        let ids = out.touched();
+        // Deleted ids stay in the entry so "Delete 2 objects" says 2.
+        let ids = out.affected();
         if let Some(tx) = &mut self.tx {
             tx.ids.extend(ids.iter().cloned());
             self.revision += 1;
             self.events.push(Event::DocumentChanged { revision: self.revision, origin: origin.clone(), label, ids });
         } else {
-            self.record(label, origin.clone(), before, ids, mergeable);
+            self.record(label, origin.clone(), before, ids, mergeable, steps);
         }
         if origin.is_agent() {
             let now = self.view.now;
@@ -410,7 +445,7 @@ impl Editor {
         Ok(out)
     }
 
-    fn record(&mut self, label: String, origin: Origin, before: Document, ids: Vec<ElementId>, allow_merge: bool) {
+    fn record(&mut self, label: String, origin: Origin, before: Document, ids: Vec<ElementId>, allow_merge: bool, steps: usize) {
         self.revision += 1;
         let now = self.view.now;
         self.redo.clear();
@@ -420,15 +455,17 @@ impl Editor {
             && origin.is_agent()
             && self.undo.last().is_some_and(|h| h.mergeable && h.origin == origin && now - h.time < AGENT_GROUP_SECS);
         if merged {
+            let n = self.undo.last().map_or(1, |h| h.steps) + steps;
+            let grouped = self.phrase(Phrase::Changes(n));
             let h = self.undo.last_mut().unwrap();
-            let n = h.label.strip_suffix(" changes").and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
-            h.label = format!("{} changes", n + 1);
+            h.steps = n;
+            h.label = grouped;
             h.time = now;
             h.revision = self.revision;
             h.ids.extend(ids.iter().cloned());
             h.deltas.push(delta);
         } else {
-            self.undo.push(HistoryEntry { label: label.clone(), origin: origin.clone(), revision: self.revision, time: now, ids: ids.clone(), deltas: vec![delta], mergeable: allow_merge });
+            self.undo.push(HistoryEntry { label: label.clone(), origin: origin.clone(), revision: self.revision, time: now, ids: ids.clone(), deltas: vec![delta], mergeable: allow_merge, steps });
             if self.undo.len() > 500 {
                 self.undo.remove(0);
             }
