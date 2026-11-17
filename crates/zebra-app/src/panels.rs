@@ -885,7 +885,7 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         let r = app.editor.apply(Command::Update { id: e.id.clone(), patch }, H);
         app.report(r);
     }
-    if !gesture_active && app.editor.human_gesture_active() && matches!(app.canvas.gesture, crate::canvas::Gesture::None) {
+    if !gesture_active && app.editor.human_gesture_active() && matches!(app.canvas.gesture, crate::canvas::Gesture::None) && !crate::media_ui::crop_active(app) {
         app.editor.commit();
     }
 

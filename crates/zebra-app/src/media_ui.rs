@@ -879,7 +879,7 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
     let mut dragging = false;
     let playing = app.media.is_playing(id);
     ui.horizontal(|ui| {
-        let label = if playing { "⏸ Pause" } else { "▶ Play" };
+        let label = if playing { "Pause" } else { "Play" };
         if ui.button(label).on_hover_text("Play in place (or double-click the video)").clicked() {
             toggle(app, id);
         }
@@ -961,7 +961,7 @@ pub fn document_section(app: &mut ZebraApp, ui: &mut Ui) {
         }
         Some(t) => {
             ui.horizontal(|ui| {
-                ui.label(format!("♪ {}", if t.name.is_empty() { "Music" } else { &t.name }));
+                ui.label(format!("Music: {}", if t.name.is_empty() { "Music" } else { &t.name }));
                 if ui.small_button("Replace…").clicked() {
                     soundtrack_dialog(app);
                 }
@@ -1000,7 +1000,7 @@ pub fn step_section(app: &mut ZebraApp, ui: &mut Ui, step: usize) {
             }
         }
         Some(_) => {
-            ui.label("♪ Voice-over");
+            ui.label("Recorded");
             if ui.small_button("Replace…").clicked() {
                 voiceover_dialog(app, step);
             }

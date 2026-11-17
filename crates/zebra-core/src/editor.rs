@@ -651,6 +651,7 @@ impl Editor {
                 self.insert_element(e, out)?;
             }
             Command::ReplaceImage { id, data_base64, path } => {
+                self.check_ids(std::slice::from_ref(&id))?;
                 self.check_unlocked(std::slice::from_ref(&id))?;
                 let (key, info) = self.load_media(&data_base64, path.as_deref(), MediaKind::Image)?;
                 let e = self.element_mut(&id)?;
