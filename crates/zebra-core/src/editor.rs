@@ -139,11 +139,19 @@ impl Outcome {
         v
     }
     /// Touched plus deleted: what a history entry is about.
+    /// Each id once, in the order first touched.
     fn affected(&self) -> Vec<ElementId> {
         let mut v = self.touched();
         v.extend(self.deleted.iter().cloned());
+        dedup(&mut v);
         v
     }
+}
+
+/// Drop repeated ids, keeping the first of each.
+fn dedup(v: &mut Vec<ElementId>) {
+    let mut seen = HashSet::new();
+    v.retain(|id| seen.insert(id.clone()));
 }
 
 /// Notifications for API subscribers and the UI.
@@ -463,6 +471,7 @@ impl Editor {
             h.time = now;
             h.revision = self.revision;
             h.ids.extend(ids.iter().cloned());
+            dedup(&mut h.ids);
             h.deltas.push(delta);
         } else {
             self.undo.push(HistoryEntry { label: label.clone(), origin: origin.clone(), revision: self.revision, time: now, ids: ids.clone(), deltas: vec![delta], mergeable: allow_merge, steps });

@@ -497,3 +497,21 @@ fn a_frame_asked_to_find_space_lands_beside_what_is_there() {
     ed.apply(cmd(serde_json::json!({"op":"add_frame","id":"d","x":0,"y":0,"w":800,"h":600})), a).unwrap();
     assert_eq!(ed.doc.elements["d"].transform.x, 0.0);
 }
+
+#[test]
+fn history_names_each_object_once() {
+    let mut ed = sample();
+    let agent = Origin::agent("test");
+    ed.apply_batch(
+        vec![cmd(serde_json::json!({"op":"move","ids":["t1"],"dx":10,"dy":0})), cmd(serde_json::json!({"op":"move","ids":["t1"],"dx":10,"dy":0}))],
+        None,
+        agent.clone(),
+    )
+    .unwrap();
+    // Merged into the same entry as a quick second burst.
+    ed.apply(cmd(serde_json::json!({"op":"move","ids":["t1"],"dx":10,"dy":0})), agent.clone()).unwrap();
+    let last = ed.history().last().unwrap();
+    assert_eq!(last.ids, vec![ElementId::from("t1")], "{:?}", last.ids);
+    ed.apply(cmd(serde_json::json!({"op":"delete","ids":["t1"]})), agent).unwrap();
+    assert!(ed.history().last().unwrap().ids.contains(&ElementId::from("t1")));
+}

@@ -95,8 +95,12 @@ enum Cmd {
     Undo,
     /// Redo
     Redo,
-    /// Start presenting (at a 0-based step).
-    Present { step: Option<usize> },
+    /// Start presenting (at a 0-based step): `present 2` or `present --step 2`.
+    Present {
+        step: Option<usize>,
+        #[arg(long = "step", value_name = "STEP", conflicts_with = "step")]
+        step_flag: Option<usize>,
+    },
     /// Next step/build while presenting.
     Next,
     /// Previous step/build while presenting.
@@ -110,6 +114,10 @@ enum Cmd {
     Screenshot {
         #[arg(long, conflicts_with_all = ["element", "overview", "viewport"])]
         step: Option<usize>,
+        /// With --step: how many of the step's builds are showing (0 = none
+        /// yet). Default: all of them.
+        #[arg(long, requires = "step")]
+        build: Option<usize>,
         #[arg(long)]
         element: Option<String>,
         #[arg(long)]
@@ -489,15 +497,15 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::SetText { id, text } => print(&call(c, "apply", json!({ "command": { "op": "update", "id": id, "patch": { "text": text } } }))?),
         Cmd::Undo => print(&call(c, "undo", json!({}))?),
         Cmd::Redo => print(&call(c, "redo", json!({}))?),
-        Cmd::Present { step } => print(&view(c, json!({ "op": "present", "step": step }))?),
+        Cmd::Present { step, step_flag } => print(&view(c, json!({ "op": "present", "step": step.or(step_flag) }))?),
         Cmd::Next => print(&view(c, json!({ "op": "next" }))?),
         Cmd::Prev => print(&view(c, json!({ "op": "prev" }))?),
         Cmd::Stop => print(&view(c, json!({ "op": "exit_present" }))?),
         Cmd::Status { text } => print(&view(c, json!({ "op": "set_status", "text": text.join(" ") }))?),
         Cmd::Disconnect => print(&c.call("disconnect", json!({}))?),
-        Cmd::Screenshot { step, element, overview, viewport, output, width, height } => {
+        Cmd::Screenshot { step, build, element, overview, viewport, output, width, height } => {
             let target = if let Some(s) = step {
-                json!({ "step": s })
+                json!({ "step": s, "build": build })
             } else if let Some(e) = element {
                 json!({ "element": e })
             } else if overview {

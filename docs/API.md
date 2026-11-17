@@ -153,6 +153,8 @@ than one document open, events carry the `document` id they come from.
 * `if_revision` gives optimistic concurrency. If the document has moved past that revision, the call fails with `stale_revision`.
 * An explicitly labelled `apply`, `batch` or transaction is always its own undo step. Single `apply` calls from the same agent that arrive less than 2 s apart are grouped into one step.
 * An agent that disconnects while its transaction is open has that transaction aborted.
+* **Sizes.** An element's own `w` and `h` are at scale 1; on the canvas it is that times its `transform.scale`. `bounds` (in `query element`) and the sizes `describe` prints are world units, scale included. So a box that should be 900 wide at scale 1.5 needs `w` 600.
+* **Frames.** An element belongs to a frame only while it sits wholly inside it (`parent_frame`, the frame's `contents`). One that crosses the edge belongs to no frame, doesn't move with it, and `lint` reports it as `outside_frame`. Deleting a frame deletes only the frame: what was inside stays where it is. To remove both, delete the frame's `contents` too.
 
 ### View: camera, selection, presenting (not undoable)
 
@@ -182,7 +184,7 @@ Capture targets:
 | `"viewport"` | the person's window |
 | `"agent_view"` | your private camera; the default for `edit`/`observe` agents |
 | `"overview"` | everything |
-| `{"step": n, "build"?: k}` | path step `n`, 0-based |
+| `{"step": n, "build"?: k}` | path step `n`, 0-based, with `k` of its builds showing (default: all). `zebractl screenshot --step n --build k` |
 | `{"element": "f1"}` | one element |
 | `{"camera": {cx, cy, zoom, rotation}}` | an explicit camera |
 
@@ -266,7 +268,7 @@ zebractl add image ./logo.png --x 0 --y 400 --width 300
 zebractl add shape arrow --x 500 --y 0 --w 300 --h 60
 zebractl move f1 --dx 200 --dy 0 | delete t3 s1 | select t1 | set-text t1 "New"
 zebractl undo | redo
-zebractl present [step] | next | prev | stop
+zebractl present [step] | next | prev | stop   # or present --step N
 zebractl screenshot --step 2 -o step2.png --width 1600 --height 1000   # or --element f1 | --overview | --viewport
 zebractl export pdf -o deck.pdf        # png | json | zebra
 zebractl open deck.zebra [--force] | save [path]
