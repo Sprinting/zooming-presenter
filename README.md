@@ -31,7 +31,7 @@ Developer options (end users never need these; AI control is a switch in the app
 |---|---|
 | `--api` | Switch AI control on at launch, as if you had flipped the switch. |
 | `--api-socket <path>` | Use this socket path instead of the default. |
-| `--agent-permission observe\|edit\|full` | Set what a connected agent may do (default `edit`). You can change it later from the agent pill. |
+| `--agent-permission observe\|edit\|full` | Set what a connected agent may do (default `edit`). You can change it later from the AI button in the toolbar. |
 | `--headless` | Run with no window, API only (for batch generation). `zebractl` starts this mode for you. |
 
 The binary is `target/release/zebra`. It builds and runs on Linux too, which

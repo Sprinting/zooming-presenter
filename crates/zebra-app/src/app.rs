@@ -353,9 +353,18 @@ impl ZebraApp {
         self.api.as_ref().is_some_and(|a| !a.clients().is_empty()) || self.demo_agent.is_some()
     }
 
+    /// The agent to name in the status bar and AI popover: the connected
+    /// agent that changed something most recently, else the first one
+    /// connected. With several agents connected, the name always matches
+    /// the latest action shown next to it.
     pub fn agent_name(&self) -> String {
-        if let Some(c) = self.api.as_ref().and_then(|a| a.clients().into_iter().next()) {
-            return c.name;
+        let clients = self.api.as_ref().map(|a| a.clients()).unwrap_or_default();
+        let latest = self.editor.activity.iter().rev().find_map(|a| match &a.origin {
+            Origin::Agent { name } if clients.iter().any(|c| c.name == *name) => Some(name.clone()),
+            _ => None,
+        });
+        if let Some(n) = latest.or_else(|| clients.into_iter().next().map(|c| c.name)) {
+            return n;
         }
         if let Some(n) = &self.demo_agent {
             return n.clone();

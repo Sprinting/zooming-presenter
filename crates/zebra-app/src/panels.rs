@@ -559,7 +559,14 @@ fn status_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let now = app.editor.view.now;
     let connected = app.agent_connected();
     let name = app.agent_name();
-    let last = app.editor.activity.iter().rev().find(|a| a.origin.is_agent()).map(|a| (a.time, a.label.clone()));
+    // That agent's own latest change, never another agent's.
+    let last = app
+        .editor
+        .activity
+        .iter()
+        .rev()
+        .find(|a| matches!(&a.origin, Origin::Agent { name: n } if *n == name))
+        .map(|a| (a.time, a.label.clone()));
     let (text, live) = match (connected, app.editor.view.agent_paused, &last) {
         (true, true, _) => (crate::t!("status-agent-paused", name = name.as_str()), false),
         (true, false, Some((t, l))) if now - t < RECENT => {

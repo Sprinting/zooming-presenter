@@ -33,7 +33,7 @@ asking the person to switch it on.
 | `zebra --api [file.zebra]` | Opens the normal window with AI control already switched on. |
 | `zebra --headless --api [file]` | Runs with no window and the same API. Good for generating decks and for CI. The process prints `ZEBRA_API_READY {...}` on stdout when it is ready. |
 | `--api-socket <path>` | Uses this socket path instead of the default one. |
-| `--agent-permission observe\|edit\|full` | Sets the starting permission. The default is `edit`. The person can change it from the status pill. |
+| `--agent-permission observe\|edit\|full` | Sets the starting permission. The default is `edit`. The person can change it from the AI button in the toolbar. |
 
 ### Permissions
 
@@ -91,7 +91,7 @@ The first call on a connection must be `hello`. The token is in the discovery fi
      "name":"Claude","methods":[…],"events":[…],"next":"call `describe` for an outline, …"}}
 ```
 
-The `name` is how the person sees this agent. It appears in the status pill
+The `name` is how the person sees this agent. It appears in the status bar
 and in history labels such as "Claude: Add agenda". Every other method,
 except `ping`, fails with `unauthenticated` until `hello` succeeds.
 
@@ -123,7 +123,7 @@ call takes no params.
 
 | Method | Params | Result |
 |---|---|---|
-| `apply` | `{"command": {"op": …}, "if_revision"?: n}` | `{"revision", "created"?, "changed"?, "deleted"?}` |
+| `apply` | `{"command": {"op": …}, "label"?: "…", "if_revision"?: n}` (a `label` makes it its own undo step with that name) | `{"revision", "created"?, "changed"?, "deleted"?}` |
 | `batch` | `{"commands": [ … ], "label"?: "…", "if_revision"?: n}` | the same; **atomic** (all or nothing) and **one undo step** named `label` |
 | `begin` | `{"label": "Add timeline"}` | starts a transaction: each following `apply` takes effect immediately, and the whole transaction becomes one undo step |
 | `commit` / `abort` | – | ends the transaction; `abort` restores the document to how it was at `begin` |
@@ -138,7 +138,7 @@ call takes no params.
 
 * `add_image` accepts `"path": "/abs/file.png"` in place of `data_base64`. The server reads the file.
 * `if_revision` gives optimistic concurrency. If the document has moved past that revision, the call fails with `stale_revision`.
-* An explicitly labelled `batch` or transaction is always its own undo step. Single `apply` calls from the same agent that arrive less than 2 s apart are grouped into one step.
+* An explicitly labelled `apply`, `batch` or transaction is always its own undo step. Single `apply` calls from the same agent that arrive less than 2 s apart are grouped into one step.
 * An agent that disconnects while its transaction is open has that transaction aborted.
 
 ### View: camera, selection, presenting (not undoable)

@@ -5,7 +5,7 @@ Zebra is a placeholder name. Built in a Linux cloud container; the target is mac
 ## Works and verified here (Linux, software GPU)
 - Full workspace builds; every test passes (`cargo test --workspace`): core model/undo/present logic, renderer pixel checks, API end-to-end over the real Unix socket, `zebractl` + MCP over stdio, and egui_kittest UI tests (double-click to write, drag = one undo step, present keys, tools, path edit).
 - The GUI ran under Xvfb with software Vulkan (lavapipe); screenshots in `out/app/`.
-- Agent driving the live window with `zebractl` while the window stayed usable (violet agent cursor, dashed agent selection, status pill).
+- Agent driving the live window with `zebractl` while the window stayed usable (violet agent cursor, dashed agent selection, status bar).
 - Headless: `zebra --headless`, built a 3-step deck with `zebractl apply`, captured steps, exported PDF (`out/integration/`).
 - vello GPU path rendered headless on lavapipe and matched the CPU renderer (mean diff < 0.05/channel).
 - AI control is a switch in the app (AI button in the toolbar), off by default and remembered. Only the person can switch it on; an agent can switch it off with `zebractl disconnect`. Tested by a UI test that clicks the switch, connects an agent, and checks the socket and discovery file disappear after `disconnect`. `--api` is now a developer flag only.

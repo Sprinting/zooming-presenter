@@ -55,6 +55,9 @@ fn main() -> anyhow::Result<()> {
     let api_opts = ApiOptions { socket: cli.api_socket.clone(), permission };
     // The first time is always a person: no flag turns AI control on until
     // someone has switched it on in Zebra's window once.
+    for v in zebra_api::discovery::ignored_overrides() {
+        eprintln!("zebra: {v} is ignored by this build (only developer builds use it)");
+    }
     let granted = zebra_api::discovery::human_has_granted();
     const NOT_GRANTED: &str = "AI control stays off until a person switches it on in Zebra once (the AI button in the toolbar). After that, --api and --headless work.";
     if cli.headless {

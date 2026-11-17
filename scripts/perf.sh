@@ -10,7 +10,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo build --release -p zebra-app -p zebra-ctl >/dev/null
+# dev-overrides: release builds ignore ZEBRA_DATA_DIR otherwise (below).
+cargo build --release -p zebra-app -p zebra-ctl --features zebra-api/dev-overrides >/dev/null
 cargo build --release -p zebra-core --examples >/dev/null
 BIN=target/release
 WORK=$(mktemp -d)
@@ -56,8 +57,10 @@ check "heap MB" "$(echo "$P" | field '["heap_mb"]')" "<=" 40
 check "repaints in 10 s idle" "$(echo "$P" | field '["repaints_last_10s"]')" "<=" 2
 echo "       repaint causes: $(echo "$P" | field '.get("repaint_causes_last_10s", {})')"
 # The perf call above left an agent connected (zebractl keeps one
-# connection per agent). Idle must stay idle with it open.
-sleep 11
+# connection per agent). Idle must stay idle with it open. 13 s, not 11:
+# the AI button's 2 s "busy" dot after that query must end outside the
+# measured 10 s window, so only true idle is counted.
+sleep 13
 P=$(perf)
 check "repaints in 10 s idle, agent connected" "$(echo "$P" | field '["repaints_last_10s"]')" "<=" 2
 echo "       repaint causes: $(echo "$P" | field '.get("repaint_causes_last_10s", {})')"

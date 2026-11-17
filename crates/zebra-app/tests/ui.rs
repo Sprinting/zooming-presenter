@@ -421,7 +421,6 @@ fn arrow_drawn_between_two_shapes_sticks_to_both() {
     let c = c.expect("an arrow between two shapes becomes a connector");
     assert_eq!((c.from.element.as_deref(), c.to.element.as_deref()), (Some("a"), Some("b")));
     // Moving b keeps it attached.
-    drop(app);
     h.state_mut().editor.apply(Command::Move { ids: vec!["b".into()], dx: 0.0, dy: 300.0, with_contents: false }, Origin::Human).unwrap();
     let app = h.state();
     let e = app.editor.doc.ordered().find(|e| matches!(e.kind, ElementKind::Connector(_))).unwrap();
@@ -586,7 +585,6 @@ fn double_click_a_shape_to_type_on_it() {
     let b = t.bounds();
     assert!(b.x1 - b.x0 <= 300.0, "fits the note's width: {b:?}");
     // Moving the note carries its text; double-clicking again edits it.
-    drop(app);
     let tid = t.id.clone();
     h.run_steps(30); // past the double-click window
     click_at(&mut h, p, 2);

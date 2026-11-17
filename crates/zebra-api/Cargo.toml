@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Honour ZEBRA_DATA_DIR / ZEBRA_GROUP_DIR in release builds (perf.sh only;
+# never in the shipped app). Debug builds always honour them.
+dev-overrides = []
+
 [dependencies]
 zebra-core.workspace = true
 # CPU-only rendering: headless must not need a GPU.

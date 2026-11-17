@@ -30,7 +30,7 @@
 //! Document-level sections (nothing selected) go in [`EXTRA_DOC_SECTIONS`].
 use egui::{Color32, RichText, Ui};
 use zebra_core::{
-    Command, Element, ElementId, ElementKind, ElementPatch, FrameStyle, Origin, ShapeKind, StepTarget, TextStyle, Theme,
+    Command, Element, ElementId, ElementKind, ElementPatch, FrameStyle, ListKind, Origin, ShapeKind, StepTarget, TextStyle, Theme,
 };
 
 use crate::actions::{frame_name, Action};
@@ -455,13 +455,32 @@ fn text_tab(insp: &mut Insp, ui: &mut Ui) {
                 insp.set(ElementPatch { align: Some(a), ..Default::default() });
             }
         });
-        let mut bullets = t.bullets;
+        // What the paragraphs actually show (the list formatting from the
+        // edit bar or an agent), not just the box-wide default: neither
+        // segment is lit for numbered or mixed lists.
+        let n = t.text.split('\n').count();
+        let lists: Vec<ListKind> = (0..n).map(|i| zebra_core::rich::para(t, i).0).collect();
+        let cur = if lists.iter().all(|l| *l == ListKind::Bullet) {
+            Some(true)
+        } else if lists.iter().all(|l| *l == ListKind::None) {
+            Some(false)
+        } else {
+            None
+        };
         w::row(ui, "Bullets", |ui| {
             let wdt = ui.available_width();
-            let mut v = bullets;
-            if w::segmented(ui, &mut v, &[(false, Seg::Text("None")), (true, Seg::Text("Bullets"))], Some(wdt)).changed() {
-                bullets = v;
-                insp.set(ElementPatch { bullets: Some(bullets), ..Default::default() });
+            let mut v = cur;
+            if w::segmented(ui, &mut v, &[(Some(false), Seg::Text("None")), (Some(true), Seg::Text("Bullets"))], Some(wdt)).changed() {
+                let list = if v == Some(true) { ListKind::Bullet } else { ListKind::None };
+                let doc = &insp.app.editor.doc;
+                let cmds: Vec<Command> = insp
+                    .sel
+                    .iter()
+                    .filter(|id| doc.get(id).is_some_and(|e| matches!(e.kind, ElementKind::Text(_))))
+                    .map(|id| Command::FormatParagraphs { id: id.clone(), first: None, last: None, list: Some(list), indent: None, indent_by: 0, align: None })
+                    .collect();
+                let r = insp.app.editor.apply_batch(cmds, Some("Format paragraphs".into()), H);
+                insp.app.report(r);
             }
         });
     });

@@ -7,6 +7,11 @@ use zebra_app::{AppOptions, ZebraApp};
 use zebra_core::{Command, Origin};
 
 fn harness(demo: &str) -> Harness<'static, ZebraApp> {
+    // The forced autosave below must not touch the real Untitled autosave.
+    let dir = std::env::temp_dir().join(format!("zebra-undo-ui-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // SAFETY: every test here sets the same value before any app starts.
+    unsafe { std::env::set_var("ZEBRA_DATA_DIR", &dir) };
     let demo = Some(demo.to_string());
     let mut h = Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))

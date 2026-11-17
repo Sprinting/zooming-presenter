@@ -38,10 +38,31 @@ pub const APP_GROUP_ID: &str = "ZEBRATEAM.app.zebra";
 /// Bundle identifier (placeholder until the product is named).
 pub const BUNDLE_ID: &str = "app.zebra.Zebra";
 
+/// True in builds that honour the folder overrides `ZEBRA_DATA_DIR` and
+/// `ZEBRA_GROUP_DIR`: debug builds (tests) and builds with the
+/// `dev-overrides` feature (scripts/perf.sh). Never the app people install:
+/// pointing Zebra at a made-up data folder would skip the person's first
+/// switch-on of AI control (see [`human_grant_file`]).
+pub const DEV_OVERRIDES: bool = cfg!(any(debug_assertions, feature = "dev-overrides"));
+
+/// A folder override from the environment, in dev builds only.
+fn dev_env(name: &str) -> Option<std::ffi::OsString> {
+    if DEV_OVERRIDES { std::env::var_os(name) } else { None }
+}
+
+/// Folder overrides set in the environment that this build ignores, so
+/// the binaries can say so instead of silently using the real folders.
+pub fn ignored_overrides() -> Vec<&'static str> {
+    if DEV_OVERRIDES {
+        return vec![];
+    }
+    ["ZEBRA_DATA_DIR", "ZEBRA_GROUP_DIR"].into_iter().filter(|n| std::env::var_os(n).is_some()).collect()
+}
+
 /// The App Group container, if this process can use it (macOS only; it
 /// exists once a process with the entitlement has run).
 pub fn group_dir() -> Option<PathBuf> {
-    if let Some(d) = std::env::var_os("ZEBRA_GROUP_DIR") {
+    if let Some(d) = dev_env("ZEBRA_GROUP_DIR") {
         return Some(PathBuf::from(d));
     }
     if !cfg!(target_os = "macos") {
@@ -51,10 +72,10 @@ pub fn group_dir() -> Option<PathBuf> {
     d.is_dir().then_some(d)
 }
 
-/// Where this process writes: `$ZEBRA_DATA_DIR`, else the App Group
+/// Where this process writes: `$ZEBRA_DATA_DIR` (dev builds only), else the App Group
 /// container (sandboxed builds), else `<data_dir>/Zebra`.
 pub fn app_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("ZEBRA_DATA_DIR") {
+    if let Some(d) = dev_env("ZEBRA_DATA_DIR") {
         return PathBuf::from(d);
     }
     if let Some(g) = group_dir() {
@@ -89,7 +110,7 @@ pub fn instances_dir() -> PathBuf {
 /// Every place a running Zebra may have announced itself: ours, the App
 /// Group, the unsandboxed data dir, and the sandboxed app's own container.
 pub fn search_dirs() -> Vec<PathBuf> {
-    if std::env::var_os("ZEBRA_DATA_DIR").is_some() {
+    if dev_env("ZEBRA_DATA_DIR").is_some() {
         return vec![instances_dir()];
     }
     let mut v = vec![instances_dir()];
@@ -201,7 +222,7 @@ pub fn default_socket_path(name: &str) -> std::io::Result<PathBuf> {
     let mut dir = match group_dir() {
         // Sandboxed builds: the App Group is the only place both the app and
         // the bundled zebractl can reach.
-        Some(g) if std::env::var_os("ZEBRA_DATA_DIR").is_none() => g.join("s"),
+        Some(g) if dev_env("ZEBRA_DATA_DIR").is_none() => g.join("s"),
         _ => std::env::temp_dir().join(format!("zebra-{uid}")),
     };
     if dir.join(format!("{name}.sock")).as_os_str().len() > 100 {

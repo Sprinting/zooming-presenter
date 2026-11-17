@@ -375,7 +375,7 @@ fn check_rev(editor: &Editor, r: Option<u64>) -> Result<(), RpcError> {
 fn need_full(perm: Permission, what: &str) -> Result<(), RpcError> {
     if perm != Permission::Full {
         return Err(RpcError::app("permission", format!("`{what}` needs 'full' agent permission"))
-            .hint("the human can grant it from the agent status pill, or launch with --agent-permission full; `export` works without it"));
+            .hint("the person can grant it from the AI button in Zebra's toolbar, or launch with --agent-permission full; `export` works without it"));
     }
     Ok(())
 }

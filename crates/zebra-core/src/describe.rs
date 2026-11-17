@@ -341,18 +341,53 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
     let d = &ed.doc;
     let theme = ed.theme();
     let mut issues = vec![];
-    // Text too small at the step that shows it.
-    for e in d.ordered() {
+    let frames: Vec<&Element> = d.ordered().filter(|e| e.is_frame()).collect();
+    // Lines and connectors run between things; they don't sit in a frame.
+    let placed = |e: &Element| !e.is_frame() && !matches!(e.kind, ElementKind::Connector(_));
+    for e in d.ordered().filter(|e| placed(e)) {
+        let b = e.bounds();
+        // The frame it mostly sits in: the most overlap, then the smallest.
+        let home = frames
+            .iter()
+            .filter(|f| f.visual_bounds().area() > b.area())
+            .map(|f| (*f, overlap(&f.visual_bounds(), &b)))
+            .filter(|(_, a)| *a > 0.0)
+            .max_by(|x, y| x.1.total_cmp(&y.1).then(y.0.visual_bounds().area().total_cmp(&x.0.visual_bounds().area())));
+        if let Some((f, _)) = home {
+            let fb = f.visual_bounds();
+            if !fb.contains_rect(&b) {
+                let sides: Vec<String> = [
+                    ("left", fb.x0 - b.x0),
+                    ("right", b.x1 - fb.x1),
+                    ("top", fb.y0 - b.y0),
+                    ("bottom", b.y1 - fb.y1),
+                ]
+                .iter()
+                .filter(|(_, px)| *px > 0.5)
+                .map(|(s, px)| format!("{px:.0} on the {s}"))
+                .collect();
+                issues.push(json!({"kind": "outside_frame", "id": e.id, "frame": f.id,
+                    "message": format!("{} {} runs past the edge of frame {} by {}", e.kind.type_name(), e.id, f.id, sides.join(", "))}));
+            }
+        }
+        // Text too small at the step that shows it.
         let ElementKind::Text(t) = &e.kind else { continue };
         let font_world = theme.text_style(t.style).size * e.transform.scale;
-        // the step whose target most tightly contains this text
+        // The tightest step that shows it: its own frame, a frame it mostly
+        // sits in, or a step that reveals it as a build.
         let best = d
             .path
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| match &s.target {
-                StepTarget::Element { id } => d.get(id).filter(|f| f.bounds().contains_rect(&e.bounds()) || f.id == e.id).map(|f| (i, f.bounds().area())),
-                _ => None,
+            .filter_map(|(i, s)| {
+                let builds = s.builds.iter().any(|x| *x == e.id);
+                match &s.target {
+                    StepTarget::Element { id } => d
+                        .get(id)
+                        .filter(|f| f.id == e.id || builds || overlap(&f.visual_bounds(), &b) >= 0.5 * b.area())
+                        .map(|f| (i, f.visual_bounds().area())),
+                    _ => None,
+                }
             })
             .min_by(|a, b| a.1.total_cmp(&b.1));
         if let Some((i, _)) = best {
@@ -362,22 +397,35 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
                     "message": format!("text is {px:.0}px tall at step {} (viewport {}x{}); aim for 18px+", i + 1, ed.view.viewport.x, ed.view.viewport.y)}));
             }
         } else if !d.path.is_empty() && !d.path.iter().any(|s| matches!(s.target, StepTarget::Overview)) {
-            issues.push(json!({"kind": "not_on_path", "id": e.id, "message": "text is not inside any path step; the audience only sees it in the overview"}));
-        }
-        if let Some(pf) = d.parent_frame(&e.id) {
-            let _ = pf;
+            issues.push(json!({"kind": "not_on_path", "id": e.id, "message": "text is not in any path step's frame and no step reveals it; the audience only sees it in the overview"}));
         }
     }
-    // Overlapping non-frame elements.
-    let items: Vec<&Element> = d.ordered().filter(|e| !e.is_frame()).collect();
+    // Overlapping elements.
+    let items: Vec<&Element> = d.ordered().filter(|e| placed(e)).collect();
     for (i, a) in items.iter().enumerate() {
         for b in &items[i + 1..] {
             let (ba, bb) = (a.bounds(), b.bounds());
-            if !ba.intersects(&bb) {
+            let ix = overlap(&ba, &bb);
+            if ix <= 0.0 {
                 continue;
             }
-            let ix = crate::geom::Rect { x0: ba.x0.max(bb.x0), y0: ba.y0.max(bb.y0), x1: ba.x1.min(bb.x1), y1: ba.y1.min(bb.y1) };
-            let frac = ix.area() / ba.area().min(bb.area()).max(1e-9);
+            // A label on its shape: fine while it fits, worth saying when
+            // it runs past the shape's edge.
+            let label = match (&a.kind, &b.kind) {
+                (ElementKind::Text(_), ElementKind::Shape(_)) => Some((a, b, ba, bb)),
+                (ElementKind::Shape(_), ElementKind::Text(_)) => Some((b, a, bb, ba)),
+                _ => None,
+            };
+            if let Some((t, s, tb, sb)) = label {
+                if ix >= 0.5 * tb.area() {
+                    if !sb.contains_rect(&tb) {
+                        issues.push(json!({"kind": "label_overflow", "ids": [s.id, t.id],
+                            "message": format!("text {} runs past the edge of shape {}", t.id, s.id)}));
+                    }
+                    continue;
+                }
+            }
+            let frac = ix / ba.area().min(bb.area()).max(1e-9);
             // a small element fully on a big shape is probably intentional
             let size_ratio = ba.area().max(bb.area()) / ba.area().min(bb.area()).max(1e-9);
             if frac > 0.2 && size_ratio < 6.0 {
@@ -394,4 +442,9 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
         }
     }
     issues
+}
+
+/// Area of the intersection of two rectangles (0 when apart).
+fn overlap(a: &crate::geom::Rect, b: &crate::geom::Rect) -> f64 {
+    crate::geom::Rect { x0: a.x0.max(b.x0), y0: a.y0.max(b.y0), x1: a.x1.min(b.x1), y1: a.y1.min(b.y1) }.area()
 }

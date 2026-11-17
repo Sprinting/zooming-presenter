@@ -63,7 +63,10 @@ pub fn autosave_path(file: &Path) -> PathBuf {
 }
 
 fn untitled_autosave() -> Option<PathBuf> {
-    dirs::data_local_dir().map(|d| d.join("Zebra").join("Untitled.zebra.autosave"))
+    // app_dir: the same folder as before on macOS (Application Support/
+    // Zebra), and tests can point it at a scratch folder (ZEBRA_DATA_DIR)
+    // instead of overwriting the person's real untitled autosave.
+    Some(zebra_api::discovery::app_dir().join("Untitled.zebra.autosave"))
 }
 
 pub fn remove_autosave(file: &Path) {

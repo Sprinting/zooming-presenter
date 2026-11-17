@@ -189,6 +189,15 @@ pub fn cache_dir() -> PathBuf {
     base.join("Zebra").join("media")
 }
 
+/// A temp name next to `path` that no other writer uses, in this process
+/// or another: two imports of the same clip at once (same cache key) each
+/// write their own copy, and the second rename simply replaces the first.
+fn part_path(path: &Path, ext: &str) -> PathBuf {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    path.with_extension(format!("{ext}.part{}-{n}", std::process::id()))
+}
+
 /// The cache file for an asset.
 pub fn cache_path(key: &str, ext: &str) -> PathBuf {
     cache_dir().join(format!("{key}.{ext}"))
@@ -204,7 +213,7 @@ pub fn materialize(key: &str, ext: &str, bytes: &[u8]) -> std::io::Result<PathBu
         return Ok(path);
     }
     std::fs::create_dir_all(path.parent().unwrap())?;
-    let tmp = path.with_extension(format!("{ext}.part{}", std::process::id()));
+    let tmp = part_path(&path, ext);
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, &path)?;
     Ok(path)
@@ -218,7 +227,7 @@ pub fn import_file(src: &Path, key: &str, ext: &str) -> std::io::Result<memmap2:
     let len = std::fs::metadata(src)?.len();
     if !std::fs::metadata(&path).is_ok_and(|m| m.len() == len) {
         std::fs::create_dir_all(path.parent().unwrap())?;
-        let tmp = path.with_extension(format!("{ext}.part{}", std::process::id()));
+        let tmp = part_path(&path, ext);
         std::fs::copy(src, &tmp)?;
         std::fs::rename(&tmp, &path)?;
     }

@@ -1363,6 +1363,38 @@ fn rich_job(rich: &TextData, text: &str, theme: &zebra_core::Theme, base: &FontI
     job
 }
 
+/// egui lays out an empty paragraph at x = 0, ignoring the indent the job
+/// gave it, so a new empty list item put its caret (and so its bullet) in
+/// the margin until something was typed. Move those rows to where the
+/// paragraph's text will start.
+fn indent_empty_list_rows(g: std::sync::Arc<egui::Galley>, rich: &TextData, text: &str, size: f32) -> std::sync::Arc<egui::Galley> {
+    use zebra_core::rich;
+    let mut r = rich.clone();
+    rich::edit_text(&mut r, text);
+    let mut shifts = vec![];
+    let mut para = 0usize;
+    for (i, row) in g.rows.iter().enumerate() {
+        if row.row.glyphs.is_empty() {
+            let (list, indent, align) = rich::para(&r, para);
+            let lead = indent as f32 * size * 1.25 + if list == ListKind::None { 0.0 } else { size * 1.2 };
+            if lead > 0.0 && align == zebra_core::Align::Left {
+                shifts.push((i, lead));
+            }
+        }
+        if row.ends_with_newline {
+            para += 1;
+        }
+    }
+    if shifts.is_empty() {
+        return g;
+    }
+    let mut g2 = (*g).clone();
+    for (i, lead) in shifts {
+        g2.rows[i].pos.x += lead;
+    }
+    std::sync::Arc::new(g2)
+}
+
 /// Whether every selected character is `on` for a property.
 fn all_on(r: &TextData, a: usize, b: usize, get: impl Fn(&SpanFormat) -> Option<bool>, default: bool) -> bool {
     (a..b).all(|i| r.spans.iter().find(|s| s.start <= i && i < s.end).and_then(|s| get(&s.format)).unwrap_or(default))
@@ -1474,7 +1506,8 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         ui.set_min_width(width);
         let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
             let job = rich_job(&rich_now, buf.as_str(), &theme2, &font2, &font_name, color, wrap);
-            ui.fonts_mut(|f| f.layout_job(job))
+            let g = ui.fonts_mut(|f| f.layout_job(job));
+            indent_empty_list_rows(g, &rich_now, buf.as_str(), font2.size)
         };
         let edit = egui::TextEdit::multiline(&mut t.buf)
             .font(font.clone())
@@ -2328,4 +2361,32 @@ fn context_menu(app: &mut ZebraApp, resp: &egui::Response) {
         item(ui, app, Action::AddToPath);
         item(ui, app, Action::ZoomToSelection);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A new, empty list item: its caret row starts where the text of the
+    /// items above starts, not in the margin.
+    #[test]
+    fn empty_list_item_lines_up_with_the_others() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |_| {});
+        out.textures_delta.clear();
+        let mut t = TextData { text: "One\nTwo".into(), ..Default::default() };
+        zebra_core::rich::format_paragraphs(&mut t, 0, 1, Some(ListKind::Bullet), None, 0, None);
+        let font = FontId::proportional(20.0);
+        let theme = zebra_core::Theme::resolve("classic");
+        for buf in ["One\nTwo\n", "One\n\nTwo"] {
+            let job = rich_job(&t, buf, &theme, &font, "", Color32::WHITE, f32::INFINITY);
+            let g = ctx.fonts_mut(|f| f.layout_job(job));
+            let g = indent_empty_list_rows(g, &t, buf, font.size);
+            let first = g.pos_from_cursor(egui::text::CCursor::new(0)).min.x;
+            let empty_at = buf.find("\n\n").map(|i| i + 1).unwrap_or(buf.chars().count());
+            let empty = g.pos_from_cursor(egui::text::CCursor::new(empty_at)).min.x;
+            assert!((first - empty).abs() < 0.5, "{buf:?}: first item at {first}, empty item at {empty}");
+            assert!(first > 0.0);
+        }
+    }
 }

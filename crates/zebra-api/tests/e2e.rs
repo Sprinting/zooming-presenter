@@ -401,3 +401,17 @@ fn app_captures_render_off_the_ui_thread() {
     assert!(ui.join().unwrap() > 0);
     assert!(woke.load(Ordering::SeqCst));
 }
+
+#[test]
+fn a_labelled_apply_is_its_own_named_undo_step() {
+    let h = start(Permission::Edit);
+    let mut c = connect(&h, "labeller");
+    c.call("apply", json!({"command":{"op":"add_text","text":"One","x":0,"y":0}})).unwrap();
+    c.call("apply", json!({"label":"Rewrite the title","command":{"op":"add_text","text":"Two","x":0,"y":100}})).unwrap();
+    let hist = c.call("query", json!({"query":{"q":"history"}})).unwrap();
+    let labels: Vec<&str> = hist["undo"].as_array().unwrap().iter().map(|e| e["label"].as_str().unwrap()).collect();
+    assert_eq!(labels.len(), 2, "never merged with the step before: {labels:?}");
+    assert!(labels.contains(&"Rewrite the title"), "{labels:?}");
+    let e = rpc_err(c.call("apply", json!({"label":5,"command":{"op":"add_text","text":"x","x":0,"y":0}})));
+    assert!(e.message.contains("label"), "{e}");
+}

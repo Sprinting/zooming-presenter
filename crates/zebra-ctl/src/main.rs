@@ -61,7 +61,8 @@ enum Cmd {
         /// Read JSON from a file ('-' = stdin).
         #[arg(short, long)]
         file: Option<PathBuf>,
-        /// Undo label for a batch.
+        /// Name for this change: one undo step with this label, shown in
+        /// the person's history and status bar.
         #[arg(long)]
         label: Option<String>,
     },
@@ -266,6 +267,9 @@ enum Add {
 
 fn main() {
     let cli = Cli::parse();
+    for v in zebra_api::discovery::ignored_overrides() {
+        eprintln!("zebractl: {v} is ignored by this build (only developer builds use it)");
+    }
     if let Err(e) = run(cli) {
         eprintln!("zebractl: {e:#}");
         std::process::exit(1);
@@ -422,7 +426,11 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 call(c, "batch", p)?
             } else {
-                call(c, "apply", json!({ "command": v }))?
+                let mut p = json!({ "command": v });
+                if let Some(l) = label {
+                    p["label"] = json!(l);
+                }
+                call(c, "apply", p)?
             };
             print(&r);
         }

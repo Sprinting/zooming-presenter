@@ -1,5 +1,4 @@
 use zebra_core::*;
-use zebra_core::command::*;
 use zebra_core::view::Mode;
 
 fn cmd(j: serde_json::Value) -> Command {

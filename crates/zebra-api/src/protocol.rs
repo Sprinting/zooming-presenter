@@ -258,7 +258,13 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
             if cmd_v.is_array() {
                 return Err(RpcError::invalid("`apply` takes one command; use `batch {\"commands\": [...]}` for a list"));
             }
-            Call::Apply { command: parse_command(cmd_v)?, if_revision: if_rev(&p)? }
+            let command = parse_command(cmd_v)?;
+            // A label makes it its own named undo step, as for a batch.
+            match p.get("label") {
+                None | Some(Value::Null) => Call::Apply { command, if_revision: if_rev(&p)? },
+                Some(Value::String(l)) => Call::Batch { commands: vec![command], label: Some(l.clone()), if_revision: if_rev(&p)? },
+                Some(_) => return Err(RpcError::invalid("`label` must be a string")),
+            }
         }
         "batch" => {
             let Some(arr) = p.get("commands").and_then(|c| c.as_array()) else {
