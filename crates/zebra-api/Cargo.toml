@@ -1,0 +1,9 @@
+[package]
+name = "zebra-api"
+description = "JSON-RPC automation API (Unix socket) for driving Zebra"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zebra-core.workspace = true

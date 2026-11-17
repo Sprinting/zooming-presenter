@@ -1,0 +1,13 @@
+[package]
+name = "zebra-app"
+description = "Zebra: native infinite-canvas presentation app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "zebra"
+path = "src/main.rs"
+
+[dependencies]
+zebra-core.workspace = true

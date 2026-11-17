@@ -1,0 +1,9 @@
+[package]
+name = "zebra-render"
+description = "Display list, text layout, and renderers (vello GPU, vello_cpu headless, PDF) for Zebra"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zebra-core.workspace = true

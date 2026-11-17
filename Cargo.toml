@@ -1,0 +1,47 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+
+[workspace.dependencies]
+zebra-core = { path = "crates/zebra-core" }
+zebra-render = { path = "crates/zebra-render" }
+zebra-api = { path = "crates/zebra-api" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1.2"
+thiserror = "2"
+anyhow = "1"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+base64 = "0.22"
+
+# rendering
+kurbo = "0.13"
+peniko = "*"
+vello = "0.12"
+vello_cpu = { version = "0.4", features = ["multithreading"] }
+parley = "0.13"
+krilla = "0.8"
+
+# ui
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "accesskit", "default_fonts", "persistence"] }
+egui = "0.37"
+egui-wgpu = "0.37"
+muda = "0.21"
+rfd = "0.18"
+
+# api
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time", "fs"] }
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+rand = "0.9"
+
+[profile.dev.package."*"]
+opt-level = 2
