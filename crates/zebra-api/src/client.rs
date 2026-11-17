@@ -42,6 +42,14 @@ pub struct Client {
     /// Event notifications received while waiting for responses.
     pub events: VecDeque<Value>,
     pub socket: PathBuf,
+    /// Longest wait for one response (None = forever). Default 60 s, or
+    /// `ZEBRA_TIMEOUT` seconds; 0 waits forever.
+    pub timeout: Option<Duration>,
+}
+
+fn default_timeout() -> Option<Duration> {
+    let secs = std::env::var("ZEBRA_TIMEOUT").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(60);
+    (secs > 0).then(|| Duration::from_secs(secs))
 }
 
 impl Client {
@@ -55,6 +63,7 @@ impl Client {
             pending: vec![],
             events: VecDeque::new(),
             socket: socket.to_path_buf(),
+            timeout: default_timeout(),
         })
     }
 
@@ -137,8 +146,23 @@ impl Client {
     }
 
     fn wait_response(&mut self, id: &Value) -> Result<Value, ClientError> {
-        self.reader.get_ref().set_read_timeout(None)?;
+        let deadline = self.timeout.map(|t| std::time::Instant::now() + t);
         loop {
+            let left = match deadline {
+                Some(d) => {
+                    let left = d.saturating_duration_since(std::time::Instant::now());
+                    if left.is_zero() {
+                        self.reader.get_ref().set_read_timeout(None)?;
+                        return Err(ClientError::Io(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "Zebra didn't answer in time (set ZEBRA_TIMEOUT=0 to wait longer)",
+                        )));
+                    }
+                    Some(left)
+                }
+                None => None,
+            };
+            self.reader.get_ref().set_read_timeout(left)?;
             let Some(m) = self.read_message()? else { continue };
             if m.get("method").is_some() && m.get("id").is_none() {
                 self.events.push_back(m.get("params").cloned().unwrap_or(Value::Null));

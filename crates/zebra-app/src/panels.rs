@@ -555,13 +555,13 @@ fn status_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let name = app.agent_name();
     let last = app.editor.activity.iter().rev().find(|a| a.origin.is_agent()).map(|a| (a.time, a.label.clone()));
     let (text, live) = match (connected, app.editor.view.agent_paused, &last) {
-        (true, true, _) => (format!("{name}: paused"), false),
+        (true, true, _) => (crate::t!("status-agent-paused", name = name.as_str()), false),
         (true, false, Some((t, l))) if now - t < RECENT => {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(RECENT - (now - t) + 0.05));
-            (format!("{name}: {l}"), true)
+            (crate::t!("status-agent-action", name = name.as_str(), action = l.as_str()), true)
         }
-        (true, false, _) => (format!("{name}: idle"), false),
-        (false, _, _) => ("No agent".to_string(), false),
+        (true, false, _) => (crate::t!("status-agent-idle", name = name.as_str()), false),
+        (false, _, _) => (crate::t!("status-no-agent"), false),
     };
     let rect = ui.max_rect();
     let resp = ui.interact(rect, egui::Id::unique("agent-status"), Sense::click());
@@ -573,10 +573,7 @@ fn status_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     job.wrap = egui::text::TextWrapping::truncate_at_width(max_w);
     let galley = ui.painter().layout_job(job);
     ui.painter().galley(Pos2::new(icon.right() + 6.0, rect.center().y - galley.size().y / 2.0), galley, color);
-    let tip = match Action::ToggleActivity.shortcut_text() {
-        Some(k) => format!("Activity  {k}"),
-        None => "Activity".to_string(),
-    };
+    let tip = crate::i18n::with_shortcut(crate::t!("status-activity"), &Action::ToggleActivity);
     if resp.on_hover_text(tip).clicked() {
         app.show_activity = !app.show_activity;
     }

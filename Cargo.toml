@@ -38,6 +38,10 @@ egui = "0.37"
 egui-wgpu = "0.37"
 muda = "0.21"
 rfd = "0.18"
+# i18n: Project Fluent via i18n-embed (compile-time checked keys with fl!)
+i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+i18n-embed-fl = "0.10"
+rust-embed = "8"
 egui_kittest = "0.37"
 
 # api

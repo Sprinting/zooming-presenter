@@ -39,6 +39,8 @@ pub fn socket_for(zebra_socket: &Path, name: &str) -> PathBuf {
 /// Run the relay in this process until Zebra goes away or it idles out.
 pub fn run(zebra_socket: &Path, token: &str, name: &str, relay_socket: &Path) -> anyhow::Result<()> {
     let mut upstream = Client::connect_hello(zebra_socket, name, token).map_err(|e| anyhow::anyhow!("{e}"))?;
+    // Each zebractl call has its own timeout; the relay itself waits.
+    upstream.timeout = None;
     if relay_socket.exists() {
         if UnixStream::connect(relay_socket).is_ok() {
             return Ok(()); // another relay for this agent won the race

@@ -6,6 +6,7 @@ pub mod cli;
 pub mod fallback;
 pub mod library;
 pub mod files;
+pub mod i18n;
 pub mod icons;
 pub mod inspector;
 pub mod inspector_s3;
