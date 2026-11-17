@@ -85,6 +85,9 @@ pub struct PerfStats {
     /// Why recent frames were drawn ("file:line" of the repaint request,
     /// with a count), newest last; reported by `perf` to find idle repaints.
     pub repaint_causes: VecDeque<(f64, String)>,
+    /// Microseconds per part of the frame (toolbar, sidebar, canvas…),
+    /// the last frames of each; reported as p50/p95 to find slow parts.
+    pub parts: BTreeMap<&'static str, VecDeque<f32>>,
 }
 
 impl PerfStats {
@@ -92,6 +95,14 @@ impl PerfStats {
         self.frames.push_back((now, ms));
         while self.frames.len() > FRAMES_KEPT {
             self.frames.pop_front();
+        }
+    }
+
+    pub fn record_part(&mut self, name: &'static str, ms: f32) {
+        let v = self.parts.entry(name).or_default();
+        v.push_back(ms);
+        while v.len() > FRAMES_KEPT {
+            v.pop_front();
         }
     }
 
@@ -126,7 +137,18 @@ impl PerfStats {
                 *causes.entry(c.as_str()).or_default() += 1;
             }
         }
+        let parts: BTreeMap<&str, [f32; 2]> = self
+            .parts
+            .iter()
+            .map(|(k, v)| {
+                let mut s: Vec<f32> = v.iter().copied().collect();
+                s.sort_by(f32::total_cmp);
+                let at = |p: f64| s[(((s.len() - 1) as f64) * p).round() as usize];
+                (*k, [(at(0.5) * 100.0).round() / 100.0, (at(0.95) * 100.0).round() / 100.0])
+            })
+            .collect();
         json!({
+            "frame_parts_ms_p50_p95": parts,
             "heap_mb": heap_bytes().map(mb),
             "heap_peak_mb": heap_peak().map(mb),
             "frame_ms_p50": self.frame_ms_percentile(50.0),

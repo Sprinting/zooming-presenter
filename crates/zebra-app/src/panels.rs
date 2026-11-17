@@ -41,14 +41,22 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     egui::Panel::top("toolbar")
         .exact_size(TITLE_ROW + TOOLBAR_ROW)
         .frame(egui::Frame::new().fill(p.toolbar))
-        .show(ui, |ui| toolbar(app, ui, &p));
+        .show(ui, |ui| {
+                let t = std::time::Instant::now();
+                toolbar(app, ui, &p);
+                app.editor.perf.record_part("toolbar", t.elapsed().as_secs_f32() * 1000.0);
+            });
 
     if app.show_sidebar {
         egui::Panel::left("path")
             .exact_size(SIDEBAR_W)
             .resizable(false)
             .frame(egui::Frame::new().fill(p.sidebar).inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 0 }).stroke(Stroke::new(1.0, p.border)))
-            .show(ui, |ui| crate::sidebar::ui(app, ui, &p));
+            .show(ui, |ui| {
+                let t = std::time::Instant::now();
+                crate::sidebar::ui(app, ui, &p);
+                app.editor.perf.record_part("sidebar", t.elapsed().as_secs_f32() * 1000.0);
+            });
     }
 
     if app.show_props {
@@ -56,7 +64,11 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
             .exact_size(crate::inspector::WIDTH)
             .resizable(false)
             .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin { left: 16, right: 12, top: 0, bottom: 0 }).stroke(Stroke::new(1.0, p.border)))
-            .show(ui, |ui| crate::inspector::ui(app, ui));
+            .show(ui, |ui| {
+                let t = std::time::Instant::now();
+                crate::inspector::ui(app, ui);
+                app.editor.perf.record_part("inspector", t.elapsed().as_secs_f32() * 1000.0);
+            });
     }
     if app.show_activity {
         egui::Panel::right("activity")
@@ -69,7 +81,9 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     }
 
     egui::CentralPanel::no_frame().show(ui, |ui| {
+        let t = std::time::Instant::now();
         crate::canvas::edit_canvas(app, ui);
+        app.editor.perf.record_part("canvas", t.elapsed().as_secs_f32() * 1000.0);
     });
     let rect = app.canvas.rect;
     floating(app, &ctx, rect, &p);

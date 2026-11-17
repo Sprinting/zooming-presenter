@@ -118,6 +118,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         let tw = ui.available_width();
         let num_w = 22.0;
         let th = (tw - num_w - 6.0) * THUMB_H as f32 / THUMB_W as f32;
+        let bg = style::c32(app.editor.theme().color(&"theme:background".into()));
         for i in 0..n {
             let (r, resp) = ui.allocate_exact_size(EVec2::new(tw, th + 26.0), Sense::click_and_drag());
             rows.push(r);
@@ -126,53 +127,55 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             }
             let is_sel = selected.contains(&i);
             let is_cur = current == Some(i);
-            let painter = ui.painter();
-            let plate = r.shrink2(EVec2::new(0.0, 1.0));
-            if is_sel {
-                painter.rect_filled(plate, 6.0, accent());
-            } else if is_cur {
-                painter.rect_filled(plate, 6.0, p.pressed);
-            } else if resp.hovered() && dragging.is_none() {
-                painter.rect_filled(plate, 6.0, p.hover);
-            }
-            if let Some((fi, a)) = flash {
-                if fi <= i {
-                    painter.rect_stroke(plate, 6.0, Stroke::new(2.0, accent().gamma_multiply(a)), egui::StrokeKind::Inside);
+            // Only rows on screen are drawn (long paths have 100+ steps).
+            if ui.is_rect_visible(r) {
+                let painter = ui.painter();
+                let plate = r.shrink2(EVec2::new(0.0, 1.0));
+                if is_sel {
+                    painter.rect_filled(plate, 6.0, accent());
+                } else if is_cur {
+                    painter.rect_filled(plate, 6.0, p.pressed);
+                } else if resp.hovered() && dragging.is_none() {
+                    painter.rect_filled(plate, 6.0, p.hover);
                 }
-            }
-            let tc = if is_sel { w::on_accent() } else { p.text };
-            let wc = if is_sel { w::on_accent() } else { p.weak };
-            // Step number, top-left like Keynote's slide numbers.
-            painter.text(Pos2::new(r.min.x + num_w / 2.0 + 1.0, r.min.y + 12.0), Align2::CENTER_CENTER, (i + 1).to_string(), style::semibold(11.0), tc);
-            // Thumbnail.
-            let img_r = Rect::from_min_size(r.min + EVec2::new(num_w, 5.0), EVec2::new(tw - num_w - 6.0, th));
-            let bg = style::c32(app.editor.theme().color(&"theme:background".into()));
-            painter.rect_filled(img_r, 3.0, bg);
-            if let Some(tex) = app.thumbs.get(i) {
-                let tint = if app.thumbs.stale(app.editor.revision) { Color32::from_white_alpha(200) } else { Color32::WHITE };
-                painter.image(tex.id(), img_r.shrink(0.5), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
-            }
-            painter.rect_stroke(img_r, 3.0, Stroke::new(1.0, if is_sel { Color32::from_white_alpha(160) } else { p.border }), egui::StrokeKind::Outside);
-            // Label and badges.
-            let step = &app.editor.doc.path[i];
-            let mut right = img_r.max.x;
-            let ly = img_r.max.y + 10.0;
-            if !step.builds.is_empty() {
-                let t = format!("{} build{}", step.builds.len(), if step.builds.len() == 1 { "" } else { "s" });
-                let g = painter.layout_no_wrap(t, style::ui_font(11.0), wc);
-                right -= g.size().x;
-                painter.galley(Pos2::new(right, ly - g.size().y / 2.0), g, wc);
-                right -= 6.0;
-            }
-            if !step.notes.is_empty() {
-                right -= 13.0;
-                paint_icon(painter, Rect::from_min_size(Pos2::new(right, ly - 6.5), EVec2::splat(13.0)), Icon::Note, wc);
-                right -= 4.0;
-            }
-            let label = step_label(app, i);
-            let clip = Rect::from_min_max(Pos2::new(img_r.min.x, ly - 8.0), Pos2::new(right, ly + 8.0));
-            painter.with_clip_rect(clip).text(Pos2::new(img_r.min.x, ly), Align2::LEFT_CENTER, &label, style::ui_font(11.0), tc);
+                if let Some((fi, a)) = flash {
+                    if fi <= i {
+                        painter.rect_stroke(plate, 6.0, Stroke::new(2.0, accent().gamma_multiply(a)), egui::StrokeKind::Inside);
+                    }
+                }
+                let tc = if is_sel { w::on_accent() } else { p.text };
+                let wc = if is_sel { w::on_accent() } else { p.weak };
+                // Step number, top-left like Keynote's slide numbers.
+                painter.text(Pos2::new(r.min.x + num_w / 2.0 + 1.0, r.min.y + 12.0), Align2::CENTER_CENTER, (i + 1).to_string(), style::semibold(11.0), tc);
+                // Thumbnail.
+                let img_r = Rect::from_min_size(r.min + EVec2::new(num_w, 5.0), EVec2::new(tw - num_w - 6.0, th));
+                painter.rect_filled(img_r, 3.0, bg);
+                if let Some(tex) = app.thumbs.get(i) {
+                    let tint = if app.thumbs.stale(app.editor.revision) { Color32::from_white_alpha(200) } else { Color32::WHITE };
+                    painter.image(tex.id(), img_r.shrink(0.5), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
+                }
+                painter.rect_stroke(img_r, 3.0, Stroke::new(1.0, if is_sel { Color32::from_white_alpha(160) } else { p.border }), egui::StrokeKind::Outside);
+                // Label and badges.
+                let step = &app.editor.doc.path[i];
+                let mut right = img_r.max.x;
+                let ly = img_r.max.y + 10.0;
+                if !step.builds.is_empty() {
+                    let t = format!("{} build{}", step.builds.len(), if step.builds.len() == 1 { "" } else { "s" });
+                    let g = painter.layout_no_wrap(t, style::ui_font(11.0), wc);
+                    right -= g.size().x;
+                    painter.galley(Pos2::new(right, ly - g.size().y / 2.0), g, wc);
+                    right -= 6.0;
+                }
+                if !step.notes.is_empty() {
+                    right -= 13.0;
+                    paint_icon(painter, Rect::from_min_size(Pos2::new(right, ly - 6.5), EVec2::splat(13.0)), Icon::Note, wc);
+                    right -= 4.0;
+                }
+                let label = step_label(app, i);
+                let clip = Rect::from_min_max(Pos2::new(img_r.min.x, ly - 8.0), Pos2::new(right, ly + 8.0));
+                painter.with_clip_rect(clip).text(Pos2::new(img_r.min.x, ly), Align2::LEFT_CENTER, &label, style::ui_font(11.0), tc);
 
+            }
             if resp.clicked() {
                 app.selected_step = Some(i);
                 if !app.editor.view.selection.is_empty() {
@@ -183,7 +186,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             if resp.drag_started() {
                 dragging = Some(i);
             }
-            let resp = resp.on_hover_text(format!("Step {}: {}\nClick to go there. Drag to reorder. Right-click for more.", i + 1, label));
+            let resp = if resp.hovered() { resp.on_hover_text(format!("Step {}: {}\nClick to go there. Drag to reorder. Right-click for more.", i + 1, step_label(app, i))) } else { resp };
             egui::Popup::context_menu(&resp).width(200.0).show(|ui| {
                 if w::menu_item(ui, "Go to Step", None).clicked() {
                     let _ = app.editor.view(ViewCommand::GotoStep { step: i }, H);

@@ -54,6 +54,9 @@ pub fn encode_scene(scene: &mut Scene, list: &DisplayList) {
 pub struct GpuRenderer {
     renderer: vello::Renderer,
     scene: Scene,
+    /// Milliseconds of the last render: (scene encode, vello submit, error
+    /// scope wait). For the `perf` query.
+    pub last_ms: [f32; 3],
 }
 
 fn renderer_options() -> RendererOptions {
@@ -64,7 +67,7 @@ impl GpuRenderer {
     pub fn new(device: &wgpu::Device) -> Result<Self, String> {
         let renderer = vello::Renderer::new(device, renderer_options())
         .map_err(|e| format!("vello init failed: {e}"))?;
-        Ok(GpuRenderer { renderer, scene: Scene::new() })
+        Ok(GpuRenderer { renderer, scene: Scene::new(), last_ms: [0.0; 3] })
     }
 
     /// Render `list` into `view` (an Rgba8Unorm texture with STORAGE_BINDING,
@@ -76,8 +79,10 @@ impl GpuRenderer {
         list: &DisplayList,
         view: &wgpu::TextureView,
     ) -> Result<(), String> {
+        let t0 = std::time::Instant::now();
         self.scene.reset();
         encode_scene(&mut self.scene, list);
+        let t1 = std::time::Instant::now();
         let params = RenderParams {
             base_color: color(list.background),
             width: list.width_px,
@@ -91,7 +96,10 @@ impl GpuRenderer {
         // missing images until restart.
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let res = self.renderer.render_to_texture(device, queue, &self.scene, view, &params);
+        let t2 = std::time::Instant::now();
         let gpu_err = pollster::block_on(scope.pop());
+        let ms = |a: std::time::Instant, b: std::time::Instant| (b - a).as_secs_f32() * 1000.0;
+        self.last_ms = [ms(t0, t1), ms(t1, t2), ms(t2, std::time::Instant::now())];
         if let Some(e) = gpu_err {
             if let Ok(r) = vello::Renderer::new(device, renderer_options()) {
                 self.renderer = r;
@@ -183,6 +191,11 @@ pub struct VelloCanvas {
 }
 
 impl VelloCanvas {
+    /// See [`GpuRenderer::last_ms`].
+    pub fn last_ms(&self) -> [f32; 3] {
+        self.gpu.as_ref().map(|g| g.last_ms).unwrap_or_default()
+    }
+
     /// Create once, from `frame.wgpu_render_state()`.
     pub fn new(rs: &egui_wgpu::RenderState) -> Self {
         VelloCanvas { gpu: GpuRenderer::new(&rs.device), target: None, texture_id: None, reported: false }

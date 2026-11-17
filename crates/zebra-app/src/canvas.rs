@@ -320,10 +320,20 @@ pub fn paint_content(app: &mut ZebraApp, ui: &mut Ui, rect: ERect, presenting: b
     if let (Some(canvas), Some(rs), true) = (&mut app.gpu_canvas, &app.wgpu, app.render_ok) {
         let cam = ed.view.camera;
         let r = &app.renderer;
+        let t = std::time::Instant::now();
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.build_display_list(ed, &cam, vp, ppp, &opts)));
+        let t_list = t.elapsed().as_secs_f32() * 1000.0;
         match built {
             Ok(list) => {
+                let t = std::time::Instant::now();
                 canvas.paint(ui, rect, &list, rs);
+                let t_paint = t.elapsed().as_secs_f32() * 1000.0;
+                app.editor.perf.record_part("canvas_scene", t_list);
+                app.editor.perf.record_part("canvas_paint", t_paint);
+                let [enc, submit, wait] = canvas.last_ms();
+                app.editor.perf.record_part("vello_encode", enc);
+                app.editor.perf.record_part("vello_submit", submit);
+                app.editor.perf.record_part("vello_scope_wait", wait);
                 // Animated GIFs on screen: repaint for their next frame only.
                 if let Some(t) = list.next_frame_in {
                     ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(t.clamp(0.01, 10.0)));
