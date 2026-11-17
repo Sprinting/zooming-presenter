@@ -70,12 +70,14 @@ pub fn build(renderer: &zebra_render::Renderer) -> Document {
     let b2 = text(&mut ed, "Then dive into the details", -1150.0, 290.0, TextStyle::Body, 1.4, 0.0, true);
     let b3 = text(&mut ed, "Zoom out again to connect them", -1150.0, 380.0, TextStyle::Body, 1.4, 0.0, true);
 
+    ed.apply(Command::Align { ids: vec![b1.clone(), b2.clone(), b3.clone()], edge: zebra_core::command::AlignEdge::Left }, H).unwrap();
+
     // 2. Circle frame with a tiny hidden detail
     let f2 = frame(&mut ed, FrameStyle::Circle, "Circles", 0.0, 300.0, 720.0, 720.0, 0.0);
     text(&mut ed, "Frames come in four styles", 0.0, 170.0, TextStyle::Subtitle, 1.0, 0.0, false);
     text(&mut ed, "brackets · circles · rectangles · invisible", 0.0, 260.0, TextStyle::Body, 1.0, 0.0, false);
-    shape(&mut ed, ShapeKind::Ellipse, 0.0, 450.0, 60.0, 60.0, 0.0, Some("theme:accent"), None);
-    let detail = frame(&mut ed, FrameStyle::Invisible, "A secret", 0.0, 450.0, 44.0, 28.0, 0.0);
+    shape(&mut ed, ShapeKind::Ellipse, 0.0, 450.0, 64.0, 64.0, 0.0, None, Some("theme:accent"));
+    let detail = frame(&mut ed, FrameStyle::Invisible, "A secret", 0.0, 450.0, 26.0, 17.0, 0.0);
     text(&mut ed, "Look closer…", 0.0, 400.0, TextStyle::Body, 0.6, 0.0, false);
     text(&mut ed, "hidden in plain sight!", 0.0, 448.0, TextStyle::Body, 0.05, 0.0, false);
 
@@ -104,7 +106,6 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
     let doc = build(&app.renderer);
     app.editor.load(doc, None);
     app.after_load();
-    let _ = ctx;
     for part in which.split(',') {
         match part.trim() {
             "sample" => {}
@@ -143,6 +144,15 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                     t.buf = "Hello, canvas".into();
                 }
             }
+            "shortcuts" => app.show_shortcuts = true,
+            "palette" => app.palette = Some(("fra".into(), 0)),
+            "seltext" => {
+                let found = app.editor.doc.ordered().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text == "Why zoom?")).map(|e| e.id.clone());
+                if let Some(id) = found {
+                    app.select(vec![id]);
+                }
+            }
+            "dark" => ctx.set_theme(egui::ThemePreference::Dark),
             "empty" => {
                 app.editor.load(Document::default(), None);
                 app.after_load();

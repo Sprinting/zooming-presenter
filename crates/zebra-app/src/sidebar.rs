@@ -52,7 +52,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new("No steps yet").color(p.weak));
                 ui.add_space(4.0);
-                ui.label(RichText::new("Select a frame and press “＋ Add”, or click “Edit path” and click frames in order.").size(12.0).color(p.weak));
+                ui.label(RichText::new("Select a frame and press “+ Add”, or click “Edit path” and click frames in order.").size(12.0).color(p.weak));
             });
         }
         let tw = ui.available_width();
@@ -86,7 +86,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 badge_x -= 52.0;
             }
             if !step.notes.is_empty() {
-                painter.text(Pos2::new(badge_x, img_r.max.y + 11.0), Align2::RIGHT_CENTER, "✎", FontId::proportional(11.0), p.weak);
+                painter.text(Pos2::new(badge_x, img_r.max.y + 11.0), Align2::RIGHT_CENTER, "notes", FontId::proportional(10.5), p.weak);
             }
             // delete × on hover
             if resp.hovered() && dragging.is_none() {
@@ -185,7 +185,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             }
         });
         let has_sel = !app.editor.view.selection.is_empty();
-        let label = if has_sel { "＋ Add selection" } else { "＋ Add current view" };
+        let label = if has_sel { "+ Add selection" } else { "+ Add current view" };
         let b = egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(ACCENT).corner_radius(8).min_size(EVec2::new(ui.available_width(), 32.0));
         if ui.add(b).on_hover_text("⇧⌘A").clicked() {
             app.queued.push(Action::AddToPath);

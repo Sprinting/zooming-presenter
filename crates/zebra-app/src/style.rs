@@ -137,7 +137,11 @@ pub fn bold(size: f32) -> FontId {
 }
 
 pub fn apply_visuals(ctx: &egui::Context) {
-    ctx.options_mut(|o| o.zoom_with_keyboard = false);
+    ctx.options_mut(|o| {
+        o.zoom_with_keyboard = false;
+        // Follow the system appearance; light when the platform doesn't say.
+        o.fallback_theme = egui::Theme::Light;
+    });
     for dark in [false, true] {
         let p = Palette::for_dark(dark);
         let theme = if dark { egui::Theme::Dark } else { egui::Theme::Light };
@@ -148,7 +152,7 @@ pub fn apply_visuals(ctx: &egui::Context) {
             v.window_stroke = Stroke::new(1.0, p.border);
             v.window_corner_radius = CornerRadius::same(12);
             v.menu_corner_radius = CornerRadius::same(8);
-            v.extreme_bg_color = if dark { Color32::from_rgb(0x18, 0x19, 0x1c) } else { Color32::WHITE };
+            v.extreme_bg_color = if dark { Color32::from_rgb(0x18, 0x19, 0x1c) } else { Color32::from_rgb(0xf1, 0xf2, 0xf5) };
             v.faint_bg_color = p.hover;
             v.selection.bg_fill = ACCENT.gamma_multiply(if dark { 0.6 } else { 0.25 });
             v.selection.stroke = Stroke::new(1.0, ACCENT);
@@ -158,11 +162,11 @@ pub fn apply_visuals(ctx: &egui::Context) {
             for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
                 w.corner_radius = CornerRadius::same(6);
             }
-            v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+            v.widgets.inactive.weak_bg_fill = if dark { Color32::from_rgb(0x30, 0x31, 0x36) } else { Color32::from_rgb(0xf0, 0xf1, 0xf4) };
             v.widgets.inactive.bg_fill = p.hover;
             v.widgets.inactive.bg_stroke = Stroke::NONE;
             v.widgets.inactive.fg_stroke = Stroke::new(1.0, p.text);
-            v.widgets.hovered.weak_bg_fill = p.hover;
+            v.widgets.hovered.weak_bg_fill = if dark { Color32::from_rgb(0x3a, 0x3b, 0x41) } else { Color32::from_rgb(0xe6, 0xe7, 0xeb) };
             v.widgets.hovered.bg_fill = p.hover;
             v.widgets.hovered.bg_stroke = Stroke::NONE;
             v.widgets.hovered.fg_stroke = Stroke::new(1.0, p.text);

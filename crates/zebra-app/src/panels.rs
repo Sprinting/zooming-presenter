@@ -194,7 +194,7 @@ fn agent_pill(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         .corner_radius(CornerRadius::same(14))
         .inner_margin(egui::Margin::symmetric(10, 5))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 let (r, _) = ui.allocate_exact_size(EVec2::splat(8.0), Sense::hover());
                 ui.painter().circle_filled(r.center(), 4.0, dot);
                 ui.label(RichText::new(text).size(12.5).color(if connected { AGENT } else { p.weak }));
@@ -207,17 +207,17 @@ fn agent_pill(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         None => "Agent controls".into(),
     });
     egui::Popup::menu(&r).width(230.0).show(|ui| {
-        if ui.button(if paused { "▶  Resume agent" } else { "⏸  Pause agent" }).clicked() {
+        if ui.button(if paused { "Resume agent" } else { "Pause agent" }).clicked() {
             app.queued.push(Action::PauseAgents);
         }
-        if ui.button("⏹  Stop agent        ⌘.").clicked() {
+        if ui.button("Stop agent  (⌘.)").clicked() {
             app.queued.push(Action::StopAgents);
         }
         let mut follow = app.editor.view.follow_agent;
         if ui.checkbox(&mut follow, "Follow agent's camera").changed() {
             app.queued.push(Action::FollowAgent);
         }
-        if ui.button("Activity…              ⌘J").clicked() {
+        if ui.button("Activity…  (⌘J)").clicked() {
             app.queued.push(Action::ToggleActivity);
         }
         ui.separator();
@@ -233,7 +233,7 @@ fn agent_pill(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             }
         }
         ui.separator();
-        if ui.button("↺  Revert agent's changes").clicked() {
+        if ui.button("Revert agent's changes").clicked() {
             app.queued.push(Action::RevertAgent);
         }
     });
@@ -415,7 +415,8 @@ fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
                         if tool == Some(Tool::Frame) {
                             // small style picker caret
                             let (cr, cresp) = ui.allocate_exact_size(EVec2::new(12.0, 32.0), Sense::click());
-                            ui.painter().text(cr.center(), Align2::CENTER_CENTER, "▾", FontId::proportional(11.0), p.weak);
+                            let c = cr.center();
+                            ui.painter().add(Shape::convex_polygon(vec![c + EVec2::new(-3.5, -2.0), c + EVec2::new(3.5, -2.0), c + EVec2::new(0.0, 2.5)], p.weak, Stroke::NONE));
                             egui::Popup::menu(&cresp).show(|ui| {
                                 for s in FrameStyle::ALL {
                                     ui.horizontal(|ui| {
@@ -473,7 +474,7 @@ fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::unique("hint")));
         let painter = painter.with_clip_rect(rect);
         painter.text(rect.center() - EVec2::new(0.0, 14.0), Align2::CENTER_CENTER, "Double-click anywhere to write", style::bold(22.0), p.weak.gamma_multiply(0.85));
-        painter.text(rect.center() + EVec2::new(0.0, 18.0), Align2::CENTER_CENTER, "F for frames  ·  drop images here  ·  File ▸ New from Sample to see an example", FontId::proportional(14.0), p.weak.gamma_multiply(0.75));
+        painter.text(rect.center() + EVec2::new(0.0, 18.0), Align2::CENTER_CENTER, "F for frames  ·  drop images here  ·  File › New from Sample to see an example", FontId::proportional(14.0), p.weak.gamma_multiply(0.75));
     } else if app.editor.doc.bounds().is_some_and(|b| !b.intersects(&app.editor.view.camera.visible_bounds(app.editor.view.viewport))) {
         // "Back to content" pill when lost in empty space.
         egui::Area::new(egui::Id::unique("backtocontent")).anchor(Align2::CENTER_TOP, EVec2::new(rect.center().x - ctx.content_rect().center().x, rect.top() + 16.0)).show(ctx, |ui| {
@@ -634,7 +635,7 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 if ui.selectable_label(t.italic, RichText::new(" I ").italics()).on_hover_text("Italic").clicked() {
                     patch_all = Some(ElementPatch { italic: Some(!t.italic), ..Default::default() });
                 }
-                if ui.selectable_label(t.bullets, "•≡").on_hover_text("Bullets").clicked() {
+                if ui.selectable_label(t.bullets, "• List").on_hover_text("Bullets").clicked() {
                     patch_all = Some(ElementPatch { bullets: Some(!t.bullets), ..Default::default() });
                 }
                 ui.separator();
@@ -792,7 +793,7 @@ fn common_actions(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         }
     });
     ui.horizontal_wrapped(|ui| {
-        if ui.button(if locked { "🔓 Unlock" } else { "🔒 Lock" }).on_hover_text("⌘L").clicked() {
+        if ui.button(if locked { "Unlock" } else { "Lock" }).on_hover_text("⌘L").clicked() {
             app.queued.push(Action::ToggleLock);
         }
         if ui.button("Duplicate").on_hover_text("⌘D").clicked() {
@@ -804,7 +805,7 @@ fn common_actions(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     });
     section(ui, "Path", p);
     ui.horizontal_wrapped(|ui| {
-        if ui.button("＋ Add to path").on_hover_text("⇧⌘A").clicked() {
+        if ui.button("+ Add to path").on_hover_text("⇧⌘A").clicked() {
             app.queued.push(Action::AddToPath);
         }
         if in_path {
@@ -825,7 +826,7 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     ui.horizontal(|ui| {
         ui.heading("Agent activity");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.small_button("✕").on_hover_text("Close  ⌘J").clicked() {
+            if ui.small_button("Close").on_hover_text("⌘J").clicked() {
                 app.show_activity = false;
             }
         });
@@ -834,7 +835,7 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         let paused = app.editor.view.agent_paused;
-        if ui.button(if paused { "▶ Resume" } else { "⏸ Pause" }).clicked() {
+        if ui.button(if paused { "Resume" } else { "Pause" }).clicked() {
             app.queued.push(Action::PauseAgents);
         }
         let mut follow = app.editor.view.follow_agent;

@@ -86,6 +86,8 @@ pub struct CanvasState {
     pub guides: Vec<[Vec2; 2]>,
     pub frame_chip: Option<(ERect, ElementId)>,
     pub step_hover: Option<usize>,
+    pub rect_valid: bool,
+    pub rect_presenting: bool,
 }
 
 impl Default for CanvasState {
@@ -99,6 +101,8 @@ impl Default for CanvasState {
             guides: vec![],
             frame_chip: None,
             step_hover: None,
+            rect_valid: false,
+            rect_presenting: false,
         }
     }
 }
@@ -270,12 +274,22 @@ pub fn paint_content(app: &mut ZebraApp, ui: &mut Ui, rect: ERect, presenting: b
 /// Keep the core's viewport equal to the canvas size.
 pub fn sync_viewport(app: &mut ZebraApp, rect: ERect) {
     let vp = app.editor.view.viewport;
+    let old = app.canvas.rect;
     if (vp.x - rect.width() as f64).abs() > 0.5 || (vp.y - rect.height() as f64).abs() > 0.5 {
-        let first = app.canvas.rect.width() <= 0.0;
-        let _ = first;
         let _ = app.editor.view(ViewCommand::SetViewport { width: rect.width().max(1.0) as f64, height: rect.height().max(1.0) as f64 }, H);
     }
+    // When a panel opens or closes, keep the content still on screen rather
+    // than re-centring it (so nothing jumps under the pointer mid-gesture).
+    let same_mode = app.canvas.rect_presenting == (app.editor.view.mode == Mode::Present);
+    if same_mode && old != rect && app.canvas.rect_valid && app.editor.view.flight.is_none() {
+        let d = old.center() - rect.center();
+        if d.length() > 0.1 {
+            let _ = app.editor.view(ViewCommand::Pan { dx: d.x as f64, dy: d.y as f64 }, H);
+        }
+    }
     app.canvas.rect = rect;
+    app.canvas.rect_valid = true;
+    app.canvas.rect_presenting = app.editor.view.mode == Mode::Present;
 }
 
 /// Wheel / trackpad / pinch handling shared by edit and present mode.
@@ -335,7 +349,7 @@ pub fn handle_scroll(app: &mut ZebraApp, ui: &Ui, hovered: bool) -> bool {
 pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     let rect = ui.available_rect_before_wrap();
     sync_viewport(app, rect);
-    let resp = ui.allocate_rect(rect, Sense::click_and_drag());
+    let resp = ui.interact(rect, egui::Id::unique("zebra-canvas"), Sense::click_and_drag());
     paint_content(app, ui, rect, false);
 
     let ctx = ui.ctx().clone();
@@ -969,7 +983,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                     t.italic = !t.italic;
                     refocus = true;
                 }
-                if ui.selectable_label(t.bullets, "•≡").on_hover_text("Bullets").clicked() {
+                if ui.selectable_label(t.bullets, "• List").on_hover_text("Bullets").clicked() {
                     t.bullets = !t.bullets;
                     refocus = true;
                 }
@@ -1048,7 +1062,7 @@ fn snap_move(app: &ZebraApp, moving: &HashSet<ElementId>, b: &Rect, d: Vec2, thr
 /// Screen positions of path badges.
 pub fn badge_positions(app: &ZebraApp) -> Vec<Pos2> {
     let ed = &app.editor;
-    ed.doc
+    let raw: Vec<Pos2> = ed.doc
         .path
         .iter()
         .map(|s| {
@@ -1059,7 +1073,17 @@ pub fn badge_positions(app: &ZebraApp) -> Vec<Pos2> {
             };
             app.canvas.w2s(ed, w)
         })
-        .collect()
+        .collect();
+    // Steps sharing a target (e.g. overview at start and end) sit side by side.
+    let mut out: Vec<Pos2> = Vec::with_capacity(raw.len());
+    for p in raw {
+        let mut q = p;
+        while out.iter().any(|o| o.distance(q) < 20.0) {
+            q.x += 30.0;
+        }
+        out.push(q);
+    }
+    out
 }
 
 fn badge_at(app: &ZebraApp, p: Pos2) -> Option<usize> {
@@ -1159,7 +1183,7 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
     if let (Some(fid), false) = (chip_frame, path_mode) {
         if let Some(e) = ed.doc.get(&fid) {
             let tl = app.canvas.w2s(ed, e.corners()[0]);
-            let label = format!("{}  ⤢", e.label(&ed.doc));
+            let label = format!("{}  ›", e.label(&ed.doc));
             let galley = painter.layout_no_wrap(label, FontId::proportional(11.5), p.text);
             let r = ERect::from_min_size(tl + egui::vec2(0.0, -24.0), galley.size() + egui::vec2(14.0, 8.0));
             painter.rect(r, 6.0, p.float, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
@@ -1253,7 +1277,7 @@ fn draw_transform_tool(app: &ZebraApp, painter: &Painter, sb: &SelBox) {
     painter.add(Shape::line(q, Stroke::new(1.5, col)));
     if locked {
         let c = sb.screen[0];
-        painter.text(c + egui::vec2(2.0, -4.0), Align2::LEFT_BOTTOM, "🔒 locked", FontId::proportional(11.0), col);
+        painter.text(c + egui::vec2(2.0, -4.0), Align2::LEFT_BOTTOM, "locked", FontId::proportional(11.0), col);
         return;
     }
     // rotation handle: thin stem + zebra-striped disc
