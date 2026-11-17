@@ -609,8 +609,19 @@ fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
         let bg = style::c32(app.editor.theme().color(&"theme:background".into()));
         let dark_bg = (bg.r() as u32 + bg.g() as u32 + bg.b() as u32) < 380;
         let (c1, c2) = if dark_bg { (Color32::from_gray(0xd0), Color32::from_gray(0xa8)) } else { (Color32::from_gray(0x55), Color32::from_gray(0x6b)) };
-        painter.text(rect.center() - EVec2::new(0.0, 14.0), Align2::CENTER_CENTER, &crate::t!("canvas-hint-title"), style::semibold(20.0), c1);
-        painter.text(rect.center() + EVec2::new(0.0, 16.0), Align2::CENTER_CENTER, crate::t!("canvas-hint-detail", key = Action::FrameTool.shortcut_text().unwrap_or_default()), FontId::proportional(13.0), c2);
+        // Wrapped to the canvas, so a narrow window doesn't cut it off.
+        let wrap = (rect.width() - 48.0).max(120.0);
+        let galley = |text: String, font: FontId, color: Color32| {
+            let mut job = egui::text::LayoutJob::simple(text, font, color, wrap);
+            job.halign = egui::Align::Center;
+            painter.layout_job(job)
+        };
+        let title = galley(crate::t!("canvas-hint-title"), style::semibold(20.0), c1);
+        let detail = galley(crate::t!("canvas-hint-detail", key = Action::FrameTool.shortcut_text().unwrap_or_default()), FontId::proportional(13.0), c2);
+        let gap = 10.0;
+        let top = rect.center().y - (title.size().y + gap + detail.size().y) / 2.0;
+        painter.galley(egui::pos2(rect.center().x, top), title.clone(), c1);
+        painter.galley(egui::pos2(rect.center().x, top + title.size().y + gap), detail, c2);
     } else if app.editor.doc.bounds().is_some_and(|b| !b.intersects(&app.editor.view.camera.visible_bounds(app.editor.view.viewport))) {
         egui::Area::new(app.uid("backtocontent"))
             .anchor(Align2::CENTER_TOP, EVec2::new(rect.center().x - ctx.content_rect().center().x, rect.top() + 14.0))

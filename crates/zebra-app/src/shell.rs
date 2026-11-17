@@ -180,7 +180,7 @@ impl Shell {
         }
     }
 
-    fn set_front(&mut self, i: usize) {
+    pub fn set_front(&mut self, i: usize) {
         if i == self.front || i >= self.windows.len() {
             return;
         }
@@ -233,8 +233,10 @@ impl Shell {
             return;
         }
         if i == 0 {
-            // The root window takes over the next document and its place.
-            let next = self.windows.remove(1);
+            // The root window takes over the next document and its place;
+            // never one whose sheet is up, which belongs to its own window.
+            let Some(j) = (1..self.windows.len()).find(|&j| !self.windows[j].sheet_showing()) else { return };
+            let next = self.windows.remove(j);
             let rect = viewport_rect(ctx, &next.doc_id);
             let old = std::mem::replace(&mut self.windows[0], next);
             drop(old);
@@ -272,26 +274,42 @@ impl Shell {
             self.quitting = true;
         }
         if self.quitting {
-            // Each window closes in turn; one with unsaved changes asks
-            // first, and Cancel there stops the quit.
-            for w in &mut self.windows {
-                if !w.quit_pending {
-                    w.quit_pending = true;
-                    w.queued.push(Action::Close);
-                } else if !w.close_me && !w.sheet_showing() && w.queued.is_empty() {
-                    self.quitting = false;
-                }
-            }
-            if !self.quitting {
-                for w in &mut self.windows {
-                    w.quit_pending = false;
-                }
-            }
+            self.quit_step(ctx);
         }
         if let Some(i) = self.windows.iter().position(|w| w.close_me) {
             self.close_window(ctx, i);
             ctx.request_repaint();
         }
+    }
+
+    /// Quit closes one window at a time, the root window last (so no
+    /// document moves into it while another is asking). A window with
+    /// unsaved changes comes to the front before it asks, so its Save
+    /// Changes sheet is the one in view; Cancel there stops the quit.
+    fn quit_step(&mut self, ctx: &egui::Context) {
+        let busy = |w: &ZebraApp| w.close_me || w.sheet_showing() || !w.queued.is_empty();
+        if let Some(w) = self.windows.iter().find(|w| w.quit_pending) {
+            if busy(w) {
+                return;
+            }
+            // Still open and nothing left to do: the person cancelled.
+            self.quitting = false;
+            for w in &mut self.windows {
+                w.quit_pending = false;
+            }
+            return;
+        }
+        let i = self.windows.len() - 1;
+        if self.windows[i].editor.dirty() {
+            self.set_front(i);
+            let vid = if i == 0 { egui::ViewportId::ROOT } else { egui::ViewportId::from_hash_of(("document", self.windows[i].doc_id.as_str())) };
+            ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Focus);
+        }
+        let w = &mut self.windows[i];
+        w.quit_pending = true;
+        w.queued.push(Action::Close);
+        ctx.request_repaint();
     }
 
     fn pump(&mut self, ctx: &egui::Context) {

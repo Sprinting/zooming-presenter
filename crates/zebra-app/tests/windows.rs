@@ -109,3 +109,38 @@ fn closing_the_last_window_keeps_zebra_running() {
     assert!(s.windows[0].is_pristine(), "a new document waits in the hidden window");
     assert!(!s.windows[0].force_quit);
 }
+
+#[test]
+fn quit_asks_one_unsaved_window_at_a_time_and_cancel_stops_it() {
+    let mut h = harness();
+    add_frame(&mut h.state_mut().windows[0]);
+    h.state_mut().windows[0].queued.push(Action::New);
+    h.run_steps(4);
+    add_frame(&mut h.state_mut().windows[1]);
+    h.state_mut().set_front(0);
+    h.state_mut().windows[0].queued.push(Action::Quit);
+    h.run_steps(4);
+    let s = h.state();
+    assert_eq!(s.windows.len(), 2);
+    assert!(s.windows[1].sheet_showing(), "the last window asks first");
+    assert!(!s.windows[0].sheet_showing(), "one sheet at a time");
+    assert_eq!(s.front, 1, "the window asking is brought to the front");
+
+    // Cancel: the quit stops and both documents stay.
+    let k = h.state_mut().windows[1].sheet.take().unwrap();
+    zebra_app::sheets::resolve(&mut h.state_mut().windows[1], k, &zebra_app::t!("sheet-cancel"));
+    h.run_steps(4);
+    let s = h.state();
+    assert_eq!(s.windows.len(), 2);
+    assert!(!s.windows.iter().any(|w| w.sheet_showing() || w.quit_pending));
+
+    // Quit again; Don't Save on the last window moves on to the first.
+    h.state_mut().windows[0].queued.push(Action::Quit);
+    h.run_steps(4);
+    let k = h.state_mut().windows[1].sheet.take().unwrap();
+    zebra_app::sheets::resolve(&mut h.state_mut().windows[1], k, &zebra_app::t!("sheet-dont-save"));
+    h.run_steps(6);
+    let s = h.state();
+    assert_eq!(s.windows.len(), 1);
+    assert!(s.windows[0].sheet_showing(), "then the first window asks");
+}

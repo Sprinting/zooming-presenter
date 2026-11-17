@@ -191,6 +191,7 @@ impl MacMenu {
         m.entries.push(Entry { item: Native::Plain(settings.clone()), action: Action::Settings, last: state(app, &Action::Settings), accel: settings_spec });
 
         let mut help: Option<Submenu> = None;
+        let mut window: Option<Submenu> = None;
         let help_title = crate::t!("menu-help");
         for (title, items) in spec() {
             let sub = Submenu::new(&title, true);
@@ -206,12 +207,19 @@ impl MacMenu {
                     &PredefinedMenuItem::bring_all_to_front(None),
                 ]);
                 let _ = m._menu.append(&win);
-                win.set_as_windows_menu_for_nsapp();
+                window = Some(win);
                 help = Some(sub.clone());
             }
             let _ = m._menu.append(&sub);
         }
         m._menu.init_for_nsapp();
+        // Both only take once the menu bar is installed: muda finds the
+        // submenu through NSApp's main menu, and before that quietly does
+        // nothing. The Window menu is where AppKit adds the window list and
+        // the tab commands (Merge All Windows, Show Next Tab…).
+        if let Some(w) = &window {
+            w.set_as_windows_menu_for_nsapp();
+        }
         // Help menu: AppKit adds the search field that finds any menu item.
         if let Some(h) = &help {
             h.set_as_help_menu_for_nsapp();
