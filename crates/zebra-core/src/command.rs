@@ -301,6 +301,15 @@ pub enum Command {
     },
     /// Align elements (snapping helper).
     Align { ids: Vec<ElementId>, edge: AlignEdge },
+    /// Group elements (at least two): selecting one selects them all.
+    /// Members of existing groups join the new one. Returns the group id.
+    Group {
+        ids: Vec<ElementId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    /// Dissolve the groups these elements belong to.
+    Ungroup { ids: Vec<ElementId> },
 
     // ---- path ----
     /// Insert a step (default: at the end).

@@ -612,10 +612,47 @@ impl ZebraApp {
             Settings => self.show_settings = true,
             ShapeLibrary => self.library.toggle(),
             Bold | Italic | Underline if self.canvas.text.is_some() => self.canvas.text_menu = Some(a.clone()),
-            Group | Ungroup | Underline => {
-                // Placeholders: the shapes, media and rich-text streams fill
-                // these in.
-                self.toast(format!("{} isn't available in this build yet.", a.label().trim_end_matches('…')));
+            Group => {
+                let ids = self.editable_selection();
+                let members = self.editor.doc.expand_groups(&ids);
+                if members.len() >= 2 {
+                    if self.apply(Command::Group { ids, id: None }).is_some() {
+                        self.select(members);
+                    }
+                }
+            }
+            Ungroup => {
+                let ids = self.editable_selection();
+                if ids.iter().any(|id| self.editor.doc.get(id).is_some_and(|e| e.group.is_some())) {
+                    self.apply(Command::Ungroup { ids });
+                }
+            }
+            Underline => {
+                // Whole boxes: underline every selected text box, or remove
+                // it if all of them are already underlined.
+                let ids: Vec<ElementId> = self
+                    .editable_selection()
+                    .into_iter()
+                    .filter(|id| matches!(self.editor.doc.get(id).map(|e| &e.kind), Some(ElementKind::Text(_))))
+                    .collect();
+                if !ids.is_empty() {
+                    let all_on = ids.iter().all(|id| match self.editor.doc.get(id).map(|e| &e.kind) {
+                        Some(ElementKind::Text(t)) => !t.spans.is_empty() && t.spans.iter().all(|sp| sp.format.underline == Some(true)),
+                        _ => false,
+                    });
+                    let cmds = ids
+                        .into_iter()
+                        .map(|id| Command::FormatText {
+                            id,
+                            start: None,
+                            end: None,
+                            find: None,
+                            format: zebra_core::SpanFormat { underline: Some(!all_on), ..Default::default() },
+                        })
+                        .collect();
+                    let r = self.editor.apply_batch(cmds, Some(a.label()), H);
+                    self.report(r);
+                }
             }
             Bold | Italic => {
                 let ids: Vec<ElementId> = self

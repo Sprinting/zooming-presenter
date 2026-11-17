@@ -1,5 +1,5 @@
 //! The editor: the single mutation point for document and view state.
-use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use base64::Engine;
 use schemars::JsonSchema;
@@ -111,6 +111,9 @@ pub struct Outcome {
     /// Keys of assets added (`add_asset`).
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub assets: Vec<String>,
+    /// The group id a `group` command made.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub group: Option<String>,
 }
 
 impl Outcome {
@@ -567,6 +570,7 @@ impl Editor {
                     locked: false,
                     name: n.name,
                     placeholder: false,
+                    group: None,
                     kind: n.kind,
                 };
                 let e = if let ElementKind::Text(mut t) = e.kind.clone() {
@@ -586,6 +590,7 @@ impl Editor {
                     locked: false,
                     name: String::new(),
                     placeholder: false,
+                    group: None,
                     kind: ElementKind::Text(data),
                 };
                 measure_text(&*self.measure, &theme, &mut e);
@@ -603,6 +608,7 @@ impl Editor {
                     locked: false,
                     name: name.unwrap_or_default(),
                     placeholder: false,
+                    group: None,
                     kind: ElementKind::Frame(FrameData { style, color: None }),
                 };
                 let id = self.insert_element(e, out)?;
@@ -626,6 +632,7 @@ impl Editor {
                     locked: false,
                     name: String::new(),
                     placeholder: false,
+                    group: None,
                     kind: ElementKind::Shape(ShapeData { shape, fill, stroke, stroke_width: 4.0, ..Default::default() }),
                 };
                 self.insert_element(e, out)?;
@@ -645,6 +652,7 @@ impl Editor {
                     locked: false,
                     name: String::new(),
                     placeholder: false,
+                    group: None,
                     kind: ElementKind::Icon(IconData { name, color: color.unwrap_or_else(|| "theme:body".into()), stroke_width: 2.0 }),
                 };
                 self.insert_element(e, out)?;
@@ -664,6 +672,7 @@ impl Editor {
                     locked: false,
                     name: String::new(),
                     placeholder: false,
+                    group: None,
                     kind: ElementKind::Image(ImageData { asset: key, alt, crop: None, mask: ImageMask::Rectangle }),
                 };
                 self.insert_element(e, out)?;
@@ -690,6 +699,7 @@ impl Editor {
                     locked: false,
                     name: String::new(),
                     placeholder: false,
+                    group: None,
                     kind: ElementKind::Connector(ConnectorData {
                         from: ep(&from),
                         to: ep(&to),
@@ -729,6 +739,7 @@ impl Editor {
                     locked: false,
                     name: String::new(),
                     placeholder: false,
+                    group: None,
                     kind: ElementKind::Video(VideoData {
                         asset: key,
                         poster,
@@ -833,6 +844,7 @@ impl Editor {
                     locked: false,
                     name: String::new(),
                     placeholder: false,
+                    group: None,
                     kind: ElementKind::Ink(InkData { points: pts.iter().map(|p| *p - c).collect(), color, width, highlighter }),
                 };
                 self.insert_element(e, out)?;
@@ -976,8 +988,21 @@ impl Editor {
                 self.check_ids(&ids)?;
                 let all = self.expand(&ids, true);
                 let ordered: Vec<ElementId> = self.doc.z_order.iter().filter(|z| all.contains(z)).cloned().collect();
+                // Copies of a group form a new group; a lone copied member
+                // leaves its group.
+                let mut regroup: HashMap<String, Option<String>> = HashMap::new();
+                for old in &ordered {
+                    if let Some(g) = self.doc.elements[old].group.clone() {
+                        let n = ordered.iter().filter(|o| self.doc.elements[*o].group.as_ref() == Some(&g)).count();
+                        if !regroup.contains_key(&g) {
+                            let new = (n >= 2).then(|| self.doc.alloc_group_id());
+                            regroup.insert(g, new);
+                        }
+                    }
+                }
                 for old in ordered {
                     let mut e = self.doc.elements[&old].clone();
+                    e.group = e.group.as_ref().and_then(|g| regroup.get(g).cloned().flatten());
                     e.id = String::new();
                     e.transform.x += dx;
                     e.transform.y += dy;
@@ -1055,6 +1080,37 @@ impl Editor {
                         AlignEdge::CenterY => (0.0, all.center().y - b.center().y),
                     };
                     self.apply_inner(Command::Move { ids: vec![id.clone()], dx, dy, with_contents: true }, out)?;
+                }
+            }
+            Command::Group { ids, id } => {
+                self.check_ids(&ids)?;
+                let members = self.doc.expand_groups(&ids);
+                if members.len() < 2 {
+                    return Err(ZError::invalid("a group needs at least two elements"));
+                }
+                if members.iter().any(|m| matches!(self.doc.elements[m].kind, ElementKind::Frame(_))) {
+                    // Frames already carry their contents; grouping them
+                    // would make clicks inside a frame select the frame.
+                    return Err(ZError::invalid("frames can't be grouped").hint("frames already move with their contents"));
+                }
+                let gid = match id {
+                    Some(g) if !g.is_empty() => g,
+                    _ => self.doc.alloc_group_id(),
+                };
+                for m in &members {
+                    self.doc.elements.get_mut(m).unwrap().group = Some(gid.clone());
+                }
+                out.changed.extend(members);
+                out.group = Some(gid);
+            }
+            Command::Ungroup { ids } => {
+                self.check_ids(&ids)?;
+                let members = self.doc.expand_groups(&ids);
+                for m in &members {
+                    let e = self.doc.elements.get_mut(m).unwrap();
+                    if e.group.take().is_some() {
+                        out.changed.push(m.clone());
+                    }
                 }
             }
             Command::AddStep { target, index, builds, notes } => {
@@ -1295,6 +1351,7 @@ impl Editor {
                     locked: false,
                     name: name.to_string(),
                     placeholder: false,
+                    group: None,
                     kind: ElementKind::Frame(FrameData { style: *style, color: None }),
                 },
                 Piece::Text { style, text, x, y, w, h, bullets, align, ph } => {
@@ -1305,6 +1362,7 @@ impl Editor {
                         locked: false,
                         name: String::new(),
                         placeholder: *ph,
+                        group: None,
                         kind: ElementKind::Text(TextData { text: text.to_string(), style: *style, bullets: *bullets, align: *align, ..Default::default() }),
                     };
                     measure_text(&*self.measure, &theme, &mut e);
@@ -1319,6 +1377,7 @@ impl Editor {
                     locked: false,
                     name: String::new(),
                     placeholder: false,
+                    group: None,
                     kind: ElementKind::Shape(ShapeData {
                         shape: *shape,
                         fill: fill.map(String::from),
@@ -1770,6 +1829,7 @@ impl Editor {
     }
 
     fn set_selection(&mut self, ids: Vec<ElementId>, agent: bool) {
+        let ids = self.doc.expand_groups(&ids);
         if agent {
             self.view.agent_selection = ids;
         } else if self.view.selection != ids {
@@ -2333,6 +2393,8 @@ pub fn command_label(c: &Command) -> String {
         Command::WrapInFrame { .. } => "Frame selection".into(),
         Command::Arrange { .. } => "Arrange".into(),
         Command::Align { .. } => "Align".into(),
+        Command::Group { .. } => "Group".into(),
+        Command::Ungroup { .. } => "Ungroup".into(),
         Command::AddStep { .. } => "Add path step".into(),
         Command::RemoveStep { .. } => "Remove path step".into(),
         Command::MoveStep { .. } => "Reorder path".into(),

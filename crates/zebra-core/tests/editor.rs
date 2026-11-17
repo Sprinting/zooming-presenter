@@ -333,3 +333,41 @@ fn connectors_stick_to_elements_and_survive_deletion() {
     assert_eq!(ends(&ed).1, Vec2::new(-300.0, -300.0));
     assert!(ed.apply(cmd(serde_json::json!({"op":"add_connector","from":{"element":"c"},"to":{"x":0,"y":0}})), h).is_err());
 }
+
+#[test]
+fn groups_select_move_duplicate_and_ungroup_together() {
+    let mut ed = Editor::default();
+    let h = Origin::Human;
+    for (id, x) in [("a", 0.0), ("b", 300.0), ("c", 600.0)] {
+        ed.apply(cmd(serde_json::json!({"op":"add_shape","id":id,"shape":"rectangle","x":x,"y":0,"w":100,"h":100})), h.clone()).unwrap();
+    }
+    assert!(ed.apply(cmd(serde_json::json!({"op":"group","ids":["a"]})), h.clone()).is_err(), "one element is not a group");
+    let out = ed.apply(cmd(serde_json::json!({"op":"group","ids":["a","b"]})), h.clone()).unwrap();
+    let g = out.group.clone().expect("group id returned");
+    assert_eq!(ed.doc.get("a").unwrap().group.as_deref(), Some(g.as_str()));
+    // Selecting one member selects the group.
+    ed.view(zebra_core::ViewCommand::Select { ids: vec!["b".into()] }, h.clone()).unwrap();
+    assert_eq!(ed.view.selection, vec!["b".to_string(), "a".to_string()]);
+    assert!(zebra_core::describe::describe(&ed).contains(&format!("group={g}")));
+    // Grouping a member with c folds the old group into the new one.
+    let g2 = ed.apply(cmd(serde_json::json!({"op":"group","ids":["a","c"]})), h.clone()).unwrap().group.unwrap();
+    assert!(["a", "b", "c"].iter().all(|i| ed.doc.get(i).unwrap().group.as_deref() == Some(g2.as_str())));
+    ed.undo(h.clone()).unwrap();
+    assert_eq!(ed.doc.get("c").unwrap().group, None, "undo restores the old grouping");
+    assert_eq!(ed.doc.get("b").unwrap().group.as_deref(), Some(g.as_str()));
+    // Duplicating the group makes a new group; copying one member alone doesn't.
+    let copies = ed.apply(cmd(serde_json::json!({"op":"duplicate","ids":["a","b"]})), h.clone()).unwrap().created;
+    let cg = ed.doc.get(&copies[0]).unwrap().group.clone().unwrap();
+    assert_ne!(cg, g);
+    assert_eq!(ed.doc.get(&copies[1]).unwrap().group.as_deref(), Some(cg.as_str()));
+    let lone = ed.apply(cmd(serde_json::json!({"op":"duplicate","ids":["a"]})), h.clone()).unwrap().created;
+    assert_eq!(ed.doc.get(&lone[0]).unwrap().group, None);
+    // Ungroup by any member dissolves the whole group.
+    ed.apply(cmd(serde_json::json!({"op":"ungroup","ids":["b"]})), h.clone()).unwrap();
+    assert!(ed.doc.get("a").unwrap().group.is_none() && ed.doc.get("b").unwrap().group.is_none());
+    // The group survives a save round trip.
+    ed.apply(cmd(serde_json::json!({"op":"group","ids":["a","b"],"id":"team"})), h.clone()).unwrap();
+    let json = serde_json::to_string(&ed.doc).unwrap();
+    let doc: zebra_core::Document = serde_json::from_str(&json).unwrap();
+    assert_eq!(doc.get("b").unwrap().group.as_deref(), Some("team"));
+}

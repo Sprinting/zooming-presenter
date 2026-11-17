@@ -64,6 +64,8 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::Command, r#"{"op":"wrap_in_frame","ids":["t1","t2"],"style":"circle","add_to_path":true}"#),
     (Kind::Command, r#"{"op":"arrange","ids":["f1","f2","f3"],"layout":"row"}"#),
     (Kind::Command, r#"{"op":"align","ids":["t1","t2"],"edge":"left"}"#),
+    (Kind::Command, r#"{"op":"group","ids":["s1","t2","n1"]}"#),
+    (Kind::Command, r#"{"op":"ungroup","ids":["s1"]}"#),
     (Kind::Command, r#"{"op":"add_step","target":{"kind":"element","id":"f1"},"builds":["t2","t3"],"notes":"Say hi"}"#),
     (Kind::Command, r#"{"op":"remove_step","index":2}"#),
     (Kind::Command, r#"{"op":"move_step","from":3,"to":0}"#),

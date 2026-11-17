@@ -213,6 +213,10 @@ pub struct Element {
     /// Editing its text makes it real content.
     #[serde(default, skip_serializing_if = "is_false")]
     pub placeholder: bool,
+    /// Grouped elements share an id ("g1"): selecting one selects them all,
+    /// so they move, scale and delete together.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     pub kind: ElementKind,
 }
 
@@ -863,6 +867,31 @@ impl Document {
     /// Topmost element under a world point.
     pub fn hit_test(&self, p: Vec2, tolerance_world: f64) -> Option<&Element> {
         self.ordered().rev().find(|e| e.hit(p, tolerance_world, false))
+    }
+    /// A group id no element uses yet ("g7").
+    pub fn alloc_group_id(&mut self) -> String {
+        loop {
+            let id = self.alloc_id("g");
+            if !self.elements.values().any(|e| e.group.as_deref() == Some(id.as_str())) {
+                return id;
+            }
+        }
+    }
+    /// `ids` plus every other member of their groups, in the given order
+    /// followed by the added members in z-order.
+    pub fn expand_groups(&self, ids: &[ElementId]) -> Vec<ElementId> {
+        let groups: std::collections::BTreeSet<&str> =
+            ids.iter().filter_map(|i| self.elements.get(i)?.group.as_deref()).collect();
+        let mut out = ids.to_vec();
+        if groups.is_empty() {
+            return out;
+        }
+        for z in &self.z_order {
+            if !out.contains(z) && self.elements[z].group.as_deref().is_some_and(|g| groups.contains(g)) {
+                out.push(z.clone());
+            }
+        }
+        out
     }
     pub fn alloc_id(&mut self, prefix: &str) -> ElementId {
         loop {

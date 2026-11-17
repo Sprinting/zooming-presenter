@@ -103,6 +103,9 @@ fn one_line(ed: &Editor, e: &Element) -> String {
     if e.locked {
         s.push_str(" locked");
     }
+    if let Some(g) = &e.group {
+        let _ = write!(s, " group={g}");
+    }
     let steps = ed.doc.steps_using(&e.id);
     if !steps.is_empty() {
         let st: Vec<String> = steps.iter().map(|i| (i + 1).to_string()).collect();

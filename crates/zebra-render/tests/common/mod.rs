@@ -18,6 +18,7 @@ pub fn add(ed: &mut Editor, id: &str, x: f64, y: f64, w: f64, h: f64, scale: f64
         locked: false,
         name: String::new(),
         placeholder: false,
+        group: None,
         kind,
     };
     let theme = ed.theme();

@@ -915,8 +915,10 @@ fn click(app: &mut ZebraApp, p: Pos2, shift: bool) {
     match hit(app, p, false) {
         Some(id) if shift => {
             let mut s = app.selection();
-            if let Some(i) = s.iter().position(|x| *x == id) {
-                s.remove(i);
+            if s.contains(&id) {
+                // A grouped element leaves the selection with its group.
+                let group = app.editor.doc.expand_groups(std::slice::from_ref(&id));
+                s.retain(|x| !group.contains(x));
             } else {
                 s.push(id);
             }

@@ -483,3 +483,33 @@ fn menu_titles_follow_state() {
     assert!(undo.enabled && undo.title.starts_with("Undo ") && undo.title.len() > 5, "{undo:?}");
     assert!(!state(h.state(), &Action::PauseAgents).enabled, "agent items are greyed out with no agent connected");
 }
+
+#[test]
+fn grouped_shapes_select_and_drag_together() {
+    let mut h = harness(Some("empty"));
+    for (id, x) in [("a", -300.0), ("b", 300.0)] {
+        h.state_mut()
+            .editor
+            .apply(Command::AddShape { shape: ShapeKind::Rectangle, x, y: 0.0, w: 160.0, h: 120.0, rotation: 0.0, fill: None, stroke: None, id: Some(id.into()) }, Origin::Human)
+            .unwrap();
+    }
+    h.state_mut().select(vec!["a".into(), "b".into()]);
+    h.state_mut().queued.push(zebra_app::actions::Action::Group);
+    h.run_steps(3);
+    assert!(h.state().editor.doc.get("a").unwrap().group.is_some(), "Arrange › Group groups the selection");
+    let _ = h.state_mut().editor.view(zebra_core::ViewCommand::ClearSelection, Origin::Human);
+    h.run_steps(2);
+    let pa = { let app = h.state(); app.canvas.w2s(&app.editor, zebra_core::Vec2::new(-300.0, 0.0)) };
+    click_at(&mut h, pa, 1);
+    h.run_steps(2);
+    let mut sel = h.state().editor.view.selection.clone();
+    sel.sort();
+    assert_eq!(sel, vec!["a".to_string(), "b".to_string()], "clicking one member selects the group");
+    drag(&mut h, pa, pa + egui::vec2(0.0, 80.0));
+    h.run_steps(2);
+    let (ya, yb) = { let d = &h.state().editor.doc; (d.get("a").unwrap().transform.y, d.get("b").unwrap().transform.y) };
+    assert!(ya > 1.0 && (ya - yb).abs() < 1e-6, "both moved down together: {ya} {yb}");
+    h.state_mut().queued.push(zebra_app::actions::Action::Ungroup);
+    h.run_steps(3);
+    assert!(h.state().editor.doc.get("b").unwrap().group.is_none());
+}
