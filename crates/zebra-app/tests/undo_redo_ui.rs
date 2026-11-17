@@ -56,8 +56,12 @@ fn undo_then_redo_after_agent_group() {
         undo(&mut h);
         h.run_steps(10);
         redo(&mut h);
-        // The quit came about 6 s after the keys: run well past that.
+        // The quit came about 6 s after the keys, right when the 30 s
+        // autosave was due: run past that and force an autosave too.
         h.run_steps(400);
+        h.state_mut().last_autosave = -1e9;
+        h.run_steps(5);
+        zebra_core::io::save_bytes(&h.state().editor.doc).expect("saves after undo/redo");
         assert_eq!(h.state().editor.doc.elements.len(), n, "{demo}: redo restores the group");
         assert!(ids.iter().all(|i| h.state().editor.doc.elements.keys().any(|k| k.to_string() == *i)));
     }
@@ -83,4 +87,7 @@ fn undo_redo_with_the_group_selected_and_all_the_way_back() {
         if i % 2 == 0 { undo(&mut h) } else { redo(&mut h) }
     }
     h.run_steps(400);
+    h.state_mut().last_autosave = -1e9;
+    h.run_steps(5);
+    zebra_core::io::save_bytes(&h.state().editor.doc).expect("saves after undo/redo");
 }

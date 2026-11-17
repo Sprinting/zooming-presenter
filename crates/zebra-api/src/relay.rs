@@ -49,6 +49,8 @@ pub fn run(zebra_socket: &Path, token: &str, name: &str, relay_socket: &Path) ->
     }
     let listener = UnixListener::bind(relay_socket)?;
     listener.set_nonblocking(true)?;
+    use std::os::fd::AsRawFd;
+    let lfd = listener.as_raw_fd();
     let _cleanup = RemoveOnDrop(relay_socket.to_path_buf());
     let mut last = Instant::now();
     loop {
@@ -65,7 +67,11 @@ pub fn run(zebra_socket: &Path, token: &str, name: &str, relay_socket: &Path) ->
                 if last.elapsed() > IDLE || upstream_closed(&upstream) {
                     return Ok(());
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                // Sleep until a zebractl call connects; wake once a second
+                // to notice Zebra closing the connection or the idle limit.
+                let mut p = libc::pollfd { fd: lfd, events: libc::POLLIN, revents: 0 };
+                // SAFETY: one valid pollfd for the listening socket.
+                unsafe { libc::poll(&mut p, 1, 1000) };
             }
             Err(e) => return Err(e.into()),
         }

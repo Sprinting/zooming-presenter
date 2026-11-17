@@ -156,7 +156,12 @@ pub fn list() -> Vec<Instance> {
             let _ = fs::remove_file(&path);
             if !pid_alive(inst.pid) {
                 // A killed or crashed instance leaves its socket behind.
-                let _ = fs::remove_file(&inst.socket);
+                // Only ever delete an actual socket, whatever the stale
+                // file says.
+                use std::os::unix::fs::FileTypeExt;
+                if fs::symlink_metadata(&inst.socket).is_ok_and(|m| m.file_type().is_socket()) {
+                    let _ = fs::remove_file(&inst.socket);
+                }
             }
             continue;
         }
