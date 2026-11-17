@@ -42,6 +42,18 @@ impl Origin {
 pub trait TextMeasure: Send + Sync {
     /// Returns (width, height) in local units. `wrap_width` None = no wrapping.
     fn measure(&self, text: &TextData, theme: &Theme, wrap_width: Option<f64>) -> (f64, f64);
+    /// Font files (bytes, extension) of an installed family, so a theme
+    /// using it can embed it in the document. Empty for bundled families
+    /// and when unknown.
+    fn font_files(&self, _family: &str) -> Vec<(Vec<u8>, String)> {
+        vec![]
+    }
+    /// Installed font families, sorted.
+    fn font_families(&self) -> Vec<String> {
+        vec![]
+    }
+    /// Make the document's embedded fonts available before measuring it.
+    fn prepare(&self, _doc: &Document) {}
 }
 
 pub struct EstimateMeasure;
@@ -96,6 +108,9 @@ pub struct Outcome {
     pub changed: Vec<ElementId>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub deleted: Vec<ElementId>,
+    /// Keys of assets added (`add_asset`).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub assets: Vec<String>,
 }
 
 impl Outcome {
@@ -150,6 +165,8 @@ pub struct Editor {
     pub agent_cursor: Option<Vec2>,
     pub file_path: Option<std::path::PathBuf>,
     events: Vec<Event>,
+    /// Frame times and cache sizes reported by the host (`perf` query).
+    pub perf: crate::perf::PerfStats,
 }
 
 impl Default for Editor {
@@ -159,6 +176,10 @@ impl Default for Editor {
 }
 
 const AGENT_GROUP_SECS: f64 = 2.0;
+/// Longest transition, dwell or autoplay time accepted, seconds.
+const MAX_SECONDS: f64 = 600.0;
+/// World width of a template.
+const TEMPLATE_WIDTH: f64 = 6000.0;
 
 impl Editor {
     pub fn new(doc: Document) -> Self {
@@ -176,11 +197,12 @@ impl Editor {
             agent_cursor: None,
             file_path: None,
             events: vec![],
+            perf: Default::default(),
         }
     }
 
     pub fn theme(&self) -> Theme {
-        Theme::resolve(&self.doc.theme)
+        Theme::resolve_in(&self.doc, &self.doc.theme)
     }
     pub fn dirty(&self) -> bool {
         self.revision != self.saved_revision
@@ -240,7 +262,8 @@ impl Editor {
     }
 
     fn remeasure_all(&self, doc: &mut Document) {
-        let theme = Theme::resolve(&doc.theme);
+        self.measure.prepare(doc);
+        let theme = Theme::resolve_in(doc, &doc.theme);
         for e in doc.elements.values_mut() {
             measure_text(&*self.measure, &theme, e);
         }
@@ -537,6 +560,7 @@ impl Editor {
                     size: Size { w: n.w.unwrap_or(dw), h: n.h.unwrap_or(dh) },
                     locked: false,
                     name: n.name,
+                    placeholder: false,
                     kind: n.kind,
                 };
                 let e = if let ElementKind::Text(mut t) = e.kind.clone() {
@@ -554,6 +578,7 @@ impl Editor {
                     size: Size { w: 0.0, h: 0.0 },
                     locked: false,
                     name: String::new(),
+                    placeholder: false,
                     kind: ElementKind::Text(TextData { text, style, ..Default::default() }),
                 };
                 measure_text(&*self.measure, &theme, &mut e);
@@ -570,11 +595,12 @@ impl Editor {
                     size: Size { w, h },
                     locked: false,
                     name: name.unwrap_or_default(),
+                    placeholder: false,
                     kind: ElementKind::Frame(FrameData { style, color: None }),
                 };
                 let id = self.insert_element(e, out)?;
                 if add_to_path {
-                    self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None });
+                    self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None });
                 }
             }
             Command::AddShape { shape, x, y, w, h, rotation, fill, stroke, id } => {
@@ -591,6 +617,7 @@ impl Editor {
                     size: Size { w, h },
                     locked: false,
                     name: String::new(),
+                    placeholder: false,
                     kind: ElementKind::Shape(ShapeData { shape, fill, stroke, stroke_width: 4.0 }),
                 };
                 self.insert_element(e, out)?;
@@ -609,6 +636,7 @@ impl Editor {
                     size: Size { w: pw, h: ph },
                     locked: false,
                     name: String::new(),
+                    placeholder: false,
                     kind: ElementKind::Image(ImageData { asset: key, alt }),
                 };
                 self.insert_element(e, out)?;
@@ -626,6 +654,7 @@ impl Editor {
                     size: Size { w: b.width().max(width), h: b.height().max(width) },
                     locked: false,
                     name: String::new(),
+                    placeholder: false,
                     kind: ElementKind::Ink(InkData { points: pts.iter().map(|p| *p - c).collect(), color, width, highlighter }),
                 };
                 self.insert_element(e, out)?;
@@ -638,6 +667,10 @@ impl Editor {
                 let frame_box = keep_in.and_then(|f| self.doc.get(&f)).map(|f| (f.world_size(), f.transform.rotation));
                 let e = self.doc.elements.get_mut(&id).unwrap();
                 apply_patch(e, &patch)?;
+                if patch.text.is_some() {
+                    // Typing into a placeholder makes it real content.
+                    e.placeholder = false;
+                }
                 measure_text(&*self.measure, &theme, e);
                 if let Some(((fw, fh), frot)) = frame_box {
                     // Fit within 90% of the frame, measured in the frame's own axes
@@ -802,7 +835,7 @@ impl Editor {
                 if i > self.doc.path.len() {
                     return Err(ZError::invalid(format!("index {i} > path length {}", self.doc.path.len())));
                 }
-                self.doc.path.insert(i, PathStep { target, builds, notes, duration: None });
+                self.doc.path.insert(i, PathStep { target, builds, notes, duration: None, dwell: None });
             }
             Command::RemoveStep { index } => {
                 self.check_step(index)?;
@@ -814,7 +847,7 @@ impl Editor {
                 let s = self.doc.path.remove(from);
                 self.doc.path.insert(to, s);
             }
-            Command::UpdateStep { index, target, builds, notes, duration } => {
+            Command::UpdateStep { index, target, builds, notes, duration, dwell } => {
                 self.check_step(index)?;
                 if let Some(t) = &target {
                     self.validate_target(t)?;
@@ -835,7 +868,10 @@ impl Editor {
                     s.notes = n;
                 }
                 if let Some(d) = duration {
-                    s.duration = if d < 0.0 { None } else { Some(d) };
+                    s.duration = if d < 0.0 { None } else { Some(d.min(MAX_SECONDS)) };
+                }
+                if let Some(d) = dwell {
+                    s.dwell = if d <= 0.0 || !d.is_finite() { None } else { Some(d.min(MAX_SECONDS)) };
                 }
             }
             Command::ClearPath => self.doc.path.clear(),
@@ -855,21 +891,214 @@ impl Editor {
                 });
                 self.doc.path = frames
                     .iter()
-                    .map(|f| PathStep { target: StepTarget::Element { id: f.id.clone() }, builds: vec![], notes: String::new(), duration: None })
+                    .map(|f| PathStep { target: StepTarget::Element { id: f.id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None })
                     .collect();
             }
             Command::SetTheme { theme } => {
-                if Theme::by_id(&theme).is_none() {
-                    return Err(ZError::invalid(format!("unknown theme '{theme}'")).values(Theme::ids()));
+                if !Theme::ids_in(&self.doc).contains(&theme) {
+                    return Err(ZError::invalid(format!("unknown theme '{theme}'")).values(Theme::ids_in(&self.doc)));
                 }
-                self.doc.theme = theme;
-                let mut d = std::mem::take(&mut self.doc);
-                self.remeasure_all(&mut d);
-                self.doc = d;
+                self.set_theme_id(theme);
             }
             Command::SetTitle { title } => self.doc.title = title,
+            Command::SetPlayback { autoplay, looping } => {
+                if let Some(a) = autoplay {
+                    self.doc.play.autoplay = if a <= 0.0 || !a.is_finite() { None } else { Some(a.min(MAX_SECONDS)) };
+                }
+                if let Some(l) = looping {
+                    self.doc.play.looping = l;
+                }
+            }
+            Command::SaveTheme { mut theme, apply } => {
+                self.validate_theme(&theme)?;
+                self.embed_fonts(&mut theme);
+                let id = theme.id.clone();
+                match self.doc.themes.iter_mut().find(|t| t.id == id) {
+                    Some(t) => *t = theme,
+                    None => self.doc.themes.push(theme),
+                }
+                if apply || self.doc.theme == id {
+                    self.set_theme_id(id);
+                }
+            }
+            Command::DeleteTheme { id } => {
+                let Some(i) = self.doc.themes.iter().position(|t| t.id == id) else {
+                    return Err(ZError::new("not_found", format!("no custom theme '{id}'"))
+                        .values(self.doc.themes.iter().map(|t| t.id.clone()).collect()));
+                };
+                self.doc.themes.remove(i);
+                if self.doc.theme == id {
+                    self.set_theme_id("classic".into());
+                }
+            }
+            Command::AddAsset { data_base64 } => {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data_base64.trim())
+                    .map_err(|e| ZError::invalid(format!("data_base64: {e}")))?;
+                let key = self.add_asset(bytes)?;
+                out.assets.push(key);
+            }
+            Command::ApplyTemplate { template, replace } => {
+                let Some(t) = crate::templates::template(&template) else {
+                    return Err(ZError::invalid(format!("unknown template '{template}'"))
+                        .values(crate::templates::TEMPLATES.iter().map(|t| t.id.to_string()).collect()));
+                };
+                if !self.doc.elements.is_empty() || !self.doc.path.is_empty() {
+                    if !replace {
+                        return Err(ZError::new("not_empty", "the canvas isn't empty")
+                            .hint("pass \"replace\": true to clear it, or use add_layout to add to it"));
+                    }
+                    out.deleted.extend(self.doc.elements.keys().cloned());
+                    self.doc.elements.clear();
+                    self.doc.z_order.clear();
+                    self.doc.path.clear();
+                }
+                if self.doc.theme != t.theme {
+                    self.set_theme_id(t.theme.into());
+                }
+                let ids = self.add_pieces(&t.pieces, Vec2::new(0.0, 0.0), TEMPLATE_WIDTH, out)?;
+                for i in t.path {
+                    if let Some(Some(id)) = ids.get(i) {
+                        self.doc.path.push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None });
+                    }
+                }
+            }
+            Command::AddLayout { layout, x, y, width, add_to_path } => {
+                let Some(pieces) = crate::templates::layout(&layout) else {
+                    return Err(ZError::invalid(format!("unknown layout '{layout}'"))
+                        .values(crate::templates::LAYOUTS.iter().map(|t| t.id.to_string()).collect()));
+                };
+                let w = width.unwrap_or(1600.0);
+                if !(w.is_finite() && w > 0.0 && x.is_finite() && y.is_finite()) {
+                    return Err(ZError::invalid("x, y and width must be finite, width > 0"));
+                }
+                let ids = self.add_pieces(&pieces, Vec2::new(x, y), w, out)?;
+                if add_to_path {
+                    for (p, id) in pieces.iter().zip(ids) {
+                        if let (crate::templates::Piece::Frame { path: true, .. }, Some(id)) = (p, id) {
+                            self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None });
+                        }
+                    }
+                }
+            }
         }
         Ok(())
+    }
+
+    fn set_theme_id(&mut self, id: String) {
+        self.doc.theme = id;
+        let mut d = std::mem::take(&mut self.doc);
+        self.remeasure_all(&mut d);
+        self.doc = d;
+    }
+
+    fn validate_theme(&self, t: &Theme) -> ZResult<()> {
+        if t.id.trim().is_empty() {
+            return Err(ZError::invalid("a theme needs an id"));
+        }
+        if Theme::is_builtin(&t.id) {
+            return Err(ZError::invalid(format!("'{}' is a built-in theme and can't be replaced", t.id))
+                .hint("save a copy under a new id, e.g. \"my-theme\""));
+        }
+        for (field, c) in t.colors() {
+            if crate::theme::parse_hex(c).is_none() {
+                return Err(ZError::invalid(format!("{field}: bad colour '{c}'")).hint("theme colours are #rrggbb or #rrggbbaa"));
+            }
+        }
+        for s in [&t.title, &t.subtitle, &t.body] {
+            if !(s.size.is_finite() && s.size > 0.0) || s.font.trim().is_empty() {
+                return Err(ZError::invalid("text styles need a font and a size > 0"));
+            }
+        }
+        if t.layers.len() > crate::theme::MAX_LAYERS {
+            return Err(ZError::invalid(format!("a 3D background has at most {} layers", crate::theme::MAX_LAYERS)));
+        }
+        for l in &t.layers {
+            if !(0.0..=1.0).contains(&l.depth) || !(0.0..=1.0).contains(&l.opacity) {
+                return Err(ZError::invalid("layer depth and opacity are between 0 and 1"));
+            }
+        }
+        for key in t.background_image.iter().chain(t.layers.iter().map(|l| &l.asset)) {
+            if !self.doc.assets.contains_key(key) {
+                return Err(ZError::new("not_found", format!("no asset '{key}'")).hint("add the picture with add_asset first"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Embed the files of every non-bundled font the theme uses, and drop
+    /// embedded fonts it no longer uses.
+    fn embed_fonts(&mut self, t: &mut Theme) {
+        let families: BTreeSet<String> = [&t.title.font, &t.subtitle.font, &t.body.font].into_iter().cloned().collect();
+        t.fonts.retain(|f, _| families.contains(f));
+        for fam in families {
+            if t.fonts.contains_key(&fam) {
+                continue;
+            }
+            let files = self.measure.font_files(&fam);
+            if files.is_empty() {
+                continue;
+            }
+            let mut keys = vec![];
+            for (bytes, ext) in files {
+                let key = content_key(&bytes);
+                self.doc.assets.entry(key.clone()).or_insert(Asset { ext, bytes: bytes.into(), width: 0, height: 0 });
+                keys.push(key);
+            }
+            t.fonts.insert(fam, keys);
+        }
+    }
+
+    /// Turn unit-space pieces into elements centred at `at`, `width` wide.
+    /// Returns the new id of each piece.
+    fn add_pieces(&mut self, pieces: &[crate::templates::Piece], at: Vec2, width: f64, out: &mut Outcome) -> ZResult<Vec<Option<ElementId>>> {
+        use crate::templates::Piece;
+        let theme = self.theme();
+        let mut ids = vec![];
+        for p in pieces {
+            let e = match p {
+                Piece::Frame { style, x, y, w, h, rot, name, .. } => Element {
+                    id: String::new(),
+                    transform: Transform { x: at.x + x * width, y: at.y + y * width, scale: 1.0, rotation: *rot },
+                    size: Size { w: w * width, h: h * width },
+                    locked: false,
+                    name: name.to_string(),
+                    placeholder: false,
+                    kind: ElementKind::Frame(FrameData { style: *style, color: None }),
+                },
+                Piece::Text { style, text, x, y, w, h, bullets, align, ph } => {
+                    let mut e = Element {
+                        id: String::new(),
+                        transform: Transform { x: at.x + x * width, y: at.y + y * width, scale: 1.0, rotation: 0.0 },
+                        size: Size { w: 0.0, h: 0.0 },
+                        locked: false,
+                        name: String::new(),
+                        placeholder: *ph,
+                        kind: ElementKind::Text(TextData { text: text.to_string(), style: *style, bullets: *bullets, align: *align, ..Default::default() }),
+                    };
+                    measure_text(&*self.measure, &theme, &mut e);
+                    let k = (w * width / e.size.w.max(1e-9)).min(h * width / e.size.h.max(1e-9));
+                    e.transform.scale = if k.is_finite() && k > 0.0 { k } else { 1.0 };
+                    e
+                }
+                Piece::Shape { shape, x, y, w, h, rot, fill, stroke } => Element {
+                    id: String::new(),
+                    transform: Transform { x: at.x + x * width, y: at.y + y * width, scale: 1.0, rotation: *rot },
+                    size: Size { w: w * width, h: h * width },
+                    locked: false,
+                    name: String::new(),
+                    placeholder: false,
+                    kind: ElementKind::Shape(ShapeData {
+                        shape: *shape,
+                        fill: fill.map(String::from),
+                        stroke: stroke.map(String::from),
+                        stroke_width: (width * 0.004).max(1.0),
+                    }),
+                },
+            };
+            ids.push(Some(self.insert_element(e, out)?));
+        }
+        Ok(ids)
     }
 
     fn check_unlocked(&self, ids: &[ElementId]) -> ZResult<()> {
@@ -1214,6 +1443,10 @@ impl Editor {
                 self.events.push(Event::AgentsPaused { paused });
             }
             ViewCommand::SetAgentPermission { permission } => self.view.agent_permission = permission,
+            ViewCommand::PauseAutoplay { paused } => {
+                self.view.present.autoplay_paused = paused;
+                self.view.present.arrived_at = self.view.now;
+            }
         }
         // Follow-agent: mirror the agent camera onto the human view.
         if agent_limited && self.view.follow_agent {
@@ -1370,6 +1603,60 @@ impl Editor {
             }
         }
         hidden
+    }
+
+    // ------------------------------------------------------------------
+    // Autoplay
+
+    /// Seconds per step/build at the current position, if autoplay applies.
+    pub fn autoplay_interval(&self) -> Option<f64> {
+        let step = self.view.present.step.and_then(|i| self.doc.path.get(i));
+        step.and_then(|s| s.dwell).or(self.doc.play.autoplay).filter(|d| *d > 0.0)
+    }
+
+    /// True when the presentation is at its last step with every build shown.
+    pub fn at_end(&self) -> bool {
+        let p = &self.view.present;
+        match p.step {
+            Some(i) => i + 1 >= self.doc.path.len() && p.build >= self.doc.path.get(i).map(|s| s.builds.len()).unwrap_or(0),
+            None => self.doc.path.is_empty(),
+        }
+    }
+
+    /// Advance autoplay. Call every frame after [`ViewState::tick`]. Returns
+    /// the seconds until the next automatic advance (for the host to
+    /// schedule a repaint), or None when autoplay isn't running.
+    pub fn autoplay_tick(&mut self) -> Option<f64> {
+        let now = self.view.now;
+        let pos = (self.view.present.step, self.view.present.build);
+        if self.view.mode != Mode::Present {
+            self.view.present.seen = None;
+            return None;
+        }
+        // The clock starts when the camera comes to rest at a new position.
+        if self.view.present.seen != Some(pos) || self.view.flight.is_some() {
+            self.view.present.seen = Some(pos);
+            self.view.present.arrived_at = now;
+        }
+        let p = &self.view.present;
+        if p.autoplay_paused || p.blank.is_some() || p.off_path || self.view.flight.is_some() {
+            return None;
+        }
+        let interval = self.autoplay_interval()?;
+        let left = p.arrived_at + interval - now;
+        if left > 0.0 {
+            return Some(left);
+        }
+        if self.at_end() {
+            if !self.doc.play.looping || self.doc.path.is_empty() {
+                return None;
+            }
+            self.goto_step(Some(0), 0);
+        } else {
+            self.next();
+        }
+        self.view.present.arrived_at = now;
+        self.autoplay_interval()
     }
 
     // ------------------------------------------------------------------
@@ -1592,6 +1879,12 @@ pub fn command_label(c: &Command) -> String {
         Command::AutoPath => "Path from frames".into(),
         Command::SetTheme { theme } => format!("Theme: {theme}"),
         Command::SetTitle { .. } => "Rename".into(),
+        Command::SetPlayback { .. } => "Change autoplay".into(),
+        Command::SaveTheme { .. } => "Edit theme".into(),
+        Command::DeleteTheme { .. } => "Delete theme".into(),
+        Command::AddAsset { .. } => "Add picture".into(),
+        Command::ApplyTemplate { template, .. } => format!("Template: {template}"),
+        Command::AddLayout { layout, .. } => format!("Insert layout: {layout}"),
     }
 }
 

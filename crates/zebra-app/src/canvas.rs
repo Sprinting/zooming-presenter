@@ -703,7 +703,7 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
         }
         Gesture::Badge { step } => {
             if let Some(id) = hit(app, p, true) {
-                app.apply(Command::UpdateStep { index: step, target: Some(StepTarget::Element { id }), builds: None, notes: None, duration: None });
+                app.apply(Command::UpdateStep { index: step, target: Some(StepTarget::Element { id }), builds: None, notes: None, duration: None, dwell: None });
                 app.toast(format!("Step {} now points here", step + 1));
             }
         }

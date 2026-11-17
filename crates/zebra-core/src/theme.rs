@@ -3,7 +3,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{ColorRef, TextStyle};
+use std::collections::BTreeMap;
+
+use crate::model::{ColorRef, Document, TextStyle};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TextStyleDef {
@@ -27,7 +29,42 @@ pub struct Theme {
     pub frame_fill: String,
     pub accent: String,
     pub shapes: [String; 4],
+    /// A picture behind everything, fixed to the screen (asset key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_image: Option<String>,
+    /// 3D background: up to three picture layers, back to front, that move
+    /// slower than the canvas as the camera flies (Prezi's 3D background).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<BackgroundLayer>,
+    /// Fonts embedded in the document, so the file looks the same on a Mac
+    /// without them: family name -> font file asset keys.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fonts: BTreeMap<String, Vec<String>>,
 }
+
+/// One layer of a 3D (parallax) background.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BackgroundLayer {
+    /// Image asset key.
+    pub asset: String,
+    /// How much the layer follows the camera, 0..1. 0 stays still like a
+    /// backdrop; 1 moves with the canvas. Back layers use small values.
+    #[serde(default = "d_depth")]
+    pub depth: f64,
+    /// 0..1.
+    #[serde(default = "d_opacity")]
+    pub opacity: f64,
+}
+
+fn d_depth() -> f64 {
+    0.3
+}
+fn d_opacity() -> f64 {
+    1.0
+}
+
+/// Most layers a 3D background can have.
+pub const MAX_LAYERS: usize = 3;
 
 fn ts(font: &str, color: &str, size: f64) -> TextStyleDef {
     TextStyleDef { font: font.into(), color: color.into(), size }
@@ -47,6 +84,9 @@ impl Theme {
                 frame_fill: "#e8f0f8".into(),
                 accent: "#e8792b".into(),
                 shapes: ["#3d7ab8".into(), "#e8792b".into(), "#6aa84f".into(), "#9e9e9e".into()],
+                background_image: None,
+                layers: vec![],
+                fonts: BTreeMap::new(),
             },
             Theme {
                 id: "chalkboard".into(),
@@ -59,6 +99,9 @@ impl Theme {
                 frame_fill: "#3a5847".into(),
                 accent: "#f6d66b".into(),
                 shapes: ["#f4f1e8".into(), "#f6d66b".into(), "#9fd3e6".into(), "#f2a3a3".into()],
+                background_image: None,
+                layers: vec![],
+                fonts: BTreeMap::new(),
             },
             Theme {
                 id: "blueprint".into(),
@@ -71,6 +114,9 @@ impl Theme {
                 frame_fill: "#245a9b".into(),
                 accent: "#ffd166".into(),
                 shapes: ["#ffffff".into(), "#ffd166".into(), "#a9d1ff".into(), "#7fdbca".into()],
+                background_image: None,
+                layers: vec![],
+                fonts: BTreeMap::new(),
             },
             Theme {
                 id: "paper".into(),
@@ -83,6 +129,9 @@ impl Theme {
                 frame_fill: "#ece2cf".into(),
                 accent: "#9c4a2f".into(),
                 shapes: ["#9c4a2f".into(), "#5b7553".into(), "#c99a3b".into(), "#7a6a5f".into()],
+                background_image: None,
+                layers: vec![],
+                fonts: BTreeMap::new(),
             },
             Theme {
                 id: "night".into(),
@@ -95,6 +144,9 @@ impl Theme {
                 frame_fill: "#1b1f29".into(),
                 accent: "#ff4fa3".into(),
                 shapes: ["#39d0ff".into(), "#ff4fa3".into(), "#b4ff39".into(), "#8a8f99".into()],
+                background_image: None,
+                layers: vec![],
+                fonts: BTreeMap::new(),
             },
         ]
     }
@@ -106,6 +158,49 @@ impl Theme {
     /// Never fails: unknown ids fall back to classic.
     pub fn resolve(id: &str) -> Theme {
         Self::by_id(id).unwrap_or_else(|| Self::builtins().remove(0))
+    }
+
+    /// Look a theme up in a document: its own custom themes first, then the
+    /// built-ins. Never fails: unknown ids fall back to classic.
+    pub fn resolve_in(doc: &Document, id: &str) -> Theme {
+        doc.themes.iter().find(|t| t.id == id).cloned().unwrap_or_else(|| Self::resolve(id))
+    }
+
+    /// Built-in and document theme ids.
+    pub fn ids_in(doc: &Document) -> Vec<String> {
+        let mut v = Self::ids();
+        v.extend(doc.themes.iter().map(|t| t.id.clone()));
+        v
+    }
+
+    pub fn is_builtin(id: &str) -> bool {
+        Self::by_id(id).is_some()
+    }
+
+    /// Assets this theme refers to (background, layers, fonts).
+    pub fn asset_keys(&self) -> impl Iterator<Item = &str> {
+        self.background_image
+            .iter()
+            .map(|s| s.as_str())
+            .chain(self.layers.iter().map(|l| l.asset.as_str()))
+            .chain(self.fonts.values().flatten().map(|s| s.as_str()))
+    }
+
+    /// Every colour of the theme, for validation: (field, value).
+    pub fn colors(&self) -> Vec<(&'static str, &str)> {
+        let mut v = vec![
+            ("background", self.background.as_str()),
+            ("title.color", self.title.color.as_str()),
+            ("subtitle.color", self.subtitle.color.as_str()),
+            ("body.color", self.body.color.as_str()),
+            ("frame", self.frame.as_str()),
+            ("frame_fill", self.frame_fill.as_str()),
+            ("accent", self.accent.as_str()),
+        ];
+        for (i, c) in self.shapes.iter().enumerate() {
+            v.push((["shapes[0]", "shapes[1]", "shapes[2]", "shapes[3]"][i], c.as_str()));
+        }
+        v
     }
 
     pub fn ids() -> Vec<String> {

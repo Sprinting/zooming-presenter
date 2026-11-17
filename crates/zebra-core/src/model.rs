@@ -32,6 +32,31 @@ pub struct Document {
     pub assets: BTreeMap<String, Asset>,
     /// Counter for readable ids (`t1`, `f2`, ...).
     pub next_id: u64,
+    /// Custom themes saved in this document (made with the theme editor).
+    /// `theme` may name one of these as well as a built-in theme.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub themes: Vec<crate::theme::Theme>,
+    /// How the presentation plays: autoplay and loop.
+    #[serde(default, skip_serializing_if = "PlaySettings::is_default")]
+    pub play: PlaySettings,
+}
+
+/// Playback options for the whole presentation (Prezi's autoplay menu).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct PlaySettings {
+    /// Advance automatically after this many seconds on each step and
+    /// build. `None` = advance by hand. A step's own `dwell` overrides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autoplay: Option<f64>,
+    /// After the last step, go back to the first one.
+    #[serde(default, rename = "loop")]
+    pub looping: bool,
+}
+
+impl PlaySettings {
+    pub fn is_default(&self) -> bool {
+        *self == PlaySettings::default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,6 +137,8 @@ impl Default for Document {
             path: vec![],
             assets: BTreeMap::new(),
             next_id: 1,
+            themes: vec![],
+            play: PlaySettings::default(),
         }
     }
 }
@@ -128,7 +155,16 @@ pub struct Element {
     /// Optional human name ("Intro", "Chapter 2"), shown in the path sidebar.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+    /// A layout or template placeholder ("Double-click to add a title").
+    /// Drawn faintly while editing, hidden when presenting and exporting.
+    /// Editing its text makes it real content.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub placeholder: bool,
     pub kind: ElementKind,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -298,6 +334,10 @@ pub struct PathStep {
     /// Transition duration override, seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    /// Autoplay: seconds to stay on this step (and each of its builds)
+    /// before moving on. Overrides the presentation's `play.autoplay`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dwell: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -390,6 +430,22 @@ pub fn truncate(s: &str, n: usize) -> String {
 }
 
 impl Document {
+    /// Asset keys the document refers to: images, plus the backgrounds,
+    /// 3D layers and embedded fonts of its custom themes.
+    pub fn used_assets(&self) -> std::collections::BTreeSet<&str> {
+        let mut used: std::collections::BTreeSet<&str> = self
+            .elements
+            .values()
+            .filter_map(|e| match &e.kind {
+                ElementKind::Image(i) => Some(i.asset.as_str()),
+                _ => None,
+            })
+            .collect();
+        for t in &self.themes {
+            used.extend(t.asset_keys());
+        }
+        used
+    }
     pub fn get(&self, id: &str) -> Option<&Element> {
         self.elements.get(id)
     }

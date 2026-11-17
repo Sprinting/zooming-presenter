@@ -845,7 +845,7 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             } else {
                 b.retain(|x| *x != e.id);
             }
-            app.apply(Command::UpdateStep { index: si, target: None, builds: Some(b), notes: None, duration: None });
+            app.apply(Command::UpdateStep { index: si, target: None, builds: Some(b), notes: None, duration: None, dwell: None });
         }
     }
 

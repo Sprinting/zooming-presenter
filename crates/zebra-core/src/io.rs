@@ -21,13 +21,7 @@ pub fn save_bytes(doc: &Document) -> ZResult<Vec<u8>> {
 /// Assets the document's elements use. History may hold others; they
 /// stay in memory/mapped but aren't written to the file.
 fn used_assets(doc: &Document) -> std::collections::BTreeSet<&str> {
-    doc.elements
-        .values()
-        .filter_map(|e| match &e.kind {
-            crate::model::ElementKind::Image(i) => Some(i.asset.as_str()),
-            _ => None,
-        })
-        .collect()
+    doc.used_assets()
 }
 
 fn write_zip<W: Write + std::io::Seek>(doc: &Document, w: W) -> ZResult<()> {
@@ -85,7 +79,11 @@ fn read_zip(bytes: &[u8], map: Option<&Arc<memmap2::Mmap>>) -> ZResult<Document>
             }
         };
         // Only the header is decoded here; pixels are decoded lazily by the renderer.
-        let (ext, w, h) = crate::editor::image_info(&data)?;
+        let (ext, w, h) = match _ext.to_ascii_lowercase().as_str() {
+            // Embedded theme fonts.
+            e @ ("ttf" | "otf" | "ttc") => (e.to_string(), 0, 0),
+            _ => crate::editor::image_info(&data)?,
+        };
         doc.assets.insert(key.to_string(), Asset { ext, bytes: data, width: w, height: h });
     }
     Ok(doc)

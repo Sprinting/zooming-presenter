@@ -55,6 +55,17 @@ pub struct PresentState {
     /// True after the presenter wandered off-path (zoomed/clicked freely).
     pub off_path: bool,
     pub blank: Option<Blank>,
+    /// Autoplay is paused by the presenter (it runs only when the
+    /// document's `play.autoplay` or a step's `dwell` is set).
+    #[serde(default)]
+    pub autoplay_paused: bool,
+    /// When the current step or build was reached (camera at rest), for
+    /// autoplay timing.
+    #[serde(default)]
+    pub arrived_at: f64,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub seen: Option<(Option<usize>, usize)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

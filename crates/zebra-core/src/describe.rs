@@ -234,12 +234,29 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                         StepTarget::Overview => "overview".into(),
                     };
                     json!({ "index": i, "label": label, "target": s.target, "builds": s.builds, "notes": s.notes,
-                            "duration": s.duration, "camera": ed.camera_for_step(i) })
+                            "duration": s.duration, "dwell": s.dwell, "camera": ed.camera_for_step(i) })
                 })
                 .collect();
-            json!({ "steps": steps })
+            json!({ "steps": steps, "play": d.play })
         }
-        Query::Themes => json!({ "current": d.theme, "themes": Theme::builtins() }),
+        Query::Themes => json!({ "current": d.theme, "themes": Theme::builtins(), "custom": d.themes }),
+        Query::Templates => json!({ "templates": crate::templates::TEMPLATES, "layouts": crate::templates::LAYOUTS }),
+        Query::Fonts => json!({ "families": ed.measure.font_families(), "bundled": ["Sans", "Serif", "Mono", "Hand"] }),
+        Query::Perf => {
+            let mut v = ed.perf.report(ed.view.now);
+            let (mut mapped, mut in_ram) = (0usize, 0usize);
+            for a in d.assets.values() {
+                if a.bytes.is_mapped() { mapped += a.bytes.len() } else { in_ram += a.bytes.len() }
+            }
+            v["document"] = json!({
+                "elements": d.elements.len(),
+                "steps": d.path.len(),
+                "history_kb": ed.history_bytes() / 1024,
+                "assets_in_ram_kb": in_ram / 1024,
+                "assets_mapped_kb": mapped / 1024,
+            });
+            v
+        }
         Query::History => {
             let h: Vec<Value> = ed
                 .history()

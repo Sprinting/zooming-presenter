@@ -17,6 +17,7 @@ pub fn add(ed: &mut Editor, id: &str, x: f64, y: f64, w: f64, h: f64, scale: f64
         size: Size { w, h },
         locked: false,
         name: String::new(),
+        placeholder: false,
         kind,
     };
     let theme = ed.theme();
@@ -97,9 +98,9 @@ pub fn sample(r: &Renderer, theme: &str) -> Editor {
     add(&mut ed, "i1", 450.0, -120.0, 160.0, 120.0, 1.0, 8.0, ElementKind::Image(ImageData { asset: key, alt: "checker".into() }));
     // Path: overview, circle, rectangle frame.
     ed.doc.path = vec![
-        PathStep { target: StepTarget::Element { id: "f1".into() }, builds: vec![], notes: String::new(), duration: None },
-        PathStep { target: StepTarget::Element { id: "f2".into() }, builds: vec![], notes: String::new(), duration: None },
-        PathStep { target: StepTarget::Element { id: "f3".into() }, builds: vec!["t4".into()], notes: String::new(), duration: None },
+        PathStep { target: StepTarget::Element { id: "f1".into() }, builds: vec![], notes: String::new(), duration: None, dwell: None },
+        PathStep { target: StepTarget::Element { id: "f2".into() }, builds: vec![], notes: String::new(), duration: None, dwell: None },
+        PathStep { target: StepTarget::Element { id: "f3".into() }, builds: vec!["t4".into()], notes: String::new(), duration: None, dwell: None },
     ];
     ed.view.camera = ed.fit_all_camera();
     ed
