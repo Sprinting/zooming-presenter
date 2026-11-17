@@ -28,7 +28,8 @@ run_app() { # $1 = file or "", sets SOCK
   SOCK="$WORK/z$RANDOM.sock"
   local args=(--api --api-socket "$SOCK" --size 1440x900)
   [[ -n "$1" ]] && args+=("$1")
-  if [[ $MAC == 1 ]]; then "$BIN/zebra" "${args[@]}" & else xvfb-run -a -s "-screen 0 1600x1000x24" "$BIN/zebra" "${args[@]}" & fi
+  # --background: never take the person's focus (they may be working).
+  if [[ $MAC == 1 ]]; then "$BIN/zebra" "${args[@]}" --background & else xvfb-run -a -s "-screen 0 1600x1000x24" "$BIN/zebra" "${args[@]}" & fi
   for _ in $(seq 100); do [[ -S "$SOCK" ]] && break; sleep 0.2; done
 }
 perf() { "$BIN/zebractl" --socket "$SOCK" perf --json; }
