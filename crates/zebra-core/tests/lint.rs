@@ -96,3 +96,26 @@ fn two_shapes_on_top_of_each_other_still_overlap() {
     run(&mut ed, json!({"op":"add_shape","id":"s2","shape":"rectangle","x":cx,"y":cy,"w":200,"h":120}));
     assert!(kinds(&lint(&ed), "s1").contains(&"overlap".to_string()));
 }
+
+#[test]
+fn text_size_is_judged_full_screen_not_in_the_persons_window() {
+    let (mut ed, cx, cy) = deck();
+    let body = ed.theme().text_style(TextStyle::Body).size;
+    // About 20pt presenting full screen on a laptop; under 14 in a small window.
+    let k = ed.camera_for_element_in(ed.doc.get("f1").unwrap(), zebra_core::describe::LINT_SCREEN).zoom;
+    run(&mut ed, json!({"op":"add_text","id":"t1","text":"Readable","x":cx,"y":cy,"style":"body","scale": 20.0 / (body * k)}));
+    ed.view.viewport = zebra_core::geom::Vec2::new(700.0, 734.0);
+    assert!(!kinds(&lint(&ed), "t1").contains(&"text_too_small".to_string()));
+    run(&mut ed, json!({"op":"update","id":"t1","patch":{"scale": 10.0 / (body * k)}}));
+    assert!(kinds(&lint(&ed), "t1").contains(&"text_too_small".to_string()));
+}
+
+#[test]
+fn an_empty_part_of_a_text_box_is_not_counted() {
+    let (mut ed, cx, cy) = deck();
+    // A short line in a box wider than the frame, centred: the words fit.
+    run(&mut ed, json!({"op":"add_text","id":"t1","text":"Hi","x":cx,"y":cy,"style":"body","scale":1}));
+    run(&mut ed, json!({"op":"update","id":"t1","patch":{"w":1400,"align":"center"}}));
+    assert!(ed.doc.get("t1").unwrap().bounds().width() > 1000.0, "the box is wider than the frame");
+    assert!(!kinds(&lint(&ed), "t1").contains(&"outside_frame".to_string()), "{:?}", lint(&ed));
+}

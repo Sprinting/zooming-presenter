@@ -62,6 +62,8 @@ pub struct Media {
 }
 
 struct Insert {
+    /// Swap this video's clip instead of adding a new one.
+    replace: Option<ElementId>,
     path: PathBuf,
     at: Vec2,
     width: f64,
@@ -479,6 +481,17 @@ pub fn insert_video_dialog(app: &mut ZebraApp) {
 /// through the command bus by path (copied into the media cache and
 /// memory-mapped, never read into memory).
 pub fn insert_video_file(app: &mut ZebraApp, p: &std::path::Path, at: Vec2) {
+    make_poster_then(app, p, at, None);
+}
+
+/// Replace a video's clip, keeping its place, size and settings.
+pub fn replace_video_dialog(app: &mut ZebraApp, id: &str) {
+    if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-video"), &["mp4", "mov", "m4v"]).pick_file() {
+        make_poster_then(app, &p, Vec2::new(0.0, 0.0), Some(id.to_string()));
+    }
+}
+
+fn make_poster_then(app: &mut ZebraApp, p: &std::path::Path, at: Vec2, replace: Option<ElementId>) {
     let width = app.editor.view.viewport.x / app.editor.view.camera.zoom * 0.5;
     let backend = app.media.backend.clone();
     let path = p.to_path_buf();
@@ -486,7 +499,7 @@ pub fn insert_video_file(app: &mut ZebraApp, p: &std::path::Path, at: Vec2) {
     let ctx = app.ctx.clone();
     let spawned = std::thread::Builder::new().name("zebra-poster".into()).spawn(move || {
         let poster = backend.poster_png(&path, 1.0, 1280).ok();
-        let _ = tx.send(Insert { path, at, width, poster });
+        let _ = tx.send(Insert { replace, path, at, width, poster });
         ctx.request_repaint();
     });
     if spawned.is_ok() {
@@ -496,6 +509,15 @@ pub fn insert_video_file(app: &mut ZebraApp, p: &std::path::Path, at: Vec2) {
 }
 
 fn finish_insert_video(app: &mut ZebraApp, i: Insert) {
+    if let Some(id) = i.replace {
+        app.apply(Command::ReplaceVideo {
+            id,
+            data_base64: String::new(),
+            path: Some(i.path.to_string_lossy().to_string()),
+            poster_base64: i.poster.map(|p| base64::engine::general_purpose::STANDARD.encode(p)),
+        });
+        return;
+    }
     let alt = i.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     let cmd = Command::AddVideo {
         data_base64: String::new(),
@@ -606,7 +628,7 @@ pub fn paste_from_system(app: &mut ZebraApp) -> bool {
             return false;
         }
         if !text.trim().is_empty() {
-            let cmd = Command::AddText { text, x: at.x, y: at.y, style: Default::default(), scale: Some(1.0 / app.editor.view.camera.zoom), place: None, id: None , markdown: false, on: None };
+            let cmd = Command::AddText { text, x: at.x, y: at.y, style: Default::default(), scale: Some(1.0 / app.editor.view.camera.zoom), place: None, id: None , markdown: false, on: None, color: None };
             if let Some(out) = app.apply(cmd) {
                 app.select(out.created);
             }
@@ -900,6 +922,9 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
         let pos = app.media.videos.get(id).map(|l| l.player.position()).unwrap_or(v.start);
         let dur = if v.duration > 0.0 { v.duration } else { app.media.videos.get(id).and_then(|l| l.player.duration()).unwrap_or(0.0) };
         ui.label(egui::RichText::new(format!("{} / {}", fmt_time(pos), fmt_time(dur))).monospace().size(11.5));
+        if ui.button(crate::t!("media-replace")).on_hover_text(crate::t!("media-replace-video-tip")).clicked() {
+            replace_video_dialog(app, id);
+        }
     });
     if !app.media.backend.can_play() {
         ui.label(egui::RichText::new(crate::t!("media-video-macos-only")).size(11.0).color(ui.visuals().weak_text_color()));

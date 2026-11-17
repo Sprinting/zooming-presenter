@@ -336,6 +336,35 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
     })
 }
 
+/// Where a text box's words are, not its box: a wrapped box is often
+/// wider than its longest line, and the rest is empty and invisible.
+fn ink_bounds(ed: &Editor, theme: &crate::theme::Theme, e: &Element) -> crate::geom::Rect {
+    let ElementKind::Text(t) = &e.kind else { return e.bounds() };
+    if !t.fixed_width {
+        return e.bounds();
+    }
+    let natural = ed.measure.measure(t, theme, None).0;
+    if !(natural > 0.0 && natural < e.size.w) {
+        return e.bounds();
+    }
+    let spare = (e.size.w - natural) / 2.0;
+    let off = match t.align {
+        crate::model::Align::Left => -spare,
+        crate::model::Align::Center => 0.0,
+        crate::model::Align::Right => spare,
+    };
+    let mut ink = e.clone();
+    ink.size.w = natural;
+    let shift = crate::geom::Vec2::new(off * e.transform.scale, 0.0).rotate_deg(e.transform.rotation);
+    ink.transform.x += shift.x;
+    ink.transform.y += shift.y;
+    ink.bounds()
+}
+
+/// The screen lint judges text size on: a 13- to 15-inch Mac laptop,
+/// presenting full screen (points).
+pub const LINT_SCREEN: crate::geom::Vec2 = crate::geom::Vec2 { x: 1440.0, y: 900.0 };
+
 /// Layout lint: things a human would want fixed before presenting.
 pub fn lint(ed: &Editor) -> Vec<Value> {
     let d = &ed.doc;
@@ -345,7 +374,7 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
     // Lines and connectors run between things; they don't sit in a frame.
     let placed = |e: &Element| !e.is_frame() && !matches!(e.kind, ElementKind::Connector(_));
     for e in d.ordered().filter(|e| placed(e)) {
-        let b = e.bounds();
+        let b = ink_bounds(ed, &theme, e);
         // The frame it mostly sits in: the most overlap, then the smallest.
         let home = frames
             .iter()
@@ -385,16 +414,18 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
                     StepTarget::Element { id } => d
                         .get(id)
                         .filter(|f| f.id == e.id || builds || overlap(&f.visual_bounds(), &b) >= 0.5 * b.area())
-                        .map(|f| (i, f.visual_bounds().area())),
+                        .map(|f| (i, f.visual_bounds().area(), f)),
                     _ => None,
                 }
             })
             .min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((i, _)) = best {
-            let px = font_world * ed.camera_for_step(i).zoom;
+        if let Some((i, _, f)) = best {
+            // On a typical laptop screen, presenting full screen, not in
+            // whatever window the person happens to have open.
+            let px = font_world * ed.camera_for_element_in(f, LINT_SCREEN).zoom;
             if px < 14.0 {
                 issues.push(json!({"kind": "text_too_small", "id": e.id, "step": i,
-                    "message": format!("text is {px:.0}px tall at step {} (viewport {}x{}); aim for 18px+", i + 1, ed.view.viewport.x, ed.view.viewport.y)}));
+                    "message": format!("text is {px:.0}pt tall at step {} presenting full screen on a {}x{} screen; aim for 18pt+", i + 1, LINT_SCREEN.x, LINT_SCREEN.y)}));
             }
         } else if !d.path.is_empty() && !d.path.iter().any(|s| matches!(s.target, StepTarget::Overview)) {
             issues.push(json!({"kind": "not_on_path", "id": e.id, "message": "text is not in any path step's frame and no step reveals it; the audience only sees it in the overview"}));
@@ -404,7 +435,7 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
     let items: Vec<&Element> = d.ordered().filter(|e| placed(e)).collect();
     for (i, a) in items.iter().enumerate() {
         for b in &items[i + 1..] {
-            let (ba, bb) = (a.bounds(), b.bounds());
+            let (ba, bb) = (ink_bounds(ed, &theme, a), ink_bounds(ed, &theme, b));
             let ix = overlap(&ba, &bb);
             if ix <= 0.0 {
                 continue;

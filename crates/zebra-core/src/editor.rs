@@ -558,13 +558,19 @@ impl Editor {
         Ok(())
     }
 
-    /// ids plus, for frames, everything inside them (when `with_contents`).
+    /// ids plus the text typed on any shape among them, and, for frames,
+    /// everything inside them (when `with_contents`).
     pub fn expand(&self, ids: &[ElementId], with_contents: bool) -> Vec<ElementId> {
         let mut seen = BTreeSet::new();
         let mut out = vec![];
         for id in ids {
             if seen.insert(id.clone()) {
                 out.push(id.clone());
+            }
+            for t in self.texts_on(id) {
+                if seen.insert(t.clone()) {
+                    out.push(t);
+                }
             }
             if with_contents && self.doc.get(id).is_some_and(|e| e.is_frame()) {
                 for c in self.doc.frame_contents(id) {
@@ -575,6 +581,26 @@ impl Editor {
             }
         }
         out
+    }
+
+    /// Text typed on a shape (`add_text` with `on`, or double-clicking
+    /// it): grouped with the shape and centred on it. It goes where the
+    /// shape goes.
+    pub fn texts_on(&self, shape: &str) -> Vec<ElementId> {
+        let Some(s) = self.doc.get(shape) else { return vec![] };
+        let (ElementKind::Shape(sd), Some(g)) = (&s.kind, &s.group) else { return vec![] };
+        if sd.shape.is_line() {
+            return vec![];
+        }
+        let c = s.transform.center();
+        let tol = (s.size.w.min(s.size.h) * s.transform.scale * 0.01).max(0.5);
+        self.doc
+            .elements
+            .values()
+            .filter(|e| e.id != s.id && e.group.as_ref() == Some(g) && matches!(e.kind, ElementKind::Text(_)))
+            .filter(|e| (e.transform.center() - c).len() <= tol)
+            .map(|e| e.id.clone())
+            .collect()
     }
 
     fn insert_element(&mut self, mut e: Element, out: &mut Outcome) -> ZResult<ElementId> {
@@ -631,8 +657,9 @@ impl Editor {
                 };
                 self.insert_element(e, out)?;
             }
-            Command::AddText { text, x, y, style, scale, place, id, markdown, on } => {
+            Command::AddText { text, x, y, style, scale, place, id, markdown, on, color } => {
                 let mut data = if markdown { TextData { style, ..crate::rich::from_markdown(&text) } } else { TextData { text, style, ..Default::default() } };
+                data.color = color.filter(|c| !c.trim().is_empty());
                 let host = match &on {
                     Some(h) => {
                         self.check_ids(std::slice::from_ref(h))?;
@@ -702,13 +729,15 @@ impl Editor {
                 }
             }
             Command::AddShape { shape, x, y, w, h, rotation, fill, stroke, id } => {
-                let (fill, stroke) = match (fill, stroke) {
+                // An empty colour means none, as in `update`.
+                let none_if_empty = |c: Option<String>| c.map(|c| if c.trim().is_empty() { None } else { Some(c) });
+                let (fill, stroke) = match (none_if_empty(fill), none_if_empty(stroke)) {
                     (None, None) => match shape {
                         k if k.is_line() => (None, Some("theme:shape1".to_string())),
                         ShapeKind::StickyNote => (Some("#ffe98a".to_string()), None),
                         _ => (Some("theme:shape1".to_string()), None),
                     },
-                    fs => fs,
+                    (f, s) => (f.flatten(), s.flatten()),
                 };
                 let e = Element {
                     id: id.unwrap_or_default(),
@@ -856,6 +885,36 @@ impl Editor {
                 e.transform.scale = world_w / nw;
                 out.changed.push(id);
             }
+            Command::ReplaceVideo { id, data_base64, path, poster_base64 } => {
+                self.check_ids(std::slice::from_ref(&id))?;
+                self.check_unlocked(std::slice::from_ref(&id))?;
+                if !matches!(self.doc.get(&id).map(|e| &e.kind), Some(ElementKind::Video(_))) {
+                    let kind = self.doc.get(&id).map(|e| e.kind.type_name()).unwrap_or("element");
+                    return Err(ZError::invalid(format!("'{id}' is a {kind}, not a video")).hint("replace_image swaps a picture"));
+                }
+                let (key, info) = self.load_media(&data_base64, path.as_deref(), MediaKind::Video)?;
+                let poster = match poster_base64.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+                    Some(p) => Some(self.load_media(p, None, MediaKind::Image)?.0),
+                    None => None,
+                };
+                let poster_size = poster.as_ref().and_then(|p| self.doc.assets.get(p)).filter(|a| a.width > 0 && a.height > 0).map(|a| (a.width as f64, a.height as f64));
+                let e = self.element_mut(&id)?;
+                let ElementKind::Video(v) = &mut e.kind else { unreachable!("checked above") };
+                v.asset = key;
+                v.poster = poster;
+                v.start = 0.0;
+                v.end = None;
+                v.duration = info.duration;
+                // Keep the width; the height follows the new clip.
+                let (nw, nh) = match (info.width, info.height) {
+                    (w, h) if w > 0 && h > 0 => (w as f64, h as f64),
+                    _ => poster_size.unwrap_or((e.size.w, e.size.h)),
+                };
+                let world_w = e.size.w * e.transform.scale;
+                e.size = Size { w: nw, h: nh };
+                e.transform.scale = world_w / nw;
+                out.changed.push(id);
+            }
             Command::SetPoster { id, data_base64, path } => {
                 let poster = if data_base64.trim().is_empty() && path.is_none() {
                     None
@@ -915,7 +974,7 @@ impl Editor {
                 };
                 self.doc.path[index].voiceover = v;
             }
-            Command::AddInk { points, color, width, highlighter } => {
+            Command::AddInk { points, color, width, highlighter, id } => {
                 if points.len() < 2 {
                     return Err(ZError::invalid("ink needs at least 2 points"));
                 }
@@ -923,7 +982,7 @@ impl Editor {
                 let b = Rect::from_points(pts.iter().copied()).unwrap();
                 let c = b.center();
                 let e = Element {
-                    id: String::new(),
+                    id: id.unwrap_or_default(),
                     transform: Transform::at(c.x, c.y),
                     size: Size { w: b.width().max(width), h: b.height().max(width) },
                     locked: false,
@@ -936,6 +995,9 @@ impl Editor {
             }
             Command::Update { id, patch } => {
                 self.element_mut(&id)?;
+                // Text on a shape follows the shape when it moves or turns.
+                let riders = self.texts_on(&id);
+                let before = self.doc.elements[&id].transform;
                 // Changing a text's style (e.g. Body -> Title) must not push it
                 // out of the frame it sits in: remember the frame first.
                 let keep_in = if patch.style.is_some() && patch.scale.is_none() { self.doc.parent_frame(&id) } else { None };
@@ -967,7 +1029,20 @@ impl Editor {
                         e.transform.scale *= k;
                     }
                 }
+                let after = e.transform;
                 out.changed.push(id);
+                if after != before {
+                    let turn = after.rotation - before.rotation;
+                    for t in riders {
+                        let r = self.doc.elements.get_mut(&t).unwrap();
+                        let off = (r.transform.center() - before.center()).rotate_deg(turn);
+                        let c = after.center() + off;
+                        r.transform.x = c.x;
+                        r.transform.y = c.y;
+                        r.transform.rotation = normalize_deg(r.transform.rotation + turn);
+                        out.changed.push(t);
+                    }
+                }
             }
             Command::FormatText { id, start, end, find, format } => {
                 self.check_unlocked(std::slice::from_ref(&id))?;
@@ -1040,6 +1115,49 @@ impl Editor {
                     e.transform.scale *= factor;
                     out.changed.push(id);
                 }
+            }
+            Command::Resize { id, width, height } => {
+                self.check_ids(std::slice::from_ref(&id))?;
+                self.check_unlocked(std::slice::from_ref(&id))?;
+                let ok = |v: Option<f64>| v.is_none_or(|v| v.is_finite() && v > 0.0);
+                if (width.is_none() && height.is_none()) || !ok(width) || !ok(height) {
+                    return Err(ZError::invalid("resize needs `width` and/or `height`, each > 0 (world units)"));
+                }
+                let theme = self.theme();
+                let e = self.doc.elements.get_mut(&id).unwrap();
+                let s = e.transform.scale;
+                let (ww, wh) = (e.size.w * s, e.size.h * s);
+                match &mut e.kind {
+                    ElementKind::Image(_) | ElementKind::Video(_) | ElementKind::Icon(_) | ElementKind::Ink(_) => {
+                        let k = match (width, height) {
+                            (Some(w), None) => w / ww.max(1e-9),
+                            (None, Some(h)) => h / wh.max(1e-9),
+                            (Some(w), Some(h)) => (w / ww.max(1e-9)).min(h / wh.max(1e-9)),
+                            (None, None) => unreachable!(),
+                        };
+                        e.transform.scale *= k;
+                    }
+                    ElementKind::Text(t) => {
+                        let Some(w) = width else {
+                            return Err(ZError::invalid("a text's height follows its words: give `width` (its wrap width)").hint("to make text bigger or smaller use `scale`"));
+                        };
+                        t.fixed_width = true;
+                        e.size.w = w / s;
+                        measure_text(&*self.measure, &theme, e);
+                    }
+                    ElementKind::Connector(_) => {
+                        return Err(ZError::invalid("a connector's size comes from its ends").hint("move its ends with `update`, or the elements they're stuck to"));
+                    }
+                    _ => {
+                        if let Some(w) = width {
+                            e.size.w = w / s;
+                        }
+                        if let Some(h) = height {
+                            e.size.h = h / s;
+                        }
+                    }
+                }
+                out.changed.push(id);
             }
             Command::Rotate { ids, degrees, about, with_contents } => {
                 self.check_ids(&ids)?;
@@ -1249,7 +1367,14 @@ impl Editor {
                     s.hide_builds = h;
                 }
             }
-            Command::ClearPath => self.doc.path.clear(),
+            Command::ClearPath { discard_notes } => {
+                let noted: Vec<String> = self.doc.path.iter().enumerate().filter(|(_, s)| !s.notes.trim().is_empty()).map(|(i, _)| (i + 1).to_string()).collect();
+                if !noted.is_empty() && !discard_notes {
+                    return Err(ZError::invalid(format!("steps {} have speaker notes that clearing the path would lose", noted.join(", ")))
+                        .hint("pass \"discard_notes\": true to clear anyway, or remove the steps you don't want with remove_step"));
+                }
+                self.doc.path.clear();
+            }
             Command::AutoPath => {
                 let mut frames: Vec<&Element> = self.doc.ordered().filter(|e| e.is_frame()).collect();
                 if frames.is_empty() {
@@ -1264,9 +1389,17 @@ impl Editor {
                     let (ca, cb) = (a.bounds().center(), b.bounds().center());
                     ((ca.y / band).floor()).total_cmp(&(cb.y / band).floor()).then(ca.x.total_cmp(&cb.x))
                 });
-                self.doc.path = frames
-                    .iter()
-                    .map(|f| PathStep { target: StepTarget::Element { id: f.id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None })
+                let ids: Vec<ElementId> = frames.iter().map(|f| f.id.clone()).collect();
+                let mut old: Vec<PathStep> = std::mem::take(&mut self.doc.path);
+                self.doc.path = ids
+                    .into_iter()
+                    .map(|id| {
+                        let target = StepTarget::Element { id };
+                        match old.iter().position(|s| s.target == target) {
+                            Some(i) => old.remove(i),
+                            None => PathStep { target, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None },
+                        }
+                    })
                     .collect();
             }
             Command::SetTheme { theme } => {
@@ -2002,11 +2135,16 @@ impl Editor {
     // Camera helpers
 
     pub fn camera_for_element(&self, e: &Element) -> Camera {
+        self.camera_for_element_in(e, self.view.viewport)
+    }
+
+    /// The camera that shows `e` on a screen of `viewport` points.
+    pub fn camera_for_element_in(&self, e: &Element, viewport: Vec2) -> Camera {
         let (w, h) = e.visual_world_size();
         let margin = if e.is_frame() { 0.04 } else { 0.12 };
         Camera::fit(
             &ViewRect { cx: e.transform.x, cy: e.transform.y, width: w, height: h, rotation: e.transform.rotation },
-            self.view.viewport,
+            viewport,
             margin,
         )
     }
@@ -2496,6 +2634,7 @@ pub fn command_label(c: &Command) -> String {
         Command::AddVideo { .. } => "Insert video".into(),
         Command::ReplaceImage { .. } => "Replace image".into(),
         Command::SetPoster { .. } => "Set poster frame".into(),
+        Command::ReplaceVideo { .. } => "Replace video".into(),
         Command::SetSoundtrack { data_base64, path, .. } if !data_base64.is_empty() || path.is_some() => "Add soundtrack".into(),
         Command::SetSoundtrack { .. } => "Change soundtrack".into(),
         Command::RemoveSoundtrack => "Remove soundtrack".into(),
@@ -2509,6 +2648,7 @@ pub fn command_label(c: &Command) -> String {
         Command::Update { .. } => "Change properties".into(),
         Command::Move { .. } => "Move".into(),
         Command::Scale { .. } => "Resize".into(),
+        Command::Resize { .. } => "Resize".into(),
         Command::Rotate { .. } => "Rotate".into(),
         Command::Delete { ids } => format!("Delete {}", plural(ids.len(), "object")),
         Command::Duplicate { .. } => "Duplicate".into(),
@@ -2522,7 +2662,7 @@ pub fn command_label(c: &Command) -> String {
         Command::RemoveStep { .. } => "Remove path step".into(),
         Command::MoveStep { .. } => "Reorder path".into(),
         Command::UpdateStep { .. } => "Edit path step".into(),
-        Command::ClearPath => "Clear path".into(),
+        Command::ClearPath { .. } => "Clear path".into(),
         Command::AutoPath => "Path from frames".into(),
         Command::SetTheme { theme } => format!("Theme: {theme}"),
         Command::SetTitle { .. } => "Rename".into(),

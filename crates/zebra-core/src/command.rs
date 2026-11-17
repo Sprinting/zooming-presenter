@@ -39,6 +39,10 @@ pub enum Command {
         /// are then ignored.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         on: Option<ElementId>,
+        /// Text colour: #rrggbb, #rrggbbaa or a theme slot. Default: the
+        /// theme's, or on a shape a colour that reads on its fill.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<ColorRef>,
     },
     /// Add a frame. `w`,`h` are world units at scale 1 (default 800x600).
     AddFrame {
@@ -66,6 +70,7 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         find_space: bool,
     },
+    /// Add a shape. An empty `fill` or `stroke` means none.
     AddShape {
         shape: ShapeKind,
         #[serde(default)]
@@ -175,6 +180,18 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
     },
+    /// Swap a video's clip for another, keeping its place, width, rotation
+    /// and settings (auto-play, loop, mute, description). The trim starts
+    /// over, and the poster is the one given, or none.
+    ReplaceVideo {
+        id: ElementId,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        data_base64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        poster_base64: Option<String>,
+    },
     /// Set a video's poster picture. No data and no path clears it.
     SetPoster {
         id: ElementId,
@@ -217,6 +234,8 @@ pub enum Command {
         width: f64,
         #[serde(default)]
         highlighter: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<ElementId>,
     },
     /// Change properties of one element. Only given fields change.
     Update { id: ElementId, patch: ElementPatch },
@@ -269,6 +288,17 @@ pub enum Command {
         about: Option<[f64; 2]>,
         #[serde(default = "yes")]
         with_contents: bool,
+    },
+    /// Set an element's size on the canvas (world units, scale included),
+    /// keeping its centre. Pictures, videos, icons and drawings keep their
+    /// shape: give `width` or `height`, or both to fit inside that box.
+    /// Text takes a `width` (its wrap width); its height follows its words.
+    Resize {
+        id: ElementId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<f64>,
     },
     /// Rotate elements by degrees (clockwise) about a point.
     Rotate {
@@ -351,9 +381,15 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hide_builds: Option<bool>,
     },
-    ClearPath,
+    /// Remove every step. Refused while a step has speaker notes, unless
+    /// `discard_notes`.
+    ClearPath {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        discard_notes: bool,
+    },
     /// Replace the path with every frame in reading order (top-left to
-    /// bottom-right, larger frames first).
+    /// bottom-right, larger frames first). A frame that was already a step
+    /// keeps its notes, builds and timings.
     AutoPath,
 
     // ---- document ----

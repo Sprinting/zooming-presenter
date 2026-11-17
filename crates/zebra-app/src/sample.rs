@@ -100,7 +100,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             "agent" => {
                 let agent = Origin::agent("Claude");
                 app.demo_agent = Some("Claude".into());
-                let _ = app.editor.apply(Command::AddText { text: "Added by the agent".into(), x: 0.0, y: -250.0, style: TextStyle::Subtitle, scale: Some(1.2), place: None, id: None, markdown: false, on: None }, agent.clone());
+                let _ = app.editor.apply(Command::AddText { text: "Added by the agent".into(), x: 0.0, y: -250.0, style: TextStyle::Subtitle, scale: Some(1.2), place: None, id: None, markdown: false, on: None, color: None }, agent.clone());
                 let found = app.editor.doc.ordered().find(|e| e.name == "Why zoom?").map(|e| e.id.clone());
                 if let Some(c) = found {
                     let _ = app.editor.apply(Command::Update { id: c.clone(), patch: zebra_core::ElementPatch { frame_style: Some(FrameStyle::Bracket), ..Default::default() } }, agent.clone());

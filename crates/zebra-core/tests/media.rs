@@ -190,3 +190,23 @@ fn old_files_without_media_fields_load() {
     let d = io::from_json(json).unwrap();
     assert!(d.soundtrack.is_none() && d.path[0].voiceover.is_none());
 }
+
+#[test]
+fn replacing_a_video_keeps_its_place_width_and_settings() {
+    let _ = tmp("replace");
+    let mut ed = Editor::default();
+    let id = ed.apply(cmd(json!({"op":"add_video","data_base64":b64(&tiny_mp4(320,240,10,true)),"x":100,"y":50,"width":640})), Origin::Human).unwrap().created[0].clone();
+    ed.apply(cmd(json!({"op":"update","id":id,"patch":{"loop":true,"muted":true,"start":2,"end":8,"autoplay":false,"rotation":15}})), Origin::Human).unwrap();
+    ed.apply(cmd(json!({"op":"replace_video","id":id,"data_base64":b64(&tiny_mp4(1280,720,4,true))})), Origin::Human).unwrap();
+    let e = ed.doc.get(&id).unwrap();
+    let ElementKind::Video(v) = &e.kind else { panic!() };
+    assert!(v.looping && v.muted && !v.autoplay, "settings kept");
+    assert_eq!((v.start, v.end), (0.0, None), "the trim starts over");
+    assert!((v.duration - 4.0).abs() < 0.1, "{}", v.duration);
+    assert_eq!((e.transform.x, e.transform.y, e.transform.rotation), (100.0, 50.0, 15.0));
+    let (w, h) = e.world_size();
+    assert!((w - 640.0).abs() < 1e-6 && (h - 360.0).abs() < 1e-6, "same width, height from the new clip: {w}x{h}");
+    // Only videos.
+    let img = ed.apply(cmd(json!({"op":"add_image","data_base64":b64(&png(4,4))})), Origin::Human).unwrap().created[0].clone();
+    assert!(ed.apply(cmd(json!({"op":"replace_video","id":img,"data_base64":b64(&tiny_mp4(320,240,1,true))})), Origin::Human).is_err());
+}

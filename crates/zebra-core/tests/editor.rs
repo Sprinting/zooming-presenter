@@ -558,3 +558,69 @@ fn objects_copy_into_another_document_with_their_pictures_groups_and_connectors(
     dst.undo(h).unwrap();
     assert_eq!(dst.doc.elements.len(), 1);
 }
+
+#[test]
+fn sonnet_run_fixes_fill_ink_ids_colour_and_text_on_shapes() {
+    let h = Origin::agent("sonnet");
+    let mut ed = Editor::default();
+    // An empty fill means none, as in `update`.
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"s","shape":"rectangle","fill":"","stroke":"theme:accent","w":400,"h":200})), h.clone()).unwrap();
+    let ElementKind::Shape(sd) = &ed.doc.elements["s"].kind else { panic!() };
+    assert_eq!(sd.fill, None);
+    assert!(sd.stroke.is_some());
+    // add_ink keeps the id it's given.
+    ed.apply(cmd(serde_json::json!({"op":"add_ink","id":"r2a","points":[[0,0],[40,30]]})), h.clone()).unwrap();
+    assert!(ed.doc.elements.contains_key("r2a"));
+    // Text on a shape takes a colour, and goes where the shape goes.
+    ed.apply(cmd(serde_json::json!({"op":"add_text","id":"lbl","text":"Hi","on":"s","color":"#ff0000"})), h.clone()).unwrap();
+    let ElementKind::Text(t) = &ed.doc.elements["lbl"].kind else { panic!() };
+    assert_eq!(t.color.as_deref(), Some("#ff0000"));
+    ed.apply(cmd(serde_json::json!({"op":"update","id":"s","patch":{"x":500,"y":-40}})), h.clone()).unwrap();
+    let l = &ed.doc.elements["lbl"].transform;
+    assert_eq!((l.x, l.y), (500.0, -40.0), "the label moved with update");
+    ed.apply(cmd(serde_json::json!({"op":"move","ids":["s"],"dx":10,"dy":0})), h.clone()).unwrap();
+    assert_eq!(ed.doc.elements["lbl"].transform.x, 510.0, "and with move");
+    ed.apply(cmd(serde_json::json!({"op":"update","id":"s","patch":{"rotation":90}})), h.clone()).unwrap();
+    assert_eq!(ed.doc.elements["lbl"].transform.rotation, 90.0, "and turns with it");
+}
+
+#[test]
+fn resize_sets_the_size_on_the_canvas() {
+    use base64::Engine;
+    let b64 = |b: Vec<u8>| base64::engine::general_purpose::STANDARD.encode(b);
+    let h = Origin::agent("sonnet");
+    let mut ed = Editor::default();
+    // An 8x8 picture shown at 4x.
+    ed.apply(cmd(serde_json::json!({"op":"add_image","id":"i","data_base64":b64(tiny_png(1)),"width":32})), h.clone()).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"resize","id":"i","width":500,"height":538})), h.clone()).unwrap();
+    let (w, hh) = ed.doc.elements["i"].world_size();
+    assert!((w - 500.0).abs() < 1e-6 && (hh - 500.0).abs() < 1e-6, "fits the box, keeps its shape: {w}x{hh}");
+    ed.apply(cmd(serde_json::json!({"op":"resize","id":"i","height":100})), h.clone()).unwrap();
+    assert!((ed.doc.elements["i"].world_size().1 - 100.0).abs() < 1e-6);
+
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"s","shape":"rectangle","w":100,"h":100})), h.clone()).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"scale","ids":["s"],"factor":2})), h.clone()).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"resize","id":"s","width":300,"height":50})), h.clone()).unwrap();
+    assert_eq!(ed.doc.elements["s"].world_size(), (300.0, 50.0));
+
+    ed.apply(cmd(serde_json::json!({"op":"add_text","id":"t","text":"Some words","x":0,"y":0})), h.clone()).unwrap();
+    assert!(ed.apply(cmd(serde_json::json!({"op":"resize","id":"t","height":50})), h.clone()).is_err(), "text height follows its words");
+    ed.apply(cmd(serde_json::json!({"op":"resize","id":"t","width":400})), h.clone()).unwrap();
+    assert!((ed.doc.elements["t"].world_size().0 - 400.0).abs() < 1e-6);
+    assert!(ed.apply(cmd(serde_json::json!({"op":"resize","id":"t"})), h).is_err());
+}
+
+#[test]
+fn clearing_the_path_keeps_speaker_notes_unless_told() {
+    let h = Origin::agent("sonnet");
+    let mut ed = sample();
+    ed.apply(cmd(serde_json::json!({"op":"update_step","index":1,"notes":"Mention the budget"})), h.clone()).unwrap();
+    let e = ed.apply(cmd(serde_json::json!({"op":"clear_path"})), h.clone()).unwrap_err();
+    assert!(e.to_string().contains("2"), "{e}");
+    assert_eq!(ed.doc.path.len(), 2);
+    // Path from Frames keeps the notes of a frame that was already a step.
+    ed.apply(cmd(serde_json::json!({"op":"auto_path"})), h.clone()).unwrap();
+    assert!(ed.doc.path.iter().any(|s| s.notes == "Mention the budget"));
+    ed.apply(cmd(serde_json::json!({"op":"clear_path","discard_notes":true})), h).unwrap();
+    assert!(ed.doc.path.is_empty());
+}

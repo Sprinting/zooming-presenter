@@ -104,7 +104,7 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
         SheetKind::Alert { .. } => {}
         SheetKind::ClearPath => {
             if label == crate::t!("sheet-clear-path") && !app.editor.doc.path.is_empty() {
-                app.apply(zebra_core::Command::ClearPath);
+                app.apply(zebra_core::Command::ClearPath { discard_notes: true });
                 app.selected_step = None;
             }
         }

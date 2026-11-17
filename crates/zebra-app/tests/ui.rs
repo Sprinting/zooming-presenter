@@ -141,7 +141,7 @@ fn tool_shortcuts_and_frame_cycle() {
     // Drawing a frame around a text wraps it.
     {
         let app = h.state_mut();
-        app.editor.apply(Command::AddText { text: "inside".into(), x: 0.0, y: 0.0, style: Default::default(), scale: Some(1.0), place: None, id: None, markdown: false, on: None }, Origin::Human).unwrap();
+        app.editor.apply(Command::AddText { text: "inside".into(), x: 0.0, y: 0.0, style: Default::default(), scale: Some(1.0), place: None, id: None, markdown: false, on: None, color: None }, Origin::Human).unwrap();
     }
     h.run_steps(1);
     let (a, b) = {

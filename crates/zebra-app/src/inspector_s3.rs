@@ -178,13 +178,12 @@ pub fn media(insp: &mut Insp, ui: &mut Ui, tab: Tab) {
             }
         }
         ElementKind::Video(v) => {
-            w::section(ui, &crate::t!("inspector-section-video"), |ui| {
-                let (p, dragging) = crate::media_ui::video_section(insp.app, ui, &id, &v);
-                insp.gesture |= dragging;
-                if let Some(p) = p {
-                    insp.set(p);
-                }
-            });
+            // No heading of its own: the inspector's title already says Video.
+            let (p, dragging) = crate::media_ui::video_section(insp.app, ui, &id, &v);
+            insp.gesture |= dragging;
+            if let Some(p) = p {
+                insp.set(p);
+            }
         }
         _ => {}
     }

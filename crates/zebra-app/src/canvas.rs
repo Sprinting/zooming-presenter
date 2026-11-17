@@ -902,7 +902,7 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
                 let hl = tool == Tool::Highlighter;
                 let pts = points.iter().map(|p| [p.x, p.y]).collect();
                 let w = if hl { 18.0 } else { 4.0 } / zoom;
-                app.apply(Command::AddInk { points: pts, color: "theme:accent".into(), width: w, highlighter: hl });
+                app.apply(Command::AddInk { points: pts, color: "theme:accent".into(), width: w, highlighter: hl, id: None });
             }
         }
         Gesture::Badge { step } => {
