@@ -9,5 +9,31 @@ license.workspace = true
 name = "zebra"
 path = "src/main.rs"
 
+[lib]
+name = "zebra_app"
+path = "src/lib.rs"
+
 [dependencies]
 zebra-core.workspace = true
+zebra-render.workspace = true
+zebra-api.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+rfd.workspace = true
+image.workspace = true
+base64.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dirs.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda.workspace = true
+
+[dev-dependencies]
+egui_kittest.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { workspace = true, features = ["x11", "wayland"] }

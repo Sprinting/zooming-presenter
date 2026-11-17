@@ -1,0 +1,304 @@
+//! Every menu item, toolbar button and keyboard shortcut is an [`Action`].
+//! `ZebraApp::perform` turns actions into zebra-core commands, so the native
+//! menu bar, the egui fallback menus, shortcuts and the ⌘K palette all share
+//! one path (and the AI drives the very same core commands over the API).
+use egui::{Key, Modifiers};
+use zebra_core::{FrameStyle, Tool};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    // File
+    New,
+    NewFromSample,
+    Open,
+    OpenPath(std::path::PathBuf),
+    Save,
+    SaveAs,
+    ExportPdf,
+    ExportPng,
+    Quit,
+    // Edit
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    Duplicate,
+    Delete,
+    SelectAll,
+    Deselect,
+    // Insert / tools
+    SetTool(Tool),
+    FrameTool,
+    SetFrameStyle(FrameStyle),
+    InsertImage,
+    WrapInFrame,
+    // Arrange
+    BringForward,
+    SendBackward,
+    BringToFront,
+    SendToBack,
+    ToggleLock,
+    // View
+    ZoomIn,
+    ZoomOut,
+    FitAll,
+    ZoomToSelection,
+    ZoomReset,
+    ToggleSidebar,
+    ToggleProperties,
+    ToggleReduceMotion,
+    CommandPalette,
+    ShowShortcuts,
+    // Path
+    TogglePathEdit,
+    AddToPath,
+    AddCurrentView,
+    AutoPath,
+    ClearPath,
+    // Present
+    PresentStart,
+    PresentCurrent,
+    // Agent
+    ToggleActivity,
+    PauseAgents,
+    StopAgents,
+    FollowAgent,
+    RevertAgent,
+    // Theme
+    SetTheme(String),
+    About,
+}
+
+impl Action {
+    pub fn label(&self) -> String {
+        use Action::*;
+        match self {
+            New => "New".into(),
+            NewFromSample => "New from Sample".into(),
+            Open => "Open…".into(),
+            OpenPath(p) => p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
+            Save => "Save".into(),
+            SaveAs => "Save As…".into(),
+            ExportPdf => "Export PDF…".into(),
+            ExportPng => "Export View as PNG…".into(),
+            Quit => "Quit Zebra".into(),
+            Undo => "Undo".into(),
+            Redo => "Redo".into(),
+            Cut => "Cut".into(),
+            Copy => "Copy".into(),
+            Paste => "Paste".into(),
+            Duplicate => "Duplicate".into(),
+            Delete => "Delete".into(),
+            SelectAll => "Select All".into(),
+            Deselect => "Deselect".into(),
+            SetTool(t) => format!("{} Tool", tool_name(*t)),
+            FrameTool => "Frame Tool (cycle style)".into(),
+            SetFrameStyle(s) => format!("{} Frame", frame_name(*s)),
+            InsertImage => "Image…".into(),
+            WrapInFrame => "Frame Selection".into(),
+            BringForward => "Bring Forward".into(),
+            SendBackward => "Send Backward".into(),
+            BringToFront => "Bring to Front".into(),
+            SendToBack => "Send to Back".into(),
+            ToggleLock => "Lock / Unlock".into(),
+            ZoomIn => "Zoom In".into(),
+            ZoomOut => "Zoom Out".into(),
+            FitAll => "Zoom to Fit All".into(),
+            ZoomToSelection => "Zoom to Selection".into(),
+            ZoomReset => "Actual Size (100%)".into(),
+            ToggleSidebar => "Show/Hide Path Sidebar".into(),
+            ToggleProperties => "Show/Hide Properties".into(),
+            ToggleReduceMotion => "Reduce Motion".into(),
+            CommandPalette => "Command Palette…".into(),
+            ShowShortcuts => "Keyboard Shortcuts".into(),
+            TogglePathEdit => "Edit Path".into(),
+            AddToPath => "Add Selection to Path".into(),
+            AddCurrentView => "Add Current View to Path".into(),
+            AutoPath => "Path from Frames".into(),
+            ClearPath => "Clear Path".into(),
+            PresentStart => "Present from Start".into(),
+            PresentCurrent => "Present from Current Step".into(),
+            ToggleActivity => "Agent Activity".into(),
+            PauseAgents => "Pause / Resume Agent".into(),
+            StopAgents => "Stop Agent".into(),
+            FollowAgent => "Follow Agent".into(),
+            RevertAgent => "Revert Agent's Changes".into(),
+            SetTheme(t) => format!("Theme: {}", zebra_core::Theme::resolve(t).name),
+            About => "About Zebra".into(),
+        }
+    }
+
+    /// Human-readable shortcut, macOS glyphs.
+    pub fn shortcut_text(&self) -> Option<String> {
+        SHORTCUTS.iter().find(|s| &s.2 == self).map(|(m, k, _)| fmt_shortcut(*m, *k))
+    }
+
+    /// Actions listed in the ⌘K palette.
+    pub fn palette() -> Vec<Action> {
+        use Action::*;
+        let mut v = vec![
+            New, NewFromSample, Open, Save, SaveAs, ExportPdf, ExportPng, Undo, Redo, Cut, Copy, Paste, Duplicate, Delete,
+            SelectAll, Deselect,
+        ];
+        for t in TOOLS {
+            v.push(SetTool(t.0));
+        }
+        v.extend([
+            InsertImage, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
+            FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ToggleReduceMotion, ShowShortcuts,
+            TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, ToggleActivity,
+            PauseAgents, StopAgents, FollowAgent, RevertAgent,
+        ]);
+        for t in zebra_core::Theme::ids() {
+            v.push(SetTheme(t));
+        }
+        v
+    }
+}
+
+pub const TOOLS: [(Tool, char); 10] = [
+    (Tool::Select, 'V'),
+    (Tool::Hand, 'H'),
+    (Tool::Text, 'T'),
+    (Tool::Frame, 'F'),
+    (Tool::Rectangle, 'R'),
+    (Tool::Ellipse, 'O'),
+    (Tool::Line, 'L'),
+    (Tool::Arrow, 'A'),
+    (Tool::Pen, 'D'),
+    (Tool::Highlighter, 'I'), // placeholder slot: the toolbar shows Image here
+];
+
+pub fn tool_name(t: Tool) -> &'static str {
+    match t {
+        Tool::Select => "Select",
+        Tool::Hand => "Hand",
+        Tool::Text => "Text",
+        Tool::Frame => "Frame",
+        Tool::Rectangle => "Rectangle",
+        Tool::Ellipse => "Ellipse",
+        Tool::Triangle => "Triangle",
+        Tool::Line => "Line",
+        Tool::Arrow => "Arrow",
+        Tool::Pen => "Pen",
+        Tool::Highlighter => "Highlighter",
+    }
+}
+
+pub fn frame_name(s: FrameStyle) -> &'static str {
+    match s {
+        FrameStyle::Bracket => "Bracket",
+        FrameStyle::Circle => "Circle",
+        FrameStyle::Rectangle => "Rectangle",
+        FrameStyle::Invisible => "Invisible",
+    }
+}
+
+const NONE: Modifiers = Modifiers::NONE;
+const CMD: Modifiers = Modifiers::COMMAND;
+const SHIFT: Modifiers = Modifiers::SHIFT;
+const CMD_SHIFT: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND };
+const CMD_ALT: Modifiers = Modifiers { alt: true, ..Modifiers::COMMAND };
+
+/// Editor shortcuts (present mode has its own keys). Most specific first.
+/// Matched exactly (Shift/Alt must match), with ⌘ = Ctrl off-Mac.
+pub static SHORTCUTS: &[(Modifiers, Key, Action)] = &[
+    (CMD_SHIFT, Key::S, Action::SaveAs),
+    (CMD_SHIFT, Key::Z, Action::Redo),
+    (CMD_SHIFT, Key::A, Action::AddToPath),
+    (CMD_SHIFT, Key::P, Action::CommandPalette),
+    (CMD_ALT, Key::Enter, Action::PresentCurrent),
+    (CMD, Key::Enter, Action::PresentStart),
+    (CMD, Key::S, Action::Save),
+    (CMD, Key::O, Action::Open),
+    (CMD, Key::N, Action::New),
+    (CMD, Key::E, Action::ExportPdf),
+    (CMD, Key::Z, Action::Undo),
+    (CMD, Key::Y, Action::Redo),
+    (CMD, Key::D, Action::Duplicate),
+    (CMD, Key::A, Action::SelectAll),
+    (CMD, Key::G, Action::WrapInFrame),
+    (CMD, Key::L, Action::ToggleLock),
+    (CMD, Key::K, Action::CommandPalette),
+    (CMD, Key::J, Action::ToggleActivity),
+    (CMD, Key::Period, Action::StopAgents),
+    (CMD, Key::Num0, Action::ZoomReset),
+    (CMD, Key::Equals, Action::ZoomIn),
+    (CMD, Key::Plus, Action::ZoomIn),
+    (CMD, Key::Minus, Action::ZoomOut),
+    (CMD, Key::CloseBracket, Action::BringToFront),
+    (CMD, Key::OpenBracket, Action::SendToBack),
+    (CMD, Key::Backslash, Action::ToggleSidebar),
+    (CMD, Key::Q, Action::Quit),
+    (SHIFT, Key::F5, Action::PresentCurrent),
+    (SHIFT, Key::Num1, Action::FitAll),
+    (SHIFT, Key::Exclamationmark, Action::FitAll),
+    (SHIFT, Key::Num2, Action::ZoomToSelection),
+    (SHIFT, Key::Questionmark, Action::ShowShortcuts),
+    (NONE, Key::Questionmark, Action::ShowShortcuts),
+    (NONE, Key::Exclamationmark, Action::FitAll),
+    (NONE, Key::F5, Action::PresentStart),
+    (NONE, Key::Delete, Action::Delete),
+    (NONE, Key::Backspace, Action::Delete),
+    (NONE, Key::Escape, Action::Deselect),
+    (NONE, Key::CloseBracket, Action::BringForward),
+    (NONE, Key::OpenBracket, Action::SendBackward),
+    (NONE, Key::P, Action::TogglePathEdit),
+    (NONE, Key::V, Action::SetTool(Tool::Select)),
+    (NONE, Key::H, Action::SetTool(Tool::Hand)),
+    (NONE, Key::T, Action::SetTool(Tool::Text)),
+    (NONE, Key::F, Action::FrameTool),
+    (NONE, Key::R, Action::SetTool(Tool::Rectangle)),
+    (NONE, Key::O, Action::SetTool(Tool::Ellipse)),
+    (NONE, Key::L, Action::SetTool(Tool::Line)),
+    (NONE, Key::A, Action::SetTool(Tool::Arrow)),
+    (NONE, Key::D, Action::SetTool(Tool::Pen)),
+    (NONE, Key::I, Action::InsertImage),
+];
+
+pub fn fmt_shortcut(m: Modifiers, k: Key) -> String {
+    let mac = cfg!(target_os = "macos");
+    let mut s = String::new();
+    if m.ctrl && !m.command {
+        s.push_str(if mac { "⌃" } else { "Ctrl+" });
+    }
+    if m.alt {
+        s.push_str(if mac { "⌥" } else { "Alt+" });
+    }
+    if m.shift {
+        s.push_str(if mac { "⇧" } else { "Shift+" });
+    }
+    if m.command || m.mac_cmd {
+        s.push_str(if mac { "⌘" } else { "Ctrl+" });
+    }
+    let key = match k {
+        Key::Enter => "↵".to_string(),
+        Key::Escape => "Esc".to_string(),
+        Key::Backspace => "⌫".to_string(),
+        Key::Delete => "Del".to_string(),
+        Key::Num0 => "0".into(),
+        Key::Num1 => "1".into(),
+        Key::Num2 => "2".into(),
+        Key::Period => ".".into(),
+        Key::Equals => "=".into(),
+        Key::Plus => "+".into(),
+        Key::Minus => "−".into(),
+        Key::OpenBracket => "[".into(),
+        Key::CloseBracket => "]".into(),
+        Key::Backslash => "\\".into(),
+        Key::Questionmark => "?".into(),
+        Key::Exclamationmark => "!".into(),
+        k => k.name().to_string(),
+    };
+    s.push_str(&key);
+    s
+}
+
+/// Does a key event's modifier state match a shortcut pattern exactly
+/// (with ⌘ on macOS == Ctrl elsewhere)?
+pub fn mods_match(ev: Modifiers, pat: Modifiers) -> bool {
+    // egui sets `command` = ⌘ on macOS and = Ctrl elsewhere.
+    let mac_ctrl_ok = !cfg!(target_os = "macos") || ev.ctrl == pat.ctrl;
+    ev.shift == pat.shift && ev.alt == pat.alt && ev.command == pat.command && mac_ctrl_ok
+}

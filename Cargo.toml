@@ -37,6 +37,7 @@ egui = "0.37"
 egui-wgpu = "0.37"
 muda = "0.21"
 rfd = "0.18"
+egui_kittest = "0.37"
 
 # api
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time", "fs"] }

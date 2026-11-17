@@ -1,0 +1,153 @@
+//! "File ▸ New from Sample": a small presentation built entirely through
+//! zebra-core commands (exactly what an agent could do), plus debug demos.
+use zebra_core::{
+    Command, Document, Editor, ElementId, ElementKind, FrameData, FrameStyle, NewElement, Origin, ShapeData, ShapeKind,
+    StepTarget, TextData, TextStyle, ViewCommand,
+};
+
+use crate::app::ZebraApp;
+
+const H: Origin = Origin::Human;
+
+fn text(ed: &mut Editor, s: &str, x: f64, y: f64, style: TextStyle, scale: f64, rot: f64, bullets: bool) -> ElementId {
+    let el = NewElement {
+        id: None,
+        x,
+        y,
+        scale,
+        rotation: rot,
+        w: None,
+        h: None,
+        name: String::new(),
+        kind: ElementKind::Text(TextData { text: s.into(), style, bullets, ..Default::default() }),
+    };
+    ed.apply(Command::AddElement { element: el }, H).expect("sample text").created[0].clone()
+}
+
+fn frame(ed: &mut Editor, style: FrameStyle, name: &str, x: f64, y: f64, w: f64, h: f64, rot: f64) -> ElementId {
+    let el = NewElement {
+        id: None,
+        x,
+        y,
+        scale: 1.0,
+        rotation: rot,
+        w: Some(w),
+        h: Some(h),
+        name: name.into(),
+        kind: ElementKind::Frame(FrameData { style, color: None }),
+    };
+    ed.apply(Command::AddElement { element: el }, H).expect("sample frame").created[0].clone()
+}
+
+fn shape(ed: &mut Editor, shape: ShapeKind, x: f64, y: f64, w: f64, h: f64, rot: f64, fill: Option<&str>, stroke: Option<&str>) -> ElementId {
+    let el = NewElement {
+        id: None,
+        x,
+        y,
+        scale: 1.0,
+        rotation: rot,
+        w: Some(w),
+        h: Some(h),
+        name: String::new(),
+        kind: ElementKind::Shape(ShapeData { shape, fill: fill.map(Into::into), stroke: stroke.map(Into::into), stroke_width: 6.0 }),
+    };
+    ed.apply(Command::AddElement { element: el }, H).expect("sample shape").created[0].clone()
+}
+
+pub fn build(renderer: &zebra_render::Renderer) -> Document {
+    let mut ed = Editor::default();
+    ed.measure = renderer.measure();
+    ed.apply(Command::SetTitle { title: "Thinking in Zoom".into() }, H).unwrap();
+
+    // Overview title
+    text(&mut ed, "Thinking in Zoom", 0.0, -560.0, TextStyle::Title, 2.2, 0.0, false);
+    text(&mut ed, "a tiny tour of a zooming canvas", 0.0, -400.0, TextStyle::Subtitle, 1.6, 0.0, false);
+
+    // 1. Bracket frame with fade-in bullets
+    let f1 = frame(&mut ed, FrameStyle::Bracket, "Why zoom?", -1150.0, 250.0, 900.0, 620.0, 0.0);
+    text(&mut ed, "Why zoom?", -1150.0, 40.0, TextStyle::Title, 1.0, 0.0, false);
+    let b1 = text(&mut ed, "Show the big picture first", -1150.0, 200.0, TextStyle::Body, 1.4, 0.0, true);
+    let b2 = text(&mut ed, "Then dive into the details", -1150.0, 290.0, TextStyle::Body, 1.4, 0.0, true);
+    let b3 = text(&mut ed, "Zoom out again to connect them", -1150.0, 380.0, TextStyle::Body, 1.4, 0.0, true);
+
+    // 2. Circle frame with a tiny hidden detail
+    let f2 = frame(&mut ed, FrameStyle::Circle, "Circles", 0.0, 300.0, 720.0, 720.0, 0.0);
+    text(&mut ed, "Frames come in four styles", 0.0, 170.0, TextStyle::Subtitle, 1.0, 0.0, false);
+    text(&mut ed, "brackets · circles · rectangles · invisible", 0.0, 260.0, TextStyle::Body, 1.0, 0.0, false);
+    shape(&mut ed, ShapeKind::Ellipse, 0.0, 450.0, 60.0, 60.0, 0.0, Some("theme:accent"), None);
+    let detail = frame(&mut ed, FrameStyle::Invisible, "A secret", 0.0, 450.0, 44.0, 28.0, 0.0);
+    text(&mut ed, "Look closer…", 0.0, 400.0, TextStyle::Body, 0.6, 0.0, false);
+    text(&mut ed, "hidden in plain sight!", 0.0, 448.0, TextStyle::Body, 0.05, 0.0, false);
+
+    // 3. Rotated rectangle frame
+    let f3 = frame(&mut ed, FrameStyle::Rectangle, "A new angle", 1150.0, 260.0, 860.0, 560.0, -12.0);
+    text(&mut ed, "A new angle", 1150.0 + 13.0, 120.0, TextStyle::Title, 0.9, -12.0, false);
+    text(&mut ed, "Rotate a frame and the camera\nrolls to meet it when presenting.", 1150.0 - 10.0, 330.0, TextStyle::Body, 1.2, -12.0, false);
+
+    // Arrows linking the ideas
+    shape(&mut ed, ShapeKind::Arrow, -560.0, 280.0, 140.0, 40.0, 0.0, None, Some("theme:shape2"));
+    shape(&mut ed, ShapeKind::Arrow, 560.0, 280.0, 140.0, 40.0, -6.0, None, Some("theme:shape2"));
+
+    // Path: overview → 1 (+3 fades) → circle → detail → rotated → overview
+    let step = |target| Command::AddStep { target, index: None, builds: vec![], notes: String::new() };
+    ed.apply(step(StepTarget::Overview), H).unwrap();
+    ed.apply(Command::AddStep { target: StepTarget::Element { id: f1 }, index: None, builds: vec![b1, b2, b3], notes: "Click to reveal each point.".into() }, H).unwrap();
+    ed.apply(step(StepTarget::Element { id: f2 }), H).unwrap();
+    ed.apply(step(StepTarget::Element { id: detail }), H).unwrap();
+    ed.apply(step(StepTarget::Element { id: f3 }), H).unwrap();
+    ed.apply(step(StepTarget::Overview), H).unwrap();
+    ed.doc
+}
+
+/// Debug demo states for screenshots: sample, pathedit, present, agent, text.
+pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
+    let doc = build(&app.renderer);
+    app.editor.load(doc, None);
+    app.after_load();
+    let _ = ctx;
+    for part in which.split(',') {
+        match part.trim() {
+            "sample" => {}
+            "select" => {
+                let found = app.editor.doc.ordered().find(|e| e.name == "A new angle").map(|e| e.id.clone());
+                if let Some(id) = found {
+                    app.select(vec![id]);
+                }
+            }
+            "pathedit" => {
+                let _ = app.editor.view(ViewCommand::SetMode { mode: zebra_core::Mode::PathEdit }, H);
+                app.selected_step = Some(1);
+            }
+            "present" => {
+                let _ = app.editor.view(ViewCommand::Present { step: Some(1) }, H);
+                let _ = app.editor.view(ViewCommand::Next, H);
+            }
+            "detail" => {
+                let _ = app.editor.view(ViewCommand::Present { step: Some(3) }, H);
+            }
+            "agent" => {
+                let agent = Origin::agent("Claude");
+                app.demo_agent = Some("Claude".into());
+                let _ = app.editor.apply(Command::AddText { text: "Added by the agent".into(), x: 0.0, y: -250.0, style: TextStyle::Subtitle, scale: Some(1.2), place: None, id: None }, agent.clone());
+                let found = app.editor.doc.ordered().find(|e| e.name == "Why zoom?").map(|e| e.id.clone());
+                if let Some(c) = found {
+                    let _ = app.editor.apply(Command::Update { id: c.clone(), patch: zebra_core::ElementPatch { frame_style: Some(FrameStyle::Bracket), ..Default::default() } }, agent.clone());
+                    let _ = app.editor.view(ViewCommand::Select { ids: vec![c] }, agent.clone());
+                }
+                app.show_activity = true;
+            }
+            "text" => {
+                let p = app.canvas.rect.center();
+                crate::canvas::begin_new_text(app, p);
+                if let Some(t) = &mut app.canvas.text {
+                    t.buf = "Hello, canvas".into();
+                }
+            }
+            "empty" => {
+                app.editor.load(Document::default(), None);
+                app.after_load();
+            }
+            _ => {}
+        }
+    }
+}
