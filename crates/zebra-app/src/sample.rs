@@ -109,6 +109,9 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
     for part in which.split(',') {
         match part.trim() {
             "sample" => {}
+            // Debug: media deck (picture, cropped circle, playing video),
+            // optionally in crop mode.
+            "media" | "mediacrop" | "mediaplay" => crate::media_ui::demo(app, part.trim()),
             // Debug: AI popover open (off), or with AI control switched on.
             "aipanel" => app.open_ai_panel = true,
             "aion" => {

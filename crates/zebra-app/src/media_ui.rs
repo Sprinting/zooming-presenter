@@ -853,7 +853,7 @@ pub fn crop_interact(app: &mut ZebraApp, ui: &mut Ui, resp: &egui::Response) {
 /// Image section: crop, mask, replace. Returns a patch to apply.
 pub fn image_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, img: &zebra_core::ImageData) -> Option<ElementPatch> {
     let mut patch = None;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let cropping = app.media.crop.as_ref().is_some_and(|c| c.id == id);
         if cropping {
             if ui.button("Done").on_hover_text("Finish cropping  ↵").clicked() {
@@ -862,14 +862,14 @@ pub fn image_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, img: &zebra_core
         } else if ui.button("Crop…").on_hover_text("Crop the picture (or double-click it)").clicked() {
             begin_crop(app, id);
         }
-        if img.crop.is_some() && ui.button("Reset Crop").clicked() {
+        if img.crop.is_some() && ui.button("Uncrop").clicked() {
             patch = Some(ElementPatch { crop: Some(Crop::FULL), ..Default::default() });
         }
         if ui.button("Replace…").on_hover_text("Swap the picture, keeping its place and size").clicked() {
             replace_image_dialog(app, id);
         }
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Mask");
         for (m, l) in [(ImageMask::Rectangle, "Rectangle"), (ImageMask::Rounded, "Rounded"), (ImageMask::Circle, "Circle")] {
             if ui.selectable_label(img.mask == m, l).clicked() {
@@ -895,7 +895,7 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
     let mut patch = None;
     let mut dragging = false;
     let playing = app.media.is_playing(id);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let label = if playing { "Pause" } else { "Play" };
         if ui.button(label).on_hover_text("Play in place (or double-click the video)").clicked() {
             toggle(app, id);
@@ -908,10 +908,10 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
         ui.label(egui::RichText::new("Video plays on macOS; the poster shows here.").size(11.0).color(ui.visuals().weak_text_color()));
     }
     let mut auto = v.autoplay;
-    if ui.checkbox(&mut auto, "Play when its step is reached").changed() {
+    if ui.checkbox(&mut auto, "Auto-play on its step").changed() {
         patch = Some(ElementPatch { autoplay: Some(auto), ..Default::default() });
     }
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let mut lp = v.looping;
         if ui.checkbox(&mut lp, "Loop").changed() {
             patch = Some(ElementPatch { looping: Some(lp), ..Default::default() });
@@ -932,7 +932,7 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
         }
         ui.end_row();
         ui.label("End");
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut e = v.end.unwrap_or(max);
             let r = ui.add(egui::DragValue::new(&mut e).speed(0.05).range(0.0..=max).suffix(" s").max_decimals(1));
             dragging |= r.dragged() || r.has_focus();
@@ -945,11 +945,11 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
         });
         ui.end_row();
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Poster");
         let frame = app.media.videos.get(id).and_then(|l| l.frame.clone());
         if let Some(f) = frame {
-            if ui.button("Use Current Frame").on_hover_text("Show this frame until the video plays").clicked() {
+            if ui.button("Use This Frame").on_hover_text("Show this frame until the video plays").clicked() {
                 let png = zebra_media::encode_png(&zebra_media::Frame { width: f.width, height: f.height, rgba: f.data.data.data().to_vec() });
                 app.apply(Command::SetPoster { id: id.to_string(), data_base64: base64::engine::general_purpose::STANDARD.encode(png), path: None });
             }
@@ -1026,4 +1026,85 @@ pub fn step_section(app: &mut ZebraApp, ui: &mut Ui, step: usize) {
             }
         }
     });
+}
+
+// ----------------------------------------------------------------------
+// Demo deck (screenshots and manual testing)
+
+fn demo_picture(w: u32, h: u32, hue: f32) -> Vec<u8> {
+    let img = image::RgbaImage::from_fn(w, h, |x, y| {
+        let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
+        // Sky to sea, with a sun.
+        let sun = ((fx - 0.7).powi(2) + (fy - 0.3).powi(2)).sqrt() < 0.12;
+        if sun {
+            return image::Rgba([255, 214, 120, 255]);
+        }
+        let horizon = fy > 0.55 + 0.04 * (fx * 12.0).sin();
+        let (r, g, b) = if horizon { (20.0 + 40.0 * fy, 70.0 + 60.0 * fy, 120.0 + 60.0 * fy) } else { (250.0 - 120.0 * fy, 150.0 + 60.0 * fy * hue, 120.0 + 120.0 * fy) };
+        image::Rgba([r as u8, g as u8, b as u8, 255])
+    });
+    let mut v = vec![];
+    let _ = img.write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Png);
+    v
+}
+
+pub fn demo(app: &mut ZebraApp, which: &str) {
+    use zebra_core::Origin;
+    let h = Origin::Human;
+    app.editor.load(zebra_core::Document::default(), None);
+    app.after_load();
+    let ed = &mut app.editor;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let cmd = |j: serde_json::Value| -> Command { serde_json::from_value(j).expect("demo command") };
+    let _ = ed.apply(cmd(serde_json::json!({"op":"add_frame","x":0,"y":0,"w":2400,"h":1300,"style":"bracket","name":"Media","add_to_path":true})), h.clone());
+    let _ = ed.apply(cmd(serde_json::json!({"op":"add_text","text":"Pictures, video and sound","x":0,"y":-520,"style":"title","scale":1.6})), h.clone());
+    let pic = demo_picture(1200, 800, 1.0);
+    let a = ed.apply(cmd(serde_json::json!({"op":"add_image","data_base64":b64(&pic),"x":-760,"y":80,"width":640,"alt":"Sunset"})), h.clone()).ok().and_then(|o| o.created.first().cloned());
+    let c = ed.apply(cmd(serde_json::json!({"op":"add_image","data_base64":b64(&demo_picture(800, 800, 0.4)),"x":0,"y":80,"width":520,"alt":"Sun"})), h.clone()).ok().and_then(|o| o.created.first().cloned());
+    if let Some(c) = &c {
+        let _ = ed.apply(cmd(serde_json::json!({"op":"update","id":c,"patch":{"crop":{"x":0.45,"y":0.1,"w":0.5,"h":0.5},"mask":"circle"}})), h.clone());
+        let _ = ed.apply(cmd(serde_json::json!({"op":"update","id":c,"patch":{"x":0,"y":80}})), h.clone());
+    }
+    // A video file (header only; the fake backend plays it).
+    let dir = zebra_core::media::cache_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("demo-clip.mp4");
+    let _ = std::fs::write(&path, zebra_core::media::fixtures::tiny_mp4(1280, 720, 20, true));
+    let poster = app.media.backend.poster_png(&path, 2.0, 640).ok();
+    let v = app
+        .editor
+        .apply(
+            Command::AddVideo {
+                data_base64: String::new(),
+                path: Some(path.to_string_lossy().to_string()),
+                x: 760.0,
+                y: 80.0,
+                width: Some(640.0),
+                alt: "Product demo".into(),
+                poster_base64: poster.map(|p| b64(&p)),
+                autoplay: true,
+                looping: true,
+                muted: false,
+                id: None,
+            },
+            h.clone(),
+        )
+        .ok()
+        .and_then(|o| o.created.first().cloned());
+    let _ = app.editor.view(zebra_core::ViewCommand::FitAll { animate: false }, h.clone());
+    match which {
+        "mediacrop" => {
+            if let Some(a) = a {
+                let _ = app.editor.apply(cmd(serde_json::json!({"op":"update","id":a,"patch":{"crop":{"x":0.2,"y":0.1,"w":0.6,"h":0.7}}})), h.clone());
+                begin_crop(app, &a);
+            }
+        }
+        "mediaplay" => {
+            if let Some(v) = v {
+                app.select(vec![v.clone()]);
+                play(app, &v);
+            }
+        }
+        _ => {}
+    }
 }
