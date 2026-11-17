@@ -191,7 +191,7 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
             true
         }
         SetTheme(t) => {
-            title = Theme::resolve(t).name;
+            title = crate::words::theme_name(&Theme::resolve(t));
             checked = Some(app.editor.doc.theme == *t);
             true
         }

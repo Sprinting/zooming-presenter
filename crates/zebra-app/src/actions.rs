@@ -109,7 +109,7 @@ impl Action {
             New => crate::t!("action-new"),
             NewFromSample => crate::t!("action-new-from-sample"),
             ShowTemplates => crate::t!("action-show-templates"),
-            NewFromTemplate(t) => crate::t!("action-new-from-template", name = zebra_core::templates::TEMPLATES.iter().find(|x| x.id == t).map(|x| x.name).unwrap_or(t)),
+            NewFromTemplate(t) => crate::t!("action-new-from-template", name = zebra_core::templates::TEMPLATES.iter().find(|x| x.id == t).map(crate::words::template_name).unwrap_or_else(|| t.to_string())),
             NewFromTemplateFile(p) => p.file_stem().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
             SaveAsTemplate => crate::t!("action-save-as-template"),
             Open => crate::t!("action-open"),
@@ -182,7 +182,7 @@ impl Action {
                 zebra_core::view::Permission::Edit => crate::t!("action-agent-permission-edit"),
                 zebra_core::view::Permission::Full => crate::t!("action-agent-permission-full"),
             },
-            SetTheme(t) => crate::t!("action-set-theme", name = zebra_core::Theme::resolve(t).name),
+            SetTheme(t) => crate::t!("action-set-theme", name = crate::words::theme_name(&zebra_core::Theme::resolve(t))),
             ThemeEditor => crate::t!("action-theme-editor"),
             About => crate::t!("action-about"),
         }

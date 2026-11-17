@@ -33,6 +33,35 @@ pub fn element_label(e: &Element, doc: &Document) -> String {
     e.own_label(doc).unwrap_or_else(|| type_name(&e.kind))
 }
 
+/// `prefix-<id>` from the ftl file when it has one, else `fallback`.
+fn named(prefix: &str, id: &str, fallback: &str) -> String {
+    let key = format!("{prefix}-{}", id.replace('_', "-"));
+    if crate::i18n::LOADER.has(&key) { tr(&key) } else { fallback.to_string() }
+}
+
+/// A theme's name: translated for the built-in themes, a person's own
+/// themes keep the name they gave.
+pub fn theme_name(t: &zebra_core::Theme) -> String {
+    if zebra_core::Theme::builtins().iter().any(|b| b.id == t.id && b.name == t.name) {
+        named("theme-name", &t.id, &t.name)
+    } else {
+        t.name.clone()
+    }
+}
+
+pub fn template_name(i: &zebra_core::templates::Info) -> String {
+    named("template-name", i.id, i.name)
+}
+pub fn template_description(i: &zebra_core::templates::Info) -> String {
+    named("template-description", i.id, i.description)
+}
+pub fn layout_name(i: &zebra_core::templates::Info) -> String {
+    named("layout-name", i.id, i.name)
+}
+pub fn layout_description(i: &zebra_core::templates::Info) -> String {
+    named("layout-description", i.id, i.description)
+}
+
 fn command(c: &Command) -> String {
     match c {
         Command::AddElement { element } => t!("history-add-element", kind = type_name(&element.kind)),
@@ -90,10 +119,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_shape_and_type_has_a_name() {
+    fn every_built_in_name_has_a_key() {
         for k in ShapeKind::ALL {
             let key = format!("shape-{}", key_part(k));
             assert!(crate::i18n::LOADER.has(&key), "missing {key} in zebra-app.ftl");
+        }
+        for t in zebra_core::Theme::builtins() {
+            assert!(crate::i18n::LOADER.has(&format!("theme-name-{}", t.id.replace('_', "-"))), "missing theme {}", t.id);
+        }
+        for i in zebra_core::templates::TEMPLATES {
+            assert!(crate::i18n::LOADER.has(&format!("template-name-{}", i.id.replace('_', "-"))), "missing template {}", i.id);
+            assert!(crate::i18n::LOADER.has(&format!("template-description-{}", i.id.replace('_', "-"))), "missing template {}", i.id);
+        }
+        for i in zebra_core::templates::LAYOUTS {
+            assert!(crate::i18n::LOADER.has(&format!("layout-name-{}", i.id.replace('_', "-"))), "missing layout {}", i.id);
+            assert!(crate::i18n::LOADER.has(&format!("layout-description-{}", i.id.replace('_', "-"))), "missing layout {}", i.id);
         }
         for t in ["frame", "text", "shape", "image", "video", "ink", "icon", "connector"] {
             assert!(crate::i18n::LOADER.has(&format!("element-{t}")), "missing element-{t}");

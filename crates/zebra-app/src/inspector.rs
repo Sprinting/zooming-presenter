@@ -771,11 +771,11 @@ fn document(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         });
         w::section(ui, &crate::t!("inspector-section-theme"), |ui| {
             let cur = app.editor.doc.theme.clone();
-            let name = app.editor.theme().name.clone();
+            let name = crate::words::theme_name(&app.editor.theme());
             let wdt = ui.available_width();
             w::popup_button(ui, "theme", &name, wdt, |ui| {
                 for t in Theme::builtins() {
-                    if w::menu_check(ui, t.id == cur, &t.name, None).clicked() {
+                    if w::menu_check(ui, t.id == cur, &crate::words::theme_name(&t), None).clicked() {
                         app.queued.push(Action::SetTheme(t.id.clone()));
                     }
                 }

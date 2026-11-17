@@ -348,7 +348,7 @@ fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
     for t in all {
         let selected = t.id == app.editor.doc.theme;
         let (r, resp) = ui.allocate_exact_size(EVec2::new(ui.available_width().max(214.0), 40.0), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &t.name));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, crate::words::theme_name(&t)));
         let painter = ui.painter();
         let hot = resp.hovered();
         if hot {
@@ -366,7 +366,7 @@ fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
         if selected {
             paint_icon(painter, Rect::from_center_size(Pos2::new(r.left() + 11.0, r.center().y), EVec2::splat(11.0)), Icon::Check, tc);
         }
-        painter.text(r.min + EVec2::new(78.0, 20.0), Align2::LEFT_CENTER, &t.name, style::ui_font(13.0), tc);
+        painter.text(r.min + EVec2::new(78.0, 20.0), Align2::LEFT_CENTER, crate::words::theme_name(&t), style::ui_font(13.0), tc);
         if resp.clicked() {
             app.queued.push(Action::SetTheme(t.id.clone()));
             ui.close();
@@ -376,7 +376,7 @@ fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
         ui.separator();
         ui.label(RichText::new(&crate::t!("toolbar-theme-my-themes")).size(11.0).weak());
         for (_, doc, t) in mine {
-            if ui.button(&t.name).clicked() {
+            if ui.button(crate::words::theme_name(&t)).clicked() {
                 crate::theme_editor::apply_library_theme(app, &doc, &t);
                 ui.close();
             }

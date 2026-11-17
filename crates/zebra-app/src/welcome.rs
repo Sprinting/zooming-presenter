@@ -147,7 +147,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
                 egui::Grid::new("templates").spacing([10.0, 10.0]).show(ui, |ui| {
                     for (i, t) in TEMPLATES.iter().enumerate() {
                         let sel = Selection::Template(t.id);
-                        let r = card(ui, tex.and_then(|m| m.get(&format!("t:{}", t.id))), t.name, welcome.selected == sel, &p).on_hover_text(t.description);
+                        let r = card(ui, tex.and_then(|m| m.get(&format!("t:{}", t.id))), &crate::words::template_name(t), welcome.selected == sel, &p).on_hover_text(crate::words::template_description(t));
                         if r.clicked() {
                             welcome.selected = sel.clone();
                         }
@@ -232,7 +232,7 @@ pub fn new_from_template(app: &mut ZebraApp, id: &str) {
         return;
     }
     let mut doc = ed.doc;
-    doc.title = TEMPLATES.iter().find(|t| t.id == id).filter(|t| t.id != "blank").map(|t| t.name.to_string()).unwrap_or_else(|| crate::t!("app-untitled"));
+    doc.title = TEMPLATES.iter().find(|t| t.id == id).filter(|t| t.id != "blank").map(crate::words::template_name).unwrap_or_else(|| crate::t!("app-untitled"));
     app.editor.load(doc, None);
     app.after_load();
 }
@@ -276,7 +276,7 @@ pub fn layout_gallery(app: &mut ZebraApp, ctx: &egui::Context) {
         let tex = app.previews.as_ref().map(|p| &p.textures);
         egui::Grid::new("layouts").spacing([10.0, 10.0]).show(ui, |ui| {
             for (i, l) in LAYOUTS.iter().enumerate() {
-                if card(ui, tex.and_then(|m| m.get(&format!("l:{}", l.id))), l.name, false, &p).on_hover_text(l.description).clicked() {
+                if card(ui, tex.and_then(|m| m.get(&format!("l:{}", l.id))), &crate::words::layout_name(l), false, &p).on_hover_text(crate::words::layout_description(l)).clicked() {
                     pick = Some(l.id);
                 }
                 if i % 5 == 4 {

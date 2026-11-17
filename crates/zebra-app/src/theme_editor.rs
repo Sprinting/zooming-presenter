@@ -29,12 +29,13 @@ impl ThemeEditor {
     pub fn open(app: &ZebraApp) -> Self {
         let mut draft = app.editor.theme();
         if Theme::is_builtin(&draft.id) {
+            let base = crate::words::theme_name(&draft);
             let mut n = 1;
             while app.editor.doc.themes.iter().any(|t| t.id == format!("custom-{n}")) {
                 n += 1;
             }
             draft.id = format!("custom-{n}");
-            draft.name = crate::t!("theme-editor-custom-name", name = draft.name.as_str());
+            draft.name = crate::t!("theme-editor-custom-name", name = base.as_str());
         }
         let mut families = app.editor.measure.font_families();
         for b in ["Sans", "Serif", "Mono", "Hand"].iter().rev() {
@@ -132,7 +133,7 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
         ui.menu_button(crate::t!("theme-editor-choose-theme"), |ui| {
             let all: Vec<Theme> = Theme::builtins().into_iter().chain(app.editor.doc.themes.iter().cloned()).collect();
             for t in all {
-                if t.id != te.draft.id && ui.selectable_label(false, &t.name).clicked() {
+                if t.id != te.draft.id && ui.selectable_label(false, crate::words::theme_name(&t)).clicked() {
                     let (id, name) = (te.draft.id.clone(), te.draft.name.clone());
                     te.draft = t;
                     te.draft.id = id;
