@@ -551,28 +551,27 @@ fn copy_box(ui: &mut Ui, text: &str, id: &str) {
 
 /// The bottom status bar while AI control is on: which agent is connected
 /// and its latest change, fading to idle. Click: the Activity pane.
-fn status_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
+/// "beta: Add rectangle" for 30 s after an agent's change, then "beta:
+/// idle" (or "paused"). Only that agent's own changes count. The bool is
+/// true while the change is recent.
+fn agent_status(app: &ZebraApp, ctx: &egui::Context, name: &str) -> (String, bool) {
     const RECENT: f64 = 30.0;
     let now = app.editor.view.now;
+    let last = app.editor.activity.iter().rev().find(|a| matches!(&a.origin, Origin::Agent { name: n } if n == name)).map(|a| (a.time, a.label.clone()));
+    match (app.editor.view.agent_paused, &last) {
+        (true, _) => (crate::t!("status-agent-paused", name = name), false),
+        (false, Some((t, l))) if now - t < RECENT => {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(RECENT - (now - t) + 0.05));
+            (crate::t!("status-agent-action", name = name, action = l.as_str()), true)
+        }
+        (false, _) => (crate::t!("status-agent-idle", name = name), false),
+    }
+}
+
+fn status_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let connected = app.agent_connected();
     let name = app.agent_name();
-    // That agent's own latest change, never another agent's.
-    let last = app
-        .editor
-        .activity
-        .iter()
-        .rev()
-        .find(|a| matches!(&a.origin, Origin::Agent { name: n } if *n == name))
-        .map(|a| (a.time, a.label.clone()));
-    let (text, live) = match (connected, app.editor.view.agent_paused, &last) {
-        (true, true, _) => (crate::t!("status-agent-paused", name = name.as_str()), false),
-        (true, false, Some((t, l))) if now - t < RECENT => {
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(RECENT - (now - t) + 0.05));
-            (crate::t!("status-agent-action", name = name.as_str(), action = l.as_str()), true)
-        }
-        (true, false, _) => (crate::t!("status-agent-idle", name = name.as_str()), false),
-        (false, _, _) => (crate::t!("status-no-agent"), false),
-    };
+    let (text, live) = if connected { agent_status(app, ui.ctx(), &name) } else { (crate::t!("status-no-agent"), false) };
     let rect = ui.max_rect();
     let resp = ui.interact(rect, egui::Id::unique("agent-status"), Sense::click());
     let color = if live { p.text } else { p.weak };
@@ -670,6 +669,23 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let mut follow = app.editor.view.follow_agent;
     if w::checkbox(ui, &mut follow, &crate::t!("activity-follow")).on_hover_text(&crate::t!("activity-follow-tip")).changed() {
         app.queued.push(Action::FollowAgent);
+    }
+    // Every agent connected right now, each with its own latest change.
+    ui.add_space(6.0);
+    ui.label(RichText::new(crate::t!("activity-connected")).font(style::semibold(11.0)).color(p.weak));
+    let mut names: Vec<String> = app.api.as_ref().map(|a| a.clients()).unwrap_or_default().into_iter().map(|c| c.name).collect();
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        w::caption(ui, &crate::t!("activity-none-connected"));
+    }
+    for n in &names {
+        let (text, live) = agent_status(app, ui.ctx(), n);
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(EVec2::splat(8.0), Sense::hover());
+            ui.painter().circle_filled(r.center(), 3.5, AGENT);
+            ui.add(egui::Label::new(RichText::new(text).size(12.0).color(if live { p.text } else { p.weak })).truncate());
+        });
     }
     ui.add_space(4.0);
     w::separator(ui);
