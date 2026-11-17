@@ -78,6 +78,11 @@ pub fn render_pixmap(list: &DisplayList) -> Pixmap {
     pixmap
 }
 
+/// Rasterise to straight-alpha RGBA8 rows (`width_px * height_px * 4` bytes).
+pub fn render_rgba(list: &DisplayList) -> Vec<u8> {
+    render_pixmap(list).take_rgba8(vello_cpu::peniko::ImageAlphaType::Alpha)
+}
+
 /// Split a similarity transform into (uniform scale, transform without it).
 pub(crate) fn split_scale(a: &Affine) -> (f64, Affine) {
     let s = affine_scale(a);
@@ -164,6 +169,12 @@ pub(crate) fn capture_view(editor: &Editor, target: &CaptureTarget, w: u32, h: u
 }
 
 pub(crate) fn capture(r: &Renderer, editor: &Editor, target: &CaptureTarget, w: u32, h: u32) -> Result<Vec<u8>, ZError> {
+    let list = capture_list(r, editor, target, w, h)?;
+    let pixmap = render_pixmap(&list);
+    pixmap.into_png().map_err(|e| ZError::new("render_failed", format!("PNG encoding failed: {e}")))
+}
+
+pub(crate) fn capture_list(r: &Renderer, editor: &Editor, target: &CaptureTarget, w: u32, h: u32) -> Result<DisplayList, ZError> {
     if w == 0 || h == 0 || w > MAX_CAPTURE || h > MAX_CAPTURE {
         return Err(ZError::new("invalid", format!("capture size must be 1..={MAX_CAPTURE} pixels per side, got {w}x{h}")));
     }
@@ -172,6 +183,5 @@ pub(crate) fn capture(r: &Renderer, editor: &Editor, target: &CaptureTarget, w: 
     // Rounding can be off by one; the PNG must be exactly w x h.
     list.width_px = w;
     list.height_px = h;
-    let pixmap = render_pixmap(&list);
-    pixmap.into_png().map_err(|e| ZError::new("render_failed", format!("PNG encoding failed: {e}")))
+    Ok(list)
 }

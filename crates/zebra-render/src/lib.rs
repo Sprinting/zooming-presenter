@@ -53,7 +53,7 @@ pub mod display;
 pub use display::DisplayList;
 
 pub mod text;
-mod cpu;
+pub mod cpu;
 mod pdf;
 #[cfg(feature = "gpu")]
 pub mod gpu;
@@ -89,6 +89,12 @@ impl Renderer {
     /// Off-screen render to PNG. `width`x`height` in pixels.
     pub fn capture(&self, editor: &Editor, target: &CaptureTarget, width: u32, height: u32) -> Result<Vec<u8>, zebra_core::ZError> {
         cpu::capture(self, editor, target, width, height)
+    }
+
+    /// The display list a [`Renderer::capture`] of `target` at `width`x`height`
+    /// pixels would rasterise (e.g. to render it on the GPU instead).
+    pub fn capture_display_list(&self, editor: &Editor, target: &CaptureTarget, width: u32, height: u32) -> Result<DisplayList, zebra_core::ZError> {
+        cpu::capture_list(self, editor, target, width, height)
     }
 
     /// Bundled font check: (family, faces found, files bundled).

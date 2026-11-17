@@ -198,3 +198,21 @@ fn capture_errors_and_no_state_change() {
     }
     assert_eq!(before, (ed.view.camera, ed.revision));
 }
+
+#[test]
+fn pdf_smoke() {
+    let r = Renderer::new();
+    let ed = sample(&r, "paper");
+    let pdf = r.export_pdf(&ed).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+    std::fs::write(out_dir().join("sample.pdf"), &pdf).unwrap();
+    let text = String::from_utf8_lossy(&pdf);
+    let count = |pat: &str| text.matches(pat).count();
+    let pages = count("/Type /Page") - count("/Type /Pages") + count("/Type/Page") - count("/Type/Pages");
+    assert_eq!(pages, ed.doc.path.len(), "one page per step");
+    // Empty path: one overview page.
+    let mut ed2 = sample(&r, "classic");
+    ed2.doc.path.clear();
+    let pdf2 = r.export_pdf(&ed2).unwrap();
+    assert!(pdf2.starts_with(b"%PDF"));
+}
