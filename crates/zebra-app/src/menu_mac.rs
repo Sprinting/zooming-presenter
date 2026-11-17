@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use muda::{accelerator::Accelerator, CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
-use crate::actions::{Action, SHORTCUTS};
+use crate::actions::Action;
 use crate::app::ZebraApp;
 use crate::menus::{is_checkable, spec, state, Item, ItemState};
 
@@ -29,6 +29,8 @@ struct Entry {
     item: Native,
     action: Action,
     last: ItemState,
+    /// The key equivalent pushed to AppKit (follows Settings › Keyboard).
+    accel: Option<String>,
 }
 
 pub struct MacMenu {
@@ -45,7 +47,16 @@ pub fn menu_owns(a: &Action) -> bool {
 }
 
 fn accel_for(a: &Action) -> Option<Accelerator> {
-    let (m, k, _) = SHORTCUTS.iter().find(|(_, _, x)| x == a)?;
+    accel_spec(a)?.parse().ok()
+}
+
+/// The key equivalent of `a` in muda's notation ("CmdOrCtrl+Shift+A").
+fn accel_spec(a: &Action) -> Option<String> {
+    if let Some(s) = text_field_spec(a) {
+        return Some(s.to_string());
+    }
+    let (m, k) = crate::keymap::binding_for(a)?;
+    let (m, k) = (&m, &k);
     // Plain-letter tool keys and ⌫/Esc stay with egui: as menu key
     // equivalents they would break typing.
     let is_f = matches!(k, egui::Key::F5);
@@ -79,21 +90,36 @@ fn accel_for(a: &Action) -> Option<Accelerator> {
         s.push_str("Alt+");
     }
     s.push_str(&key);
-    s.parse().ok()
+    Some(s)
 }
 
-/// Undo/Redo/clipboard shortcuts egui text fields also need.
-fn text_field_accel(a: &Action) -> Option<Accelerator> {
-    let s = match a {
+/// The keys of a menu item's key equivalent, as egui names them.
+fn menu_keys(a: &Action) -> Option<(egui::Modifiers, egui::Key)> {
+    let cmd = egui::Modifiers::COMMAND;
+    let fixed = match a {
+        Action::Undo => Some((cmd, egui::Key::Z)),
+        Action::Redo => Some((egui::Modifiers { shift: true, ..cmd }, egui::Key::Z)),
+        Action::Cut => Some((cmd, egui::Key::X)),
+        Action::Copy => Some((cmd, egui::Key::C)),
+        Action::Paste => Some((cmd, egui::Key::V)),
+        Action::SelectAll => Some((cmd, egui::Key::A)),
+        _ => None,
+    };
+    fixed.or_else(|| crate::keymap::binding_for(a))
+}
+
+/// Undo/Redo/clipboard shortcuts egui text fields also need (fixed).
+fn text_field_spec(a: &Action) -> Option<&'static str> {
+    Some(match a {
         Action::Undo => "CmdOrCtrl+Z",
         Action::Redo => "CmdOrCtrl+Shift+Z",
         Action::Cut => "CmdOrCtrl+X",
         Action::Copy => "CmdOrCtrl+C",
         Action::Paste => "CmdOrCtrl+V",
         Action::SelectAll => "CmdOrCtrl+A",
+        Action::Quit => "CmdOrCtrl+Q",
         _ => return None,
-    };
-    s.parse().ok()
+    })
 }
 
 fn build_items(sub: &Submenu, items: &[Item], m: &mut MacMenu, next: &mut u32, app: &ZebraApp) {
@@ -103,7 +129,8 @@ fn build_items(sub: &Submenu, items: &[Item], m: &mut MacMenu, next: &mut u32, a
                 *next += 1;
                 let id = format!("zebra.{next}");
                 let st = state(app, a);
-                let accel = text_field_accel(a).or_else(|| accel_for(a));
+                let spec = accel_spec(a);
+                let accel = spec.as_deref().and_then(|s| s.parse().ok());
                 let item = if is_checkable(a) {
                     let c = CheckMenuItem::with_id(id.clone(), &st.title, st.enabled, st.checked.unwrap_or(false), accel);
                     let _ = sub.append(&c);
@@ -114,7 +141,7 @@ fn build_items(sub: &Submenu, items: &[Item], m: &mut MacMenu, next: &mut u32, a
                     Native::Plain(mi)
                 };
                 m.ids.insert(id, a.clone());
-                m.entries.push(Entry { item, action: a.clone(), last: st });
+                m.entries.push(Entry { item, action: a.clone(), last: st, accel: spec });
             }
             Item::Sep => {
                 let _ = sub.append(&PredefinedMenuItem::separator());
@@ -142,9 +169,10 @@ impl MacMenu {
         let app_menu = Submenu::new(crate::t!("menu-mac-app"), true);
         let about = MenuItem::with_id("zebra.about", Action::About.label(), true, None);
         m.ids.insert("zebra.about".to_string(), Action::About);
-        let settings = MenuItem::with_id("zebra.settings", Action::Settings.label(), true, "CmdOrCtrl+Comma".parse().ok());
+        let settings_spec = accel_spec(&Action::Settings);
+        let settings = MenuItem::with_id("zebra.settings", Action::Settings.label(), true, accel_for(&Action::Settings));
         m.ids.insert("zebra.settings".to_string(), Action::Settings);
-        let quit = MenuItem::with_id("zebra.quit", Action::Quit.label(), true, "CmdOrCtrl+Q".parse().ok());
+        let quit = MenuItem::with_id("zebra.quit", Action::Quit.label(), true, accel_for(&Action::Quit));
         m.ids.insert("zebra.quit".to_string(), Action::Quit);
         let _ = app_menu.append_items(&[
             &about,
@@ -160,6 +188,7 @@ impl MacMenu {
             &quit,
         ]);
         let _ = m._menu.append(&app_menu);
+        m.entries.push(Entry { item: Native::Plain(settings.clone()), action: Action::Settings, last: state(app, &Action::Settings), accel: settings_spec });
 
         let mut help: Option<Submenu> = None;
         let help_title = crate::t!("menu-help");
@@ -193,6 +222,15 @@ impl MacMenu {
     /// Push changed titles, enabled states and ✓ marks to AppKit.
     fn sync(&mut self, app: &ZebraApp) {
         for e in &mut self.entries {
+            let spec = accel_spec(&e.action);
+            if spec != e.accel {
+                let accel = spec.as_deref().and_then(|s| s.parse().ok());
+                let _ = match &e.item {
+                    Native::Plain(mi) => mi.set_accelerator(accel),
+                    Native::Check(c) => c.set_accelerator(accel),
+                };
+                e.accel = spec;
+            }
             let st = state(app, &e.action);
             if st == e.last {
                 continue;
@@ -266,6 +304,13 @@ pub fn poll(app: &mut ZebraApp, ctx: &egui::Context) {
     }
     while let Ok(ev) = MenuEvent::receiver().try_recv() {
         let Some(a) = app.menu.as_ref().and_then(|m| m.ids.get(ev.id().0.as_str()).cloned()) else { continue };
+        // Settings › Keyboard is recording: a key the menu bar owns was
+        // pressed. Hand its keys to the recorder instead of acting.
+        if let Some(cap) = &mut app.key_capture {
+            cap.got = menu_keys(&a);
+            ctx.request_repaint();
+            continue;
+        }
         // Clipboard and undo items while typing go to the text field.
         if ctx.egui_wants_keyboard_input() {
             let cmd = egui::Modifiers::COMMAND;

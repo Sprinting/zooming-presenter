@@ -14,7 +14,7 @@ use zebra_core::{
 };
 use zebra_render::Renderer;
 
-use crate::actions::{mods_match, Action, SHORTCUTS};
+use crate::actions::Action;
 use crate::canvas::CanvasState;
 use crate::thumbs::Thumbs;
 
@@ -104,6 +104,10 @@ pub struct ZebraApp {
     /// Debug: draw the icon sheet (`--demo icons`).
     pub show_icon_sheet: bool,
     pub settings_pane: crate::settings::Pane,
+    /// Settings › Keyboard: recording a new shortcut (all shortcuts are off).
+    pub key_capture: Option<crate::keymap::Capture>,
+    /// Settings › Keyboard: what the last change did ("⌘L was Lock").
+    pub key_message: Option<String>,
     /// Theme for File › New (Settings › General).
     pub default_theme: String,
     /// Snap to other objects while moving (Settings › Canvas).
@@ -214,6 +218,8 @@ impl ZebraApp {
             show_settings: false,
             show_icon_sheet: false,
             settings_pane: storage.and_then(|s| eframe::get_value(s, "settings_pane")).unwrap_or_default(),
+            key_capture: None,
+            key_message: None,
             default_theme: storage.and_then(|s| eframe::get_value(s, "default_theme")).unwrap_or_else(|| zebra_core::Document::default().theme),
             snapping: storage.and_then(|s| eframe::get_value(s, "snapping")).unwrap_or(true),
             mac_sync: Default::default(),
@@ -1101,6 +1107,10 @@ impl ZebraApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &Context) {
+        // Settings › Keyboard is recording keys: none of them act.
+        if self.key_capture.is_some() {
+            return;
+        }
         let text_focus = ctx.egui_wants_keyboard_input();
         let events = ctx.input(|i| i.events.clone());
         for ev in events {
@@ -1122,7 +1132,8 @@ impl ZebraApp {
                     }
                 }
             }
-            let Some((_, _, action)) = SHORTCUTS.iter().find(|(m, k, _)| *k == key && mods_match(modifiers, *m)) else { continue };
+            let Some(action) = crate::keymap::action_for(modifiers, key) else { continue };
+            let action = &action;
             let has_cmd = modifiers.command;
             // While typing: only ⌘ shortcuts that text fields don't use.
             if text_focus {

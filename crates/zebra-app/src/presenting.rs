@@ -714,7 +714,7 @@ mod mac {
                 let top = main_h - (f.origin.y + f.size.height);
                 let name = s.localizedName().to_string();
                 Display {
-                    name: if name.is_empty() { crate::t!("present-display-n", n = i + 1) } else { name },
+                    name: if name.is_empty() { crate::t!("present-display-n", n = ((i + 1) as u64)) } else { name },
                     frame: egui::Rect::from_min_size(egui::pos2(f.origin.x as f32, top as f32), egui::vec2(f.size.width as f32, f.size.height as f32)),
                     main: i == 0,
                 }

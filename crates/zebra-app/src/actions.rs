@@ -190,7 +190,7 @@ impl Action {
 
     /// Human-readable shortcut, macOS glyphs.
     pub fn shortcut_text(&self) -> Option<String> {
-        SHORTCUTS.iter().find(|s| &s.2 == self).map(|(m, k, _)| fmt_shortcut(*m, *k))
+        crate::keymap::binding_for(self).map(|(m, k)| fmt_shortcut(m, k))
     }
 
     /// Actions listed in the ⌘K palette.
@@ -276,9 +276,11 @@ const CMD_ALT: Modifiers = Modifiers { alt: true, ..Modifiers::COMMAND };
 const CMD_ALT_SHIFT: Modifiers = Modifiers { alt: true, shift: true, ..Modifiers::COMMAND };
 const CMD_CTRL: Modifiers = Modifiers { ctrl: true, ..Modifiers::COMMAND };
 
-/// Editor shortcuts (present mode has its own keys). Most specific first.
-/// Matched exactly (Shift/Alt must match), with ⌘ = Ctrl off-Mac.
-pub static SHORTCUTS: &[(Modifiers, Key, Action)] = &[
+/// The shortcuts Zebra comes with (present mode has its own keys). Most
+/// specific first. Matched exactly (Shift/Alt must match), with ⌘ = Ctrl
+/// off-Mac. What is live is [`crate::keymap`]: these plus the person's
+/// changes.
+pub static DEFAULTS: &[(Modifiers, Key, Action)] = &[
     // Keynote: Play ⌥⌘P; from the current step adds ⇧.
     (CMD_ALT_SHIFT, Key::P, Action::PresentCurrent),
     (CMD_ALT, Key::P, Action::PresentStart),

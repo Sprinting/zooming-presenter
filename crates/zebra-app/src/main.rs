@@ -46,6 +46,7 @@ struct Cli {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    zebra_app::keymap::load();
     let permission = match cli.agent_permission.as_str() {
         "observe" => Permission::Observe,
         "full" => Permission::Full,

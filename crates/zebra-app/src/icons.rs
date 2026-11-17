@@ -68,6 +68,7 @@ pub enum Icon {
     Activity,
     Pause,
     Warning,
+    Keyboard,
 }
 
 /// Every icon, for review (`zebra --demo icons`).
@@ -77,7 +78,7 @@ pub const ALL: &[Icon] = &[
     Icon::Plus, Icon::Minus, Icon::Home, Icon::Zoom, Icon::AddStep, Icon::Play, Icon::Shapes, Icon::Media, Icon::Theme, Icon::Share,
     Icon::Sparkles, Icon::Format, Icon::SidebarLeft, Icon::ChevronDown, Icon::ChevronRight, Icon::ChevronLeft, Icon::UpDown, Icon::Check, Icon::Close,
     Icon::Gear, Icon::Lock, Icon::Unlock, Icon::Trash, Icon::Note, Icon::Video, Icon::Path, Icon::AlignLeft, Icon::AlignCenter,
-    Icon::AlignRight, Icon::List, Icon::Bold, Icon::Italic, Icon::Underline, Icon::Group, Icon::Activity, Icon::Pause, Icon::Warning,
+    Icon::AlignRight, Icon::List, Icon::Bold, Icon::Italic, Icon::Underline, Icon::Group, Icon::Activity, Icon::Pause, Icon::Warning, Icon::Keyboard,
 ];
 
 pub fn debug_sheet(ui: &mut egui::Ui) {
@@ -404,6 +405,15 @@ pub fn paint_icon(painter: &Painter, r: Rect, icon: Icon, c: Color32) {
             painter.add(closed(&[(0.0, -8.5), (9.0, 7.5), (-9.0, 7.5)]));
             painter.add(line(&[(0.0, -2.5), (0.0, 2.5)]));
             painter.circle_filled(p(0.0, 5.0), 1.0 * u, c);
+        }
+        Icon::Keyboard => {
+            painter.add(rr(-9.5, -6.0, 9.5, 6.0, 1.8));
+            for y in [-2.5, 0.5] {
+                for x in [-6.0, -3.0, 0.0, 3.0, 6.0] {
+                    painter.circle_filled(p(x, y), 0.9 * u, c);
+                }
+            }
+            painter.add(line(&[(-4.5, 3.5), (4.5, 3.5)]));
         }
     }
 }

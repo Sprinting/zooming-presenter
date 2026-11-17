@@ -9,6 +9,7 @@ pub mod files;
 pub mod i18n;
 pub mod icons;
 pub mod inspector;
+pub mod keymap;
 pub mod inspector_s3;
 pub mod shape_library;
 pub mod mac;

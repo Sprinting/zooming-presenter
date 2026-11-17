@@ -15,6 +15,7 @@ pub enum Pane {
     General,
     Canvas,
     Presenting,
+    Keyboard,
     Agents,
 }
 
@@ -25,6 +26,7 @@ impl Pane {
             Pane::General => crate::t!("settings-general"),
             Pane::Canvas => crate::t!("settings-canvas"),
             Pane::Presenting => crate::t!("settings-presenting"),
+            Pane::Keyboard => crate::t!("settings-keyboard"),
             Pane::Agents => crate::t!("settings-agents"),
         }
     }
@@ -33,6 +35,7 @@ impl Pane {
 pub fn show(app: &mut ZebraApp, ctx: &egui::Context) {
     if !app.show_settings {
         ctx.data_mut(|d| d.remove::<u32>(egui::Id::unique("zebra-settings-frames")));
+        app.key_capture = None;
         return;
     }
     let title = app.settings_pane.label();
@@ -56,7 +59,9 @@ pub fn show(app: &mut ZebraApp, ctx: &egui::Context) {
         if frames < 30 {
             ctx.request_repaint_of(vid);
         }
-        if ctx.input(|i| i.viewport().close_requested() || (i.modifiers.command && i.key_pressed(egui::Key::W)) || i.key_pressed(egui::Key::Escape)) {
+        // While a shortcut is being typed, Esc and ⌘W belong to it.
+        let typing_keys = app.key_capture.is_some();
+        if ctx.input(|i| i.viewport().close_requested() || (!typing_keys && ((i.modifiers.command && i.key_pressed(egui::Key::W)) || i.key_pressed(egui::Key::Escape)))) {
             app.show_settings = false;
         }
         if class == egui::ViewportClass::EmbeddedWindow {
@@ -79,9 +84,9 @@ fn contents(app: &mut ZebraApp, ui: &mut Ui) {
     egui::Frame::new().fill(p.toolbar).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            let total = 4.0 * 66.0;
+            let total = 5.0 * 66.0;
             ui.add_space(((ui.available_width() - total) / 2.0).max(0.0));
-            for (pane, icon) in [(Pane::General, Icon::Gear), (Pane::Canvas, Icon::Select), (Pane::Presenting, Icon::Play), (Pane::Agents, Icon::Sparkles)] {
+            for (pane, icon) in [(Pane::General, Icon::Gear), (Pane::Canvas, Icon::Select), (Pane::Presenting, Icon::Play), (Pane::Keyboard, Icon::Keyboard), (Pane::Agents, Icon::Sparkles)] {
                 let label = pane.label();
                 ui.allocate_ui(Vec2::new(64.0, 44.0), |ui| {
                     let st = ToolbarState { enabled: true, active: app.settings_pane == pane, ..Default::default() };
@@ -100,6 +105,7 @@ fn contents(app: &mut ZebraApp, ui: &mut Ui) {
             Pane::General => general(app, ui),
             Pane::Canvas => canvas(app, ui),
             Pane::Presenting => presenting(app, ui),
+            Pane::Keyboard => keyboard(app, ui),
             Pane::Agents => agents(app, ui),
         }
     });
@@ -118,10 +124,10 @@ fn srow(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
 
 fn general(app: &mut ZebraApp, ui: &mut Ui) {
     srow(ui, &crate::t!("settings-default-theme"), |ui| {
-        let name = Theme::resolve(&app.default_theme).name;
+        let name = crate::words::theme_name(&Theme::resolve(&app.default_theme));
         w::popup_button(ui, "default-theme", &name, 200.0, |ui| {
             for t in Theme::builtins() {
-                if w::menu_check(ui, t.id == app.default_theme, &t.name, None).clicked() {
+                if w::menu_check(ui, t.id == app.default_theme, &crate::words::theme_name(&t), None).clicked() {
                     app.default_theme = t.id.clone();
                 }
             }
@@ -173,6 +179,81 @@ fn presenting(app: &mut ZebraApp, ui: &mut Ui) {
             let _ = app.editor.view(zebra_core::ViewCommand::SetReduceMotion { on }, zebra_core::Origin::Human);
         }
         w::caption(ui, crate::t!("settings-reduce-motion-caption"));
+    });
+}
+
+/// Settings › Keyboard: every rebindable action and its shortcut. Click a
+/// shortcut, then press the new keys; Esc cancels.
+fn keyboard(app: &mut ZebraApp, ui: &mut Ui) {
+    use crate::keymap;
+    let p = Palette::of(ui.ctx());
+    // Keys typed while a shortcut is being recorded (the Mac menu bar
+    // hands over the ones it owns through `got`).
+    let mut recorded_now = false;
+    if let Some(cap) = &mut app.key_capture {
+        if cap.got.is_none() {
+            cap.got = ui.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, modifiers, .. } => Some((*modifiers, *key)),
+                    _ => None,
+                })
+            });
+        }
+        if let Some((m, k)) = cap.got {
+            let a = cap.action.clone();
+            app.key_capture = None;
+            recorded_now = true;
+            if k == egui::Key::Escape && m.is_none() {
+                // Cancelled.
+            } else {
+                let keys = crate::actions::fmt_shortcut(m, k);
+                match keymap::action_for(m, k) {
+                    Some(other) if other != a && !keymap::rebindable().contains(&other) => {
+                        app.key_message = Some(crate::t!("settings-keys-taken", keys = keys.as_str(), action = other.label()));
+                    }
+                    _ => {
+                        let before = keymap::set(&a, m, k);
+                        app.key_message = before.map(|b| crate::t!("settings-keys-moved", keys = keys.as_str(), action = b.label()));
+                    }
+                }
+            }
+        }
+    }
+    w::caption(ui, crate::t!("settings-keys-caption"));
+    let capturing = app.key_capture.as_ref().map(|c| c.action.clone());
+    egui::ScrollArea::vertical().max_height(196.0).auto_shrink([false, true]).show(ui, |ui| {
+        egui::Grid::new("keymap").num_columns(3).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
+            for a in keymap::rebindable() {
+                ui.add(egui::Label::new(RichText::new(a.label()).font(style::ui_font(12.0)).color(p.text)).truncate());
+                let text = if capturing.as_ref() == Some(&a) {
+                    crate::t!("settings-keys-type")
+                } else {
+                    a.shortcut_text().unwrap_or_else(|| crate::t!("settings-keys-none"))
+                };
+                // Space or Return just recorded must not press the button again.
+                if w::push_button_ext(ui, &text, w::Size::Small, true, Some(110.0)).clicked() && !recorded_now {
+                    app.key_message = None;
+                    app.key_capture = Some(keymap::Capture { action: a.clone(), got: None });
+                }
+                let has = keymap::binding_for(&a).is_some();
+                if w::icon_button(ui, Icon::Close, 16.0, has, false).on_hover_text(crate::t!("settings-keys-remove")).clicked() {
+                    keymap::clear(&a);
+                    app.key_message = None;
+                }
+                ui.end_row();
+            }
+        });
+    });
+    if let Some(m) = &app.key_message {
+        w::caption(ui, m.as_str());
+    }
+    ui.horizontal(|ui| {
+        let changed = !keymap::overrides().keys.is_empty();
+        if w::push_button_ext(ui, &crate::t!("settings-keys-restore"), w::Size::Regular, changed, None).clicked() {
+            keymap::reset_all();
+            app.key_capture = None;
+            app.key_message = None;
+        }
     });
 }
 
