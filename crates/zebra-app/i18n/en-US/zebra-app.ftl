@@ -17,6 +17,9 @@
 
 ## ---- app.rs ----
 
+# This language's name in itself, shown in Settings › General › Language.
+language-name = English
+
 app-untitled = Untitled
 app-agent-default-name = Agent
 app-window-title-edited = { $name } — Edited
@@ -275,6 +278,8 @@ settings-keys-moved = { $keys } was { $action }'s shortcut. { $action } has none
 settings-keys-taken = { $keys } is { $action }. It can't be changed.
 settings-keys-restore = Restore Defaults
 settings-default-theme = Theme for new presentations:
+settings-language = Language:
+settings-language-system = System ({ $language })
 settings-appearance = Appearance:
 settings-appearance-caption = Zebra follows the system's Light or Dark appearance and accent colour. The canvas uses the presentation's theme.
 settings-scrolling = Scrolling:

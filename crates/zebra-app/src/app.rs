@@ -860,6 +860,16 @@ impl ZebraApp {
         })
     }
 
+    /// Settings › General › Language. Every string is looked up each
+    /// frame, so the window follows at once; the Mac menu bar is rebuilt.
+    pub fn set_language(&mut self, id: Option<&str>) {
+        crate::i18n::set_language(id);
+        #[cfg(target_os = "macos")]
+        {
+            self.menu = None;
+        }
+    }
+
     pub fn canvas_center_world(&self) -> Vec2 {
         self.editor.view.camera.center()
     }

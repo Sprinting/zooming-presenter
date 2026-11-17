@@ -133,6 +133,26 @@ fn general(app: &mut ZebraApp, ui: &mut Ui) {
             }
         });
     });
+    srow(ui, &crate::t!("settings-language"), |ui| {
+        let chosen = crate::i18n::chosen_language();
+        let system = crate::t!("settings-language-system", language = crate::i18n::language_name(&crate::i18n::system_language()));
+        let label = chosen.as_deref().map(crate::i18n::language_name).unwrap_or_else(|| system.clone());
+        let mut pick = None;
+        w::popup_button(ui, "language", &label, 200.0, |ui| {
+            if w::menu_check(ui, chosen.is_none(), &system, None).clicked() {
+                pick = Some(None);
+            }
+            w::menu_separator(ui);
+            for (id, name) in crate::i18n::available() {
+                if w::menu_check(ui, chosen.as_deref() == Some(id.as_str()), &name, None).clicked() {
+                    pick = Some(Some(id));
+                }
+            }
+        });
+        if let Some(p) = pick {
+            app.set_language(p.as_deref());
+        }
+    });
     srow(ui, &crate::t!("settings-appearance"), |ui| {
         w::caption(ui, crate::t!("settings-appearance-caption"));
     });
