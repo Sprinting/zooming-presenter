@@ -216,3 +216,30 @@ fn pdf_smoke() {
     let pdf2 = r.export_pdf(&ed2).unwrap();
     assert!(pdf2.starts_with(b"%PDF"));
 }
+
+#[test]
+fn italic_rotation_and_deep_text_samples() {
+    let r = Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    ed.doc.theme = "chalkboard".into();
+    ed.view.viewport = Vec2::new(800.0, 500.0);
+    let it = |s: &str, bold: bool| ElementKind::Text(TextData { text: s.into(), italic: true, bold, ..Default::default() });
+    add(&mut ed, "a", 0.0, -60.0, 0.0, 0.0, 2.0, 0.0, it("Synthetic italic Caveat", false));
+    add(&mut ed, "b", 0.0, 40.0, 0.0, 0.0, 2.0, 0.0, it("Bold italic Caveat", true));
+    add(&mut ed, "tiny", 0.0, 140.0, 0.0, 0.0, 0.001, 30.0, text("deep zoom text stays crisp", TextStyle::Body));
+    let cam = Camera { cx: 0.0, cy: 0.0, zoom: 1.0, rotation: 0.0 };
+    let png = r.capture(&ed, &CaptureTarget::Camera { camera: cam }, 800, 500).unwrap();
+    std::fs::write(out_dir().join("italic.png"), &png).unwrap();
+    // Zoom 2000x onto the tiny text, camera rolled to match its rotation.
+    let png = r.capture(&ed, &CaptureTarget::Element { id: "tiny".into() }, 800, 300).unwrap();
+    std::fs::write(out_dir().join("deep_text.png"), &png).unwrap();
+    let img = decode(&png);
+    let bg = Theme::resolve("chalkboard").color(&Theme::resolve("chalkboard").background);
+    assert!(img.pixels().filter(|p| !close(p.0, bg, 3)).count() > 2000);
+    let pdf = {
+        ed.doc.path = vec![PathStep { target: StepTarget::Element { id: "a".into() }, builds: vec![], notes: String::new(), duration: None }];
+        r.export_pdf(&ed).unwrap()
+    };
+    std::fs::write(out_dir().join("italic.pdf"), &pdf).unwrap();
+}

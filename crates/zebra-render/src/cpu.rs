@@ -49,7 +49,8 @@ pub fn render_pixmap(list: &DisplayList) -> Pixmap {
                         .hint(false)
                         .normalized_coords(&run.coords);
                     if let Some(skew) = run.skew {
-                        b = b.glyph_transform(Affine::skew((skew as f64).to_radians().tan(), 0.0));
+                        // Synthetic italic; vello_cpu glyph space is y-down.
+                        b = b.glyph_transform(Affine::skew(-(skew as f64).to_radians().tan(), 0.0));
                     }
                     let _ = b.fill_glyphs(glyphs);
                 }

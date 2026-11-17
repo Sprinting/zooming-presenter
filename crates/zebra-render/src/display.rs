@@ -69,16 +69,19 @@ impl DisplayList {
 }
 
 /// Decoded images, keyed by asset key. `None` = undecodable (placeholder).
+/// Mip levels of one asset, largest first.
+pub type ImageLevels = Arc<Vec<Arc<ImageLevel>>>;
+
 #[derive(Default)]
 pub(crate) struct ImageCache {
-    map: Mutex<HashMap<String, Option<Arc<Vec<Arc<ImageLevel>>>>>>,
+    map: Mutex<HashMap<String, Option<ImageLevels>>>,
 }
 
 /// Largest dimension kept for level 0.
 const MAX_IMAGE_DIM: u32 = 8192;
 
 impl ImageCache {
-    pub(crate) fn levels(&self, editor: &Editor, key: &str) -> Option<Arc<Vec<Arc<ImageLevel>>>> {
+    pub(crate) fn levels(&self, editor: &Editor, key: &str) -> Option<ImageLevels> {
         if let Some(v) = self.map.lock().unwrap_or_else(|e| e.into_inner()).get(key) {
             return v.clone();
         }

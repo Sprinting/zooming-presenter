@@ -1,5 +1,5 @@
 //! Shared sample documents for render tests.
-#![allow(dead_code)]
+#![allow(dead_code, clippy::too_many_arguments)]
 
 use zebra_core::*;
 use zebra_render::Renderer;
@@ -62,7 +62,8 @@ pub fn sample(r: &Renderer, theme: &str) -> Editor {
     // Big overview frame with a title.
     add(&mut ed, "f1", 0.0, 0.0, 1600.0, 1000.0, 1.0, 0.0, frame(FrameStyle::Bracket));
     add(&mut ed, "t1", 0.0, -340.0, 0.0, 0.0, 1.0, 0.0, text("Zebra: zoom into ideas", TextStyle::Title));
-    add(&mut ed, "t2", 0.0, -250.0, 0.0, 0.0, 1.0, 0.0, text("A classic-Prezi style canvas", TextStyle::Subtitle));
+    let sub = TextData { text: "A classic-Prezi style canvas".into(), style: TextStyle::Subtitle, italic: true, ..Default::default() };
+    add(&mut ed, "t2", 0.0, -250.0, 0.0, 0.0, 1.0, 0.0, ElementKind::Text(sub));
     // Circle frame with a rotated child.
     add(&mut ed, "f2", -450.0, 120.0, 420.0, 420.0, 1.0, 0.0, frame(FrameStyle::Circle));
     add(&mut ed, "t3", -450.0, 120.0, 0.0, 0.0, 1.0, -12.0, text("Rotated!", TextStyle::Subtitle));

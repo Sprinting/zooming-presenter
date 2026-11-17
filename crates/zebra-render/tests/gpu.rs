@@ -47,6 +47,8 @@ fn gpu_matches_cpu() {
         assert_eq!(gpu_px.len(), cpu_px.len());
         let img = image::RgbaImage::from_raw(w, h, gpu_px.clone()).unwrap();
         img.save(out_dir().join(format!("gpu_{theme}.png"))).unwrap();
+        let cimg = image::RgbaImage::from_raw(w, h, cpu_px.clone()).unwrap();
+        cimg.save(out_dir().join(format!("cpu_{theme}.png"))).unwrap();
         // Compare: mean abs difference small, and nearly all pixels close
         // (anti-aliasing differs slightly between the two rasterisers).
         let mut sum = 0u64;
@@ -63,6 +65,6 @@ fn gpu_matches_cpu() {
         let far_frac = far as f64 / n;
         eprintln!("{theme}: mean max-channel diff {mean:.3}, pixels off by >48: {:.4}%", far_frac * 100.0);
         assert!(mean < 2.0, "{theme}: GPU and CPU disagree (mean {mean})");
-        assert!(far_frac < 0.01, "{theme}: too many differing pixels ({far_frac})");
+        assert!(far_frac < 0.001, "{theme}: too many differing pixels ({far_frac})");
     }
 }

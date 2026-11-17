@@ -25,6 +25,7 @@ pub fn encode_scene(scene: &mut Scene, list: &DisplayList) {
                 let (s, rest) = split_scale(transform);
                 let brush = color(*c);
                 for run in &layout.runs {
+                    // vello GPU glyph space is y-up, vello_cpu y-down: the signs differ.
                     let skew = run.skew.map(|a| Affine::skew((a as f64).to_radians().tan(), 0.0));
                     scene
                         .draw_glyphs(&run.font)
