@@ -94,7 +94,9 @@ fn top_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         let status = if app.editor.dirty() { "Edited" } else if app.editor.file_path.is_some() { "Saved" } else { "Not saved yet" };
         ui.label(RichText::new(status).size(12.0).color(p.weak));
 
-        ui.add_space(12.0);
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
         let undo_tip = app.editor.undo_label().map(|l| format!("Undo {l}  ⌘Z")).unwrap_or_else(|| "Nothing to undo".into());
         if icon_button(ui, Icon::Undo, app.editor.can_undo(), false, p).on_hover_text(undo_tip).clicked() {
             app.queued.push(Action::Undo);
@@ -129,7 +131,7 @@ fn top_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 }
             });
             ui.add_space(4.0);
-            let ex = ui.add(egui::Button::new("Export").min_size(EVec2::new(0.0, 30.0)));
+            let ex = ui.add(egui::Button::new("Export").min_size(EVec2::new(0.0, 30.0))).on_hover_text("Export as PDF or PNG");
             egui::Popup::menu(&ex).show(|ui| {
                 if ui.button("PDF — one page per step…").clicked() {
                     app.queued.push(Action::ExportPdf);
@@ -138,7 +140,7 @@ fn top_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                     app.queued.push(Action::ExportPng);
                 }
             });
-            let th = ui.add(egui::Button::new(format!("Theme: {}", app.editor.theme().name)).min_size(EVec2::new(0.0, 30.0)));
+            let th = ui.add(egui::Button::new(format!("Theme: {}", app.editor.theme().name)).min_size(EVec2::new(0.0, 30.0))).on_hover_text("Change the presentation's colours and fonts");
             egui::Popup::menu(&th).width(220.0).show(|ui| theme_menu(app, ui));
             if app.api.is_some() || app.demo_agent.is_some() || app.api_error.is_some() {
                 ui.add_space(4.0);
@@ -202,14 +204,14 @@ fn agent_pill(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         None => "Agent controls".into(),
     });
     egui::Popup::menu(&r).width(230.0).show(|ui| {
-        if ui.button(if paused { "Resume agent" } else { "Pause agent" }).clicked() {
+        if ui.button(if paused { "Resume agent" } else { "Pause agent" }).on_hover_text("Temporarily stop the agent from making changes").clicked() {
             app.queued.push(Action::PauseAgents);
         }
         if ui.button("Stop agent  (⌘.)").clicked() {
             app.queued.push(Action::StopAgents);
         }
         let mut follow = app.editor.view.follow_agent;
-        if ui.checkbox(&mut follow, "Follow agent's camera").changed() {
+        if ui.checkbox(&mut follow, "Follow agent's camera").on_hover_text("Move your view to wherever the agent is working").changed() {
             app.queued.push(Action::FollowAgent);
         }
         if ui.button("Activity…  (⌘J)").clicked() {
@@ -228,7 +230,7 @@ fn agent_pill(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             }
         }
         ui.separator();
-        if ui.button("Revert agent's changes").clicked() {
+        if ui.button("Revert agent's changes").on_hover_text("Undo everything the agent did since your last change").clicked() {
             app.queued.push(Action::RevertAgent);
         }
     });
@@ -618,7 +620,7 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             section(ui, "Text", p);
             ui.horizontal(|ui| {
                 for s in [TextStyle::Title, TextStyle::Subtitle, TextStyle::Body] {
-                    if ui.selectable_label(t.style == s, format!("{s:?}")).clicked() {
+                    if ui.selectable_label(t.style == s, format!("{s:?}")).on_hover_text(format!("{s:?} text style")).clicked() {
                         patch_all = Some(ElementPatch { style: Some(s), ..Default::default() });
                     }
                 }
@@ -630,7 +632,7 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 if ui.selectable_label(t.italic, RichText::new(" I ").italics()).on_hover_text("Italic").clicked() {
                     patch_all = Some(ElementPatch { italic: Some(!t.italic), ..Default::default() });
                 }
-                if ui.selectable_label(t.bullets, "• List").on_hover_text("Bullets").clicked() {
+                if ui.selectable_label(t.bullets, "• List").on_hover_text("Bulleted list").clicked() {
                     patch_all = Some(ElementPatch { bullets: Some(!t.bullets), ..Default::default() });
                 }
             });
@@ -642,7 +644,7 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                     }
                 }
             });
-            if ui.button("Edit text  ↵").clicked() {
+            if ui.button("Edit text  ↵").on_hover_text("Edit the text in place  ↵ / double-click").clicked() {
                 crate::canvas::begin_edit_existing(app, e.id.clone());
             }
             section(ui, "Colour", p);
@@ -716,7 +718,7 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             });
             let n = app.editor.doc.frame_contents(&e.id).len();
             ui.label(RichText::new(format!("Contains {n} object{}", if n == 1 { "" } else { "s" })).size(12.0).color(p.weak));
-            if ui.button("Zoom into frame").clicked() {
+            if ui.button("Zoom into frame").on_hover_text("Move the camera to fit this frame").clicked() {
                 let _ = app.editor.view(zebra_core::ViewCommand::ZoomTo { id: e.id.clone(), animate: true }, H);
             }
         }
@@ -776,24 +778,24 @@ fn common_actions(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let in_path = sel.iter().any(|id| !app.editor.doc.steps_using(id).is_empty());
     section(ui, "Arrange", p);
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Forward").on_hover_text("]").clicked() {
+        if ui.button("Forward").on_hover_text("Bring forward one layer  ]").clicked() {
             app.queued.push(Action::BringForward);
         }
-        if ui.button("Backward").on_hover_text("[").clicked() {
+        if ui.button("Backward").on_hover_text("Send backward one layer  [").clicked() {
             app.queued.push(Action::SendBackward);
         }
-        if ui.button("To front").on_hover_text("⌘]").clicked() {
+        if ui.button("To front").on_hover_text("Bring to front  ⌘]").clicked() {
             app.queued.push(Action::BringToFront);
         }
-        if ui.button("To back").on_hover_text("⌘[").clicked() {
+        if ui.button("To back").on_hover_text("Send to back  ⌘[").clicked() {
             app.queued.push(Action::SendToBack);
         }
     });
     ui.horizontal_wrapped(|ui| {
-        if ui.button(if locked { "Unlock" } else { "Lock" }).on_hover_text("⌘L").clicked() {
+        if ui.button(if locked { "Unlock" } else { "Lock" }).on_hover_text(if locked { "Unlock so it can be moved and edited  ⌘L" } else { "Lock in place  ⌘L" }).clicked() {
             app.queued.push(Action::ToggleLock);
         }
-        if ui.button("Duplicate").on_hover_text("⌘D").clicked() {
+        if ui.button("Duplicate").on_hover_text("Duplicate the selection  ⌘D").clicked() {
             app.queued.push(Action::Duplicate);
         }
         if ui.button("Frame it").on_hover_text("Draw a frame around the selection  ⌘G").clicked() {
@@ -802,7 +804,7 @@ fn common_actions(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     });
     section(ui, "Path", p);
     ui.horizontal_wrapped(|ui| {
-        if ui.button("+ Add to path").on_hover_text("⇧⌘A").clicked() {
+        if ui.button("+ Add to path").on_hover_text("Add a path step that zooms to the selection  ⇧⌘A").clicked() {
             app.queued.push(Action::AddToPath);
         }
         if in_path {
@@ -811,7 +813,7 @@ fn common_actions(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     });
     ui.add_space(10.0);
     let del = egui::Button::new(RichText::new("Delete").color(Color32::from_rgb(200, 50, 50)));
-    if ui.add_enabled(!locked, del).on_hover_text("⌫").clicked() {
+    if ui.add_enabled(!locked, del).on_hover_text("Delete the selection  ⌫").on_disabled_hover_text("Unlock to delete  ⌘L").clicked() {
         app.queued.push(Action::Delete);
     }
 }
@@ -823,7 +825,7 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     ui.horizontal(|ui| {
         ui.heading("Agent activity");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.small_button("Close").on_hover_text("⌘J").clicked() {
+            if ui.small_button("Close").on_hover_text("Close the activity panel  ⌘J").clicked() {
                 app.show_activity = false;
             }
         });
@@ -832,11 +834,11 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         let paused = app.editor.view.agent_paused;
-        if ui.button(if paused { "Resume" } else { "Pause" }).clicked() {
+        if ui.button(if paused { "Resume" } else { "Pause" }).on_hover_text(if paused { "Let the agent continue" } else { "Temporarily stop the agent from making changes" }).clicked() {
             app.queued.push(Action::PauseAgents);
         }
         let mut follow = app.editor.view.follow_agent;
-        if ui.checkbox(&mut follow, "Follow").changed() {
+        if ui.checkbox(&mut follow, "Follow").on_hover_text("Move your view to wherever the agent is working").changed() {
             app.queued.push(Action::FollowAgent);
         }
         if ui.button("Revert all").on_hover_text("Undo everything the agent did since your last change").clicked() {

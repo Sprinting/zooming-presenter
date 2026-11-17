@@ -50,7 +50,9 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         if n == 0 {
             ui.add_space(20.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("No steps yet").color(p.weak));
+                ui.label(RichText::new("◇").size(22.0).color(p.weak));
+                ui.add_space(2.0);
+                ui.label(RichText::new("No steps yet").font(style::bold(13.0)).color(p.text));
                 ui.add_space(4.0);
                 ui.label(RichText::new("Select a frame and press “+ Add”, or click “Edit path” and click frames in order.").size(12.0).color(p.weak));
             });
@@ -62,9 +64,20 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             rows.push(r);
             let selected = app.selected_step == Some(i) || (app.editor.view.mode == Mode::Present && app.editor.view.present.step == Some(i));
             let painter = ui.painter();
-            let img_r = Rect::from_min_size(r.min + EVec2::new(18.0, 0.0), EVec2::new(tw - 18.0, th));
-            // number
-            painter.text(Pos2::new(r.min.x + 6.0, r.min.y + 10.0), Align2::CENTER_CENTER, (i + 1).to_string(), style::bold(12.0), if selected { ACCENT } else { p.weak });
+            let img_r = Rect::from_min_size(r.min + EVec2::new(22.0, 0.0), EVec2::new(tw - 22.0, th));
+            // row highlight: tint for the current step, subtle fill on hover
+            let row_bg = r.expand2(EVec2::new(2.0, 3.0));
+            if selected {
+                painter.rect_filled(row_bg, 8.0, ACCENT.gamma_multiply(0.12));
+            } else if resp.hovered() && dragging.is_none() {
+                painter.rect_filled(row_bg, 8.0, p.hover);
+            }
+            // number badge
+            let num_c = Pos2::new(r.min.x + 10.0, r.min.y + 11.0);
+            if selected {
+                painter.circle_filled(num_c, 9.0, ACCENT);
+            }
+            painter.text(num_c, Align2::CENTER_CENTER, (i + 1).to_string(), style::bold(if i + 1 >= 10 { 11.0 } else { 12.5 }), if selected { Color32::WHITE } else { p.text });
             // thumbnail
             let bg = style::c32(app.editor.theme().color(&"theme:background".into()));
             painter.rect_filled(img_r, 6.0, bg);
@@ -106,7 +119,8 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             if resp.drag_started() {
                 dragging = Some(i);
             }
-            let resp = resp.on_hover_text("Click to fly there · drag to reorder · right-click for more");
+            let tip = format!("Step {} · {}\nClick to fly there · drag to reorder · right-click for more", i + 1, step_label(app, i));
+            let resp = resp.on_hover_text(tip);
             egui::Popup::context_menu(&resp).show(|ui| {
                 if ui.button("Go to step").clicked() {
                     let _ = app.editor.view(ViewCommand::GotoStep { step: i }, H);
@@ -134,7 +148,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                     app.apply(Command::RemoveStep { index: i });
                 }
             });
-            ui.add_space(6.0);
+            ui.add_space(10.0);
         }
     });
 
@@ -180,7 +194,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             if ui.small_button("Path from frames").on_hover_text("Replace the path with every frame, top-left to bottom-right").clicked() {
                 app.queued.push(Action::AutoPath);
             }
-            if n > 0 && ui.small_button("Clear").clicked() {
+            if n > 0 && ui.small_button("Clear").on_hover_text("Remove every step from the path").clicked() {
                 app.queued.push(Action::ClearPath);
             }
         });

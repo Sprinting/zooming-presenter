@@ -154,7 +154,7 @@ pub fn apply_visuals(ctx: &egui::Context) {
             v.menu_corner_radius = CornerRadius::same(8);
             v.extreme_bg_color = if dark { Color32::from_rgb(0x18, 0x19, 0x1c) } else { Color32::from_rgb(0xf1, 0xf2, 0xf5) };
             v.faint_bg_color = p.hover;
-            v.selection.bg_fill = ACCENT.gamma_multiply(if dark { 0.6 } else { 0.25 });
+            v.selection.bg_fill = ACCENT.gamma_multiply(if dark { 0.45 } else { 0.22 });
             v.selection.stroke = Stroke::new(1.0, ACCENT);
             v.hyperlink_color = ACCENT;
             v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
@@ -173,15 +173,23 @@ pub fn apply_visuals(ctx: &egui::Context) {
             v.widgets.active.weak_bg_fill = p.border;
             v.widgets.active.bg_fill = p.border;
             v.widgets.active.bg_stroke = Stroke::NONE;
+            v.widgets.active.fg_stroke = Stroke::new(1.0, p.text);
+            v.widgets.open.bg_fill = p.hover;
+            v.widgets.open.fg_stroke = Stroke::new(1.0, p.text);
+            v.weak_text_color = Some(p.weak);
             v.widgets.open.weak_bg_fill = p.hover;
             v.popup_shadow = Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if dark { 100 } else { 30 }) };
             v.window_shadow = v.popup_shadow;
             s.spacing.button_padding = egui::vec2(8.0, 4.0);
             s.spacing.item_spacing = egui::vec2(6.0, 6.0);
             s.spacing.interact_size.y = 26.0;
+            s.spacing.menu_margin = Margin::same(6);
+            s.spacing.window_margin = Margin::same(10);
+            // Short ease on hover/press fills so the chrome feels less twitchy.
+            s.animation_time = 0.12;
             s.text_styles.insert(egui::TextStyle::Body, FontId::new(13.5, FontFamily::Proportional));
             s.text_styles.insert(egui::TextStyle::Button, FontId::new(13.5, FontFamily::Proportional));
-            s.text_styles.insert(egui::TextStyle::Small, FontId::new(11.0, FontFamily::Proportional));
+            s.text_styles.insert(egui::TextStyle::Small, FontId::new(11.5, FontFamily::Proportional));
             s.text_styles.insert(egui::TextStyle::Heading, FontId::new(17.0, FontFamily::Name(SANS_BOLD.into())));
         });
     }
