@@ -180,7 +180,7 @@ fn zoom_item(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let painter = ui.painter();
     painter.text(Pos2::new(bez.left() + 8.0, bez.center().y), Align2::LEFT_CENTER, &txt, style::ui_font(12.0), p.text);
     paint_icon(painter, Rect::from_center_size(Pos2::new(bez.right() - 9.0, bez.center().y), EVec2::splat(10.0)), Icon::UpDown, p.weak);
-    let galley = painter.layout_no_wrap("Zoom".into(), style::ui_font(10.0), p.text.gamma_multiply(0.9));
+    let galley = painter.layout_no_wrap("Zoom".into(), style::ui_font(11.0), p.text.gamma_multiply(0.9));
     painter.galley(Pos2::new(rect.center().x - galley.size().x / 2.0, rect.bottom() - galley.size().y - 1.0), galley, p.text);
     let resp = resp.on_hover_text("Zoom");
     egui::Popup::menu(&resp).width(200.0).show(|ui| {

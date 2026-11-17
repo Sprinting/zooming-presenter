@@ -100,9 +100,9 @@ pub fn sample(r: &Renderer, theme: &str) -> Editor {
     add(&mut ed, "i1", 450.0, -120.0, 160.0, 120.0, 1.0, 8.0, ElementKind::Image(ImageData { asset: key, alt: "checker".into(), crop: None, mask: Default::default() }));
     // Path: overview, circle, rectangle frame.
     ed.doc.path = vec![
-        PathStep { target: StepTarget::Element { id: "f1".into() }, builds: vec![], notes: String::new(), duration: None, dwell: None, voiceover: None },
-        PathStep { target: StepTarget::Element { id: "f2".into() }, builds: vec![], notes: String::new(), duration: None, dwell: None, voiceover: None },
-        PathStep { target: StepTarget::Element { id: "f3".into() }, builds: vec!["t4".into()], notes: String::new(), duration: None, dwell: None, voiceover: None },
+        PathStep { target: StepTarget::Element { id: "f1".into() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None },
+        PathStep { target: StepTarget::Element { id: "f2".into() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None },
+        PathStep { target: StepTarget::Element { id: "f3".into() }, builds: vec!["t4".into()], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None },
     ];
     ed.view.camera = ed.fit_all_camera();
     ed

@@ -197,6 +197,12 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                         app.select(vec![id.clone()]);
                     }
                 }
+                if matches!(&app.editor.doc.path[i].target, StepTarget::Overview) {
+                    let hide = app.editor.doc.path[i].hide_builds;
+                    if w::menu_check(ui, !hide, "Show Later Fade-ins Dimmed", None).clicked() {
+                        app.apply(Command::UpdateStep { index: i, target: None, builds: None, notes: None, duration: None, dwell: None, hide_builds: Some(!hide) });
+                    }
+                }
                 w::menu_separator(ui);
                 if w::menu_item(ui, "Duplicate Step", None).clicked() {
                     let s = app.editor.doc.path[i].clone();

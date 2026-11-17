@@ -237,6 +237,40 @@ fn leaving_present_mode_after_a_window_resize_keeps_view_centred() {
 }
 
 #[test]
+fn leaving_present_mode_fits_the_current_step_in_the_editor() {
+    let mut h = harness(Some("sample"));
+    h.run_steps(10);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    h.run_steps(5);
+    h.key_press(Key::ArrowRight);
+    h.key_press(Key::ArrowRight);
+    h.run_steps(60);
+    let step = h.state().editor.view.present.step.unwrap();
+    h.key_press(Key::Escape);
+    h.run_steps(5);
+    let app = h.state();
+    assert_eq!(app.editor.view.mode, Mode::Edit);
+    let want = app.editor.camera_for_step(step);
+    let cam = app.editor.view.camera;
+    assert!((cam.zoom - want.zoom).abs() / want.zoom < 0.01, "zoom {} vs {}", cam.zoom, want.zoom);
+}
+
+#[test]
+fn present_hud_steps_with_the_mouse() {
+    let mut h = harness(Some("sample"));
+    h.run_steps(5);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    h.run_steps(3);
+    let before = h.state().editor.view.present.step;
+    h.get_by_label("Next Step").click();
+    h.run_steps(3);
+    assert_ne!(h.state().editor.view.present.step, before, "› advanced");
+    h.get_by_label("Previous Step").click();
+    h.run_steps(3);
+    assert_eq!(h.state().editor.view.present.step, before, "‹ went back");
+}
+
+#[test]
 fn present_on_an_empty_document_is_refused() {
     let mut h = harness(Some("empty"));
     h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
@@ -512,4 +546,16 @@ fn grouped_shapes_select_and_drag_together() {
     h.state_mut().queued.push(zebra_app::actions::Action::Ungroup);
     h.run_steps(3);
     assert!(h.state().editor.doc.get("b").unwrap().group.is_none());
+}
+
+#[test]
+fn the_editor_stops_repainting_at_rest() {
+    // F26: with nothing animating, no frame asks for another one.
+    let mut h = harness(Some("sample"));
+    h.run_steps(5);
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    match h.try_run() {
+        Ok(_) => {}
+        Err(e) => panic!("still repainting at rest: {e}"),
+    }
 }

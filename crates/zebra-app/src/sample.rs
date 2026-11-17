@@ -65,12 +65,13 @@ pub fn build(renderer: &zebra_render::Renderer) -> Document {
 
     // 1. Bracket frame with fade-in bullets
     let f1 = frame(&mut ed, FrameStyle::Bracket, "Why zoom?", -1150.0, 250.0, 900.0, 620.0, 0.0);
-    text(&mut ed, "Why zoom?", -1150.0, 40.0, TextStyle::Title, 1.0, 0.0, false);
+    let t1 = text(&mut ed, "Why zoom?", -1150.0, 40.0, TextStyle::Title, 1.0, 0.0, false);
     let b1 = text(&mut ed, "Show the big picture first", -1150.0, 200.0, TextStyle::Body, 1.4, 0.0, true);
     let b2 = text(&mut ed, "Then dive into the details", -1150.0, 290.0, TextStyle::Body, 1.4, 0.0, true);
     let b3 = text(&mut ed, "Zoom out again to connect them", -1150.0, 380.0, TextStyle::Body, 1.4, 0.0, true);
 
-    ed.apply(Command::Align { ids: vec![b1.clone(), b2.clone(), b3.clone()], edge: zebra_core::command::AlignEdge::Left }, H).unwrap();
+    // Title and bullets share one left edge (critique 28).
+    ed.apply(Command::Align { ids: vec![t1, b1.clone(), b2.clone(), b3.clone()], edge: zebra_core::command::AlignEdge::Left }, H).unwrap();
 
     // 2. Circle frame with a tiny hidden detail
     let f2 = frame(&mut ed, FrameStyle::Circle, "Circles", 0.0, 300.0, 720.0, 720.0, 0.0);
@@ -247,7 +248,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             }
             "notes" => {
                 let notes = "Open with the question: why do slides feel flat?\n\nPause. Let them answer.\n\nThen zoom in: one idea leads into the next.";
-                let _ = app.editor.apply(Command::UpdateStep { index: 1, target: None, builds: None, notes: Some(notes.into()), duration: None, dwell: None }, H);
+                let _ = app.editor.apply(Command::UpdateStep { index: 1, target: None, builds: None, notes: Some(notes.into()), duration: None, dwell: None, hide_builds: None }, H);
                 app.selected_step = Some(1);
             }
             "presenter" => {

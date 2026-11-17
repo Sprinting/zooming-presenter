@@ -94,7 +94,9 @@ impl Theme {
                 background: "#2f4a3a".into(),
                 title: ts("Hand", "#f4f1e8", 72.0),
                 subtitle: ts("Hand", "#f6d66b", 40.0),
-                body: ts("Hand", "#e8e6dc", 24.0),
+                // Caveat only for headings: at body size it is hard to read
+                // from the back of a room.
+                body: ts("Sans", "#e8e6dc", 24.0),
                 frame: "#f4f1e8".into(),
                 frame_fill: "#3a5847".into(),
                 accent: "#f6d66b".into(),

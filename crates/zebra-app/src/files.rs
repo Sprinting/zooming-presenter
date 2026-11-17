@@ -84,6 +84,15 @@ pub fn autosave_newer(file: &Path) -> Option<PathBuf> {
     (am > fm).then_some(a)
 }
 
+/// Seconds until an autosave is due, if one is pending; the frame loop
+/// schedules a single wake for it so an idle window still autosaves.
+pub fn autosave_due_in(app: &ZebraApp) -> Option<f64> {
+    if !app.editor.dirty() || app.editor.revision == app.autosaved_rev || app.editor.doc.elements.is_empty() {
+        return None;
+    }
+    Some((AUTOSAVE_SECS - (app.now() - app.last_autosave)).max(0.5))
+}
+
 pub fn autosave_tick(app: &mut ZebraApp) {
     let now = app.now();
     if !app.editor.dirty() || app.editor.revision == app.autosaved_rev || now - app.last_autosave < AUTOSAVE_SECS {

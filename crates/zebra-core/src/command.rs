@@ -338,6 +338,9 @@ pub enum Command {
         /// Autoplay time on this step, seconds; negative clears it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dwell: Option<f64>,
+        /// Overview steps: hide later fade-ins instead of showing them dimmed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hide_builds: Option<bool>,
     },
     ClearPath,
     /// Replace the path with every frame in reading order (top-left to

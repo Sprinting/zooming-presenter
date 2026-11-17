@@ -43,6 +43,7 @@ pub enum Icon {
     // Small glyphs
     ChevronDown,
     ChevronRight,
+    ChevronLeft,
     UpDown,
     Check,
     Close,
@@ -71,7 +72,7 @@ pub const ALL: &[Icon] = &[
     Icon::Select, Icon::Hand, Icon::Text, Icon::Frame(FrameStyle::Bracket), Icon::Frame(FrameStyle::Circle), Icon::Frame(FrameStyle::Rectangle),
     Icon::Frame(FrameStyle::Invisible), Icon::Rect, Icon::Ellipse, Icon::Line, Icon::Arrow, Icon::Pen, Icon::Image, Icon::Undo, Icon::Redo,
     Icon::Plus, Icon::Minus, Icon::Home, Icon::Zoom, Icon::AddStep, Icon::Play, Icon::Shapes, Icon::Media, Icon::Theme, Icon::Share,
-    Icon::Sparkles, Icon::Format, Icon::SidebarLeft, Icon::ChevronDown, Icon::ChevronRight, Icon::UpDown, Icon::Check, Icon::Close,
+    Icon::Sparkles, Icon::Format, Icon::SidebarLeft, Icon::ChevronDown, Icon::ChevronRight, Icon::ChevronLeft, Icon::UpDown, Icon::Check, Icon::Close,
     Icon::Gear, Icon::Lock, Icon::Unlock, Icon::Trash, Icon::Note, Icon::Video, Icon::Path, Icon::AlignLeft, Icon::AlignCenter,
     Icon::AlignRight, Icon::List, Icon::Bold, Icon::Italic, Icon::Underline, Icon::Group, Icon::Activity, Icon::Pause, Icon::Warning,
 ];
@@ -277,6 +278,9 @@ pub fn paint_icon(painter: &Painter, r: Rect, icon: Icon, c: Color32) {
         }
         Icon::ChevronRight => {
             painter.add(line(&[(-2.5, -5.0), (2.5, 0.0), (-2.5, 5.0)]));
+        }
+        Icon::ChevronLeft => {
+            painter.add(line(&[(2.5, -5.0), (-2.5, 0.0), (2.5, 5.0)]));
         }
         Icon::UpDown => {
             painter.add(line(&[(-3.5, -2.0), (0.0, -5.5), (3.5, -2.0)]));

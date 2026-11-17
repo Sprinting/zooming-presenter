@@ -737,6 +737,11 @@ pub struct PathStep {
     /// Voice-over: an audio asset that plays when this step is reached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voiceover: Option<String>,
+    /// Overview steps only: hide later steps' fade-ins entirely instead of
+    /// showing them dimmed (the default), so the overview isn't missing
+    /// content.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_builds: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -775,12 +780,46 @@ impl Element {
     pub fn world_size(&self) -> (f64, f64) {
         (self.size.w * self.transform.scale, self.size.h * self.transform.scale)
     }
+    /// A circle frame draws the circle inscribed in its box (shorter side,
+    /// centred), so switching frame style never changes the box.
+    pub fn is_circle_frame(&self) -> bool {
+        matches!(&self.kind, ElementKind::Frame(f) if f.style == FrameStyle::Circle)
+    }
+    /// Local size of what is drawn: the inscribed square for circle frames,
+    /// else the box.
+    pub fn visual_size(&self) -> (f64, f64) {
+        if self.is_circle_frame() {
+            let d = self.size.w.min(self.size.h);
+            (d, d)
+        } else {
+            (self.size.w, self.size.h)
+        }
+    }
+    /// World size of what is drawn (see [`Element::visual_size`]).
+    pub fn visual_world_size(&self) -> (f64, f64) {
+        let (w, h) = self.visual_size();
+        (w * self.transform.scale, h * self.transform.scale)
+    }
+    /// Axis-aligned world bounds of what is drawn.
+    pub fn visual_bounds(&self) -> Rect {
+        let (hw, hh) = { let (w, h) = self.visual_size(); (w / 2.0, h / 2.0) };
+        Rect::from_points([Vec2::new(-hw, -hh), Vec2::new(hw, -hh), Vec2::new(hw, hh), Vec2::new(-hw, hh)].map(|p| self.transform.apply(p))).unwrap()
+    }
     /// Precise hit test against the rotated box (frames: only near their border
     /// unless `interior` is true).
     pub fn hit(&self, p: Vec2, tolerance_world: f64, interior: bool) -> bool {
         let l = self.transform.inverse(p);
         let tol = tolerance_world / self.transform.scale;
         let (hw, hh) = (self.size.w / 2.0, self.size.h / 2.0);
+        if self.is_circle_frame() {
+            let r = hw.min(hh);
+            let d = l.x.hypot(l.y);
+            if d > r + tol {
+                return false;
+            }
+            let edge = tol.max(r * 0.08);
+            return interior || d >= r - edge;
+        }
         let inside = l.x.abs() <= hw + tol && l.y.abs() <= hh + tol;
         if !inside {
             return false;
@@ -847,7 +886,7 @@ impl Document {
     /// geometrically, so dragging something into a frame makes it a child.
     pub fn frame_contents(&self, frame_id: &str) -> Vec<ElementId> {
         let Some(f) = self.elements.get(frame_id) else { return vec![] };
-        let fb = f.bounds();
+        let fb = f.visual_bounds();
         let fa = fb.area();
         self.ordered()
             .filter(|e| e.id != f.id && e.bounds().area() < fa && fb.contains_rect(&e.bounds()))
@@ -860,8 +899,8 @@ impl Document {
         let b = e.bounds();
         self.ordered()
             .filter(|f| f.is_frame() && f.id != id)
-            .filter(|f| f.bounds().contains_rect(&b) && f.bounds().area() > b.area())
-            .min_by(|a, b| a.bounds().area().total_cmp(&b.bounds().area()))
+            .filter(|f| f.visual_bounds().contains_rect(&b) && f.visual_bounds().area() > b.area())
+            .min_by(|a, b| a.visual_bounds().area().total_cmp(&b.visual_bounds().area()))
             .map(|f| f.id.clone())
     }
     /// Topmost element under a world point.

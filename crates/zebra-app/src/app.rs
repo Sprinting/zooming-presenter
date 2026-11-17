@@ -805,8 +805,10 @@ impl ZebraApp {
         if self.editor.doc.path.is_empty() {
             return None;
         }
-        if let Some(s) = self.selected_step.filter(|s| *s < self.editor.doc.path.len()) {
-            return Some(s);
+        // The step the sidebar highlights: from the canvas selection, else
+        // the step clicked last.
+        if let Some(s) = crate::sidebar::selected_steps(self).first() {
+            return Some(*s);
         }
         let cam = self.editor.view.camera;
         (0..self.editor.doc.path.len()).min_by(|a, b| {
@@ -972,7 +974,7 @@ impl ZebraApp {
                 self.set_ai_control(false);
                 self.toast(format!("{name} switched AI control off. Turn it back on from the AI button."));
             } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64((t - self.editor.view.now).max(0.016)));
             }
         }
 
@@ -1020,12 +1022,20 @@ impl ZebraApp {
         if self.editor.flashes.iter().any(|(_, t)| self.editor.view.now - *t < 1.2) {
             ctx.request_repaint();
         }
+        // Idle at rest (F26): wake only when something is due, never poll.
         if let Some(t) = &self.toast {
-            if now > t.until {
+            let left = t.until - now;
+            if left <= 0.0 {
                 self.toast = None;
+            } else if left > 0.3 {
+                // Sleep until the fade-out starts, then animate it.
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(left - 0.3));
             } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                ctx.request_repaint();
             }
+        }
+        if let Some(wait) = crate::files::autosave_due_in(self) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
         self.thumbs.update(&self.editor, now);
         crate::files::debug_screenshot(self, &ctx);
@@ -1165,6 +1175,8 @@ impl ZebraApp {
             crate::presenting::sync_stage(self, ctx, presenting);
             self.revealed.clear();
             self.prev_hidden = self.editor.hidden_builds();
+            // Show the step HUD for a moment when the show starts.
+            self.last_pointer_move = self.last_pointer_move.max(self.now());
             if !presenting {
                 // Esc returns to the editor at the current step.
                 if let Some(s) = self.editor.view.present.step {

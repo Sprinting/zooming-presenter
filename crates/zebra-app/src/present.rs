@@ -1,9 +1,10 @@
 //! Present mode: full screen, chrome hidden, the camera flies the path.
-use egui::{Color32, CursorIcon, FontId, Key, PointerButton, Sense, Ui};
+use egui::{Color32, CursorIcon, Key, PointerButton, Sense, Ui};
 use zebra_core::view::Blank;
 use zebra_core::{Origin, ViewCommand};
 
 use crate::app::ZebraApp;
+use crate::icons::Icon;
 
 const H: Origin = Origin::Human;
 
@@ -86,7 +87,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
         }
 
         let painter = ui.painter_at(rect);
-        crate::canvas::draw_agent_presence(app, &painter);
+        let _ = crate::canvas::draw_agent_presence(app, &painter);
         match app.blank() {
             Some(Blank::Black) => {
                 painter.rect_filled(rect, 0.0, Color32::BLACK);
@@ -105,22 +106,56 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
         }
         let idle = app.now() - app.last_pointer_move;
         if idle < 2.0 {
+            // A dark HUD bezel at the bottom centre: ‹ position › and how to
+            // leave, so mouse users can step without the keyboard (critique 21).
             let n = app.editor.doc.path.len();
             let txt = match app.editor.view.present.step {
-                Some(s) if app.editor.view.present.off_path => format!("{} / {n}  ·  off path — → to return", s + 1),
-                Some(s) => format!("{} / {n}", s + 1),
+                Some(s) if app.editor.view.present.off_path => format!("{} of {n}  ·  → returns to the path", s + 1),
+                Some(s) => format!("{} of {n}", s + 1),
                 None => format!("Overview  ·  {n} steps"),
             };
             let a = ((2.0 - idle) / 0.4).clamp(0.0, 1.0) as f32;
-            let galley = painter.layout_no_wrap(txt, FontId::proportional(13.0), Color32::WHITE.gamma_multiply(a));
-            let r = egui::Rect::from_min_size(rect.right_bottom() - galley.size() - egui::vec2(36.0, 30.0), galley.size() + egui::vec2(20.0, 10.0));
-            painter.rect_filled(r, 8.0, Color32::from_black_alpha((150.0 * a) as u8));
-            painter.galley(r.min + egui::vec2(10.0, 5.0), galley, Color32::WHITE);
-            let hint = painter.layout_no_wrap("Esc to exit".into(), FontId::proportional(12.0), Color32::WHITE.gamma_multiply(a * 0.9));
-            let hr = egui::Rect::from_min_size(rect.left_bottom() + egui::vec2(24.0, -30.0 - hint.size().y - 10.0), hint.size() + egui::vec2(20.0, 10.0));
-            painter.rect_filled(hr, 8.0, Color32::from_black_alpha((120.0 * a) as u8));
-            painter.galley(hr.min + egui::vec2(10.0, 5.0), hint, Color32::WHITE);
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            let white = Color32::WHITE.gamma_multiply(a);
+            let font = crate::style::ui_font(13.0);
+            let galley = painter.layout_no_wrap(txt, font.clone(), white);
+            let esc = painter.layout_no_wrap("Esc to exit".into(), crate::style::ui_font(11.0), Color32::from_gray(200).gamma_multiply(a));
+            let btn = egui::vec2(30.0, 30.0);
+            let w = btn.x * 2.0 + galley.size().x + 24.0 + 1.0 + esc.size().x + 28.0;
+            let hud = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.bottom() - 44.0), egui::vec2(w, 38.0));
+            painter.rect_filled(hud, 10.0, Color32::from_black_alpha((170.0 * a) as u8));
+            let mut x = hud.left() + 4.0;
+            let step_btn = |painter: &egui::Painter, ui: &mut egui::Ui, x: f32, icon: Icon, id: &str, enabled: bool| -> bool {
+                let r = egui::Rect::from_min_size(egui::pos2(x, hud.center().y - btn.y / 2.0), btn);
+                let resp = ui.interact(r, egui::Id::unique(("present-hud", id)), Sense::click());
+                let label = if id == "prev" { "Previous Step" } else { "Next Step" };
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, enabled, label));
+                if resp.hovered() && enabled {
+                    painter.rect_filled(r, 6.0, Color32::from_white_alpha((40.0 * a) as u8));
+                }
+                let col = if enabled { white } else { white.gamma_multiply(0.35) };
+                crate::icons::paint_icon(painter, r.shrink(8.0), icon, col);
+                enabled && resp.clicked()
+            };
+            let at_end = app.editor.view.present.step.is_some_and(|s| s + 1 >= n && app.editor.view.present.build >= app.editor.doc.path[s].builds.len());
+            if step_btn(&painter, ui, x, Icon::ChevronLeft, "prev", app.editor.view.present.step.is_some()) {
+                let _ = app.editor.view(ViewCommand::Prev, H);
+            }
+            x += btn.x + 12.0;
+            painter.galley(egui::pos2(x, hud.center().y - galley.size().y / 2.0), galley.clone(), white);
+            x += galley.size().x + 12.0;
+            if step_btn(&painter, ui, x, Icon::ChevronRight, "next", !at_end) {
+                let _ = app.editor.view(ViewCommand::Next, H);
+            }
+            x += btn.x + 8.0;
+            painter.line_segment([egui::pos2(x, hud.top() + 9.0), egui::pos2(x, hud.bottom() - 9.0)], egui::Stroke::new(1.0, Color32::from_white_alpha((60.0 * a) as u8)));
+            x += 12.0;
+            painter.galley(egui::pos2(x, hud.center().y - esc.size().y / 2.0), esc, white);
+            // Repaint only for the fade, not while the bezel just sits there.
+            if idle < 1.6 {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(1.6 - idle));
+            } else {
+                ctx.request_repaint();
+            }
         } else if resp.contains_pointer() {
             ctx.set_cursor_icon(CursorIcon::None);
         }

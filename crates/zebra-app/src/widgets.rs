@@ -203,7 +203,7 @@ pub struct ToolbarState {
 /// Toolbar item width: at least 44 pt, or the label width plus padding.
 pub fn toolbar_item(ui: &mut Ui, icon: Icon, label: &str, st: ToolbarState) -> Response {
     let p = pal(ui);
-    let font = style::ui_font(10.0);
+    let font = style::ui_font(11.0);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER);
     let caret = if st.menu { 8.0 } else { 0.0 };
     let w = (galley.size().x + caret + 10.0).max(44.0);

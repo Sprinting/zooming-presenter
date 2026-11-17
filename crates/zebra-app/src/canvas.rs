@@ -14,7 +14,7 @@ use zebra_core::{
 };
 
 use crate::app::{ScrollMode, ZebraApp};
-use crate::style::{self, ACCENT, AGENT, GUIDE, PATH};
+use crate::style::{self, AGENT, GUIDE, PATH};
 
 const H: Origin = Origin::Human;
 
@@ -124,6 +124,12 @@ pub struct CanvasState {
     pub text_toolbar: Option<ERect>,
     pub guides: Vec<[Vec2; 2]>,
     pub frame_chip: Option<(ERect, ElementId)>,
+    /// The chip's › part: click zooms into the frame.
+    pub chip_chevron: Option<ERect>,
+    /// Renaming a frame in place from its chip: (frame, text, focused yet).
+    pub renaming: Option<(ElementId, String, bool)>,
+    /// The off-screen agent label: click flies there.
+    pub agent_edge: Option<ERect>,
     pub step_hover: Option<usize>,
     pub rect_valid: bool,
     pub rect_presenting: bool,
@@ -132,6 +138,10 @@ pub struct CanvasState {
     /// Bold / Italic / Underline chosen from the menu bar while editing text
     /// (on macOS the menu owns ⌘B/⌘I/⌘U): applied to the text selection.
     pub text_menu: Option<crate::actions::Action>,
+    /// After leaving Present: keep re-fitting this camera target while the
+    /// window settles (leaving full screen resizes over several frames),
+    /// until this time (`view.now`) or the first pointer press.
+    pub refit_until: Option<(f64, Option<usize>)>,
 }
 
 impl Default for CanvasState {
@@ -144,11 +154,15 @@ impl Default for CanvasState {
             text_toolbar: None,
             guides: vec![],
             frame_chip: None,
+            chip_chevron: None,
+            renaming: None,
+            agent_edge: None,
             step_hover: None,
             rect_valid: false,
             rect_presenting: false,
             window_size: egui::Vec2::ZERO,
             text_menu: None,
+            refit_until: None,
         }
     }
 }
@@ -274,7 +288,10 @@ pub fn paint_content(app: &mut ZebraApp, ui: &mut Ui, rect: ERect, presenting: b
     let ed = &app.editor;
     let mut opts = zebra_render::SceneOptions { presenting, ..Default::default() };
     if presenting {
-        opts.hidden = ed.hidden_builds();
+        // Fade-ins still to come: hidden, except in an overview, where they
+        // show dimmed (critique 14).
+        let dimmed = ed.dimmed_builds();
+        opts.hidden = ed.hidden_builds().into_iter().filter(|id| !dimmed.contains(id)).collect();
         let now = ed.view.now;
         opts.opacity = app
             .revealed
@@ -284,6 +301,7 @@ pub fn paint_content(app: &mut ZebraApp, ui: &mut Ui, rect: ERect, presenting: b
                 (a < 1.0).then(|| (id.clone(), a))
             })
             .collect();
+        opts.opacity.extend(dimmed.into_iter().map(|id| (id, 0.25)));
     }
     opts.skip = app.canvas.text.as_ref().and_then(|t| t.id.clone());
     opts.time = Some(ed.view.now);
@@ -342,6 +360,27 @@ pub fn sync_viewport(app: &mut ZebraApp, rect: ERect, window: egui::Vec2) {
         let d = old.center() - rect.center();
         if d.length() > 0.1 {
             let _ = app.editor.view(ViewCommand::Pan { dx: d.x as f64, dy: d.y as f64 }, H);
+        }
+    }
+    // Back from presenting: the camera still has the show's zoom, fitted to
+    // the whole screen. Re-fit the step you were on into the editor canvas
+    // (critique 13), with no animation, and keep doing so while the window
+    // leaves full screen.
+    let now = app.editor.view.now;
+    if app.canvas.rect_valid && app.canvas.rect_presenting && app.editor.view.mode != Mode::Present && !app.editor.view.present.off_path {
+        app.canvas.refit_until = Some((now + 1.0, app.editor.view.present.step));
+    }
+    if let Some((until, step)) = app.canvas.refit_until {
+        if now > until || app.editor.view.mode == Mode::Present {
+            app.canvas.refit_until = None;
+        } else if old != rect || app.canvas.rect_presenting {
+            let ed = &app.editor;
+            let cam = match step {
+                Some(i) if i < ed.doc.path.len() => ed.camera_for_step(i),
+                _ => ed.fit_all_camera(),
+            };
+            app.editor.view.flight = None;
+            app.editor.view.fly_to(cam, false);
         }
     }
     if !app.canvas.rect_valid && app.editor.view.mode != Mode::Present && app.editor.view.flight.is_none() {
@@ -452,6 +491,9 @@ pub fn handle_scroll(app: &mut ZebraApp, ui: &Ui, hovered: bool) -> bool {
 pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     let rect = ui.available_rect_before_wrap();
     sync_viewport(app, rect, ui.ctx().content_rect().size());
+    if ui.input(|i| i.pointer.any_pressed() || i.smooth_scroll_delta != egui::Vec2::ZERO || i.zoom_delta() != 1.0) {
+        app.canvas.refit_until = None;
+    }
     let resp = ui.interact(rect, egui::Id::unique("zebra-canvas"), Sense::click_and_drag());
     paint_content(app, ui, rect, false);
     if crate::media_ui::crop_active(app) {
@@ -516,9 +558,17 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
         if let Some(p) = resp.interact_pointer_pos() {
             if app.canvas.text.is_some() {
                 commit_text_edit(app);
-            } else if let Some((r, id)) = app.canvas.frame_chip.clone().filter(|(r, _)| r.contains(p)) {
-                let _ = r;
-                let _ = app.editor.view(ViewCommand::ZoomTo { id, animate: true }, H);
+            } else if app.canvas.agent_edge.is_some_and(|r| r.contains(p)) && app.editor.agent_cursor.is_some() {
+                let c = app.editor.agent_cursor.unwrap_or_default();
+                let camera = zebra_core::Camera { cx: c.x, cy: c.y, ..app.editor.view.camera };
+                let _ = app.editor.view(ViewCommand::SetCamera { camera, animate: true }, H);
+            } else if let Some((_, id)) = app.canvas.frame_chip.clone().filter(|(r, _)| r.contains(p)) {
+                // Chip: › zooms in; the name selects (double-click renames).
+                if app.canvas.chip_chevron.is_some_and(|c| c.contains(p)) {
+                    let _ = app.editor.view(ViewCommand::ZoomTo { id, animate: true }, H);
+                } else {
+                    let _ = app.editor.view(ViewCommand::Select { ids: vec![id] }, H);
+                }
             } else {
                 click(app, p, mods.shift);
             }
@@ -526,7 +576,22 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     }
     if resp.double_clicked() {
         if let Some(p) = resp.interact_pointer_pos() {
-            double_click(app, p);
+            let chip = app.canvas.frame_chip.clone().filter(|(r, _)| r.contains(p));
+            match chip {
+                Some((_, id)) if !app.canvas.chip_chevron.is_some_and(|c| c.contains(p)) => {
+                    let name = app.editor.doc.get(&id).map(|e| e.label(&app.editor.doc)).unwrap_or_default();
+                    app.canvas.renaming = Some((id, name, false));
+                }
+                Some(_) => {}
+                None => double_click(app, p),
+            }
+        }
+    }
+    // Chip tooltips (critique 27).
+    if let (Some(p), Some((r, _)), Gesture::None) = (pointer, &app.canvas.frame_chip, &app.canvas.gesture) {
+        if r.contains(p) && app.canvas.renaming.is_none() {
+            let tip = if app.canvas.chip_chevron.is_some_and(|c| c.contains(p)) { "Zoom into Frame" } else { "Double-click to rename" };
+            resp.clone().on_hover_text(tip);
         }
     }
 
@@ -549,6 +614,11 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
         (_, Some(Handle::Body)) => CursorIcon::Move,
         _ => CursorIcon::Default,
     };
+    let cursor = if pointer.is_some_and(|p| app.canvas.agent_edge.is_some_and(|r| r.contains(p)) || app.canvas.chip_chevron.is_some_and(|r| r.contains(p))) {
+        CursorIcon::PointingHand
+    } else {
+        cursor
+    };
     if resp.contains_pointer() {
         ctx.set_cursor_icon(cursor);
     }
@@ -556,7 +626,39 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     // ---- overlays
     let painter = ui.painter_at(rect);
     draw_overlays(app, &painter, path_mode, zoom);
+    rename_overlay(app, ui);
     text_overlay(app, &ctx);
+}
+
+/// In-place rename field over a frame's chip.
+fn rename_overlay(app: &mut ZebraApp, ui: &mut Ui) {
+    let Some((id, mut text, focused)) = app.canvas.renaming.take() else { return };
+    let Some(e) = app.editor.doc.get(&id) else { return };
+    let tl = app.canvas.w2s(&app.editor, e.corners()[0]);
+    let r = ERect::from_min_size(tl + egui::vec2(0.0, -24.0), egui::vec2(200.0, 22.0));
+    let resp = ui.put(r, egui::TextEdit::singleline(&mut text).font(style::ui_font(11.5)).margin(egui::vec2(6.0, 3.0)).id_salt("frame-rename"));
+    if !focused {
+        resp.request_focus();
+        if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), resp.id) {
+            st.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()))));
+            st.store(ui.ctx(), resp.id);
+        }
+    }
+    let esc = ui.input(|i| i.key_pressed(Key::Escape));
+    if esc {
+        return;
+    }
+    if resp.lost_focus() && focused {
+        let current = e.label(&app.editor.doc);
+        if text.trim() != current {
+            let patch = zebra_core::ElementPatch { name: Some(text.trim().to_string()), ..Default::default() };
+            if app.editor.apply(Command::Update { id, patch }, H).is_err() {
+                app.toast("Couldn't rename the frame.");
+            }
+        }
+        return;
+    }
+    app.canvas.renaming = Some((id, text, true));
 }
 
 fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
@@ -773,7 +875,7 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
         }
         Gesture::Badge { step } => {
             if let Some(id) = hit(app, p, true) {
-                app.apply(Command::UpdateStep { index: step, target: Some(StepTarget::Element { id }), builds: None, notes: None, duration: None, dwell: None });
+                app.apply(Command::UpdateStep { index: step, target: Some(StepTarget::Element { id }), builds: None, notes: None, duration: None, dwell: None, hide_builds: None });
                 app.toast(format!("Step {} now points here", step + 1));
             }
         }
@@ -1304,7 +1406,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
             at += p.chars().count() + 1;
         }
         let r = resp.rect.expand(4.0);
-        ui.painter().add(Shape::dashed_line(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], Stroke::new(1.0, ACCENT), 4.0, 3.0));
+        ui.painter().add(Shape::dashed_line(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], Stroke::new(1.0, style::accent()), 4.0, 3.0));
         resp
     });
     let resp = r.inner;
@@ -1534,26 +1636,51 @@ fn snap_move(app: &ZebraApp, moving: &HashSet<ElementId>, b: &Rect, d: Vec2, thr
 // Overlays
 
 /// Screen positions of path badges.
+/// World corners of a step's camera box for view and overview steps
+/// (drawn dashed in path editing); `None` for element steps.
+fn step_view_quad(app: &ZebraApp, t: &StepTarget) -> Option<Vec<Pos2>> {
+    let ed = &app.editor;
+    let v = match t {
+        StepTarget::View { view } => *view,
+        StepTarget::Overview => {
+            let b = ed.doc.bounds()?;
+            let c = b.center();
+            zebra_core::ViewRect { cx: c.x, cy: c.y, width: b.width(), height: b.height(), rotation: 0.0 }
+        }
+        StepTarget::Element { .. } => return None,
+    };
+    let (hw, hh) = (v.width / 2.0, v.height / 2.0);
+    Some(
+        [Vec2::new(-hw, -hh), Vec2::new(hw, -hh), Vec2::new(hw, hh), Vec2::new(-hw, hh)]
+            .iter()
+            .map(|p| app.canvas.w2s(ed, p.rotate_deg(v.rotation) + Vec2::new(v.cx, v.cy)))
+            .collect(),
+    )
+}
+
 pub fn badge_positions(app: &ZebraApp) -> Vec<Pos2> {
     let ed = &app.editor;
+    // Element steps: the element's centre. View and overview steps: the
+    // top-left corner of their dashed camera box, so they don't land on
+    // whatever content happens to be in the middle (critique 11).
     let raw: Vec<Pos2> = ed.doc
         .path
         .iter()
-        .map(|s| {
-            let w = match &s.target {
-                StepTarget::Element { id } => ed.doc.get(id).map(|e| e.transform.center()).unwrap_or(Vec2::ZERO),
-                StepTarget::View { view } => Vec2::new(view.cx, view.cy),
-                StepTarget::Overview => ed.doc.bounds().map(|b| b.center()).unwrap_or(Vec2::ZERO),
-            };
-            app.canvas.w2s(ed, w)
+        .map(|s| match &s.target {
+            StepTarget::Element { id } => app.canvas.w2s(ed, ed.doc.get(id).map(|e| e.transform.center()).unwrap_or(Vec2::ZERO)),
+            t => step_view_quad(app, t).map(|q| q[0] + (q[2] - q[0]).normalized() * 22.0).unwrap_or(app.canvas.rect.center()),
         })
         .collect();
-    // Steps sharing a target (e.g. overview at start and end) sit side by side.
+    // Steps sharing a spot (e.g. overview at start and end) fan out around it.
     let mut out: Vec<Pos2> = Vec::with_capacity(raw.len());
     for p in raw {
         let mut q = p;
-        while out.iter().any(|o| o.distance(q) < 20.0) {
-            q.x += 30.0;
+        let mut k = 0;
+        while out.iter().any(|o| o.distance(q) < 24.0) && k < 24 {
+            k += 1;
+            let ring = 1 + (k - 1) / 6;
+            let a = (k as f32) * std::f32::consts::TAU / 6.0 + ring as f32 * 0.5;
+            q = p + egui::vec2(a.cos(), a.sin()) * 30.0 * ring as f32;
         }
         out.push(q);
     }
@@ -1563,6 +1690,22 @@ pub fn badge_positions(app: &ZebraApp) -> Vec<Pos2> {
 fn badge_at(app: &ZebraApp, p: Pos2) -> Option<usize> {
     // Later steps sit on top.
     badge_positions(app).iter().enumerate().rev().find(|(_, b)| b.distance(p) < 15.0).map(|(i, _)| i)
+}
+
+/// Screen outline of what an element draws: its box, or the inscribed
+/// circle for circle frames.
+fn outline_screen(app: &ZebraApp, e: &zebra_core::Element) -> Vec<Pos2> {
+    if e.is_circle_frame() {
+        let (w, _) = e.visual_size();
+        let r = w / 2.0;
+        return (0..64)
+            .map(|i| {
+                let a = i as f64 / 64.0 * std::f64::consts::TAU;
+                app.canvas.w2s(&app.editor, e.transform.apply(Vec2::new(r * a.cos(), r * a.sin())))
+            })
+            .collect();
+    }
+    quad_screen(app, e.corners())
 }
 
 fn quad_screen(app: &ZebraApp, corners: [Vec2; 4]) -> Vec<Pos2> {
@@ -1575,7 +1718,7 @@ fn dashed_quad(painter: &Painter, q: &[Pos2], stroke: Stroke, dash: f32, gap: f3
     painter.extend(Shape::dashed_line(&pts, stroke, dash, gap));
 }
 
-pub fn draw_agent_presence(app: &ZebraApp, painter: &Painter) {
+pub fn draw_agent_presence(app: &ZebraApp, painter: &Painter) -> Option<ERect> {
     let ed = &app.editor;
     let now = ed.view.now;
     // Agent selection: violet, dashed.
@@ -1598,20 +1741,34 @@ pub fn draw_agent_presence(app: &ZebraApp, painter: &Painter) {
             painter.add(Shape::line(q, Stroke::new(2.5, AGENT.gamma_multiply(a))));
         }
     }
-    // Agent cursor with name label.
+    // Agent cursor with name label. Fades out after 5 s without agent
+    // edits, whether or not the agent is still connected (critique 18).
+    let mut edge = None;
     if let Some(c) = ed.agent_cursor {
-        if app.agent_connected() || ed.activity.back().is_some_and(|a| a.origin.is_agent() && now - a.time < 10.0) {
+        const HOLD: f64 = 5.0;
+        const FADE: f64 = 0.6;
+        let age = now - ed.agent_cursor_time;
+        let a = if age < HOLD { 1.0 } else { (1.0 - (age - HOLD) / FADE).clamp(0.0, 1.0) as f32 };
+        if a > 0.0 {
+            if age < HOLD {
+                painter.ctx().request_repaint_after(std::time::Duration::from_secs_f64(HOLD - age));
+            } else {
+                painter.ctx().request_repaint();
+            }
+            let agent = AGENT.gamma_multiply(a);
+            let white = Color32::WHITE.gamma_multiply(a);
             let p = app.canvas.w2s(ed, c);
+            let name = app.agent_name();
             if app.canvas.rect.expand(-2.0).contains(p) {
                 let pts = vec![p, p + egui::vec2(0.0, 18.0), p + egui::vec2(4.5, 13.5), p + egui::vec2(12.0, 13.0)];
-                painter.add(Shape::convex_polygon(pts, AGENT, Stroke::new(1.5, Color32::WHITE)));
-                let name = app.agent_name();
-                let galley = painter.layout_no_wrap(name, FontId::proportional(12.0), Color32::WHITE);
+                painter.add(Shape::convex_polygon(pts, agent, Stroke::new(1.5, white)));
+                let galley = painter.layout_no_wrap(name, style::ui_font(12.0), white);
                 let r = ERect::from_min_size(p + egui::vec2(12.0, 16.0), galley.size() + egui::vec2(12.0, 6.0));
-                painter.rect_filled(r, 6.0, AGENT);
-                painter.galley(r.min + egui::vec2(6.0, 3.0), galley, Color32::WHITE);
+                painter.rect_filled(r, 6.0, agent);
+                painter.galley(r.min + egui::vec2(6.0, 3.0), galley, white);
             } else {
-                // Edge indicator pointing to off-screen agent activity.
+                // Edge arrow + label pointing to off-screen agent edits;
+                // clicking the label flies there.
                 let rect = app.canvas.rect.shrink(18.0);
                 let c0 = rect.center();
                 let d = (p - c0).normalized();
@@ -1619,10 +1776,24 @@ pub fn draw_agent_presence(app: &ZebraApp, painter: &Painter) {
                 let ty = if d.y.abs() > 1e-6 { (rect.height() / 2.0) / d.y.abs() } else { f32::INFINITY };
                 let e = c0 + d * tx.min(ty);
                 let perp = egui::vec2(-d.y, d.x);
-                painter.add(Shape::convex_polygon(vec![e + d * 9.0, e - d * 5.0 + perp * 7.0, e - d * 5.0 - perp * 7.0], AGENT, Stroke::NONE));
+                painter.add(Shape::convex_polygon(vec![e + d * 9.0, e - d * 5.0 + perp * 7.0, e - d * 5.0 - perp * 7.0], agent, Stroke::NONE));
+                let galley = painter.layout_no_wrap(format!("{name} is editing here"), style::ui_font(11.0), white);
+                let size = galley.size() + egui::vec2(14.0, 6.0);
+                // Place the label inward from the arrow, kept inside the canvas.
+                let centre = e - d * (14.0 + size.length() / 2.0);
+                let r = ERect::from_center_size(centre, size);
+                let inner = app.canvas.rect.shrink(4.0);
+                let r = r.translate(egui::vec2(
+                    (inner.min.x - r.min.x).max(0.0) + (inner.max.x - r.max.x).min(0.0),
+                    (inner.min.y - r.min.y).max(0.0) + (inner.max.y - r.max.y).min(0.0),
+                ));
+                painter.rect_filled(r, r.height() / 2.0, agent);
+                painter.galley(r.min + egui::vec2(7.0, 3.0), galley, white);
+                edge = Some(r);
             }
         }
     }
+    edge
 }
 
 fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f64) {
@@ -1639,14 +1810,15 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
     }
     // Hover outline + frame chip.
     app.canvas.frame_chip = None;
+    app.canvas.chip_chevron = None;
     let sel = &ed.view.selection;
     let hover_frame = app.canvas.hover.clone().filter(|h| ed.doc.get(h).is_some_and(|e| e.is_frame()));
     if let Some(h) = &app.canvas.hover {
         if !sel.contains(h) && !path_mode {
             if let Some(e) = ed.doc.get(h) {
-                let mut q = quad_screen(app, e.corners());
+                let mut q = outline_screen(app, e);
                 q.push(q[0]);
-                painter.add(Shape::line(q, Stroke::new(1.0, ACCENT.gamma_multiply(0.7))));
+                painter.add(Shape::line(q, Stroke::new(1.0, style::accent().gamma_multiply(0.7))));
             }
         }
     }
@@ -1657,12 +1829,18 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
     if let (Some(fid), false) = (chip_frame, path_mode) {
         if let Some(e) = ed.doc.get(&fid) {
             let tl = app.canvas.w2s(ed, e.corners()[0]);
-            let label = format!("{}  ›", e.label(&ed.doc));
-            let galley = painter.layout_no_wrap(label, FontId::proportional(11.5), p.text);
-            let r = ERect::from_min_size(tl + egui::vec2(0.0, -24.0), galley.size() + egui::vec2(14.0, 8.0));
-            painter.rect(r, 6.0, p.float, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
-            painter.galley(r.min + egui::vec2(7.0, 4.0), galley, p.text);
+            let galley = painter.layout_no_wrap(e.label(&ed.doc), style::ui_font(11.5), p.text);
+            let chev_w = 20.0;
+            let r = ERect::from_min_size(tl + egui::vec2(0.0, -24.0), egui::vec2(galley.size().x + 14.0 + chev_w, galley.size().y.max(14.0) + 8.0));
+            let chev = ERect::from_min_max(egui::pos2(r.max.x - chev_w, r.min.y), r.max);
+            if app.canvas.renaming.as_ref().is_none_or(|(rid, _, _)| *rid != fid) {
+                painter.rect(r, 6.0, p.float, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
+                painter.galley(r.min + egui::vec2(7.0, 4.0), galley, p.text);
+                painter.line_segment([egui::pos2(chev.min.x, r.min.y + 4.0), egui::pos2(chev.min.x, r.max.y - 4.0)], Stroke::new(1.0, p.border));
+                crate::icons::paint_icon(painter, ERect::from_center_size(chev.center(), egui::vec2(10.0, 10.0)), crate::icons::Icon::ChevronRight, p.weak);
+            }
             app.canvas.frame_chip = Some((r, fid));
+            app.canvas.chip_chevron = Some(chev);
         }
     }
 
@@ -1670,7 +1848,7 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
         draw_path_overlay(app, painter);
     }
 
-    draw_agent_presence(app, painter);
+    app.canvas.agent_edge = draw_agent_presence(app, painter);
 
     // Selection + zebra transform tool.
     if !path_mode && app.canvas.text.is_none() {
@@ -1693,13 +1871,13 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
         Gesture::Marquee { start, .. } => {
             if let Some(cur) = painter.ctx().input(|i| i.pointer.hover_pos()) {
                 let r = ERect::from_two_pos(*start, cur);
-                painter.rect(r, 2.0, ACCENT.gamma_multiply(0.08), Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);
+                painter.rect(r, 2.0, style::accent().gamma_multiply(0.08), Stroke::new(1.0, style::accent()), egui::StrokeKind::Inside);
             }
         }
         Gesture::Create { tool, start } => {
             if let Some(cur) = painter.ctx().input(|i| i.pointer.hover_pos()) {
                 let a = app.canvas.w2s(ed, *start);
-                let st = Stroke::new(1.5, ACCENT);
+                let st = Stroke::new(1.5, style::accent());
                 match tool {
                     Tool::Line | Tool::Arrow => {
                         painter.line_segment([a, cur], st);
@@ -1745,7 +1923,7 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
         if let Some(t) = attach_target(app, w, exclude.as_deref()).and_then(|t| app.editor.doc.get(&t)) {
             let mut q = quad_screen(app, t.corners());
             q.push(q[0]);
-            painter.add(Shape::line(q, Stroke::new(2.0, ACCENT)));
+            painter.add(Shape::line(q, Stroke::new(2.0, style::accent())));
         }
     }
     let _ = zoom;
@@ -1761,13 +1939,22 @@ fn draw_bracket_preview(painter: &Painter, r: ERect, st: Stroke) {
 /// handle — the signature transform tool.
 fn draw_transform_tool(app: &ZebraApp, painter: &Painter, sb: &SelBox) {
     let locked = app.editor.view.selection.iter().all(|id| app.editor.doc.get(id).is_some_and(|e| e.locked));
-    let col = if locked { Color32::from_gray(150) } else { ACCENT };
+    let col = if locked { Color32::from_gray(150) } else { style::accent() };
+    // Frames: draw the outline 4 pt outside the frame so its own style
+    // (brackets, circle, rectangle) stays visible (critique 24).
+    let all_frames = !app.editor.view.selection.is_empty()
+        && app.editor.view.selection.iter().all(|id| app.editor.doc.get(id).is_some_and(|e| e.is_frame()));
     let mut q = sb.screen.to_vec();
+    if all_frames {
+        let u = (sb.screen[1] - sb.screen[0]).normalized() * 4.0;
+        let v = (sb.screen[3] - sb.screen[0]).normalized() * 4.0;
+        q = vec![sb.screen[0] - u - v, sb.screen[1] + u - v, sb.screen[2] + u + v, sb.screen[3] - u + v];
+    }
     q.push(q[0]);
     painter.add(Shape::line(q, Stroke::new(1.5, col)));
     if locked {
         let c = sb.screen[0];
-        painter.text(c + egui::vec2(2.0, -4.0), Align2::LEFT_BOTTOM, "locked", FontId::proportional(11.0), col);
+        painter.text(c + egui::vec2(2.0, -4.0), Align2::LEFT_BOTTOM, "Locked", style::ui_font(11.0), col);
         return;
     }
     // rotation handle: thin stem + zebra-striped disc
@@ -1778,6 +1965,29 @@ fn draw_transform_tool(app: &ZebraApp, painter: &Painter, sb: &SelBox) {
         let r = ERect::from_center_size(c, egui::vec2(9.0, 9.0));
         painter.rect(r, 2.0, Color32::WHITE, Stroke::new(1.5, col), egui::StrokeKind::Middle);
     }
+    // While rotating: the angle beside the handle. Hovering the handle: what
+    // it does (critique 23).
+    let label = match &app.canvas.gesture {
+        Gesture::Rotate { base_rot, applied, .. } => {
+            let a = (base_rot + applied).rem_euclid(360.0);
+            let a = if a > 180.0 { a - 360.0 } else { a };
+            Some(format!("{:.0}°", a + 0.0))
+        }
+        Gesture::None => {
+            let hover = painter.ctx().pointer_hover_pos();
+            hover.filter(|p| matches!(hit_handle(sb, *p), Some(Handle::Rotate))).map(|_| "Rotate  ·  ⇧ snaps to 15°".to_string())
+        }
+        _ => None,
+    };
+    if let Some(text) = label {
+        let font = style::ui_font(11.0);
+        let galley = painter.layout_no_wrap(text, font, Color32::WHITE);
+        let pad = egui::vec2(7.0, 3.0);
+        let pos = rp + egui::vec2(14.0, -galley.size().y / 2.0 - pad.y);
+        let r = ERect::from_min_size(pos, galley.size() + pad * 2.0);
+        painter.rect_filled(r, 5.0, Color32::from_black_alpha(190));
+        painter.galley(r.min + pad, galley, Color32::WHITE);
+    }
 }
 
 /// A selected connector: its route highlighted, with a round handle at each
@@ -1786,10 +1996,10 @@ fn draw_connector_handles(app: &ZebraApp, painter: &Painter, id: &str) {
     let Some(e) = app.editor.doc.get(id) else { return };
     let ElementKind::Connector(c) = &e.kind else { return };
     let pts: Vec<Pos2> = zebra_core::connector::local_route(c).sample().iter().map(|p| app.canvas.w2s(&app.editor, e.transform.apply(*p))).collect();
-    painter.add(Shape::line(pts, Stroke::new(1.5, ACCENT.gamma_multiply(0.6))));
+    painter.add(Shape::line(pts, Stroke::new(1.5, style::accent().gamma_multiply(0.6))));
     for (end, attached) in [(&c.from, c.from.element.is_some()), (&c.to, c.to.element.is_some())] {
         let p = app.canvas.w2s(&app.editor, e.transform.apply(Vec2::new(end.x, end.y)));
-        painter.circle(p, 5.5, if attached { ACCENT } else { Color32::WHITE }, Stroke::new(1.5, ACCENT));
+        painter.circle(p, 5.5, if attached { style::accent() } else { Color32::WHITE }, Stroke::new(1.5, style::accent()));
     }
 }
 
@@ -1826,27 +2036,37 @@ pub fn draw_zebra_disc(painter: &Painter, c: Pos2, r: f32) {
 }
 
 pub fn draw_badge(painter: &Painter, p: Pos2, n: usize, active: bool) {
-    let fill = if active { ACCENT } else { PATH };
+    let fill = if active { style::accent() } else { PATH };
     painter.circle(p, 13.0, fill, Stroke::new(2.0, Color32::WHITE));
     painter.text(p, Align2::CENTER_CENTER, n.to_string(), style::bold(12.0), Color32::WHITE);
 }
 
 fn draw_path_overlay(app: &ZebraApp, painter: &Painter) {
     // Dim content slightly so the path stands out.
-    painter.rect_filled(app.canvas.rect, 0.0, Color32::from_white_alpha(70));
+    let dim = Color32::from_white_alpha(70);
+    painter.rect_filled(app.canvas.rect, 0.0, dim);
     let ed = &app.editor;
-    // Outline every step target.
+    // Element steps: faint dashed outline. View and overview steps: their
+    // camera box, dashed.
     for s in &ed.doc.path {
-        if let StepTarget::Element { id } = &s.target {
-            if let Some(e) = ed.doc.get(id) {
-                let q = quad_screen(app, e.corners());
-                dashed_quad(painter, &q, Stroke::new(1.0, PATH.gamma_multiply(0.6)), 4.0, 4.0);
+        match &s.target {
+            StepTarget::Element { id } => {
+                if let Some(e) = ed.doc.get(id) {
+                    let q = outline_screen(app, e);
+                    dashed_quad(painter, &q, Stroke::new(1.0, PATH.gamma_multiply(0.5)), 4.0, 4.0);
+                }
+            }
+            t => {
+                if let Some(q) = step_view_quad(app, t) {
+                    dashed_quad(painter, &q, Stroke::new(1.25, PATH.gamma_multiply(0.8)), 8.0, 5.0);
+                }
             }
         }
     }
     let pos = badge_positions(app);
     if pos.len() >= 2 {
-        // Gentle curve between consecutive badges.
+        // Gentle curve between consecutive badges, kept light so text under
+        // it stays readable.
         for w in pos.windows(2) {
             let (a, b) = (w[0], w[1]);
             let mid = a.lerp(b, 0.5);
@@ -1859,7 +2079,23 @@ fn draw_path_overlay(app: &ZebraApp, painter: &Painter) {
                     Pos2::new(u * u * a.x + 2.0 * u * t * ctrl.x + t * t * b.x, u * u * a.y + 2.0 * u * t * ctrl.y + t * t * b.y)
                 })
                 .collect();
-            painter.add(Shape::line(pts, Stroke::new(2.5, PATH.gamma_multiply(0.75))));
+            painter.add(Shape::line(pts, Stroke::new(2.0, PATH.gamma_multiply(0.45))));
+        }
+    }
+    // Hovered object that isn't a step yet: outline + ghost badge with the
+    // number it would get.
+    if let Some(h) = &app.canvas.hover {
+        if app.canvas.step_hover.is_none() {
+            if let Some(e) = ed.doc.get(h) {
+                let mut q = outline_screen(app, e);
+                q.push(q[0]);
+                painter.add(Shape::line(q, Stroke::new(1.5, PATH)));
+                if ed.doc.steps_using(h).is_empty() {
+                    let c = app.canvas.w2s(ed, e.transform.center());
+                    painter.circle(c, 13.0, PATH.gamma_multiply(0.35), Stroke::new(1.5, Color32::WHITE.gamma_multiply(0.8)));
+                    painter.text(c, Align2::CENTER_CENTER, format!("{}", ed.doc.path.len() + 1), style::bold(12.0), Color32::WHITE);
+                }
+            }
         }
     }
     let selected = app.selected_step;
@@ -1867,7 +2103,10 @@ fn draw_path_overlay(app: &ZebraApp, painter: &Painter) {
         draw_badge(painter, *p, i + 1, selected == Some(i) || app.canvas.step_hover == Some(i));
         let builds = ed.doc.path[i].builds.len();
         if builds > 0 {
-            painter.text(*p + egui::vec2(12.0, -12.0), Align2::LEFT_BOTTOM, format!("+{builds}"), FontId::proportional(10.0), PATH);
+            let g = painter.layout_no_wrap(format!("+{builds}"), style::ui_font(11.0), Color32::WHITE);
+            let r = ERect::from_min_size(*p + egui::vec2(10.0, -22.0), g.size() + egui::vec2(8.0, 2.0));
+            painter.rect_filled(r, r.height() / 2.0, PATH);
+            painter.galley(r.min + egui::vec2(4.0, 1.0), g, Color32::WHITE);
         }
     }
 }
