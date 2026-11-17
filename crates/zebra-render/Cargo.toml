@@ -5,5 +5,21 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["gpu"]
+# GPU canvas for the windowed app (vello on eframe's wgpu device = Metal on macOS).
+gpu = ["dep:vello", "dep:eframe", "dep:egui-wgpu", "dep:egui"]
+
 [dependencies]
 zebra-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+kurbo.workspace = true
+parley.workspace = true
+vello_cpu.workspace = true
+krilla.workspace = true
+image.workspace = true
+vello = { workspace = true, optional = true }
+eframe = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+egui-wgpu = { workspace = true, optional = true }
