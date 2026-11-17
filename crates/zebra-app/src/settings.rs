@@ -30,6 +30,15 @@ impl Pane {
             Pane::Agents => crate::t!("settings-agents"),
         }
     }
+
+    /// The window's content size for this pane. Like Mac preference
+    /// windows, the window grows for a pane that needs the room.
+    pub fn size(self) -> Vec2 {
+        match self {
+            Pane::Keyboard => Vec2::new(620.0, 520.0),
+            _ => Vec2::new(520.0, 380.0),
+        }
+    }
 }
 
 pub fn show(app: &mut ZebraApp, ctx: &egui::Context) {
@@ -41,7 +50,7 @@ pub fn show(app: &mut ZebraApp, ctx: &egui::Context) {
     let title = app.settings_pane.label();
     let vb = egui::ViewportBuilder::default()
         .with_title(title)
-        .with_inner_size([520.0, 380.0])
+        .with_inner_size(app.settings_pane.size())
         .with_resizable(false)
         .with_minimize_button(false)
         .with_maximize_button(false);
@@ -61,13 +70,15 @@ pub fn show(app: &mut ZebraApp, ctx: &egui::Context) {
         }
         // While a shortcut is being typed, Esc and ⌘W belong to it.
         let typing_keys = app.key_capture.is_some();
-        if ctx.input(|i| i.viewport().close_requested() || (!typing_keys && ((i.modifiers.command && i.key_pressed(egui::Key::W)) || i.key_pressed(egui::Key::Escape)))) {
+        // Esc in a text field (the shortcut search) is the field's.
+        let in_field = ctx.egui_wants_keyboard_input();
+        if ctx.input(|i| i.viewport().close_requested() || (!typing_keys && ((i.modifiers.command && i.key_pressed(egui::Key::W)) || (!in_field && i.key_pressed(egui::Key::Escape))))) {
             app.show_settings = false;
         }
         if class == egui::ViewportClass::EmbeddedWindow {
             // No multi-window support (tests): draw as an egui window.
             let mut open = true;
-            egui::Window::new(crate::t!("settings-title")).open(&mut open).collapsible(false).resizable(false).default_width(520.0).show(&ctx, |ui| contents(app, ui));
+            egui::Window::new(crate::t!("settings-title")).open(&mut open).collapsible(false).resizable(false).fixed_size(app.settings_pane.size()).show(&ctx, |ui| contents(app, ui));
             if !open {
                 app.show_settings = false;
             }
@@ -98,14 +109,15 @@ fn contents(app: &mut ZebraApp, ui: &mut Ui) {
         });
     });
     w::separator(ui);
-    egui::Frame::new().inner_margin(egui::Margin::symmetric(28, 16)).show(ui, |ui| {
+    let margin = if app.settings_pane == Pane::Keyboard { egui::Margin::symmetric(20, 14) } else { egui::Margin::symmetric(28, 16) };
+    egui::Frame::new().inner_margin(margin).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 8.0;
         match app.settings_pane {
             Pane::General => general(app, ui),
             Pane::Canvas => canvas(app, ui),
             Pane::Presenting => presenting(app, ui),
-            Pane::Keyboard => keyboard(app, ui),
+            Pane::Keyboard => crate::keys_pane::show(app, ui),
             Pane::Agents => agents(app, ui),
         }
     });
@@ -199,81 +211,6 @@ fn presenting(app: &mut ZebraApp, ui: &mut Ui) {
             let _ = app.editor.view(zebra_core::ViewCommand::SetReduceMotion { on }, zebra_core::Origin::Human);
         }
         w::caption(ui, crate::t!("settings-reduce-motion-caption"));
-    });
-}
-
-/// Settings › Keyboard: every rebindable action and its shortcut. Click a
-/// shortcut, then press the new keys; Esc cancels.
-fn keyboard(app: &mut ZebraApp, ui: &mut Ui) {
-    use crate::keymap;
-    let p = Palette::of(ui.ctx());
-    // Keys typed while a shortcut is being recorded (the Mac menu bar
-    // hands over the ones it owns through `got`).
-    let mut recorded_now = false;
-    if let Some(cap) = &mut app.key_capture {
-        if cap.got.is_none() {
-            cap.got = ui.input(|i| {
-                i.events.iter().find_map(|e| match e {
-                    egui::Event::Key { key, pressed: true, modifiers, .. } => Some((*modifiers, *key)),
-                    _ => None,
-                })
-            });
-        }
-        if let Some((m, k)) = cap.got {
-            let a = cap.action.clone();
-            app.key_capture = None;
-            recorded_now = true;
-            if k == egui::Key::Escape && m.is_none() {
-                // Cancelled.
-            } else {
-                let keys = crate::actions::fmt_shortcut(m, k);
-                match keymap::action_for(m, k) {
-                    Some(other) if other != a && !keymap::rebindable().contains(&other) => {
-                        app.key_message = Some(crate::t!("settings-keys-taken", keys = keys.as_str(), action = other.label()));
-                    }
-                    _ => {
-                        let before = keymap::set(&a, m, k);
-                        app.key_message = before.map(|b| crate::t!("settings-keys-moved", keys = keys.as_str(), action = b.label()));
-                    }
-                }
-            }
-        }
-    }
-    w::caption(ui, crate::t!("settings-keys-caption"));
-    let capturing = app.key_capture.as_ref().map(|c| c.action.clone());
-    egui::ScrollArea::vertical().max_height(196.0).auto_shrink([false, true]).show(ui, |ui| {
-        egui::Grid::new("keymap").num_columns(3).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
-            for a in keymap::rebindable() {
-                ui.add(egui::Label::new(RichText::new(a.label()).font(style::ui_font(12.0)).color(p.text)).truncate());
-                let text = if capturing.as_ref() == Some(&a) {
-                    crate::t!("settings-keys-type")
-                } else {
-                    a.shortcut_text().unwrap_or_else(|| crate::t!("settings-keys-none"))
-                };
-                // Space or Return just recorded must not press the button again.
-                if w::push_button_ext(ui, &text, w::Size::Small, true, Some(110.0)).clicked() && !recorded_now {
-                    app.key_message = None;
-                    app.key_capture = Some(keymap::Capture { action: a.clone(), got: None });
-                }
-                let has = keymap::binding_for(&a).is_some();
-                if w::icon_button(ui, Icon::Close, 16.0, has, false).on_hover_text(crate::t!("settings-keys-remove")).clicked() {
-                    keymap::clear(&a);
-                    app.key_message = None;
-                }
-                ui.end_row();
-            }
-        });
-    });
-    if let Some(m) = &app.key_message {
-        w::caption(ui, m.as_str());
-    }
-    ui.horizontal(|ui| {
-        let changed = !keymap::overrides().keys.is_empty();
-        if w::push_button_ext(ui, &crate::t!("settings-keys-restore"), w::Size::Regular, changed, None).clicked() {
-            keymap::reset_all();
-            app.key_capture = None;
-            app.key_message = None;
-        }
     });
 }
 

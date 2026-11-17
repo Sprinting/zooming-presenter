@@ -543,6 +543,62 @@ pub fn text_field(ui: &mut Ui, text: &mut String, width: f32, hint: &str) -> Res
     r
 }
 
+/// NSSearchField: a rounded field with a magnifier, and a clear button
+/// once something is typed.
+pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, hint: &str) -> Response {
+    let p = pal(ui);
+    let rect = ui.allocate_space(Vec2::new(width, H_REGULAR)).1;
+    let r = rect.height() / 2.0;
+    ui.painter().rect(rect, r, p.field, Stroke::new(if p.dark { 0.0 } else { 0.6 }, p.control_edge), StrokeKind::Inside);
+    // Magnifier.
+    let c = egui::pos2(rect.left() + 13.0, rect.center().y - 1.0);
+    let glyph = Stroke::new(1.3, p.weak);
+    ui.painter().circle_stroke(c, 4.2, glyph);
+    ui.painter().line_segment([c + Vec2::splat(3.0), c + Vec2::splat(6.2)], glyph);
+    let clear_w = if text.is_empty() { 0.0 } else { 20.0 };
+    let field = Rect::from_min_max(egui::pos2(rect.left() + 24.0, rect.top() + 2.0), egui::pos2(rect.right() - 8.0 - clear_w, rect.bottom() - 2.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
+    let resp = child.add(
+        egui::TextEdit::singleline(text)
+            .frame(egui::Frame::NONE)
+            .font(style::ui_font(13.0))
+            .hint_text(hint)
+            .desired_width(field.width())
+            .align(Align2::LEFT_CENTER)
+            .margin(egui::Margin::ZERO),
+    );
+    // Esc clears what was typed, as in every Mac search field.
+    if resp.lost_focus() && !text.is_empty() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        text.clear();
+        let mut r2 = resp.clone();
+        r2.mark_changed();
+        return r2;
+    }
+    if !text.is_empty() {
+        let cr = Rect::from_center_size(egui::pos2(rect.right() - 13.0, rect.center().y), Vec2::splat(14.0));
+        let b = ui.interact(cr, resp.id.with("clear"), Sense::click());
+        ui.painter().circle_filled(cr.center(), 7.0, if b.hovered() { p.text } else { p.weak });
+        let d = 2.6;
+        let x = Stroke::new(1.4, p.field);
+        ui.painter().line_segment([cr.center() - Vec2::splat(d), cr.center() + Vec2::splat(d)], x);
+        ui.painter().line_segment([cr.center() + Vec2::new(-d, d), cr.center() + Vec2::new(d, -d)], x);
+        if b.clicked() {
+            text.clear();
+            resp.request_focus();
+            let mut r2 = resp.clone();
+            r2.mark_changed();
+            if resp.has_focus() {
+                focus_ring(ui, rect, r);
+            }
+            return r2;
+        }
+    }
+    if resp.has_focus() {
+        focus_ring(ui, rect, r);
+    }
+    resp
+}
+
 fn paint_field(ui: &Ui, rect: Rect, p: &Palette) {
     let painter = ui.painter();
     painter.rect(rect, 4.0, p.field, Stroke::new(if p.dark { 0.0 } else { 0.6 }, p.control_edge), StrokeKind::Inside);

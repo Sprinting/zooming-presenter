@@ -41,8 +41,30 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             "icons" => app.show_icon_sheet = true,
             // Debug: the Settings window, a sheet, the inspector on text.
             "settings" => app.show_settings = true,
+            // Debug: Settings › Keyboard; `keysrec` is recording Lock's keys,
+            // `keysearch:<text>` has typed a search.
+            "keys" | "keysrec" => {
+                app.show_settings = true;
+                app.settings_pane = crate::settings::Pane::Keyboard;
+                if part.trim() == "keysrec" {
+                    app.key_capture = Some(crate::keymap::Capture { action: crate::actions::Action::ToggleLock, got: None });
+                }
+            }
+            q if q.starts_with("keysearch:") => {
+                app.show_settings = true;
+                app.settings_pane = crate::settings::Pane::Keyboard;
+                crate::keys_pane::set_query(ctx, &q["keysearch:".len()..]);
+            }
+            q if q.starts_with("keysgroup:") => {
+                app.show_settings = true;
+                app.settings_pane = crate::settings::Pane::Keyboard;
+                crate::keys_pane::set_group(ctx, q["keysgroup:".len()..].parse().unwrap_or(0));
+            }
             "sheet" => crate::sheets::request(app, crate::sheets::SheetKind::ClearPath),
             "dark" => ctx.set_theme(egui::Theme::Dark),
+            // Debug: draw extra windows (Settings) inside the main one, so a
+            // screenshot of the main window shows them (Linux CI).
+            "embed" => ctx.set_embed_viewports(true),
             // Debug: media deck (picture, cropped circle, playing video),
             // optionally in crop mode.
             "media" | "mediacrop" | "mediaplay" => media_demo(app, part.trim()),

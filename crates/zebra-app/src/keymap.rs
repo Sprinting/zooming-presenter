@@ -148,7 +148,17 @@ pub fn parse(s: &str) -> Option<(Modifiers, Key)> {
     if cfg!(target_os = "macos") && m.command {
         m.mac_cmd = true;
     }
-    Some((m, Key::from_name(key)?))
+    let k = Key::from_name(key)?;
+    // ⌘ or ⇧ on its own is never a shortcut (an older build could save one).
+    if is_modifier(k) {
+        return None;
+    }
+    Some((m, k))
+}
+
+/// ⇧, ⌃, ⌥ or ⌘ itself, which egui also reports as a key press.
+pub fn is_modifier(k: Key) -> bool {
+    matches!(k, Key::ShiftLeft | Key::ShiftRight | Key::ControlLeft | Key::ControlRight | Key::AltLeft | Key::AltRight | Key::SuperLeft | Key::SuperRight)
 }
 
 fn file() -> std::path::PathBuf {
@@ -165,7 +175,22 @@ pub fn load() {
         }),
         Err(_) => Overrides::default(),
     };
-    install(o);
+    let mut fixed = o.clone();
+    drop_bad_keys(&mut fixed);
+    if fixed != o {
+        save(&fixed);
+    }
+    install(fixed);
+}
+
+/// Forget saved keys that can't be shortcuts (a bare ⌘ from an older
+/// build): an action left with none of its own goes back to its default.
+fn drop_bad_keys(o: &mut Overrides) {
+    o.keys.retain(|_, v| {
+        let had = !v.is_empty();
+        v.retain(|s| parse(s).is_some());
+        !(had && v.is_empty())
+    });
 }
 
 /// Use `o` from now on (no saving).
@@ -272,6 +297,17 @@ mod tests {
 
         install(Overrides::default());
         assert_eq!(action_for(cmd, Key::L), Some(Action::ToggleLock));
+    }
+
+    #[test]
+    fn a_saved_bare_modifier_gives_the_action_its_default_back() {
+        let mut o = Overrides::default();
+        o.keys.insert(id(&Action::SendToBack), vec!["SuperLeft".into()]);
+        o.keys.insert(id(&Action::ToggleLock), vec![]);
+        drop_bad_keys(&mut o);
+        assert!(!o.keys.contains_key(&id(&Action::SendToBack)));
+        assert_eq!(o.keys.get(&id(&Action::ToggleLock)), Some(&vec![]));
+        assert_eq!(parse("cmd+ShiftLeft"), None);
     }
 
     #[test]
