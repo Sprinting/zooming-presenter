@@ -38,7 +38,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     });
     ui.add_space(6.0);
 
-    let footer_h = 74.0;
+    let footer_h = if app.current_step().is_some() { 160.0 } else { 74.0 };
     let avail = ui.available_height() - footer_h;
     let drag_id = egui::Id::unique("path-drag");
     let mut dragging: Option<usize> = ui.ctx().data(|d| d.get_temp(drag_id));
@@ -204,5 +204,6 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         if ui.add(b).on_hover_text("⇧⌘A").clicked() {
             app.queued.push(Action::AddToPath);
         }
+        crate::presenting::sidebar_notes(app, ui, p);
     });
 }

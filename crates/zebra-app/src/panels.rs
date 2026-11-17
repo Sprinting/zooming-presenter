@@ -129,6 +129,14 @@ fn top_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 if ui.button("Present from Current Step").clicked() {
                     app.queued.push(Action::PresentCurrent);
                 }
+                ui.separator();
+                if ui.button("Playback Options…").clicked() {
+                    app.queued.push(Action::PlaybackOptions);
+                }
+                let mut pv = app.stage.presenter_view;
+                if ui.checkbox(&mut pv, "Presenter View").clicked() {
+                    app.queued.push(Action::TogglePresenterView);
+                }
             });
             ui.add_space(4.0);
             let ex = ui.add(egui::Button::new("Export").min_size(EVec2::new(0.0, 30.0))).on_hover_text("Export as PDF or PNG");
@@ -149,7 +157,8 @@ fn top_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
 }
 
 fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
-    for t in Theme::builtins() {
+    let all: Vec<Theme> = Theme::builtins().into_iter().chain(app.editor.doc.themes.iter().cloned()).collect();
+    for t in all {
         let selected = t.id == app.editor.doc.theme;
         let (r, resp) = ui.allocate_exact_size(EVec2::new(210.0, 40.0), Sense::click());
         let painter = ui.painter();
@@ -173,6 +182,21 @@ fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
             app.queued.push(Action::SetTheme(t.id.clone()));
             ui.close();
         }
+    }    let mine = crate::library::list_themes();
+    if !mine.is_empty() {
+        ui.separator();
+        ui.label(RichText::new("My Themes").size(11.0).weak());
+        for (_, doc, t) in mine {
+            if ui.button(&t.name).clicked() {
+                crate::theme_editor::apply_library_theme(app, &doc, &t);
+                ui.close();
+            }
+        }
+    }
+    ui.separator();
+    if ui.button("Customize Theme…").on_hover_text("Colours, fonts, background picture and 3D background").clicked() {
+        app.queued.push(Action::ThemeEditor);
+        ui.close();
     }
 }
 
@@ -825,6 +849,11 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             }
         }
         ElementKind::Ink(_) => {}
+    }
+
+    // The step this element is the target of: notes and timing.
+    if let Some(si) = app.editor.doc.path.iter().position(|s| matches!(&s.target, StepTarget::Element { id } if *id == e.id)) {
+        crate::presenting::step_section(app, ui, p, si);
     }
 
     // Fade-in builds: classic Prezi "Animate" within a step.

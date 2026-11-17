@@ -19,7 +19,7 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
     vec![
         (
             "File",
-            vec![A(New), A(NewFromSample), A(Open), Recent, Sep, A(Save), A(SaveAs), Sep, A(ExportPdf), A(ExportPng)],
+            vec![A(New), A(ShowTemplates), A(NewFromSample), A(Open), Recent, Sep, A(Save), A(SaveAs), A(SaveAsTemplate), Sep, A(ExportPdf), A(ExportPng)],
         ),
         (
             "Edit",
@@ -36,6 +36,7 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
                 A(SetTool(Tool::Arrow)),
                 A(SetTool(Tool::Pen)),
                 A(InsertImage),
+                A(InsertLayout),
                 Sep,
                 A(WrapInFrame),
             ],
@@ -53,14 +54,14 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
                 A(ToggleSidebar),
                 A(ToggleProperties),
                 Sep,
-                Sub("Theme", Theme::ids().into_iter().map(|t| A(SetTheme(t))).collect()),
+                Sub("Theme", Theme::ids().into_iter().map(|t| A(SetTheme(t))).chain([Sep, A(ThemeEditor)]).collect()),
                 A(ToggleReduceMotion),
                 Sep,
                 A(ShowShortcuts),
             ],
         ),
         ("Path", vec![A(TogglePathEdit), A(AddToPath), A(AddCurrentView), Sep, A(AutoPath), A(ClearPath)]),
-        ("Present", vec![A(PresentStart), A(PresentCurrent)]),
+        ("Present", vec![A(PresentStart), A(PresentCurrent), Sep, A(TogglePresenterView), A(PlaybackOptions)]),
         ("Agent", vec![A(ToggleAiControl), Sep, A(ToggleActivity), A(PauseAgents), A(StopAgents), A(FollowAgent), Sep, A(RevertAgent)]),
         ("Help", vec![A(ShowShortcuts), A(About)]),
     ]

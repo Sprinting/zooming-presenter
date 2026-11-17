@@ -1261,6 +1261,16 @@ impl Editor {
         Ok(key)
     }
 
+    /// Copy assets (theme pictures and fonts) from another document, e.g.
+    /// a saved theme file. Content-addressed, so existing keys are kept.
+    pub fn import_assets<'a>(&mut self, from: &Document, keys: impl IntoIterator<Item = &'a str>) {
+        for k in keys {
+            if let Some(a) = from.assets.get(k) {
+                self.doc.assets.entry(k.to_string()).or_insert_with(|| a.clone());
+            }
+        }
+    }
+
     fn gc_assets(&mut self) {
         let used: HashSet<String> = self
             .doc

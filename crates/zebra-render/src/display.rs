@@ -81,6 +81,13 @@ pub(crate) struct ImageCache {
 const MAX_IMAGE_DIM: u32 = 8192;
 
 impl ImageCache {
+    /// (images decoded, bytes of decoded pixels across all mip levels).
+    pub(crate) fn stats(&self) -> (usize, u64) {
+        let m = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        let bytes = m.values().flatten().flat_map(|l| l.iter()).map(|l| l.width as u64 * l.height as u64 * 4).sum();
+        (m.len(), bytes)
+    }
+
     pub(crate) fn levels(&self, editor: &Editor, key: &str) -> Option<ImageLevels> {
         if let Some(v) = self.map.lock().unwrap_or_else(|e| e.into_inner()).get(key) {
             return v.clone();

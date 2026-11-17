@@ -46,6 +46,12 @@ enum Cmd {
     State,
     /// Text outline of the presentation (ids, text, positions, path).
     Describe,
+    /// Memory and speed: heap, cache sizes, frame times, repaints per second.
+    Perf {
+        /// Print JSON instead of a short table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Run a query: '{"q":"elements","kind":"frame"}' or just 'path'.
     Query { query: String },
     /// Apply a command, or an array of commands as one undo step.
@@ -320,6 +326,14 @@ fn run(cli: Cli) -> Result<()> {
                 None => print(&v),
             }
         }
+        Cmd::Perf { json } => {
+            let v = call(c, "query", json!({ "query": { "q": "perf" } }))?;
+            if json {
+                print(&v);
+            } else {
+                print_perf(&v);
+            }
+        }
         Cmd::Query { query } => {
             let q = if query.trim_start().starts_with('{') { parse_json(&query, "query")? } else { json!({ "q": query }) };
             print(&call(c, "query", json!({ "query": q }))?);
@@ -592,5 +606,21 @@ fn mcp(conn: &Conn, spawn: bool, file: Option<PathBuf>, bin: Option<PathBuf>) ->
         let mut server =
             zebra_api::mcp::McpServer::new(move || Client::discover(conn.instance, conn.socket.as_deref(), conn.token.as_deref(), &name));
         server.serve(stdin, stdout)
+    }
+}
+
+/// `zebractl perf` as a short human-readable table.
+fn print_perf(v: &Value) {
+    let n = |k: &str| v.get(k).filter(|x| !x.is_null()).map(|x| x.to_string()).unwrap_or_else(|| "n/a".into());
+    println!("heap            {} MB (peak {} MB)", n("heap_mb"), n("heap_peak_mb"));
+    println!("frame time      p50 {} ms, p95 {} ms ({} frames)", n("frame_ms_p50"), n("frame_ms_p95"), n("frames_sampled"));
+    println!("repaints        {} in the last second, {} in the last 10 s", n("repaints_last_second"), n("repaints_last_10s"));
+    if let Some(c) = v.get("caches").and_then(|c| c.as_object()) {
+        for (k, x) in c {
+            println!("cache {k:<10} {x}");
+        }
+    }
+    if let Some(d) = v.get("document") {
+        println!("document        {d}");
     }
 }

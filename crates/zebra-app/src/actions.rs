@@ -10,6 +10,11 @@ pub enum Action {
     // File
     New,
     NewFromSample,
+    /// Open the template chooser.
+    ShowTemplates,
+    NewFromTemplate(String),
+    NewFromTemplateFile(std::path::PathBuf),
+    SaveAsTemplate,
     Open,
     OpenPath(std::path::PathBuf),
     Save,
@@ -32,6 +37,7 @@ pub enum Action {
     FrameTool,
     SetFrameStyle(FrameStyle),
     InsertImage,
+    InsertLayout,
     WrapInFrame,
     // Arrange
     BringForward,
@@ -59,6 +65,8 @@ pub enum Action {
     // Present
     PresentStart,
     PresentCurrent,
+    TogglePresenterView,
+    PlaybackOptions,
     // Agent
     ToggleAiControl,
     ToggleActivity,
@@ -68,6 +76,7 @@ pub enum Action {
     RevertAgent,
     // Theme
     SetTheme(String),
+    ThemeEditor,
     About,
 }
 
@@ -77,6 +86,10 @@ impl Action {
         match self {
             New => "New".into(),
             NewFromSample => "New from Sample".into(),
+            ShowTemplates => "New from Template…".into(),
+            NewFromTemplate(t) => format!("New from Template: {}", zebra_core::templates::TEMPLATES.iter().find(|x| x.id == t).map(|x| x.name).unwrap_or(t)),
+            NewFromTemplateFile(p) => p.file_stem().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
+            SaveAsTemplate => "Save as Template…".into(),
             Open => "Open…".into(),
             OpenPath(p) => p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
             Save => "Save".into(),
@@ -97,6 +110,7 @@ impl Action {
             FrameTool => "Frame Tool (cycle style)".into(),
             SetFrameStyle(s) => format!("{} Frame", frame_name(*s)),
             InsertImage => "Image…".into(),
+            InsertLayout => "Layout…".into(),
             WrapInFrame => "Frame Selection".into(),
             BringForward => "Bring Forward".into(),
             SendBackward => "Send Backward".into(),
@@ -120,6 +134,8 @@ impl Action {
             ClearPath => "Clear Path".into(),
             PresentStart => "Present from Start".into(),
             PresentCurrent => "Present from Current Step".into(),
+            TogglePresenterView => "Presenter View".into(),
+            PlaybackOptions => "Playback Options…".into(),
             ToggleAiControl => "Let AI Agents Control Zebra".into(),
             ToggleActivity => "Agent Activity".into(),
             PauseAgents => "Pause / Resume Agent".into(),
@@ -127,6 +143,7 @@ impl Action {
             FollowAgent => "Follow Agent".into(),
             RevertAgent => "Revert Agent's Changes".into(),
             SetTheme(t) => format!("Theme: {}", zebra_core::Theme::resolve(t).name),
+            ThemeEditor => "Customize Theme…".into(),
             About => "About Zebra".into(),
         }
     }
@@ -140,17 +157,17 @@ impl Action {
     pub fn palette() -> Vec<Action> {
         use Action::*;
         let mut v = vec![
-            New, NewFromSample, Open, Save, SaveAs, ExportPdf, ExportPng, Undo, Redo, Cut, Copy, Paste, Duplicate, Delete,
+            New, NewFromSample, ShowTemplates, SaveAsTemplate, Open, Save, SaveAs, ExportPdf, ExportPng, Undo, Redo, Cut, Copy, Paste, Duplicate, Delete,
             SelectAll, Deselect,
         ];
         for t in TOOLS {
             v.push(SetTool(t.0));
         }
         v.extend([
-            InsertImage, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
+            InsertImage, InsertLayout, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
             FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ToggleReduceMotion, ShowShortcuts,
-            TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, ToggleAiControl, ToggleActivity,
-            PauseAgents, StopAgents, FollowAgent, RevertAgent,
+            TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, TogglePresenterView, PlaybackOptions, ToggleAiControl, ToggleActivity,
+            PauseAgents, StopAgents, FollowAgent, RevertAgent, ThemeEditor,
         ]);
         for t in zebra_core::Theme::ids() {
             v.push(SetTheme(t));
@@ -207,6 +224,7 @@ const CMD_ALT: Modifiers = Modifiers { alt: true, ..Modifiers::COMMAND };
 /// Matched exactly (Shift/Alt must match), with ⌘ = Ctrl off-Mac.
 pub static SHORTCUTS: &[(Modifiers, Key, Action)] = &[
     (CMD_SHIFT, Key::S, Action::SaveAs),
+    (CMD_SHIFT, Key::N, Action::ShowTemplates),
     (CMD_SHIFT, Key::Z, Action::Redo),
     (CMD_SHIFT, Key::A, Action::AddToPath),
     (CMD_SHIFT, Key::P, Action::CommandPalette),

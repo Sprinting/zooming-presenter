@@ -108,6 +108,14 @@ pub struct ZebraApp {
     pub prev_hidden: HashSet<ElementId>,
     pub last_pointer_move: f64,
     pub last_pointer: Option<Pos2>,
+    /// Presenter view, playback options, notes typing, play display.
+    pub stage: crate::presenting::Stage,
+    pub theme_ed: Option<crate::theme_editor::ThemeEditor>,
+    /// The template chooser, when open.
+    pub welcome: Option<crate::welcome::Welcome>,
+    /// Template and layout previews (rendered once, on demand).
+    pub previews: Option<crate::welcome::Previews>,
+    pub show_layouts: bool,
     #[cfg(target_os = "macos")]
     pub menu: Option<crate::menu_mac::MacMenu>,
 }
@@ -142,6 +150,11 @@ impl ZebraApp {
             t0: Instant::now(),
             canvas: CanvasState::default(),
             thumbs: Thumbs::new(ctx.clone(), renderer.clone()),
+            stage: crate::presenting::Stage::new(ctx, renderer.clone(), storage),
+            theme_ed: None,
+            welcome: None,
+            previews: None,
+            show_layouts: false,
             show_sidebar: true,
             show_props: true,
             show_activity: false,
@@ -187,8 +200,13 @@ impl ZebraApp {
             }
             app.set_ai_control(true);
         }
+        let launch_welcome = opts.open.is_none() && app.demo.is_none() && app.screenshot.is_none() && app.wgpu.is_some();
         if let Some(p) = opts.open {
             app.open_path(&p);
+        }
+        // Like Keynote: a fresh launch offers the template chooser.
+        if launch_welcome && app.recovered.is_none() && storage.and_then(|s| s.get_string("welcome_at_launch")).is_none_or(|v| v != "false") {
+            app.welcome = Some(crate::welcome::Welcome::new());
         }
         app
     }
@@ -315,13 +333,21 @@ impl ZebraApp {
     fn perform_inner(&mut self, ctx: &Context, a: Action) {
         use Action::*;
         match a {
-            New | NewFromSample | Open | OpenPath(_) | Quit if self.editor.dirty() && self.confirm.is_none() && !self.force_quit => {
+            New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit
+                if self.editor.dirty() && self.confirm.is_none() && !self.force_quit =>
+            {
                 self.confirm = Some(a);
             }
             New => {
                 self.editor.load(zebra_core::Document::default(), None);
                 self.after_load();
             }
+            ShowTemplates => self.welcome = Some(crate::welcome::Welcome::new()),
+            NewFromTemplate(t) => crate::welcome::new_from_template(self, &t),
+            NewFromTemplateFile(p) => crate::welcome::new_from_template_file(self, &p),
+            SaveAsTemplate => crate::welcome::save_as_template(self),
+            InsertLayout => self.show_layouts = true,
+            ThemeEditor => self.theme_ed = Some(crate::theme_editor::ThemeEditor::open(self)),
             NewFromSample => {
                 let doc = crate::sample::build(&*self.renderer);
                 self.editor.load(doc, None);
@@ -487,6 +513,11 @@ impl ZebraApp {
                 let step = self.current_step();
                 self.view_cmd(ViewCommand::Present { step });
             }
+            TogglePresenterView => {
+                self.stage.presenter_view = !self.stage.presenter_view;
+                self.toast(if self.stage.presenter_view { "Presenter view will open when you present." } else { "Presenter view is off." });
+            }
+            PlaybackOptions => self.stage.show_playback = true,
             ToggleAiControl => {
                 let on = !self.ai_enabled;
                 self.set_ai_control(on);
@@ -749,9 +780,12 @@ impl ZebraApp {
     pub fn frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let now = self.now();
+        self.stage.frame_start = Some(std::time::Instant::now());
         if self.editor.view.tick(now) {
             ctx.request_repaint();
         }
+        crate::presenting::tick_autoplay(self, &ctx);
+        crate::presenting::tick_notes(self);
 
         // Automation API
         if let (Some(server), Some(d)) = (&self.api, &mut self.dispatcher) {
@@ -802,7 +836,12 @@ impl ZebraApp {
         } else {
             self.handle_shortcuts(&ctx);
             crate::panels::layout(self, ui);
+            crate::presenting::playback_window(self, &ctx);
+            crate::theme_editor::window(self, &ctx);
+            crate::welcome::layout_gallery(self, &ctx);
+            crate::welcome::window(self, &ctx);
         }
+        crate::presenting::presenter_window(self, &ctx);
 
         let queued = std::mem::take(&mut self.queued);
         for a in queued {
@@ -828,6 +867,21 @@ impl ZebraApp {
         }
         self.thumbs.update(&self.editor, now);
         crate::files::debug_screenshot(self, &ctx);
+        self.record_perf(now);
+    }
+
+    /// Frame time and cache sizes for the `perf` query.
+    fn record_perf(&mut self, now: f64) {
+        if let Some(t) = self.stage.frame_start.take() {
+            self.editor.perf.record_frame(now, t.elapsed().as_secs_f32() * 1000.0);
+        }
+        let caches = &mut self.editor.perf.caches;
+        for (k, v) in self.renderer.cache_stats() {
+            caches.insert(k.into(), v);
+        }
+        caches.insert("thumbnails".into(), self.thumbs.textures.iter().flatten().count() as u64);
+        caches.insert("presenter_kb".into(), self.stage.slides.texture_bytes() / 1024);
+        caches.insert("previews".into(), self.previews.as_ref().map(|p| p.textures.len() as u64).unwrap_or(0));
     }
 
     fn handle_shortcuts(&mut self, ctx: &Context) {
@@ -934,9 +988,7 @@ impl ZebraApp {
         if presenting != self.was_presenting {
             self.was_presenting = presenting;
             crate::canvas::commit_text_edit(self);
-            if self.wgpu.is_some() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(presenting));
-            }
+            crate::presenting::sync_stage(self, ctx, presenting);
             self.revealed.clear();
             self.prev_hidden = self.editor.hidden_builds();
             if !presenting {
@@ -990,6 +1042,7 @@ impl eframe::App for ZebraApp {
         eframe::set_value(storage, "reduce_motion", &self.editor.view.reduce_motion);
         eframe::set_value(storage, "ai_enabled", &self.ai_enabled);
         eframe::set_value(storage, "agent_permission", &permission_name(self.editor.view.agent_permission).to_string());
+        self.stage.save(storage);
     }
 
     fn raw_input_hook(&mut self, _ctx: &Context, raw: &mut egui::RawInput) {

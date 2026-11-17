@@ -170,6 +170,39 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 let _ = app.editor.apply(Command::SetTheme { theme: t[6..].into() }, H);
             }
             "dark" => ctx.set_theme(egui::ThemePreference::Dark),
+            // Stream 4 demos: template chooser, layout gallery, theme editor,
+            // presenter view (embedded so a screenshot shows it), 3D background.
+            "welcome" => app.welcome = Some(crate::welcome::Welcome::new()),
+            "layouts" => app.show_layouts = true,
+            "themeeditor" => app.theme_ed = Some(crate::theme_editor::ThemeEditor::open(app)),
+            "playback" => app.stage.show_playback = true,
+            t if t.starts_with("template=") => crate::welcome::new_from_template(app, &t[9..]),
+            t if t.starts_with("layout=") => {
+                app.editor.view.camera = app.editor.fit_all_camera();
+                crate::welcome::insert_layout(app, &t[7..]);
+                let ids = app.selection();
+                let b = app.editor.bounds_of(&ids);
+                app.editor.view.camera = zebra_core::Camera::fit_rect(&b, app.editor.view.viewport, 0.1);
+            }
+            "notes" => {
+                let notes = "Open with the question: why do slides feel flat?\n\nPause. Let them answer.\n\nThen zoom in: one idea leads into the next.";
+                let _ = app.editor.apply(Command::UpdateStep { index: 1, target: None, builds: None, notes: Some(notes.into()), duration: None, dwell: None }, H);
+                app.selected_step = Some(1);
+            }
+            "presenter" => {
+                ctx.set_embed_viewports(true);
+                app.stage.presenter_view = true;
+                let _ = app.editor.apply(Command::SetPlayback { autoplay: Some(10.0), looping: Some(true) }, H);
+                let _ = app.editor.view(ViewCommand::Present { step: Some(1) }, H);
+                app.last_pointer_move = 1e9;
+            }
+            "parallax" => demo_parallax(app),
+            t if t.starts_with("zoom=") => {
+                if let Ok(k) = t[5..].parse::<f64>() {
+                    let _ = app.editor.view(ViewCommand::Zoom { factor: k, anchor: None }, H);
+                    app.editor.view.flight = None;
+                }
+            }
             "empty" => {
                 app.editor.load(Document::default(), None);
                 app.after_load();
@@ -177,4 +210,38 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             _ => {}
         }
     }
+}
+
+/// Debug demo: a custom theme with a two-layer 3D background made of
+/// generated pictures (a starry sky far away, hills nearer).
+fn demo_parallax(app: &mut ZebraApp) {
+    let png = |img: image::RgbaImage| {
+        let mut b = std::io::Cursor::new(vec![]);
+        img.write_to(&mut b, image::ImageFormat::Png).ok();
+        b.into_inner()
+    };
+    let (w, h) = (640u32, 400u32);
+    let sky = image::RgbaImage::from_fn(w, h, |x, y| {
+        let t = y as f32 / h as f32;
+        let star = (x.wrapping_mul(7919) ^ y.wrapping_mul(104_729)) % 211 == 0;
+        if star {
+            image::Rgba([255, 255, 255, 255])
+        } else {
+            image::Rgba([(20.0 + 40.0 * t) as u8, (30.0 + 50.0 * t) as u8, (70.0 + 90.0 * t) as u8, 255])
+        }
+    });
+    let hills = image::RgbaImage::from_fn(w, h, |x, y| {
+        let fx = x as f32 / w as f32 * std::f32::consts::TAU;
+        let top = h as f32 * (0.62 + 0.08 * (fx * 1.5).sin() + 0.04 * (fx * 4.0).cos());
+        if (y as f32) > top { image::Rgba([40, 90, 70, 230]) } else { image::Rgba([0, 0, 0, 0]) }
+    });
+    let (Some(a), Some(b)) = (app.editor.add_asset(png(sky)).ok(), app.editor.add_asset(png(hills)).ok()) else { return };
+    let mut t = zebra_core::Theme::resolve("night");
+    t.id = "night-3d".into();
+    t.name = "Night 3D".into();
+    t.layers = vec![
+        zebra_core::BackgroundLayer { asset: a, depth: 0.1, opacity: 1.0 },
+        zebra_core::BackgroundLayer { asset: b, depth: 0.45, opacity: 1.0 },
+    ];
+    let _ = app.editor.apply(Command::SaveTheme { theme: t, apply: true }, H);
 }

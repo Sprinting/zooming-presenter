@@ -240,7 +240,7 @@ pub fn template(id: &str) -> Option<Template> {
         }
         "journey" => {
             // A winding road: stops shrink so each step zooms in a little.
-            let stops = [(-0.38, 0.18, 0.22, -8.0), (-0.16, -0.05, 0.18, 6.0), (0.04, 0.14, 0.15, -5.0), (0.2, -0.06, 0.12, 9.0), (0.33, 0.1, 0.1, -6.0), (0.42, -0.08, 0.08, 0.0)];
+            let stops = [(-0.36, 0.14, 0.24, -8.0), (-0.13, -0.07, 0.2, 6.0), (0.07, 0.12, 0.17, -5.0), (0.23, -0.08, 0.14, 9.0), (0.35, 0.09, 0.11, -6.0), (0.44, -0.07, 0.08, 0.0)];
             step!(frame(Invisible, 0.0, 0.02, 1.0, 0.5, "The road ahead"));
             for w in stops.windows(2) {
                 pieces.push(line(w[0].0, w[0].1, w[1].0, w[1].1));
