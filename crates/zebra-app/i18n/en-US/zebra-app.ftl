@@ -22,6 +22,8 @@ app-agent-default-name = Agent
 app-window-title-edited = { $name } — Edited
 app-file-filter-zebra = Zebra presentation
 app-file-filter-image = Image
+app-file-filter-video = Video
+app-file-filter-audio = Audio
 app-ai-start-failed = Couldn't start AI control: { $error }
 app-toast-error-with-hint = { $message } — { $hint }
 app-toast-nothing-to-play = Nothing to play yet. Double-click the canvas to write something first.
@@ -803,6 +805,15 @@ canvas-text-bold = Bold
 canvas-text-italic = Italic
 canvas-text-underline = Underline
 canvas-text-strikethrough = Strikethrough
+# Letters drawn on the text-format buttons, styled as bold, italic,
+# underlined and struck through.
+canvas-text-bold-glyph = B
+canvas-text-italic-glyph = I
+canvas-text-underline-glyph = U
+canvas-text-strikethrough-glyph = S
+canvas-text-bigger-glyph = A+
+canvas-text-smaller-glyph = A−
+canvas-link-hint = https://…
 canvas-text-bigger = Bigger
 canvas-text-smaller = Smaller
 canvas-text-colour = Colour

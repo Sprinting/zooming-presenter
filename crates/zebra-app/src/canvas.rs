@@ -1595,22 +1595,22 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                     }
                 }
                 ui.separator();
-                if ui.selectable_label(is_bold, egui::RichText::new("B").strong()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-bold"), &crate::actions::Action::Bold)).clicked() {
+                if ui.selectable_label(is_bold, egui::RichText::new(crate::t!("canvas-text-bold-glyph")).strong()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-bold"), &crate::actions::Action::Bold)).clicked() {
                     fx.push(Fx::Bold);
                 }
-                if ui.selectable_label(is_italic, egui::RichText::new("I").italics()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-italic"), &crate::actions::Action::Italic)).clicked() {
+                if ui.selectable_label(is_italic, egui::RichText::new(crate::t!("canvas-text-italic-glyph")).italics()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-italic"), &crate::actions::Action::Italic)).clicked() {
                     fx.push(Fx::Italic);
                 }
-                if ui.selectable_label(is_under, egui::RichText::new("U").underline()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-underline"), &crate::actions::Action::Underline)).clicked() {
+                if ui.selectable_label(is_under, egui::RichText::new(crate::t!("canvas-text-underline-glyph")).underline()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-underline"), &crate::actions::Action::Underline)).clicked() {
                     fx.push(Fx::Underline);
                 }
-                if ui.selectable_label(is_strike, egui::RichText::new("S").strikethrough()).on_hover_text(crate::t!("canvas-text-strikethrough")).clicked() {
+                if ui.selectable_label(is_strike, egui::RichText::new(crate::t!("canvas-text-strikethrough-glyph")).strikethrough()).on_hover_text(crate::t!("canvas-text-strikethrough")).clicked() {
                     fx.push(Fx::Strike);
                 }
-                if ui.button("A+").on_hover_text(crate::t!("canvas-text-bigger")).clicked() {
+                if ui.button(crate::t!("canvas-text-bigger-glyph")).on_hover_text(crate::t!("canvas-text-bigger")).clicked() {
                     fx.push(Fx::Bigger);
                 }
-                if ui.button("A−").on_hover_text(crate::t!("canvas-text-smaller")).clicked() {
+                if ui.button(crate::t!("canvas-text-smaller-glyph")).on_hover_text(crate::t!("canvas-text-smaller")).clicked() {
                     fx.push(Fx::Smaller);
                 }
                 ui.menu_button(crate::t!("canvas-text-colour"), |ui| {
@@ -1630,7 +1630,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                         }
                     }
                 });
-                if ui.selectable_label(t.link_draft.is_some(), crate::t!("canvas-text-link")).on_hover_text(with_key(crate::t!("canvas-text-link"), "⌘K")).clicked() {
+                if ui.selectable_label(t.link_draft.is_some(), crate::t!("canvas-text-link")).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-link"), egui::Modifiers::COMMAND, egui::Key::K)).clicked() {
                     fx.push(Fx::Link);
                 }
                 ui.separator();
@@ -1642,10 +1642,10 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                 }
                 // Drawn icons, not ⇤/⇥ characters: the UI fonts may not
                 // have those glyphs (egui would draw an empty box).
-                if crate::widgets::icon_button(ui, crate::icons::Icon::Outdent, 22.0, true, false).on_hover_text(with_key(crate::t!("canvas-text-decrease-indent"), "⇧⇥")).clicked() {
+                if crate::widgets::icon_button(ui, crate::icons::Icon::Outdent, 22.0, true, false).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-decrease-indent"), egui::Modifiers::SHIFT, egui::Key::Tab)).clicked() {
                     fx.push(Fx::Indent(-1));
                 }
-                if crate::widgets::icon_button(ui, crate::icons::Icon::Indent, 22.0, true, false).on_hover_text(with_key(crate::t!("canvas-text-increase-indent"), "⇥")).clicked() {
+                if crate::widgets::icon_button(ui, crate::icons::Icon::Indent, 22.0, true, false).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-increase-indent"), egui::Modifiers::NONE, egui::Key::Tab)).clicked() {
                     fx.push(Fx::Indent(1));
                 }
                 ui.separator();
@@ -1657,7 +1657,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                 let mut keep = true;
                 ui.horizontal(|ui| {
                     ui.label(crate::t!("canvas-link-to"));
-                    let r = ui.add(egui::TextEdit::singleline(&mut url).hint_text("https://…").desired_width(240.0));
+                    let r = ui.add(egui::TextEdit::singleline(&mut url).hint_text(crate::t!("canvas-link-hint")).desired_width(240.0));
                     if !r.has_focus() && !r.lost_focus() && url.is_empty() {
                         r.request_focus();
                     }
@@ -2369,13 +2369,6 @@ fn context_menu(app: &mut ZebraApp, resp: &egui::Response) {
         item(ui, app, Action::AddToPath);
         item(ui, app, Action::ZoomToSelection);
     });
-}
-
-/// `text` followed by a fixed key hint (keys handled inside the text
-/// editor, not by an [`Action`](crate::actions::Action)), in the same
-/// layout as [`crate::i18n::with_shortcut`].
-fn with_key(text: String, key: &str) -> String {
-    format!("{text}  {key}")
 }
 
 #[cfg(test)]

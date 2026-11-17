@@ -284,7 +284,7 @@ fn section(ui: &mut Ui, title: &str) {
 
 /// Ask for a picture and store it as a document asset; returns its key.
 fn pick_image(app: &mut ZebraApp) -> Option<String> {
-    let p = rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg", "webp"]).pick_file()?;
+    let p = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), &["png", "jpg", "jpeg", "webp"]).pick_file()?;
     let bytes = match std::fs::read(&p) {
         Ok(b) => b,
         Err(e) => {

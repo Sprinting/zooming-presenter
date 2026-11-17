@@ -327,8 +327,9 @@ pub static SHORTCUTS: &[(Modifiers, Key, Action)] = &[
     (NONE, Key::Questionmark, Action::ShowShortcuts),
     (NONE, Key::Exclamationmark, Action::FitAll),
     (NONE, Key::F5, Action::PresentStart),
-    (NONE, Key::Delete, Action::Delete),
+    // The Mac's delete key is Backspace; it comes first so menus show ⌫.
     (NONE, Key::Backspace, Action::Delete),
+    (NONE, Key::Delete, Action::Delete),
     (NONE, Key::Escape, Action::Deselect),
     (NONE, Key::CloseBracket, Action::BringForward),
     (NONE, Key::OpenBracket, Action::SendBackward),
@@ -362,8 +363,13 @@ pub fn fmt_shortcut(m: Modifiers, k: Key) -> String {
     }
     let key = match k {
         Key::Enter => "↵".to_string(),
+        Key::Tab => if mac { "⇥".to_string() } else { "Tab".to_string() },
         Key::Escape => "Esc".to_string(),
         Key::Backspace => "⌫".to_string(),
+        Key::ArrowRight => "→".into(),
+        Key::ArrowLeft => "←".into(),
+        Key::ArrowUp => "↑".into(),
+        Key::ArrowDown => "↓".into(),
         Key::Delete => "Del".to_string(),
         Key::Num0 => "0".into(),
         Key::Num1 => "1".into(),

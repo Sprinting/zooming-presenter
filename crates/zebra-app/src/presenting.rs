@@ -496,14 +496,14 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
                 let _ = app.editor.view(ViewCommand::Next, H);
             }
             ui.add_space(16.0);
-            if ui.button("A−").on_hover_text(crate::t!("present-notes-smaller")).clicked() {
+            if ui.button(crate::t!("canvas-text-smaller-glyph")).on_hover_text(crate::t!("present-notes-smaller")).clicked() {
                 app.stage.notes_size = (app.stage.notes_size - 2.0).max(12.0);
             }
-            if ui.button("A+").on_hover_text(crate::t!("present-notes-larger")).clicked() {
+            if ui.button(crate::t!("canvas-text-bigger-glyph")).on_hover_text(crate::t!("present-notes-larger")).clicked() {
                 app.stage.notes_size = (app.stage.notes_size + 2.0).min(48.0);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new(crate::t!("present-end-show")).min_size(EVec2::new(90.0, 30.0))).on_hover_text("Esc").clicked() {
+                if ui.add(egui::Button::new(crate::t!("present-end-show")).min_size(EVec2::new(90.0, 30.0))).on_hover_text(crate::i18n::key_text(egui::Modifiers::NONE, egui::Key::Escape)).clicked() {
                     let _ = app.editor.view(ViewCommand::ExitPresent, H);
                 }
             });
