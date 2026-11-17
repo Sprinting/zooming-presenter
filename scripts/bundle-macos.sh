@@ -12,7 +12,18 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-TARGETS=${TARGETS:-"aarch64-apple-darwin x86_64-apple-darwin"}
+# Universal (Apple Silicon + Intel) when both standard libraries are
+# installed (`rustup target add x86_64-apple-darwin`), else this Mac's own.
+if [[ -z "${TARGETS:-}" ]]; then
+  HOST=$(rustc -vV | sed -n 's/^host: //p')
+  SYSROOT=$(rustc --print sysroot)
+  if [[ -d "$SYSROOT/lib/rustlib/x86_64-apple-darwin" && -d "$SYSROOT/lib/rustlib/aarch64-apple-darwin" ]]; then
+    TARGETS="aarch64-apple-darwin x86_64-apple-darwin"
+  else
+    TARGETS="$HOST"
+    echo "Building for $HOST only (add x86_64-apple-darwin with rustup for a universal app)."
+  fi
+fi
 for t in $TARGETS; do cargo build --release --target "$t" -p zebra-app -p zebra-ctl; done
 
 APP=target/Zebra.app

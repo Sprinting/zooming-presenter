@@ -47,6 +47,7 @@ sleep 14   # past launch, so the last 10 s are pure idle
 P=$(perf)
 check "heap MB" "$(echo "$P" | field '["heap_mb"]')" "<=" 40
 check "repaints in 10 s idle" "$(echo "$P" | field '["repaints_last_10s"]')" "<=" 2
+echo "       repaint causes: $(echo "$P" | field '.get("repaint_causes_last_10s", {})')"
 stop
 
 echo "== Dense deck (2,000 elements, 50 photos)"

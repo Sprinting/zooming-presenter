@@ -505,7 +505,12 @@ fn copy_box(ui: &mut Ui, text: &str, id: &str) {
     let p = Palette::of(ui.ctx());
     egui::Frame::new().fill(p.field).stroke(Stroke::new(0.6, p.control_edge)).corner_radius(4.0).inner_margin(8.0).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.add(egui::Label::new(RichText::new(text).monospace().size(11.0)).wrap());
+        // Left-aligned and never justified: a long path that drops to the
+        // next line no longer spreads the line before it.
+        let mut job = egui::text::LayoutJob::simple(text.to_string(), egui::FontId::monospace(11.0), ui.visuals().text_color(), ui.available_width());
+        job.justify = false;
+        job.halign = egui::Align::LEFT;
+        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| ui.add(egui::Label::new(job)));
     });
     let copied_id = ui.scope_id().with(("copied", id));
     let copied_at: Option<f64> = ui.data(|d| d.get_temp(copied_id));

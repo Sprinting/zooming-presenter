@@ -20,6 +20,7 @@ pub enum Pane {
 
 pub fn show(app: &mut ZebraApp, ctx: &egui::Context) {
     if !app.show_settings {
+        ctx.data_mut(|d| d.remove::<u32>(egui::Id::unique("zebra-settings-frames")));
         return;
     }
     let title = match app.settings_pane {
@@ -34,8 +35,20 @@ pub fn show(app: &mut ZebraApp, ctx: &egui::Context) {
         .with_resizable(false)
         .with_minimize_button(false)
         .with_maximize_button(false);
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("zebra-settings"), vb, |ui, class| {
+    let vid = egui::ViewportId::from_hash_of("zebra-settings");
+    ctx.show_viewport_immediate(vid, vb, |ui, class| {
         let ctx = ui.ctx().clone();
+        // A new native window can come up after our first paint (another
+        // Space, not focused yet) and then sits blank: keep painting it
+        // until it has been shown for a moment.
+        let frames: u32 = ctx.data_mut(|d| {
+            let n = d.get_temp_mut_or(egui::Id::unique("zebra-settings-frames"), 0u32);
+            *n += 1;
+            *n
+        });
+        if frames < 30 {
+            ctx.request_repaint_of(vid);
+        }
         if ctx.input(|i| i.viewport().close_requested() || (i.modifiers.command && i.key_pressed(egui::Key::W)) || i.key_pressed(egui::Key::Escape)) {
             app.show_settings = false;
         }

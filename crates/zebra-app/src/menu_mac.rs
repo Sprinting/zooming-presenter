@@ -232,6 +232,11 @@ fn pasteboard_text() -> Option<String> {
 }
 
 pub fn poll(app: &mut ZebraApp, ctx: &egui::Context) {
+    // AppKit menus exist only on the main thread. Test harnesses run the
+    // app on worker threads: they get egui's own shortcuts instead.
+    if objc2::MainThreadMarker::new().is_none() {
+        return;
+    }
     if app.menu.is_none() {
         app.menu = Some(MacMenu::install(app));
     }

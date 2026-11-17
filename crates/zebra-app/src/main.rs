@@ -66,7 +66,12 @@ fn main() -> anyhow::Result<()> {
             .with_app_id("dev.zebra.Zebra")
             .with_inner_size([w, h])
             .with_min_inner_size([760.0, 480.0])
-            .with_drag_and_drop(true),
+            .with_drag_and_drop(true)
+            // Unified title bar: the content runs under a transparent title
+            // bar, so the traffic lights and title sit in our 28 pt title
+            // row above the toolbar (panels::TITLE_ROW).
+            .with_fullsize_content_view(cfg!(target_os = "macos"))
+            .with_titlebar_shown(!cfg!(target_os = "macos")),
         // Each run starts at the requested size (debug screenshots need it).
         persist_window: false,
         ..Default::default()

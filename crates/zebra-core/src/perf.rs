@@ -82,6 +82,9 @@ pub struct PerfStats {
     frames: VecDeque<(f64, f32)>,
     /// Bytes or counts per cache, filled by the host each frame.
     pub caches: BTreeMap<String, u64>,
+    /// Why recent frames were drawn ("file:line" of the repaint request,
+    /// with a count), newest last; reported by `perf` to find idle repaints.
+    pub repaint_causes: VecDeque<(f64, String)>,
 }
 
 impl PerfStats {
@@ -89,6 +92,13 @@ impl PerfStats {
         self.frames.push_back((now, ms));
         while self.frames.len() > FRAMES_KEPT {
             self.frames.pop_front();
+        }
+    }
+
+    pub fn record_cause(&mut self, now: f64, cause: String) {
+        self.repaint_causes.push_back((now, cause));
+        while self.repaint_causes.len() > 200 {
+            self.repaint_causes.pop_front();
         }
     }
 
@@ -110,6 +120,12 @@ impl PerfStats {
 
     pub fn report(&self, now: f64) -> Value {
         let mb = |b: usize| (b as f64 / 1_048_576.0 * 10.0).round() / 10.0;
+        let mut causes: BTreeMap<&str, usize> = BTreeMap::new();
+        for (t, c) in &self.repaint_causes {
+            if now - t <= 10.0 {
+                *causes.entry(c.as_str()).or_default() += 1;
+            }
+        }
         json!({
             "heap_mb": heap_bytes().map(mb),
             "heap_peak_mb": heap_peak().map(mb),
@@ -119,6 +135,7 @@ impl PerfStats {
             "repaints_last_second": self.repaints_in(now, 1.0),
             "repaints_last_10s": self.repaints_in(now, 10.0),
             "caches": self.caches,
+            "repaint_causes_last_10s": causes,
         })
     }
 }

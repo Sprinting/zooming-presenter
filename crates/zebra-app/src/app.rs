@@ -938,16 +938,10 @@ impl ZebraApp {
     // ------------------------------------------------------------------
     // Frame loop
 
-    pub fn frame(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        let now = self.now();
-        self.stage.frame_start = Some(std::time::Instant::now());
-        if self.editor.view.tick(now) {
-            ctx.request_repaint();
-        }
-        crate::presenting::tick_autoplay(self, &ctx);
-        crate::presenting::tick_notes(self);
-
+    /// Work that must go on even while the window is hidden or covered
+    /// (eframe then runs no ui pass): answering the automation API, so
+    /// `zebractl` never hangs on a background window.
+    pub fn logic(&mut self, ctx: &egui::Context) {
         // Automation API
         if let (Some(server), Some(d)) = (&self.api, &mut self.dispatcher) {
             if d.pump(server, &mut self.editor) {
@@ -957,7 +951,7 @@ impl ZebraApp {
             // state directly, so these are only drained here.
             let _ = d.take_events();
             if std::mem::take(&mut d.disconnect_requested) && self.ai_off_at.is_none() {
-                self.ai_off_at = Some(self.editor.view.now + 0.3);
+                self.ai_off_at = Some(self.now() + 0.3);
                 ctx.request_repaint_after(std::time::Duration::from_millis(350));
             }
             // While agents are connected keep a slow heartbeat so presence
@@ -969,14 +963,26 @@ impl ZebraApp {
             self.editor.drain_events();
         }
         if let Some(t) = self.ai_off_at {
-            if self.editor.view.now >= t {
+            if self.now() >= t {
                 let name = self.agent_name();
                 self.set_ai_control(false);
                 self.toast(format!("{name} switched AI control off. Turn it back on from the AI button."));
             } else {
-                ctx.request_repaint_after(std::time::Duration::from_secs_f64((t - self.editor.view.now).max(0.016)));
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64((t - self.now()).max(0.016)));
             }
         }
+
+    }
+
+    pub fn frame(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let now = self.now();
+        self.stage.frame_start = Some(std::time::Instant::now());
+        if self.editor.view.tick(now) {
+            ctx.request_repaint();
+        }
+        crate::presenting::tick_autoplay(self, &ctx);
+        crate::presenting::tick_notes(self);
 
         #[cfg(target_os = "macos")]
         crate::menu_mac::poll(self, &ctx);
@@ -1040,6 +1046,9 @@ impl ZebraApp {
         self.thumbs.update(&self.editor, now);
         crate::files::debug_screenshot(self, &ctx);
         self.record_perf(now);
+        for c in ctx.repaint_causes() {
+            self.editor.perf.record_cause(now, c.to_string());
+        }
     }
 
     /// Frame time and cache sizes for the `perf` query.
@@ -1096,7 +1105,7 @@ impl ZebraApp {
             }
             // On macOS the native menu owns these key equivalents.
             #[cfg(target_os = "macos")]
-            if crate::menu_mac::menu_owns(action) {
+            if self.menu.is_some() && crate::menu_mac::menu_owns(action) {
                 continue;
             }
             self.queued.push(action.clone());
@@ -1232,6 +1241,10 @@ pub fn sanitize(s: &str) -> String {
 }
 
 impl eframe::App for ZebraApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ZebraApp::logic(self, ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.frame(ui);
         #[cfg(target_os = "macos")]

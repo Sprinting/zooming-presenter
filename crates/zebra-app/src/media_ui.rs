@@ -869,12 +869,12 @@ pub fn image_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, img: &zebra_core
             replace_image_dialog(app, id);
         }
     });
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Mask");
-        for (m, l) in [(ImageMask::Rectangle, "Rectangle"), (ImageMask::Rounded, "Rounded"), (ImageMask::Circle, "Circle")] {
-            if ui.selectable_label(img.mask == m, l).clicked() {
-                patch = Some(ElementPatch { mask: Some(m), ..Default::default() });
-            }
+    crate::widgets::row(ui, "Mask", |ui| {
+        use crate::widgets::Seg;
+        let mut m = img.mask;
+        let items = [(ImageMask::Rectangle, Seg::Text("Square")), (ImageMask::Rounded, Seg::Text("Rounded")), (ImageMask::Circle, Seg::Text("Circle"))];
+        if crate::widgets::segmented(ui, &mut m, &items, Some(ui.available_width())).changed() {
+            patch = Some(ElementPatch { mask: Some(m), ..Default::default() });
         }
     });
     if let Some(a) = app.editor.doc.assets.get(&img.asset) {
