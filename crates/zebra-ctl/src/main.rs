@@ -11,8 +11,12 @@ use serde_json::{Value, json};
 use zebra_api::client::{Client, ClientError};
 
 #[derive(Parser)]
-#[command(name = "zebractl", version, about = "Drive a running Zebra (zooming presentations) from the command line or an MCP client",
-    long_about = "Drive a running Zebra from the command line or an MCP client.\n\nStart Zebra with `zebra --api` (or `zebra --headless --api`). zebractl finds the newest running instance through its discovery file.\n\nEXAMPLES:\n  zebractl describe\n  zebractl add frame --x 0 --y 0 --name Intro --path\n  zebractl add text \"Hello\" --inside f1 --style title\n  zebractl screenshot --step 0 -o step0.png\n  zebractl apply '[{\"op\":\"auto_path\"},{\"op\":\"set_theme\",\"theme\":\"night\"}]'\n  claude mcp add zebra -- zebractl mcp")]
+#[command(name = "zebractl", version, about = "Control Zebra, a zooming presentation app (like classic Prezi), from the command line",
+    long_about = "Control Zebra, a zooming presentation app (like classic Prezi), from the command line.\n\n\
+Zebra must be open, and the person using it must have switched on \"Let AI agents control Zebra\" (the AI button in Zebra's toolbar). Agents cannot switch it on; `zebractl disconnect` switches it off. Everything you do shows up live in the person's window with your --name, and each change can be undone by them.\n\n\
+HOW ZEBRA WORKS:\n  One infinite canvas. Elements (frames, text, shapes, images) have a centre x,y in world units (y points down), a scale and a rotation in degrees.\n  Frames (bracket, circle, rectangle, invisible) group whatever lies inside them and are the usual path stops.\n  The path is the ordered list of camera stops used when presenting; the camera flies, zooms and rotates between them.\n  Ids are short and stable (f1, t2, s3); read them with `describe` first.\n\n\
+START HERE:\n  zebractl describe                     outline of the canvas, ids and path\n  zebractl add frame --x 0 --y 0 --name Intro --path\n  zebractl add text \"Hello\" --inside f1 --style title\n  zebractl apply '[{\"op\":\"auto_path\"},{\"op\":\"set_theme\",\"theme\":\"night\"}]'\n  zebractl screenshot --step 0 -o step0.png   check your work (doesn't move the person's view)\n  zebractl commands                     every command with its JSON schema\n\n\
+MCP clients can use `zebractl mcp` as a stdio server instead.")]
 struct Cli {
     #[command(flatten)]
     conn: Conn,
@@ -76,7 +80,9 @@ enum Cmd {
     Select { ids: Vec<String> },
     /// Set text of an element.
     SetText { id: String, text: String },
+    /// Undo the last change (yours or the person's)
     Undo,
+    /// Redo
     Redo,
     /// Start presenting (at a 0-based step).
     Present { step: Option<usize> },
@@ -167,6 +173,8 @@ enum Cmd {
     },
     /// List running instances.
     Instances,
+    /// Switch AI control off in Zebra (only the person can switch it back on)
+    Disconnect,
 }
 
 #[derive(Subcommand)]
@@ -378,6 +386,7 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Next => print(&view(c, json!({ "op": "next" }))?),
         Cmd::Prev => print(&view(c, json!({ "op": "prev" }))?),
         Cmd::Stop => print(&view(c, json!({ "op": "exit_present" }))?),
+        Cmd::Disconnect => print(&c.call("disconnect", json!({}))?),
         Cmd::Screenshot { step, element, overview, viewport, output, width, height } => {
             let target = if let Some(s) = step {
                 json!({ "step": s })

@@ -142,10 +142,8 @@ fn top_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             });
             let th = ui.add(egui::Button::new(format!("Theme: {}", app.editor.theme().name)).min_size(EVec2::new(0.0, 30.0))).on_hover_text("Change the presentation's colours and fonts");
             egui::Popup::menu(&th).width(220.0).show(|ui| theme_menu(app, ui));
-            if app.api.is_some() || app.demo_agent.is_some() || app.api_error.is_some() {
-                ui.add_space(4.0);
-                agent_pill(app, ui, p);
-            }
+            ui.add_space(4.0);
+            agent_pill(app, ui, p);
         });
     });
 }
@@ -179,12 +177,15 @@ fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
 }
 
 fn agent_pill(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
+    let on = app.api.is_some() || app.demo_agent.is_some();
     let connected = app.agent_connected();
     let paused = app.editor.view.agent_paused;
     let (dot, text) = if let Some(e) = &app.api_error {
-        (Color32::from_rgb(220, 60, 60), format!("API error: {}", crate::files::short(e, 40)))
+        (Color32::from_rgb(220, 60, 60), format!("AI: error · {}", crate::files::short(e, 32)))
+    } else if !on {
+        (p.weak, "AI: Off".to_string())
     } else if !connected {
-        (p.weak, "Automation on · no agent".to_string())
+        (Color32::from_rgb(70, 170, 90), "AI: On · waiting".to_string())
     } else if paused {
         (Color32::from_rgb(230, 160, 40), format!("{} · paused", app.agent_name()))
     } else {
@@ -193,47 +194,138 @@ fn agent_pill(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     };
     let fill = if connected && !paused { AGENT.gamma_multiply(0.12) } else { p.hover };
     let tc = if connected { AGENT } else { p.weak };
-    let galley = ui.painter().layout_no_wrap(text, FontId::proportional(12.5), tc);
+    let galley = ui.painter().layout_no_wrap(text.clone(), FontId::proportional(12.5), tc);
     let size = EVec2::new(galley.size().x + 34.0, 28.0);
     let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &text));
     ui.painter().rect_filled(rect, 14.0, if r.hovered() { fill.gamma_multiply(1.6) } else { fill });
     ui.painter().circle_filled(Pos2::new(rect.min.x + 14.0, rect.center().y), 4.0, dot);
     ui.painter().galley(Pos2::new(rect.min.x + 24.0, rect.center().y - galley.size().y / 2.0), galley, tc);
-    let r = r.on_hover_text(match &app.api {
-        Some(s) => format!("Automation API socket:\n{}\nClick for agent controls", s.socket_path().display()),
-        None => "Agent controls".into(),
+    let r = r.on_hover_text(if on { "AI control is on. Click for agent controls" } else { "Let an AI agent work in Zebra" });
+    let mut popup = egui::Popup::menu(&r);
+    if std::mem::take(&mut app.open_ai_panel) {
+        popup = popup.open_memory(egui::SetOpenCommand::Bool(true));
+    }
+    popup.width(320.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| ai_panel(app, ui, on, connected, paused));
+}
+
+/// The AI popover: the human-only switch, how to connect an agent, and
+/// (when on) the agent controls.
+fn ai_panel(app: &mut ZebraApp, ui: &mut Ui, on: bool, connected: bool, paused: bool) {
+    let weak = ui.visuals().weak_text_color();
+    let mut want = on;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Let AI agents control Zebra").strong());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if toggle_switch(ui, &mut want).on_hover_text("Only you can switch this on. An agent can switch it off.").changed() {
+                app.queued.push(Action::ToggleAiControl);
+            }
+        });
     });
-    egui::Popup::menu(&r).width(230.0).show(|ui| {
+    ui.label(
+        RichText::new(if on {
+            "Agents on this Mac that can run a command (Claude Code, Codex, Cursor, Gemini CLI, your own scripts) can now see and edit this window. You can watch, undo, pause or stop them at any time."
+        } else {
+            "Off: nothing outside Zebra can see or change your work. Switch it on to let an AI agent on this Mac build or edit presentations with you."
+        })
+        .small()
+        .color(weak),
+    );
+    if let Some(e) = &app.api_error {
+        ui.label(RichText::new(e).small().color(Color32::from_rgb(220, 60, 60)));
+    }
+    if !on {
+        return;
+    }
+
+    ui.separator();
+    ui.label(RichText::new("Connect an agent").strong());
+    ui.label(RichText::new("Paste this into your agent's chat:").small().color(weak));
+    let ctl = crate::cli::zebractl_command();
+    let prompt = crate::cli::agent_prompt(&ctl);
+    copy_box(ui, &prompt, "agent-prompt");
+    ui.horizontal_wrapped(|ui| {
+        if let Some(installed) = crate::cli::install_state() {
+            if installed {
+                ui.label(RichText::new("✓ zebractl is installed on this Mac").small().color(weak));
+            } else if ui.button("Install command-line tool…").on_hover_text("Adds `zebractl` to /usr/local/bin so agents can type just `zebractl`. macOS asks for your password.").clicked() {
+                match crate::cli::install() {
+                    Ok(()) => app.toast("Installed zebractl. Agents can now run `zebractl --help`."),
+                    Err(e) => app.toast(format!("Couldn't install zebractl: {e}")),
+                }
+            }
+        }
+        ui.menu_button("Use with MCP", |ui| {
+            ui.set_max_width(320.0);
+            ui.label(RichText::new("Optional. For apps that take an MCP server config (Claude Desktop, Cursor, and others):").small().color(weak));
+            copy_box(ui, &crate::cli::mcp_config(&ctl), "mcp-json");
+        });
+    });
+
+    ui.separator();
+    if !connected {
+        ui.label(RichText::new("No agent connected yet.").small().color(weak));
+    }
+    if connected {
         if ui.button(if paused { "Resume agent" } else { "Pause agent" }).on_hover_text("Temporarily stop the agent from making changes").clicked() {
             app.queued.push(Action::PauseAgents);
-        }
-        if ui.button("Stop agent  (⌘.)").clicked() {
-            app.queued.push(Action::StopAgents);
         }
         let mut follow = app.editor.view.follow_agent;
         if ui.checkbox(&mut follow, "Follow agent's camera").on_hover_text("Move your view to wherever the agent is working").changed() {
             app.queued.push(Action::FollowAgent);
         }
-        if ui.button("Activity…  (⌘J)").clicked() {
-            app.queued.push(Action::ToggleActivity);
-        }
-        ui.separator();
-        ui.label(RichText::new("Permission").small().color(ui.visuals().weak_text_color()));
-        let cur = app.editor.view.agent_permission;
-        for (perm, label) in [
-            (zebra_core::view::Permission::Observe, "Observe (read-only)"),
-            (zebra_core::view::Permission::Edit, "Edit (default)"),
-            (zebra_core::view::Permission::Full, "Full control"),
-        ] {
-            if ui.radio(cur == perm, label).clicked() {
-                let _ = app.editor.view(zebra_core::ViewCommand::SetAgentPermission { permission: perm }, H);
-            }
-        }
-        ui.separator();
         if ui.button("Revert agent's changes").on_hover_text("Undo everything the agent did since your last change").clicked() {
             app.queued.push(Action::RevertAgent);
         }
+    }
+    if ui.button("Activity…  (⌘J)").clicked() {
+        app.queued.push(Action::ToggleActivity);
+    }
+    ui.add_space(2.0);
+    ui.label(RichText::new("What agents may do").small().color(weak));
+    let cur = app.editor.view.agent_permission;
+    for (perm, label) in [
+        (zebra_core::view::Permission::Observe, "Look only"),
+        (zebra_core::view::Permission::Edit, "Edit the presentation (default)"),
+        (zebra_core::view::Permission::Full, "Full control (also your view, files, presenting)"),
+    ] {
+        if ui.radio(cur == perm, label).clicked() {
+            let _ = app.editor.view(zebra_core::ViewCommand::SetAgentPermission { permission: perm }, H);
+        }
+    }
+}
+
+/// A read-only text block with a Copy button.
+fn copy_box(ui: &mut Ui, text: &str, id: &str) {
+    egui::Frame::new().fill(ui.visuals().extreme_bg_color).corner_radius(6.0).inner_margin(8.0).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.add(egui::Label::new(RichText::new(text).monospace().size(11.0)).wrap());
     });
+    let copied_id = ui.scope_id().with(("copied", id));
+    let copied_at: Option<f64> = ui.data(|d| d.get_temp(copied_id));
+    let now = ui.input(|i| i.time);
+    let label = if copied_at.is_some_and(|t| now - t < 1.5) { "Copied ✓" } else { "Copy" };
+    if ui.small_button(label).clicked() {
+        ui.ctx().copy_text(text.to_string());
+        ui.data_mut(|d| d.insert_temp(copied_id, now));
+    }
+}
+
+/// iOS/macOS-style on/off switch.
+fn toggle_switch(ui: &mut Ui, on: &mut bool) -> egui::Response {
+    let size = EVec2::new(36.0, 20.0);
+    let (rect, mut r) = ui.allocate_exact_size(size, Sense::click());
+    if r.clicked() {
+        *on = !*on;
+        r.mark_changed();
+    }
+    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, ui.is_enabled(), *on, "Let AI agents control Zebra"));
+    let t = ui.ctx().animate_bool_responsive(r.id, *on);
+    let bg = Color32::from_gray(190).lerp_to_gamma(Color32::from_rgb(52, 199, 89), t);
+    ui.painter().rect_filled(rect, 10.0, bg);
+    let x = egui::lerp((rect.left() + 10.0)..=(rect.right() - 10.0), t);
+    ui.painter().circle(Pos2::new(x, rect.center().y), 8.0, Color32::WHITE, Stroke::new(0.5, Color32::from_gray(150)));
+    r
 }
 
 // ----------------------------------------------------------------------

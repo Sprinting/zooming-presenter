@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Zebra</string>
+  <key>CFBundleDisplayName</key><string>Zebra</string>
+  <!-- PLACEHOLDER until the product is named; must match BUNDLE_ID in zebra-api/src/discovery.rs -->
+  <key>CFBundleIdentifier</key><string>app.zebra.Zebra</string>
+  <key>CFBundleExecutable</key><string>zebra</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__VERSION__</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSHumanReadableCopyright</key><string>Zebra (placeholder name)</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Zebra Presentation</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSItemContentTypes</key><array><string>app.zebra.presentation</string></array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>app.zebra.presentation</string>
+      <key>UTTypeDescription</key><string>Zebra Presentation</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.zip-archive</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>zebra</string></array></dict>
+    </dict>
+  </array>
+</dict>
+</plist>

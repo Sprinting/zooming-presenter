@@ -60,6 +60,7 @@ pub enum Action {
     PresentStart,
     PresentCurrent,
     // Agent
+    ToggleAiControl,
     ToggleActivity,
     PauseAgents,
     StopAgents,
@@ -119,6 +120,7 @@ impl Action {
             ClearPath => "Clear Path".into(),
             PresentStart => "Present from Start".into(),
             PresentCurrent => "Present from Current Step".into(),
+            ToggleAiControl => "Let AI Agents Control Zebra".into(),
             ToggleActivity => "Agent Activity".into(),
             PauseAgents => "Pause / Resume Agent".into(),
             StopAgents => "Stop Agent".into(),
@@ -147,7 +149,7 @@ impl Action {
         v.extend([
             InsertImage, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
             FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ToggleReduceMotion, ShowShortcuts,
-            TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, ToggleActivity,
+            TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, ToggleAiControl, ToggleActivity,
             PauseAgents, StopAgents, FollowAgent, RevertAgent,
         ]);
         for t in zebra_core::Theme::ids() {

@@ -109,6 +109,12 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
     for part in which.split(',') {
         match part.trim() {
             "sample" => {}
+            // Debug: AI popover open (off), or with AI control switched on.
+            "aipanel" => app.open_ai_panel = true,
+            "aion" => {
+                app.set_ai_control(true);
+                app.open_ai_panel = true;
+            }
             "select" => {
                 let found = app.editor.doc.ordered().find(|e| e.name == "A new angle").map(|e| e.id.clone());
                 if let Some(id) = found {

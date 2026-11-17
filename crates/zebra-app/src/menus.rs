@@ -61,7 +61,7 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
         ),
         ("Path", vec![A(TogglePathEdit), A(AddToPath), A(AddCurrentView), Sep, A(AutoPath), A(ClearPath)]),
         ("Present", vec![A(PresentStart), A(PresentCurrent)]),
-        ("Agent", vec![A(ToggleActivity), A(PauseAgents), A(StopAgents), A(FollowAgent), Sep, A(RevertAgent)]),
+        ("Agent", vec![A(ToggleAiControl), Sep, A(ToggleActivity), A(PauseAgents), A(StopAgents), A(FollowAgent), Sep, A(RevertAgent)]),
         ("Help", vec![A(ShowShortcuts), A(About)]),
     ]
 }

@@ -6,9 +6,12 @@ that flies between steps. It's written in Rust (egui for the chrome, vello on
 Metal for the canvas) and uses no web views.
 
 You use it like Prezi: you click, drag and type, and you never need to know a
-command. It can also be driven by AI agents, if you choose. Start it with
-`--api` and an agent can read and edit the same presentation through a local
-socket while you watch (see [docs/API.md](docs/API.md)). Everything an agent
+command. It can also be driven by AI agents, if you choose: click **AI: Off**
+in the toolbar and switch on **Let AI agents control Zebra**. Then any agent
+on the Mac that can run a command (Claude Code, Codex, Cursor, Gemini CLI, a
+shell script) can read and edit the same presentation while you watch, using
+the `zebractl` tool bundled inside the app (see [docs/API.md](docs/API.md)).
+Only you can switch it on; an agent can switch it off. Everything an agent
 changes is shown on the canvas and can be undone.
 
 ## Build and run (macOS)
@@ -22,11 +25,11 @@ cargo run --release -p zebra-app -- talk.zebra   # opens a file
 To try it right away, choose **File › New from Sample** for a short tour
 presentation, then press **F5**.
 
-Options:
+Developer options (end users never need these; AI control is a switch in the app):
 
 | Flag | What it does |
 |---|---|
-| `--api` | Let AI agents drive this window over a local Unix socket (off by default). A pill in the top bar shows when an agent is connected. |
+| `--api` | Switch AI control on at launch, as if you had flipped the switch. |
 | `--api-socket <path>` | Use this socket path instead of the default. |
 | `--agent-permission observe\|edit\|full` | Set what a connected agent may do (default `edit`). You can change it later from the agent pill. |
 | `--headless` | Run with no window, API only (for batch generation). `zebractl` starts this mode for you. |
@@ -83,13 +86,21 @@ produces one page per step.
 
 ## Working with an AI agent
 
-When Zebra runs with `--api`, an agent (for example Claude, through
-`zebractl mcp`) uses the same commands that the buttons and gestures use:
+Click the **AI** button in the toolbar and switch on **Let AI agents control
+Zebra**. The popover gives you a sentence to paste into any agent's chat. It
+points the agent at `zebractl --help`, by the tool's full path inside
+`Zebra.app`, so nothing has to be installed. Optional extras in the same
+popover: **Install command-line tool** (puts `zebractl` on your PATH, direct
+download builds only) and **Use with MCP** (a JSON snippet for apps that take
+an MCP server config). The switch is remembered between launches. Switching it
+off, or an agent running `zebractl disconnect`, closes the socket at once.
+
+A connected agent uses the same commands that the buttons and gestures use:
 
 - You see the agent's **violet cursor** with its name, a **dashed violet
   selection** that is separate from yours, and a brief **violet flash** on
   everything it changes.
-- The **agent pill** in the top bar lets you pause or stop the agent (⌘. stops
+- The **AI button** in the top bar lets you pause or stop the agent (⌘. stops
   it), follow its camera, change its permission, or **revert everything it
   did**. The **activity panel** (⌘J) lists each change it made. Click an entry
   to zoom to the objects involved.
@@ -107,7 +118,8 @@ See [docs/API.md](docs/API.md) for the protocol, `zebractl` and the MCP setup.
 | `crates/zebra-core` | Document model, the command bus (the only way to change state), undo, camera flights, themes, file format |
 | `crates/zebra-render` | Display list, text layout, vello GPU canvas, CPU captures, PDF export |
 | `crates/zebra-api` | JSON-RPC automation server, headless mode |
-| `crates/zebra-ctl` | `zebractl` CLI and MCP bridge |
+| `crates/zebra-ctl` | `zebractl` CLI and MCP bridge (shipped inside Zebra.app) |
+| `scripts/bundle-macos.sh`, `packaging/macos/` | Builds Zebra.app with zebractl inside; Info.plist and App Store entitlements |
 | `crates/zebra-app` | This app (`zebra` binary) |
 
 Tests: `cargo test --workspace`. The UI tests (`crates/zebra-app/tests/ui.rs`)

@@ -2,6 +2,7 @@
 pub mod actions;
 pub mod app;
 pub mod canvas;
+pub mod cli;
 pub mod fallback;
 pub mod files;
 pub mod menus;

@@ -30,16 +30,63 @@ pub struct Instance {
     pub file: PathBuf,
 }
 
-/// `<data_dir>/Zebra` (or `$ZEBRA_DATA_DIR`).
+/// App Group shared by the sandboxed app and its bundled `zebractl` in a
+/// Mac App Store build (both must carry this `application-groups`
+/// entitlement). PLACEHOLDER: the real id is `<TEAMID>.<bundle id>`, set at
+/// signing time. Unsandboxed builds don't need it.
+pub const APP_GROUP_ID: &str = "ZEBRATEAM.app.zebra";
+/// Bundle identifier (placeholder until the product is named).
+pub const BUNDLE_ID: &str = "app.zebra.Zebra";
+
+/// The App Group container, if this process can use it (macOS only; it
+/// exists once a process with the entitlement has run).
+pub fn group_dir() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("ZEBRA_GROUP_DIR") {
+        return Some(PathBuf::from(d));
+    }
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let d = dirs::home_dir()?.join("Library/Group Containers").join(APP_GROUP_ID);
+    d.is_dir().then_some(d)
+}
+
+/// Where this process writes: `$ZEBRA_DATA_DIR`, else the App Group
+/// container (sandboxed builds), else `<data_dir>/Zebra`.
 pub fn app_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("ZEBRA_DATA_DIR") {
         return PathBuf::from(d);
+    }
+    if let Some(g) = group_dir() {
+        return g.join("Zebra");
     }
     dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("Zebra")
 }
 
 pub fn instances_dir() -> PathBuf {
     app_dir().join("instances")
+}
+
+/// Every place a running Zebra may have announced itself: ours, the App
+/// Group, the unsandboxed data dir, and the sandboxed app's own container.
+pub fn search_dirs() -> Vec<PathBuf> {
+    if std::env::var_os("ZEBRA_DATA_DIR").is_some() {
+        return vec![instances_dir()];
+    }
+    let mut v = vec![instances_dir()];
+    if let Some(g) = group_dir() {
+        v.push(g.join("Zebra/instances"));
+    }
+    if let Some(d) = dirs::data_dir() {
+        v.push(d.join("Zebra/instances"));
+    }
+    if cfg!(target_os = "macos") {
+        if let Some(h) = dirs::home_dir() {
+            v.push(h.join("Library/Containers").join(BUNDLE_ID).join("Data/Library/Application Support/Zebra/instances"));
+        }
+    }
+    v.dedup();
+    v
 }
 
 /// True if a process with this pid exists (works on macOS and Linux).
@@ -77,9 +124,8 @@ pub fn write(inst: &Instance, file_name: &str) -> std::io::Result<PathBuf> {
 /// All live instances, newest first. Stale files (dead pid or missing
 /// socket) are deleted as a side effect.
 pub fn list() -> Vec<Instance> {
-    let mut out = vec![];
-    let Ok(rd) = fs::read_dir(instances_dir()) else { return out };
-    for entry in rd.flatten() {
+    let mut out: Vec<Instance> = vec![];
+    for entry in search_dirs().iter().filter_map(|d| fs::read_dir(d).ok()).flat_map(|rd| rd.flatten()) {
         let path = entry.path();
         if path.extension().is_none_or(|e| e != "json") {
             continue;
@@ -91,7 +137,9 @@ pub fn list() -> Vec<Instance> {
             let _ = fs::remove_file(&path);
             continue;
         }
-        out.push(inst);
+        if !out.iter().any(|o| o.socket == inst.socket) {
+            out.push(inst);
+        }
     }
     out.sort_by(|a, b| b.started_at.cmp(&a.started_at).then(b.pid.cmp(&a.pid)));
     out
@@ -110,8 +158,8 @@ pub fn find(pid: Option<u32>, socket: Option<&Path>) -> anyhow::Result<Instance>
     }
     all.into_iter().next().ok_or_else(|| {
         anyhow::anyhow!(
-            "no running Zebra instance with the API enabled (looked in {}). Start one with `zebra --api` (GUI) or `zebra --headless --api`, or use `zebractl mcp --spawn-headless`",
-            instances_dir().display()
+            "Zebra isn't accepting AI control right now. Either Zebra isn't open, or \"Let AI agents control Zebra\" is switched off. Ask the person to open Zebra and switch it on (the AI button in the toolbar); an agent cannot turn it on. Developers: `zebra --headless --api` runs a private instance. (Looked in: {})",
+            search_dirs().iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", ")
         )
     })
 }
@@ -122,7 +170,12 @@ pub fn find(pid: Option<u32>, socket: Option<&Path>) -> anyhow::Result<Instance>
 pub fn default_socket_path(name: &str) -> std::io::Result<PathBuf> {
     // SAFETY: getuid never fails.
     let uid = unsafe { libc::getuid() };
-    let mut dir = std::env::temp_dir().join(format!("zebra-{uid}"));
+    let mut dir = match group_dir() {
+        // Sandboxed builds: the App Group is the only place both the app and
+        // the bundled zebractl can reach.
+        Some(g) if std::env::var_os("ZEBRA_DATA_DIR").is_none() => g.join("s"),
+        _ => std::env::temp_dir().join(format!("zebra-{uid}")),
+    };
     if dir.join(format!("{name}.sock")).as_os_str().len() > 100 {
         dir = PathBuf::from(format!("/tmp/zebra-{uid}"));
     }

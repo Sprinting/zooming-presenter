@@ -13,9 +13,24 @@ API is off unless you turn it on.
 
 ## 1. Turning it on
 
+**For people:** click **AI: Off** in Zebra's toolbar and switch on **Let AI
+agents control Zebra**. That's it; no launch flags, no terminal. The choice is
+remembered. Only the person can switch it on: there is deliberately no API
+method, flag in a file, or menu action an agent can reach to enable it. An
+agent can switch it off with the `disconnect` method (`zebractl disconnect`).
+Off means no socket and no discovery file, so nothing can find Zebra.
+
+**For agents:** `zebractl` ships inside the app at
+`/Applications/Zebra.app/Contents/MacOS/zebractl`, so it works without
+installing anything. Start with `zebractl --help`, then `zebractl describe`.
+If Zebra isn't open or the switch is off, every command fails with a message
+asking the person to switch it on.
+
+**For developers:**
+
 | How | What happens |
 |---|---|
-| `zebra --api [file.zebra]` | Opens the normal window and starts the API. A status pill appears when an agent connects. |
+| `zebra --api [file.zebra]` | Opens the normal window with AI control already switched on. |
 | `zebra --headless --api [file]` | Runs with no window and the same API. Good for generating decks and for CI. The process prints `ZEBRA_API_READY {...}` on stdout when it is ready. |
 | `--api-socket <path>` | Uses this socket path instead of the default one. |
 | `--agent-permission observe\|edit\|full` | Sets the starting permission. The default is `edit`. The person can change it from the status pill. |
@@ -44,6 +59,22 @@ Each instance with the API enabled writes a discovery file when it starts and re
   "token": "9f2c…", "version": "0.1.0", "api_version": 1,
   "started_at": 1763380000, "headless": false }
 ```
+
+Mac App Store builds are sandboxed, so the app's own Application Support and
+temp folders sit inside its container where the bundled `zebractl` (which
+must also be sandboxed) can't see them. Both binaries therefore share an App
+Group, and a sandboxed app writes its discovery file and socket there:
+
+```
+~/Library/Group Containers/<TEAMID>.app.zebra/Zebra/instances/<pid>.json
+~/Library/Group Containers/<TEAMID>.app.zebra/s/<pid>.sock
+```
+
+Clients search, in order: `$ZEBRA_DATA_DIR`, the App Group, the normal data
+directory above, and the app's own container. The group id and bundle id are
+placeholders (`APP_GROUP_ID`, `BUNDLE_ID` in `zebra-api/src/discovery.rs`)
+until the app is named and signed. `ZEBRA_GROUP_DIR` overrides the group path
+for testing.
 
 Set `ZEBRA_DATA_DIR` to replace the whole `…/Zebra` directory. The tests do this.
 Clients ignore a file, and delete it, when its pid is no longer running.
@@ -128,6 +159,7 @@ call takes no params.
 | `export` | `{"format": "pdf"\|"png"\|"json"\|"zebra", "path"?, "target"?, "width"?, "height"?}` | `{"path","bytes","mime"}`, or the data inline when no `path` is given (`json` returns `{"document": …}`) |
 | `open` | `{"path": "/abs/deck.zebra", "force"?: false}` | needs `full`; fails with `unsaved_changes` unless `force` is set |
 | `save` | `{"path"?: "/abs/deck.zebra"}` | needs `full`; with no `path` it saves to the current file |
+| `disconnect` | – | switches AI control off in the app (the person must switch it back on); in headless mode it quits |
 | `quit` | – | headless instances only |
 
 Capture targets:
@@ -248,7 +280,7 @@ valid values, and set exit status 1.
 ## 5. MCP (Claude Code, Claude Desktop, other MCP clients)
 
 ```sh
-# attach to the Zebra window you have open (start it with `zebra --api`)
+# attach to the Zebra window you have open (switch on AI control in the app)
 claude mcp add zebra -- zebractl mcp
 
 # or give the agent its own private, invisible document
@@ -282,7 +314,7 @@ move. Path steps are 0-based. Theme colour slots look like `theme:accent`.
 ## 6. Walkthrough: a 3-step presentation
 
 ```sh
-zebra --headless --api --agent-permission full &      # or use the GUI: zebra --api
+zebra --headless --api --agent-permission full &      # or use the app with AI control switched on
 
 cat > deck.json <<'EOF'
 [

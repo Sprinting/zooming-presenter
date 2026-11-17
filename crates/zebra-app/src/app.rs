@@ -34,6 +34,8 @@ pub enum ScrollMode {
 #[derive(Default)]
 pub struct AppOptions {
     pub open: Option<PathBuf>,
+    /// Dev: `--api` switches AI control on at launch (socket/permission
+    /// overrides). End users use the AI button instead.
     pub api: Option<zebra_api::ApiOptions>,
     /// Debug: (seconds, png path): screenshot the window then quit.
     pub screenshot: Option<(f64, PathBuf)>,
@@ -57,6 +59,17 @@ pub struct ZebraApp {
     pub api: Option<zebra_api::ApiServer>,
     pub dispatcher: Option<zebra_api::Dispatcher>,
     pub api_error: Option<String>,
+    /// Socket override from `--api-socket` (dev); used whenever AI control
+    /// is switched on.
+    pub api_socket: Option<PathBuf>,
+    /// The human's saved choice for "Let AI agents control Zebra".
+    pub ai_enabled: bool,
+    /// An agent called `disconnect`: switch off at this time (after its reply
+    /// has been written).
+    pub ai_off_at: Option<f64>,
+    /// Debug/demo: open the AI popover on the next frame.
+    pub open_ai_panel: bool,
+    pub ctx: Context,
     pub t0: Instant,
     pub canvas: CanvasState,
     pub thumbs: Thumbs,
@@ -121,6 +134,11 @@ impl ZebraApp {
             api: None,
             dispatcher: None,
             api_error: None,
+            api_socket: None,
+            ai_enabled: false,
+            ai_off_at: None,
+            open_ai_panel: false,
+            ctx: ctx.clone(),
             t0: Instant::now(),
             canvas: CanvasState::default(),
             thumbs: Thumbs::new(ctx.clone(), renderer.clone()),
@@ -158,16 +176,16 @@ impl ZebraApp {
             #[cfg(target_os = "macos")]
             menu: None,
         };
+        let saved_ai: bool = storage.and_then(|s| eframe::get_value(s, "ai_enabled")).unwrap_or(false);
         if let Some(api_opts) = opts.api {
-            let c = ctx.clone();
-            let waker: zebra_api::Waker = Arc::new(move || c.request_repaint());
-            match zebra_api::ApiServer::start(api_opts, waker) {
-                Ok(s) => {
-                    app.dispatcher = Some(zebra_api::Dispatcher::new(renderer));
-                    app.api = Some(s);
-                }
-                Err(e) => app.api_error = Some(format!("Automation API failed to start: {e}")),
+            app.api_socket = api_opts.socket.clone();
+            app.editor.view.agent_permission = api_opts.permission;
+            app.set_ai_control(true);
+        } else if saved_ai {
+            if let Some(p) = storage.and_then(|s| eframe::get_value::<String>(s, "agent_permission")) {
+                app.editor.view.agent_permission = parse_permission(&p);
             }
+            app.set_ai_control(true);
         }
         if let Some(p) = opts.open {
             app.open_path(&p);
@@ -182,6 +200,40 @@ impl ZebraApp {
     pub fn toast(&mut self, text: impl Into<String>) {
         let until = self.now() + 2.6;
         self.toast = Some(Toast { text: text.into(), until });
+    }
+
+    /// Switch "Let AI agents control Zebra" on or off. Only the human UI
+    /// calls this with `true`; agents can only reach the `false` side (the
+    /// `disconnect` API method). Off closes the socket, disconnects every
+    /// agent and removes the discovery file, so nothing can find Zebra.
+    pub fn set_ai_control(&mut self, on: bool) {
+        self.ai_off_at = None;
+        if !on {
+            if let Some(d) = &mut self.dispatcher {
+                d.shutdown(&mut self.editor);
+            }
+            self.dispatcher = None;
+            self.api = None;
+            self.api_error = None;
+            self.ai_enabled = false;
+            self.editor.view.agent_paused = false;
+            return;
+        }
+        self.ai_enabled = true;
+        if self.api.is_some() {
+            return;
+        }
+        let c = self.ctx.clone();
+        let waker: zebra_api::Waker = Arc::new(move || c.request_repaint());
+        let opts = zebra_api::ApiOptions { socket: self.api_socket.clone(), permission: self.editor.view.agent_permission };
+        match zebra_api::ApiServer::start(opts, waker) {
+            Ok(s) => {
+                self.dispatcher = Some(zebra_api::Dispatcher::new(self.renderer.clone()));
+                self.api = Some(s);
+                self.api_error = None;
+            }
+            Err(e) => self.api_error = Some(format!("Couldn't start AI control: {e}")),
+        }
     }
 
     /// Report a core error to the human (agents get them over the API).
@@ -434,6 +486,11 @@ impl ZebraApp {
             PresentCurrent => {
                 let step = self.current_step();
                 self.view_cmd(ViewCommand::Present { step });
+            }
+            ToggleAiControl => {
+                let on = !self.ai_enabled;
+                self.set_ai_control(on);
+                self.toast(if on { "AI control is on. Agents on this Mac can now work in Zebra." } else { "AI control is off. Agents can't reach Zebra." });
             }
             ToggleActivity => self.show_activity = !self.show_activity,
             PauseAgents => {
@@ -704,6 +761,10 @@ impl ZebraApp {
             // Core events (document/selection/mode changes) — the UI polls
             // state directly, so these are only drained here.
             let _ = d.take_events();
+            if std::mem::take(&mut d.disconnect_requested) && self.ai_off_at.is_none() {
+                self.ai_off_at = Some(self.editor.view.now + 0.3);
+                ctx.request_repaint_after(std::time::Duration::from_millis(350));
+            }
             // While agents are connected keep a slow heartbeat so presence
             // (flashes, cursor) animates even when the waker is quiet.
             if !server.clients().is_empty() {
@@ -711,6 +772,15 @@ impl ZebraApp {
             }
         } else {
             self.editor.drain_events();
+        }
+        if let Some(t) = self.ai_off_at {
+            if self.editor.view.now >= t {
+                let name = self.agent_name();
+                self.set_ai_control(false);
+                self.toast(format!("{name} switched AI control off. Turn it back on from the AI button."));
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            }
         }
 
         #[cfg(target_os = "macos")]
@@ -885,6 +955,24 @@ impl ZebraApp {
     }
 }
 
+pub fn permission_name(p: zebra_core::view::Permission) -> &'static str {
+    use zebra_core::view::Permission::*;
+    match p {
+        Observe => "observe",
+        Edit => "edit",
+        Full => "full",
+    }
+}
+
+pub fn parse_permission(s: &str) -> zebra_core::view::Permission {
+    use zebra_core::view::Permission::*;
+    match s {
+        "observe" => Observe,
+        "full" => Full,
+        _ => Edit,
+    }
+}
+
 pub fn sanitize(s: &str) -> String {
     let t: String = s.chars().map(|c| if c.is_alphanumeric() || " -_".contains(c) { c } else { '_' }).collect();
     let t = t.trim().to_string();
@@ -900,6 +988,8 @@ impl eframe::App for ZebraApp {
         eframe::set_value(storage, "recent", &self.recent);
         eframe::set_value(storage, "scroll_mode", &self.scroll_mode);
         eframe::set_value(storage, "reduce_motion", &self.editor.view.reduce_motion);
+        eframe::set_value(storage, "ai_enabled", &self.ai_enabled);
+        eframe::set_value(storage, "agent_permission", &permission_name(self.editor.view.agent_permission).to_string());
     }
 
     fn raw_input_hook(&mut self, _ctx: &Context, raw: &mut egui::RawInput) {

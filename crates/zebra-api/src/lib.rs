@@ -112,6 +112,9 @@ pub struct Dispatcher {
     pub headless: bool,
     /// Set when a client called `quit` (headless only).
     pub quit_requested: bool,
+    /// Set when a client called `disconnect`: the host should switch AI
+    /// control off (drop the [`ApiServer`]) once replies are flushed.
+    pub disconnect_requested: bool,
     events: Vec<Event>,
     initialized: bool,
     tx_owner: Option<u64>,
@@ -120,11 +123,21 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
+    /// Call before dropping the server when AI control is switched off:
+    /// rolls back a transaction an agent left open.
+    pub fn shutdown(&mut self, editor: &mut zebra_core::editor::Editor) {
+        if self.tx_owner.take().is_some() && editor.in_transaction() {
+            editor.abort();
+        }
+        self.waits.clear();
+        self.deferred.clear();
+    }
     pub fn new(renderer: Arc<zebra_render::Renderer>) -> Self {
         Dispatcher {
             renderer,
             headless: false,
             quit_requested: false,
+            disconnect_requested: false,
             events: vec![],
             initialized: false,
             tx_owner: None,

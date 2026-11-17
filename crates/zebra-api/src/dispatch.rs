@@ -203,6 +203,15 @@ impl Dispatcher {
             }
             Call::Export { format, path, capture } => self.export(editor, format, path, &capture, limited)?,
             Call::Wait { .. } => unreachable!("handled in run"),
+            Call::Disconnect => {
+                // Any agent may switch AI control off; only the human can turn
+                // it back on (there is deliberately no API to enable it).
+                self.disconnect_requested = true;
+                if self.headless {
+                    self.quit_requested = true;
+                }
+                json!({ "ok": true, "message": "AI control is now off. Only the person using Zebra can turn it back on." })
+            }
             Call::Quit => {
                 if !self.headless {
                     return Err(RpcError::app("permission", "quit is only available for headless instances")
