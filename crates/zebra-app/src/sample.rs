@@ -147,7 +147,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             "agent" => {
                 let agent = Origin::agent("Claude");
                 app.demo_agent = Some("Claude".into());
-                let _ = app.editor.apply(Command::AddText { text: "Added by the agent".into(), x: 0.0, y: -250.0, style: TextStyle::Subtitle, scale: Some(1.2), place: None, id: None, markdown: false }, agent.clone());
+                let _ = app.editor.apply(Command::AddText { text: "Added by the agent".into(), x: 0.0, y: -250.0, style: TextStyle::Subtitle, scale: Some(1.2), place: None, id: None, markdown: false, on: None }, agent.clone());
                 let found = app.editor.doc.ordered().find(|e| e.name == "Why zoom?").map(|e| e.id.clone());
                 if let Some(c) = found {
                     let _ = app.editor.apply(Command::Update { id: c.clone(), patch: zebra_core::ElementPatch { frame_style: Some(FrameStyle::Bracket), ..Default::default() } }, agent.clone());
@@ -197,6 +197,24 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 if let Some(id) = id {
                     app.select(vec![id]);
                 }
+            }
+            "whiteboard" => {
+                // Debug: sticky notes and shapes with text typed on them.
+                app.editor.load(Document::default(), None);
+                app.after_load();
+                let add = |app: &mut ZebraApp, j: serde_json::Value| {
+                    let _ = app.editor.apply(serde_json::from_value(j).unwrap(), H);
+                };
+                let notes = [("n1", -330.0, -170.0, "Interview five teachers", "#ffe98a"), ("n2", -10.0, -190.0, "Prototype the quiz flow", "#b8f0c8"), ("n3", -340.0, 160.0, "Price under $5 a month?", "#ffc4d6"), ("n4", 0.0, 140.0, "Ship the beta on Friday", "#bfe0ff")];
+                for (id, x, y, text, fill) in notes {
+                    add(app, serde_json::json!({"op":"add_shape","id":id,"shape":"sticky_note","x":x,"y":y,"w":260,"h":260,"fill":fill}));
+                    add(app, serde_json::json!({"op":"add_text","text":text,"on":id}));
+                }
+                add(app, serde_json::json!({"op":"add_shape","id":"goal","shape":"rounded_rect","x":420,"y":-20,"w":300,"h":160,"fill":"theme:shape1"}));
+                add(app, serde_json::json!({"op":"add_text","text":"**Launch** in March","markdown":true,"on":"goal"}));
+                add(app, serde_json::json!({"op":"add_connector","from":{"element":"n4"},"to":{"element":"goal"},"route":"curved"}));
+                let _ = app.editor.view(ViewCommand::FitAll { animate: false }, H);
+                app.select(vec!["n2".into()]);
             }
             "shapes" => {
                 // Gallery of every shape plus a row of icons.

@@ -610,7 +610,7 @@ pub fn paste_from_system(app: &mut ZebraApp) -> bool {
             return false;
         }
         if !text.trim().is_empty() {
-            let cmd = Command::AddText { text, x: at.x, y: at.y, style: Default::default(), scale: Some(1.0 / app.editor.view.camera.zoom), place: None, id: None , markdown: false };
+            let cmd = Command::AddText { text, x: at.x, y: at.y, style: Default::default(), scale: Some(1.0 / app.editor.view.camera.zoom), place: None, id: None , markdown: false, on: None };
             if let Some(out) = app.apply(cmd) {
                 app.select(out.created);
             }

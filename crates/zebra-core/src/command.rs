@@ -34,6 +34,11 @@ pub enum Command {
         /// `[text](url)`, `- ` bullets, `1. ` numbers, nested by indenting.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         markdown: bool,
+        /// Type on a shape (like double-clicking it): the text is centred
+        /// on the shape, wraps inside it and is grouped with it. `x`,`y`
+        /// are then ignored.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on: Option<ElementId>,
     },
     /// Add a frame. `w`,`h` are world units at scale 1 (default 800x600).
     AddFrame {

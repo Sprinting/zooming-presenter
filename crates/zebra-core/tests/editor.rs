@@ -409,3 +409,25 @@ fn overview_shows_later_fade_ins_dimmed() {
 fn cmd_view(j: serde_json::Value) -> ViewCommand {
     serde_json::from_value(j).unwrap()
 }
+
+#[test]
+fn text_typed_on_a_shape_is_centred_wrapped_and_grouped() {
+    let mut ed = Editor::default();
+    let h = Origin::Human;
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"n","shape":"sticky_note","x":100,"y":50,"w":260,"h":260})), h.clone()).unwrap();
+    let out = ed.apply(cmd(serde_json::json!({"op":"add_text","text":"Ship the beta on Friday after the review","on":"n"})), h.clone()).unwrap();
+    let t = ed.doc.get(&out.created[0]).unwrap().clone();
+    let ElementKind::Text(td) = &t.kind else { panic!() };
+    assert!(td.fixed_width && td.align == Align::Center);
+    assert!((t.transform.center() - Vec2::new(100.0, 50.0)).len() < 1e-9);
+    let b = t.bounds();
+    assert!(b.x1 - b.x0 <= 260.0 * 0.8 + 1e-6, "wraps inside: {b:?}");
+    assert!(t.group.is_some() && t.group == ed.doc.get("n").unwrap().group);
+    // One undo removes the text and the grouping.
+    ed.undo(h.clone()).unwrap();
+    assert_eq!(ed.doc.elements.len(), 1);
+    assert!(ed.doc.get("n").unwrap().group.is_none());
+    // Lines and connectors have no inside.
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"l","shape":"line","x":0,"y":0,"w":100,"h":0})), h.clone()).unwrap();
+    assert!(ed.apply(cmd(serde_json::json!({"op":"add_text","text":"x","on":"l"})), h.clone()).is_err());
+}

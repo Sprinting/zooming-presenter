@@ -585,8 +585,19 @@ impl Editor {
                 };
                 self.insert_element(e, out)?;
             }
-            Command::AddText { text, x, y, style, scale, place, id, markdown } => {
-                let data = if markdown { TextData { style, ..crate::rich::from_markdown(&text) } } else { TextData { text, style, ..Default::default() } };
+            Command::AddText { text, x, y, style, scale, place, id, markdown, on } => {
+                let mut data = if markdown { TextData { style, ..crate::rich::from_markdown(&text) } } else { TextData { text, style, ..Default::default() } };
+                let host = match &on {
+                    Some(h) => {
+                        self.check_ids(std::slice::from_ref(h))?;
+                        let e = &self.doc.elements[h];
+                        if !matches!(&e.kind, ElementKind::Shape(s) if !s.shape.is_line()) {
+                            return Err(ZError::invalid(format!("'{h}' is not a shape with an inside")).hint("text goes on shapes such as rectangles and sticky notes"));
+                        }
+                        Some(e.clone())
+                    }
+                    None => None,
+                };
                 let mut e = Element {
                     id: id.unwrap_or_default(),
                     transform: Transform { x, y, scale: scale.unwrap_or(1.0), rotation: 0.0 },
@@ -595,13 +606,30 @@ impl Editor {
                     name: String::new(),
                     placeholder: false,
                     group: None,
-                    kind: ElementKind::Text(data),
+                    kind: ElementKind::Text(TextData::default()),
                 };
+                if let Some(h) = &host {
+                    let (w, hh) = (h.size.w * h.transform.scale, h.size.h * h.transform.scale);
+                    let body = theme.text_style(style).size;
+                    let k = scale.unwrap_or_else(|| (hh / (body * 4.0)).min(w / (body * 8.0)));
+                    let c = h.transform.center();
+                    e.transform = Transform { x: c.x, y: c.y, scale: k, rotation: h.transform.rotation };
+                    e.size.w = w * 0.8 / k;
+                    data.fixed_width = true;
+                    data.align = Align::Center;
+                    if let ElementKind::Shape(sd) = &h.kind {
+                        data.color = data.color.take().or_else(|| theme.text_on(sd.fill.as_ref()));
+                    }
+                }
+                e.kind = ElementKind::Text(data);
                 measure_text(&*self.measure, &theme, &mut e);
-                if let Some(p) = place {
+                if let Some(p) = place.filter(|_| host.is_none()) {
                     self.place(&mut e, &p, scale.is_none())?;
                 }
-                self.insert_element(e, out)?;
+                let new = self.insert_element(e, out)?;
+                if let Some(h) = host {
+                    self.apply_inner(Command::Group { ids: vec![h.id, new], id: None }, out)?;
+                }
             }
             Command::AddFrame { style, x, y, w, h, rotation, name, id, add_to_path } => {
                 let (w, h) = if style == FrameStyle::Circle { (w.max(h), w.max(h)) } else { (w, h) };

@@ -114,6 +114,11 @@ pub struct TextEditState {
     pub sel: (usize, usize),
     /// The link field is open with this URL.
     pub link_draft: Option<String>,
+    /// Wrap width in local units (fixed-width boxes and text on shapes).
+    pub wrap: Option<f64>,
+    /// New text typed on this shape: kept centred on it, and grouped with
+    /// it on commit.
+    pub host: Option<ElementId>,
 }
 
 pub struct CanvasState {
@@ -1043,6 +1048,7 @@ fn double_click(app: &mut ZebraApp, p: Pos2) {
             Some(ElementKind::Text(_)) => begin_edit_existing(app, id),
             Some(ElementKind::Image(_)) => crate::media_ui::begin_crop(app, &id),
             Some(ElementKind::Video(_)) => crate::media_ui::toggle(app, &id),
+            Some(ElementKind::Shape(s)) if !s.shape.is_line() => begin_text_on_shape(app, id),
             Some(_) => {
                 let _ = app.editor.view(ViewCommand::ZoomTo { id, animate: true }, H);
             }
@@ -1078,8 +1084,71 @@ pub fn begin_new_text(app: &mut ZebraApp, p: Pos2) {
         rich: TextData::default(),
         sel: (0, 0),
         link_draft: None,
+        wrap: None,
+        host: None,
     });
     let _ = app.editor.view(ViewCommand::ClearSelection, H);
+}
+
+/// Double-click on a shape: type on it. If the shape already carries a
+/// label (a text grouped with it, centred inside), edit that instead.
+pub fn begin_text_on_shape(app: &mut ZebraApp, shape: ElementId) {
+    let Some(e) = app.editor.doc.get(&shape).cloned() else { return };
+    if let Some(label) = shape_label(app, &e) {
+        begin_edit_existing(app, label);
+        return;
+    }
+    if e.locked {
+        app.toast("This shape is locked — unlock it to type on it (⌘L)");
+        return;
+    }
+    commit_text_edit(app);
+    let zoom = app.editor.view.camera.zoom;
+    let body = app.editor.theme().text_style(TextStyle::Body).size;
+    let (w, h) = (e.size.w * e.transform.scale, e.size.h * e.transform.scale);
+    // Text that reads well at this zoom, but never taller than about a
+    // third of the shape.
+    let scale = (1.0 / zoom).min(h / (body * 3.0)).max(1e-12);
+    let wrap = w * 0.8 / scale;
+    let c = e.transform.center();
+    let fill = match &e.kind {
+        ElementKind::Shape(sd) => sd.fill.clone(),
+        _ => None,
+    };
+    let mut rich = TextData { align: zebra_core::Align::Center, color: app.editor.theme().text_on(fill.as_ref()), ..Default::default() };
+    rich.fixed_width = true;
+    app.canvas.text = Some(TextEditState {
+        id: None,
+        anchor: Vec2::new(c.x - wrap * scale / 2.0, c.y - body * scale * 0.65),
+        buf: String::new(),
+        original: String::new(),
+        style: TextStyle::Body,
+        bold: false,
+        italic: false,
+        bullets: false,
+        scale,
+        focused_once: false,
+        size_px: egui::Vec2::ZERO,
+        zoom,
+        rich,
+        sel: (0, 0),
+        link_draft: None,
+        wrap: Some(wrap),
+        host: Some(shape.clone()),
+    });
+    app.select(vec![shape]);
+}
+
+/// The text grouped with `shape` whose centre lies inside it, if any.
+fn shape_label(app: &ZebraApp, shape: &zebra_core::Element) -> Option<ElementId> {
+    let g = shape.group.as_deref()?;
+    let b = shape.bounds();
+    app.editor
+        .doc
+        .ordered()
+        .filter(|o| o.group.as_deref() == Some(g) && matches!(o.kind, ElementKind::Text(_)))
+        .find(|o| b.contains(o.transform.center()))
+        .map(|o| o.id.clone())
 }
 
 pub fn begin_edit_existing(app: &mut ZebraApp, id: ElementId) {
@@ -1106,6 +1175,8 @@ pub fn begin_edit_existing(app: &mut ZebraApp, id: ElementId) {
         rich: t.clone(),
         sel: (0, 0),
         link_draft: None,
+        wrap: t.fixed_width.then_some(e.size.w),
+        host: None,
     });
     app.select(vec![id]);
 }
@@ -1127,14 +1198,22 @@ pub fn commit_text_edit(app: &mut ZebraApp) {
             }
             // Centre of the box as laid out on screen.
             let half = Vec2::new(t.size_px.x as f64, t.size_px.y as f64) * (0.5 / t.zoom);
-            let c = t.anchor + half.rotate_deg(app.editor.view.camera.rotation);
+            let mut c = t.anchor + half.rotate_deg(app.editor.view.camera.rotation);
+            let mut rotation = app.editor.view.camera.rotation;
+            let host = t.host.clone().and_then(|h| app.editor.doc.get(&h).cloned());
+            let mut id = None;
+            if let Some(h) = &host {
+                c = h.transform.center();
+                rotation = h.transform.rotation;
+                id = (1..).map(|n| format!("t{n}")).find(|i| !app.editor.doc.elements.contains_key(i));
+            }
             let el = NewElement {
-                id: None,
+                id: id.clone(),
                 x: c.x,
                 y: c.y,
                 scale: t.scale,
-                rotation: app.editor.view.camera.rotation,
-                w: None,
+                rotation,
+                w: t.wrap,
                 h: None,
                 name: String::new(),
                 kind: ElementKind::Text(TextData {
@@ -1145,10 +1224,16 @@ pub fn commit_text_edit(app: &mut ZebraApp) {
                     bullets: t.bullets,
                     spans: t.rich.spans.clone(),
                     paras: t.rich.paras.clone(),
+                    align: t.rich.align,
+                    color: t.rich.color.clone(),
                     ..Default::default()
                 }),
             };
-            let r = app.editor.apply_batch(vec![Command::AddElement { element: el }], Some("Add text".into()), H);
+            let mut cmds = vec![Command::AddElement { element: el }];
+            if let (Some(h), Some(id)) = (&host, id) {
+                cmds.push(Command::Group { ids: vec![h.id.clone(), id], id: None });
+            }
+            let r = app.editor.apply_batch(cmds, Some("Add text".into()), H);
             if let Some(out) = app.report(r) {
                 app.select(out.created);
             }
@@ -1196,6 +1281,13 @@ fn rich_job(rich: &TextData, text: &str, theme: &zebra_core::Theme, base: &FontI
     let mut r = rich.clone();
     rich::edit_text(&mut r, text);
     let mut job = egui::text::LayoutJob { wrap: egui::text::TextWrapping { max_width: wrap, ..Default::default() }, ..Default::default() };
+    if wrap.is_finite() {
+        job.halign = match rich.align {
+            zebra_core::Align::Left => egui::Align::LEFT,
+            zebra_core::Align::Center => egui::Align::Center,
+            zebra_core::Align::Right => egui::Align::RIGHT,
+        };
+    }
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let n = chars.len();
     let byte = |i: usize| chars.get(i).map(|c| c.0).unwrap_or(text.len());
@@ -1279,11 +1371,11 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     t.zoom = zoom;
     let size = (ts.size * t.scale * zoom) as f32;
     let font = FontId::new(size.clamp(4.0, 600.0), style::doc_family(&ts.font, t.bold, t.italic));
-    let color = crate::fallback::theme_color(&theme, match t.style {
+    let color = crate::fallback::theme_color(&theme, t.rich.color.as_deref().filter(|c| !c.is_empty()).unwrap_or(match t.style {
         TextStyle::Title => "theme:title",
         TextStyle::Subtitle => "theme:subtitle",
         TextStyle::Body => "theme:body",
-    });
+    }));
     rich::edit_text(&mut t.rich, &t.buf);
     t.rich.bold = t.bold;
     t.rich.italic = t.italic;
@@ -1294,7 +1386,19 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         let job = rich_job(&t.rich, &measure_text, &theme, &font, &ts.font, color, f32::INFINITY);
         ctx.fonts_mut(|f| f.layout_job(job).size().x)
     };
-    let width = gw.max(size * 2.0);
+    let width = match t.wrap {
+        Some(w) => (w * t.scale * zoom) as f32,
+        None => gw.max(size * 2.0),
+    };
+    let pos = match t.host.as_ref().and_then(|h| app.editor.doc.get(h)) {
+        // Keep new text on a shape centred on it as lines are added.
+        Some(h) if t.id.is_none() => {
+            let c = h.transform.center();
+            t.anchor = Vec2::new(c.x - width as f64 / zoom / 2.0, c.y - (t.size_px.y.max(size * 1.3)) as f64 / zoom / 2.0);
+            app.canvas.w2s(&app.editor, t.anchor)
+        }
+        _ => pos,
+    };
     let mut committed = false;
     let mut refocus = false;
     let edit_id = egui::Id::unique("zebra-text-edit-field");

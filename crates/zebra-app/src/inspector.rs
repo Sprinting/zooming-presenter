@@ -220,9 +220,20 @@ fn kind_name(e: &Element) -> String {
     }
 }
 
+/// The selection is exactly one whole group.
+fn one_group(insp: &Insp) -> bool {
+    let doc = &insp.app.editor.doc;
+    let g = insp.sel.first().and_then(|id| doc.get(id)).and_then(|e| e.group.clone());
+    g.is_some() && insp.sel.iter().all(|id| doc.get(id).is_some_and(|e| e.group == g)) && doc.expand_groups(&insp.sel).len() == insp.sel.len()
+}
+
 fn header(insp: &mut Insp, ui: &mut Ui, p: &Palette) {
     ui.add_space(8.0);
-    let title = if insp.sel.len() > 1 { format!("{} Objects", insp.sel.len()) } else { kind_name(&insp.el) };
+    let title = match insp.sel.len() {
+        1 => kind_name(&insp.el),
+        n if one_group(insp) => format!("Group of {n}"),
+        n => format!("{n} Objects"),
+    };
     ui.horizontal(|ui| {
         ui.label(RichText::new(title).font(style::semibold(13.0)).color(p.text));
         if insp.sel.len() == 1 && insp.el.locked {
@@ -543,13 +554,20 @@ fn arrange_common(insp: &mut Insp, ui: &mut Ui) {
         }
     });
     w::section(ui, "", |ui| {
-        let b = [
+        let grouped = sel.iter().any(|id| insp.app.editor.doc.get(id).is_some_and(|e| e.group.is_some()));
+        let mut b = vec![
             (if locked { "Unlock" } else { "Lock" }, if locked { "Unlock so it can be moved and edited  ⌘L" } else { "Lock in place  ⌘L" }, true),
             ("Duplicate", "Duplicate the selection  ⌘D", true),
         ];
+        if sel.len() > 1 {
+            b.push(("Group", "Select, move and resize these together  ⌥⌘G", !locked && !one_group(insp)));
+            b.push(("Ungroup", "Separate the group  ⌥⇧⌘G", !locked && grouped));
+        }
         match w::button_grid(ui, &b, 2) {
             Some(0) => insp.app.queued.push(Action::ToggleLock),
             Some(1) => insp.app.queued.push(Action::Duplicate),
+            Some(2) => insp.app.queued.push(Action::Group),
+            Some(3) => insp.app.queued.push(Action::Ungroup),
             _ => {}
         }
         if w::push_button_ext(ui, "Frame Selection", w::Size::Regular, true, Some(ui.available_width())).on_hover_text("Draw a frame around the selection  ⌘G").clicked() {

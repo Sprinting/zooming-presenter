@@ -33,7 +33,7 @@ fn main() {
             let cmds = vec![
                 Command::AddFrame { style: Default::default(), x, y, w: 1000.0, h: 700.0, rotation: 0.0, name: None, id: None, add_to_path: gx % 5 == 0 },
                 Command::AddText { text: format!("Section {gy}.{gx}"), x, y: y - 250.0, style: zebra_core::TextStyle::Title, scale: Some(0.6), place: None, id: None, markdown: false },
-                Command::AddText { text: "First point\nSecond point\nThird point".into(), x, y, style: zebra_core::TextStyle::Body, scale: None, place: None, id: None, markdown: false },
+                Command::AddText { text: "First point\nSecond point\nThird point".into(), x, y, style: zebra_core::TextStyle::Body, scale: None, place: None, id: None, markdown: false, on: None },
                 Command::AddShape { shape: zebra_core::ShapeKind::Ellipse, x: x + 350.0, y: y + 200.0, w: 120.0, h: 120.0, rotation: 0.0, fill: None, stroke: None, id: None },
             ];
             ed.apply_batch(cmds, Some("cell".into()), h.clone()).unwrap();

@@ -217,6 +217,27 @@ impl Theme {
         }
     }
 
+    /// Text colour for writing on a shape filled with `fill`: white on a
+    /// dark fill, None (the theme's text colour) otherwise.
+    pub fn text_on(&self, fill: Option<&ColorRef>) -> Option<ColorRef> {
+        let lum = |[r, g, b, _]: [u8; 4]| {
+            let lin = |c: u8| {
+                let c = c as f64 / 255.0;
+                if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+        };
+        let f = self.color(fill?);
+        if f[3] <= 128 {
+            return None;
+        }
+        // WCAG contrast ratio of the theme's text and of white on the fill.
+        let contrast = |a: f64, b: f64| (a.max(b) + 0.05) / (a.min(b) + 0.05);
+        let lf = lum(f);
+        let text = lum(self.color(&"theme:body".to_string()));
+        (contrast(1.0, lf) > contrast(text, lf)).then(|| "#ffffff".to_string())
+    }
+
     /// Resolve a [`ColorRef`] to `[r,g,b,a]` in 0..=255. Unknown -> magenta.
     pub fn color(&self, c: &ColorRef) -> [u8; 4] {
         let hex = match c.strip_prefix("theme:") {

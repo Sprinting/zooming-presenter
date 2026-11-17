@@ -141,7 +141,7 @@ fn tool_shortcuts_and_frame_cycle() {
     // Drawing a frame around a text wraps it.
     {
         let app = h.state_mut();
-        app.editor.apply(Command::AddText { text: "inside".into(), x: 0.0, y: 0.0, style: Default::default(), scale: Some(1.0), place: None, id: None, markdown: false }, Origin::Human).unwrap();
+        app.editor.apply(Command::AddText { text: "inside".into(), x: 0.0, y: 0.0, style: Default::default(), scale: Some(1.0), place: None, id: None, markdown: false, on: None }, Origin::Human).unwrap();
     }
     h.run_steps(1);
     let (a, b) = {
@@ -558,4 +558,41 @@ fn the_editor_stops_repainting_at_rest() {
         Ok(_) => {}
         Err(e) => panic!("still repainting at rest: {e}"),
     }
+}
+
+#[test]
+fn double_click_a_shape_to_type_on_it() {
+    let mut h = harness(Some("empty"));
+    h.state_mut()
+        .editor
+        .apply(Command::AddShape { shape: ShapeKind::StickyNote, x: 0.0, y: 0.0, w: 300.0, h: 300.0, rotation: 0.0, fill: None, stroke: None, id: Some("s".into()) }, Origin::Human)
+        .unwrap();
+    h.run_steps(2);
+    let p = { let app = h.state(); app.canvas.w2s(&app.editor, zebra_core::Vec2::new(0.0, 0.0)) };
+    click_at(&mut h, p, 2);
+    h.run_steps(2);
+    h.event(Event::Text("Ship the beta on Friday".into()));
+    h.run_steps(2);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    let app = h.state();
+    let t = app.editor.doc.ordered().find(|e| matches!(e.kind, ElementKind::Text(_))).expect("text was added").clone();
+    let ElementKind::Text(td) = &t.kind else { unreachable!() };
+    assert_eq!(td.text, "Ship the beta on Friday");
+    assert!(td.fixed_width && td.align == zebra_core::Align::Center, "wraps inside the note, centred");
+    assert!(t.transform.center().len() < 1e-6, "centred on the note: {:?}", t.transform.center());
+    let s = app.editor.doc.get("s").unwrap();
+    assert!(s.group.is_some() && s.group == t.group, "grouped with the note");
+    let b = t.bounds();
+    assert!(b.x1 - b.x0 <= 300.0, "fits the note's width: {b:?}");
+    // Moving the note carries its text; double-clicking again edits it.
+    drop(app);
+    let tid = t.id.clone();
+    h.run_steps(30); // past the double-click window
+    click_at(&mut h, p, 2);
+    h.run_steps(2);
+    assert_eq!(h.state().canvas.text.as_ref().and_then(|e| e.id.clone()), Some(tid));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().editor.doc.ordered().filter(|e| matches!(e.kind, ElementKind::Text(_))).count(), 1);
 }
