@@ -144,3 +144,33 @@ fn quit_asks_one_unsaved_window_at_a_time_and_cancel_stops_it() {
     assert_eq!(s.windows.len(), 1);
     assert!(s.windows[0].sheet_showing(), "then the first window asks");
 }
+
+#[test]
+fn an_agent_opens_a_document_behind_and_closes_it() {
+    use zebra_api::Documents;
+    let mut h = harness();
+    add_frame(&mut h.state_mut().windows[0]);
+    let ctx = h.ctx.clone();
+    let id = h.state_mut().agent_documents(&ctx).new_document().unwrap();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.windows.len(), 2);
+    assert_eq!(s.front, 0, "the person's window stays in front");
+    assert!(s.windows[1].opened_by_agent && s.windows[1].doc_id == id);
+
+    h.state_mut().agent_documents(&ctx).close(&id, false).unwrap();
+    assert_eq!(h.state_mut().agent_documents(&ctx).list().len(), 1, "gone from the list at once");
+    h.run_steps(3);
+    assert_eq!(h.state().windows.len(), 1);
+
+    // The last one closed: no documents, and a new one shows the window again.
+    h.state_mut().windows[0].editor.mark_saved(None);
+    h.state_mut().agent_documents(&ctx).close("d1", false).unwrap();
+    h.run_steps(3);
+    assert!(h.state().empty);
+    assert!(h.state_mut().agent_documents(&ctx).list().is_empty());
+    let again = h.state_mut().agent_documents(&ctx).new_document().unwrap();
+    h.run_steps(2);
+    assert!(!h.state().empty);
+    assert_eq!(h.state_mut().agent_documents(&ctx).list()[0].id, again);
+}

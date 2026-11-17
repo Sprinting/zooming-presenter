@@ -13,8 +13,8 @@ use zebra_render::CaptureTarget;
 
 /// Every method the server understands, in documentation order.
 pub const METHODS: &[&str] = &[
-    "hello", "ping", "methods", "commands", "schema", "subscribe", "unsubscribe", "documents", "state", "describe", "query",
-    "apply", "batch", "begin", "commit", "abort", "undo", "redo", "view", "capture", "wait", "open", "save",
+    "hello", "ping", "methods", "commands", "schema", "subscribe", "unsubscribe", "documents", "new_document", "close_document", "state", "describe", "query",
+    "apply", "batch", "copy_to", "begin", "commit", "abort", "undo", "redo", "view", "capture", "wait", "open", "save",
     "export", "disconnect", "quit",
 ];
 
@@ -130,6 +130,13 @@ pub enum Call {
     State,
     /// The open documents (front one first).
     Documents,
+    /// A new, empty document in a window of its own.
+    NewDocument,
+    /// Close the document; with unsaved changes only when `discard`.
+    CloseDocument { discard: bool },
+    /// Copy elements (with their groups, frame contents and pictures) into
+    /// another open document, moved by `offset` or centred on `at`.
+    CopyTo { ids: Vec<String>, to: String, at: Option<(f64, f64)>, offset: (f64, f64) },
     Capture(CaptureReq),
     Undo,
     Redo,
@@ -146,7 +153,7 @@ impl Call {
     pub fn mutates(&self) -> bool {
         matches!(
             self,
-            Call::Apply { .. } | Call::Batch { .. } | Call::Begin { .. } | Call::Undo | Call::Redo | Call::Open { .. }
+            Call::Apply { .. } | Call::Batch { .. } | Call::Begin { .. } | Call::Undo | Call::Redo | Call::Open { .. } | Call::CopyTo { .. } | Call::CloseDocument { .. }
         )
     }
 }
@@ -317,6 +324,32 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
         "describe" => Call::Describe,
         "state" => Call::State,
         "documents" => Call::Documents,
+        "new_document" => Call::NewDocument,
+        "close_document" => Call::CloseDocument { discard: p.get("discard").and_then(|f| f.as_bool()).unwrap_or(false) },
+        "copy_to" => {
+            const EX: &str = r#"example: {"document":"d1","ids":["f1"],"to":"d2"} copies frame f1 and what's in it from d1 into d2 at the same place; add "at":{"x":0,"y":0} to centre the copies there"#;
+            let ids: Vec<String> = match p.get("ids") {
+                Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+                Some(Value::String(s)) => vec![s.clone()],
+                _ => vec![],
+            };
+            if ids.is_empty() {
+                return Err(RpcError::invalid("`copy_to` needs {\"ids\": [...], \"to\": \"<document>\"}").hint(EX));
+            }
+            let Some(to) = p.get("to").and_then(|t| t.as_str()).map(str::to_string) else {
+                return Err(RpcError::invalid("`copy_to` needs \"to\": the id or name of the document to copy into").hint(EX));
+            };
+            let num = |v: &Value, k: &str| v.get(k).and_then(|n| n.as_f64());
+            let at = match p.get("at") {
+                None | Some(Value::Null) => None,
+                Some(v) => match (num(v, "x"), num(v, "y")) {
+                    (Some(x), Some(y)) => Some((x, y)),
+                    _ => return Err(RpcError::invalid("`at` needs {\"x\": number, \"y\": number}").hint(EX)),
+                },
+            };
+            let offset = (p.get("dx").and_then(|n| n.as_f64()).unwrap_or(0.0), p.get("dy").and_then(|n| n.as_f64()).unwrap_or(0.0));
+            Call::CopyTo { ids, to, at, offset }
+        }
         "capture" => Call::Capture(parse_capture(&p)?),
         "undo" => Call::Undo,
         "redo" => Call::Redo,

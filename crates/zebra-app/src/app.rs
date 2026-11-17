@@ -9,7 +9,7 @@ use base64::Engine;
 use egui::{Context, Pos2};
 use zebra_core::view::Blank;
 use zebra_core::{
-    Command, Editor, Element, ElementId, ElementKind, Mode, NewElement, Origin, StepTarget, Tool, Vec2, ViewCommand,
+    Command, Editor, ElementId, ElementKind, Mode, NewElement, Origin, StepTarget, Tool, Vec2, ViewCommand,
     ZOrderOp,
 };
 use zebra_render::Renderer;
@@ -106,7 +106,11 @@ pub struct ZebraApp {
     pub library: crate::shape_library::Library,
     pub show_about: bool,
     pub selected_step: Option<usize>,
-    pub clipboard: Vec<Element>,
+    /// Objects copied in any window (shared by all of them).
+    pub clipboard: Arc<zebra_core::clip::Clip>,
+    /// The text Copy put on the system clipboard: while it's still there,
+    /// Paste uses Zebra's own copy.
+    pub clipboard_marker: Option<String>,
     pub paste_count: u32,
     pub recent: Vec<PathBuf>,
     pub toast: Option<Toast>,
@@ -146,6 +150,8 @@ pub struct ZebraApp {
     /// Untitled documents from the last run to reopen, each in its own
     /// window (the first in this one).
     pub reopen_untitled: Vec<PathBuf>,
+    /// An agent made this document: its window opens without taking focus.
+    pub opened_by_agent: bool,
     pub was_presenting: bool,
     pub force_quit: bool,
     pub title_buf: Option<String>,
@@ -261,7 +267,8 @@ impl ZebraApp {
             library: Default::default(),
             show_about: false,
             selected_step: None,
-            clipboard: vec![],
+            clipboard: Default::default(),
+            clipboard_marker: None,
             paste_count: 0,
             recent,
             toast: None,
@@ -286,6 +293,7 @@ impl ZebraApp {
             recovered: None,
             autosave_name: crate::files::new_autosave_name(),
             reopen_untitled: vec![],
+            opened_by_agent: false,
             was_presenting: false,
             force_quit: false,
             title_buf: None,
@@ -545,7 +553,7 @@ impl ZebraApp {
             }
             Copy | Cut => {
                 let ids = self.editor.expand(&self.selection(), true);
-                self.clipboard = ids.iter().filter_map(|id| self.editor.doc.get(id).cloned()).collect();
+                self.clipboard = Arc::new(zebra_core::clip::Clip::of(&self.editor, &ids));
                 self.paste_count = 0;
                 if !ids.is_empty() {
                     crate::media_ui::copied_to_system(self, &ids);
@@ -842,7 +850,7 @@ impl ZebraApp {
         self.paste_count += 1;
         let d = 24.0 * self.paste_count as f64 / self.editor.view.camera.zoom;
         // If the copied things are off-screen, paste them at the view centre.
-        let b = self.clipboard.iter().map(|e| e.bounds()).reduce(|a, b| a.union(&b)).unwrap();
+        let Some(b) = self.clipboard.bounds() else { return };
         let vis = self.editor.view.camera.visible_bounds(self.editor.view.viewport);
         let (dx, dy) = if vis.intersects(&b) {
             (d, d)
@@ -850,27 +858,8 @@ impl ZebraApp {
             let c = vis.center() - b.center();
             (c.x, c.y)
         };
-        let cmds: Vec<Command> = self
-            .clipboard
-            .iter()
-            .map(|e| {
-                let keep_w = !matches!(&e.kind, ElementKind::Text(t) if !t.fixed_width);
-                Command::AddElement {
-                    element: NewElement {
-                        id: None,
-                        x: e.transform.x + dx,
-                        y: e.transform.y + dy,
-                        scale: e.transform.scale,
-                        rotation: e.transform.rotation,
-                        w: keep_w.then_some(e.size.w),
-                        h: keep_w.then_some(e.size.h),
-                        name: e.name.clone(),
-                        kind: e.kind.clone(),
-                    },
-                }
-            })
-            .collect();
-        let r = self.editor.apply_batch(cmds, Some(crate::t!("app-undo-paste")), H);
+        let clip = self.clipboard.clone();
+        let r = self.editor.paste_clip(&clip, dx, dy, Some(crate::t!("app-undo-paste")), H);
         if let Some(out) = self.report(r) {
             let top = self.top_level(&out.created);
             self.select(top);

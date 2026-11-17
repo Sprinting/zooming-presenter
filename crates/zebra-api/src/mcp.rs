@@ -129,11 +129,43 @@ fn tools() -> Value {
             "description": "The presentations open in Zebra: id, name, path, which one is in front, unsaved changes. Every other tool takes an optional `document` (id or name); without it, tools act on the front document.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true }
+        },
+        {
+            "name": "new_document",
+            "title": "New document",
+            "description": "Open a new, empty presentation in a window of its own (the person's window stays in front). Returns its id: pass it as `document` to every other tool to work in it.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "close_document",
+            "title": "Close a document",
+            "description": "Close an open document. Refused if it has unsaved changes, unless `discard` is true (needs full permission, and you must have read its latest version): then the changes are lost. Save first to keep them.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "discard": { "type": "boolean", "default": false } },
+                "required": ["document"]
+            }
+        },
+        {
+            "name": "copy_to",
+            "title": "Copy into another document",
+            "description": "Copy elements from `document` (default: the front one) into the open document `to`, as one undo step there. Brings along their groups, everything inside a copied frame, and the pictures and videos they show. Same position unless `at` (centre of the copies) or `dx`/`dy` is given. Doesn't touch the clipboard.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+                    "to": { "type": "string", "description": "Id or name of the document to copy into" },
+                    "at": { "type": "object", "properties": { "x": { "type": "number" }, "y": { "type": "number" } }, "required": ["x", "y"] },
+                    "dx": { "type": "number" },
+                    "dy": { "type": "number" }
+                },
+                "required": ["ids", "to"]
+            }
         }
     ]);
     // Every tool that reaches a document can name one.
     for t in v.as_array_mut().into_iter().flatten() {
-        if matches!(t["name"].as_str(), Some("list_commands" | "list_documents")) {
+        if matches!(t["name"].as_str(), Some("list_commands" | "list_documents" | "new_document")) {
             continue;
         }
         if let Some(props) = t["inputSchema"]["properties"].as_object_mut() {
@@ -261,6 +293,22 @@ impl<C: Connector> McpServer<C> {
         self.document = args.get("document").and_then(|d| d.as_str()).map(str::to_string);
         let out = match name {
             "list_documents" => self.rpc("documents", json!({})).map(text),
+            "new_document" => self.rpc("new_document", json!({})).map(text),
+            "close_document" => {
+                if self.document.is_none() {
+                    return Ok(ToolOut::Error("`document` is required: the id or name of the document to close (see list_documents)".into()));
+                }
+                self.rpc("close_document", json!({ "discard": args.get("discard").and_then(|d| d.as_bool()).unwrap_or(false) })).map(text)
+            }
+            "copy_to" => {
+                let mut p = json!({});
+                for k in ["ids", "to", "at", "dx", "dy"] {
+                    if let Some(v) = args.get(k) {
+                        p[k] = v.clone();
+                    }
+                }
+                self.rpc("copy_to", p).map(text)
+            }
             "list_commands" => Ok(ToolOut::Content(vec![json!({ "type": "text", "text": catalogue::catalogue_text() })])),
             "describe" => self.rpc("describe", json!({})).map(|v| {
                 let s = v.get("outline").and_then(|o| o.as_str()).map(str::to_string).unwrap_or_else(|| pretty(&v));
@@ -338,7 +386,7 @@ impl<C: Connector> McpServer<C> {
             }
             _ => {
                 return Err(json!({ "code": -32602, "message": format!("unknown tool '{name}'"),
-                    "data": { "valid_values": ["describe","get_state","apply_commands","view","query","capture","undo","list_commands","list_documents"] } }));
+                    "data": { "valid_values": ["describe","get_state","apply_commands","view","query","capture","undo","list_commands","list_documents","new_document","close_document","copy_to"] } }));
             }
         };
         Ok(match out {

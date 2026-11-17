@@ -127,6 +127,26 @@ pub trait Documents {
     fn list(&self) -> Vec<DocInfo>;
     /// The editor of the document with this id.
     fn editor(&mut self, id: &str) -> Option<&mut zebra_core::Editor>;
+    /// Some document's editor, for settings every document shares (agent
+    /// permission, paused), even when no document is open.
+    fn any_editor(&mut self) -> Option<&mut zebra_core::Editor> {
+        let id = self.list().first()?.id.clone();
+        self.editor(&id)
+    }
+    /// Open a new, empty document in a window of its own; its id.
+    fn new_document(&mut self) -> Result<String, RpcError> {
+        Err(RpcError::app("unsupported", "this Zebra has a single document").hint("run the Zebra app for several documents"))
+    }
+    /// A question to the person about this document is on screen (Save
+    /// Changes and the like): it can't close under them.
+    fn asking(&self, _id: &str) -> bool {
+        false
+    }
+    /// Close the document (the caller has dealt with unsaved changes):
+    /// `discard` says they are to be thrown away.
+    fn close(&mut self, _id: &str, _discard: bool) -> Result<(), RpcError> {
+        Err(RpcError::app("unsupported", "this Zebra has a single document").hint("run the Zebra app for several documents"))
+    }
 }
 
 /// A host with a single document.

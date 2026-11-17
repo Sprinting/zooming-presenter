@@ -515,3 +515,46 @@ fn history_names_each_object_once() {
     ed.apply(cmd(serde_json::json!({"op":"delete","ids":["t1"]})), agent).unwrap();
     assert!(ed.history().last().unwrap().ids.contains(&ElementId::from("t1")));
 }
+
+#[test]
+fn objects_copy_into_another_document_with_their_pictures_groups_and_connectors() {
+    use base64::Engine;
+    let b64 = |b: Vec<u8>| base64::engine::general_purpose::STANDARD.encode(b);
+    let h = Origin::Human;
+    let mut src = Editor::default();
+    src.apply(cmd(serde_json::json!({"op":"add_frame","id":"f1","x":0,"y":0,"w":800,"h":600})), h.clone()).unwrap();
+    src.apply(cmd(serde_json::json!({"op":"add_image","id":"a","data_base64":b64(tiny_png(7)),"x":-100})), h.clone()).unwrap();
+    src.apply(cmd(serde_json::json!({"op":"add_shape","id":"s","shape":"rectangle","x":100})), h.clone()).unwrap();
+    src.apply(cmd(serde_json::json!({"op":"group","ids":["a","s"]})), h.clone()).unwrap();
+    src.apply(cmd(serde_json::json!({"op":"add_shape","id":"out","shape":"rectangle","x":5000})), h.clone()).unwrap();
+    src.apply(cmd(serde_json::json!({"op":"add_connector","id":"c1","from":{"element":"a"},"to":{"element":"out"}})), h.clone()).unwrap();
+
+    // The frame brings what's inside it; the picture brings its group.
+    let clip = zebra_core::clip::Clip::of(&src, &["f1".to_string(), "c1".to_string()]);
+    let ids: Vec<&str> = clip.elements.iter().map(|e| e.id.as_str()).collect();
+    assert!(ids.contains(&"a") && ids.contains(&"s") && ids.contains(&"c1"), "{ids:?}");
+    assert!(!ids.contains(&"out"));
+    assert_eq!(clip.assets.len(), 1);
+
+    let mut dst = Editor::default();
+    dst.apply(cmd(serde_json::json!({"op":"add_frame","id":"f1","x":0,"y":0})), h.clone()).unwrap();
+    let out = dst.paste_clip(&clip, 10.0, 0.0, Some("Copy".into()), h.clone()).unwrap();
+    assert_eq!(out.created.len(), clip.elements.len());
+    assert!(!out.created.contains(&"f1".to_string()), "fresh ids, the old f1 is kept: {:?}", out.created);
+    assert_eq!(dst.doc.elements.len(), 1 + clip.elements.len());
+
+    let img = dst.doc.elements.values().find(|e| matches!(e.kind, ElementKind::Image(_))).unwrap();
+    let ElementKind::Image(d) = &img.kind else { unreachable!() };
+    assert!(dst.doc.assets.contains_key(&d.asset), "the picture's bytes came along");
+    assert_eq!(img.transform.x, -90.0);
+    let shape = dst.doc.elements.values().find(|e| matches!(e.kind, ElementKind::Shape(_))).unwrap();
+    assert!(img.group.is_some() && img.group == shape.group, "still grouped");
+    let conn = dst.doc.elements.values().find(|e| matches!(e.kind, ElementKind::Connector(_))).unwrap();
+    let ElementKind::Connector(c) = &conn.kind else { unreachable!() };
+    assert_eq!(c.from.element.as_deref(), Some(img.id.as_str()), "stuck to the copied picture");
+    assert_eq!(c.to.element, None, "loose where the other end wasn't copied");
+
+    // One undo step takes it all back.
+    dst.undo(h).unwrap();
+    assert_eq!(dst.doc.elements.len(), 1);
+}

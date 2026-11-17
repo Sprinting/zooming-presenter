@@ -114,6 +114,8 @@ call takes no params.
 | `schema` | – | full JSON Schemas for `Command`, `ViewCommand`, `Query` and capture targets, plus the event and method lists |
 | `methods` | – | the method names |
 | `documents` | – | `{"documents": [{"id": "d1", "name": "Pitch", "path": …, "front": true, "edited": false}, …]}`: the open documents |
+| `new_document` | – | `{"document": {"id": "d2", …}}`: a new, empty document in a window of its own (needs `edit`). The person's document stays in front, so pass the new id as `document` to work in it. |
+| `close_document` | `{"document": "d2", "discard"?: false}` | `{"ok": true, "closed": "d2"}`. `document` is required. Fails with `unsaved_changes` unless `discard` is set; discarding needs `full` and a read of the latest version (`stale_revision` otherwise). Closing the last document leaves Zebra running with no window. |
 
 #### Several open documents
 
@@ -141,6 +143,7 @@ than one document open, events carry the `document` id they come from.
 | `begin` | `{"label": "Add timeline"}` | starts a transaction: each following `apply` takes effect immediately, and the whole transaction becomes one undo step |
 | `commit` / `abort` | – | ends the transaction; `abort` restores the document to how it was at `begin` |
 | `undo` / `redo` | – | `{"undone": "label" \| null, "revision"}` |
+| `copy_to` | `{"ids": [ … ], "to": "<document>", "at"?: {"x", "y"}, "dx"?, "dy"?}`, from `document` (default: the front one) | `{"revision", "created", "document"}`: copies into `to` as one undo step there, with fresh ids. Brings along their groups, everything inside a copied frame, and the pictures and videos they show; a connector stays stuck to an end copied with it. Same position unless `at` (centre of the copies) or `dx`/`dy`. Doesn't touch the clipboard. Read-before-write applies to `to`. |
 
 ```json
 → {"jsonrpc":"2.0","id":3,"method":"batch","params":{"label":"Add intro","commands":[
@@ -150,7 +153,7 @@ than one document open, events carry the `document` id they come from.
 ```
 
 * `add_image` accepts `"path": "/abs/file.png"` in place of `data_base64`. The server reads the file.
-* **Read before you write.** `apply`, `batch`, `begin`, `undo` and `redo` fail with `stale_revision` if anyone else (the person or another agent) changed the document since you last read it with `describe` or `query`. Your own changes don't count, and a new, untouched document needs no read. The error says who changed it. Read again, then retry. Agents are told apart by name (`--agent`).
+* **Read before you write.** `apply`, `batch`, `copy_to`, `begin`, `undo` and `redo` fail with `stale_revision` if anyone else (the person or another agent) changed the document since you last read it with `describe` or `query`. Your own changes don't count, and a new, untouched document needs no read. The error says who changed it. Read again, then retry. Agents are told apart by name (`--agent`).
 * `if_revision` adds a stricter check: the call fails with `stale_revision` unless the document is at exactly that revision.
 * An explicitly labelled `apply`, `batch` or transaction is always its own undo step. Single `apply` calls from the same agent that arrive less than 2 s apart are grouped into one step.
 * An agent that disconnects while its transaction is open has that transaction aborted.
@@ -241,7 +244,7 @@ Errors are JSON-RPC errors whose `data` explains how to fix the problem:
 | -32000 | `permission` | The call needs a higher permission level. The hint says which one. |
 | -32000 | `stale_revision` | Someone changed the document since you last read it (or the `if_revision` check failed). Read again and retry. |
 | -32000 | `no_transaction` | `commit` or `abort` without a matching `begin`. |
-| -32000 | `unsaved_changes` | `open` would discard the person's work. Pass `force`. |
+| -32000 | `unsaved_changes` | `open` or `close_document` would discard unsaved work. Save first, or pass `force` (`open`) or `discard` (`close_document`). |
 | -32000 | `timeout` | A `wait` condition was not met in time. |
 | -32000 | `io`, `bad_file`, `no_path`, `unimplemented` | File and renderer problems. |
 
@@ -257,6 +260,9 @@ never blocked.
 ```
 zebractl instances                          # running instances
 zebractl documents                          # open documents; --document <id|name> on any command picks one
+zebractl new                                # a new document in its own window; prints its id
+zebractl --document d2 close [--discard]    # close one; refused with unsaved changes unless --discard
+zebractl --document d1 copy-to d2 f1 t3 [--x 0 --y 0]   # copy elements into another document
 zebractl state | describe
 zebractl query '{"q":"elements","kind":"text"}'     # or: zebractl query path
 zebractl apply '{"op":"set_theme","theme":"night"}'
@@ -307,7 +313,7 @@ claude mcp add zebra-headless -- zebractl mcp --spawn-headless
 `zebractl mcp` is a stdio MCP server that supports protocol version
 `2025-06-18`. It connects to Zebra the first time a tool is called, and
 reconnects if Zebra restarts. In MCP the agent's default name is `Claude`;
-change it with `--agent`. It offers eight tools. Their schemas come from the
+change it with `--agent`. It offers these tools. Their schemas come from the
 same Rust types as the API.
 
 | Tool | Does |
@@ -320,6 +326,10 @@ same Rust types as the API.
 | `capture` | `{target?, width?, height?}`: returns an MCP **image** content block. |
 | `undo` | `{redo?, steps?}`. |
 | `list_commands` | The full command reference as compact text. |
+| `list_documents` | The open documents. Every other tool takes an optional `document`. |
+| `new_document` | A new, empty document in its own window; returns its id. |
+| `close_document` | `{document, discard?}`: refused with unsaved changes unless `discard`. |
+| `copy_to` | `{ids, to, at?, dx?, dy?}`: copy elements into another open document. |
 
 The server's `instructions` teach the model the essentials. The ids are
 short (`f1`, `t3`). Coordinates are world units. x and y are the centre of

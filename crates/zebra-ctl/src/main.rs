@@ -213,6 +213,30 @@ enum Cmd {
     Instances,
     /// List the documents open in Zebra (id, name, which is in front).
     Documents,
+    /// Open a new, empty document in a window of its own; prints its id.
+    /// Pass `--document <id>` on later commands to work in it.
+    New,
+    /// Close the `--document` you name. Refused with unsaved changes
+    /// unless --discard (needs 'full' permission; the changes are lost).
+    Close {
+        #[arg(long)]
+        discard: bool,
+    },
+    /// Copy elements from `--document` (default: the front one) into
+    /// another open document, with their groups, frame contents and
+    /// pictures. Doesn't touch the clipboard.
+    CopyTo {
+        /// The document to copy into (id or name).
+        to: String,
+        /// Element ids.
+        #[arg(required = true)]
+        ids: Vec<String>,
+        /// Centre the copies here (world x).
+        #[arg(long, requires = "y")]
+        x: Option<f64>,
+        #[arg(long, requires = "x")]
+        y: Option<f64>,
+    },
     /// Internal: the per-agent background relay that holds this agent's one
     /// connection to Zebra (started by the first command).
     #[command(name = "__relay", hide = true)]
@@ -437,6 +461,20 @@ fn run(cli: Cli) -> Result<()> {
     match cli.cmd {
         Cmd::State => print(&call(c, "state", json!({}))?),
         Cmd::Documents => print(&call(c, "documents", json!({}))?),
+        Cmd::New => print(&call(c, "new_document", json!({}))?),
+        Cmd::Close { discard } => {
+            if cli.conn.document.is_none() {
+                bail!("say which document to close: zebractl --document <id or name> close");
+            }
+            print(&call(c, "close_document", json!({ "discard": discard }))?)
+        }
+        Cmd::CopyTo { to, ids, x, y } => {
+            let mut p = json!({ "to": to, "ids": ids });
+            if let (Some(x), Some(y)) = (x, y) {
+                p["at"] = json!({ "x": x, "y": y });
+            }
+            print(&call(c, "copy_to", p)?)
+        }
         Cmd::Describe => {
             let v = call(c, "describe", json!({}))?;
             match v.get("outline").and_then(|o| o.as_str()) {

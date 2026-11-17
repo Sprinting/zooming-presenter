@@ -56,9 +56,6 @@ pub struct Media {
     /// Videos being inserted (poster made on a worker first).
     inserting: Vec<Receiver<Insert>>,
     pub crop: Option<CropEdit>,
-    /// The text Zebra last put on the system clipboard when copying
-    /// objects: pasting it again means "paste the copied objects".
-    pub clipboard_marker: Option<String>,
     reported: HashSet<String>,
     /// Background work that ends with a message (exports).
     pub background: Vec<Receiver<String>>,
@@ -85,7 +82,6 @@ impl Default for Media {
             autoplayed: HashSet::new(),
             inserting: vec![],
             crop: None,
-            clipboard_marker: None,
             reported: HashSet::new(),
             background: vec![],
         }
@@ -582,11 +578,11 @@ pub fn copied_to_system(app: &mut ZebraApp, ids: &[ElementId]) {
     };
     if let Ok(mut c) = arboard::Clipboard::new() {
         if c.set_text(marker.clone()).is_ok() {
-            app.media.clipboard_marker = Some(marker);
+            app.clipboard_marker = Some(marker);
             return;
         }
     }
-    app.media.clipboard_marker = None;
+    app.clipboard_marker = None;
 }
 
 /// Paste from the system clipboard if it holds something newer than
@@ -606,7 +602,7 @@ pub fn paste_from_system(app: &mut ZebraApp) -> bool {
         }
     }
     if let Ok(text) = c.get_text() {
-        if app.media.clipboard_marker.as_deref() == Some(text.as_str()) {
+        if app.clipboard_marker.as_deref() == Some(text.as_str()) {
             return false;
         }
         if !text.trim().is_empty() {

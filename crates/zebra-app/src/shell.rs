@@ -31,7 +31,8 @@ struct Shared {
     motion_override: Option<bool>,
     reduce_motion: bool,
     recent: Vec<std::path::PathBuf>,
-    clipboard: Vec<zebra_core::Element>,
+    clipboard: Arc<zebra_core::clip::Clip>,
+    clipboard_marker: Option<String>,
     paste_count: u32,
     show_settings: bool,
     settings_pane: crate::settings::Pane,
@@ -56,6 +57,7 @@ impl Shared {
             reduce_motion: w.editor.view.reduce_motion,
             recent: w.recent.clone(),
             clipboard: w.clipboard.clone(),
+            clipboard_marker: w.clipboard_marker.clone(),
             paste_count: w.paste_count,
             show_settings: w.show_settings,
             settings_pane: w.settings_pane,
@@ -79,6 +81,7 @@ impl Shared {
         w.editor.view.reduce_motion = self.reduce_motion;
         w.recent = self.recent.clone();
         w.clipboard = self.clipboard.clone();
+        w.clipboard_marker = self.clipboard_marker.clone();
         w.paste_count = self.paste_count;
         w.show_settings = self.show_settings;
         w.settings_pane = self.settings_pane;
@@ -105,7 +108,8 @@ impl Shared {
             && self.motion_override == o.motion_override
             && self.reduce_motion == o.reduce_motion
             && self.recent == o.recent
-            && self.clipboard == o.clipboard
+            && Arc::ptr_eq(&self.clipboard, &o.clipboard)
+            && self.clipboard_marker == o.clipboard_marker
             && self.paste_count == o.paste_count
             && self.show_settings == o.show_settings
             && self.settings_pane == o.settings_pane
@@ -312,12 +316,17 @@ impl Shell {
         ctx.request_repaint();
     }
 
+    /// The open documents as agents see them.
+    pub fn agent_documents(&mut self, ctx: &egui::Context) -> impl zebra_api::Documents + '_ {
+        Docs { windows: &mut self.windows, front: self.front, next_id: &mut self.next_id, shared: &self.shared, empty: &mut self.empty, ctx: ctx.clone() }
+    }
+
     fn pump(&mut self, ctx: &egui::Context) {
         let api = self.shared.api.clone();
         match (&api, &mut self.dispatcher) {
             (Some(_), None) => self.dispatcher = Some(zebra_api::Dispatcher::new(self.windows[0].renderer.clone())),
             (None, Some(d)) => {
-                d.shutdown_docs(&mut Docs { windows: &mut self.windows, front: self.front });
+                d.shutdown_docs(&mut Docs { windows: &mut self.windows, front: self.front, next_id: &mut self.next_id, shared: &self.shared, empty: &mut self.empty, ctx: ctx.clone() });
                 self.dispatcher = None;
             }
             _ => {}
@@ -328,7 +337,7 @@ impl Shell {
             }
             return;
         };
-        if d.pump_docs(&server, &mut Docs { windows: &mut self.windows, front: self.front }) {
+        if d.pump_docs(&server, &mut Docs { windows: &mut self.windows, front: self.front, next_id: &mut self.next_id, shared: &self.shared, empty: &mut self.empty, ctx: ctx.clone() }) {
             ctx.request_repaint();
         }
         let _ = d.take_events();
@@ -357,18 +366,72 @@ fn viewport_rect(ctx: &egui::Context, id: &str) -> Option<egui::Rect> {
 struct Docs<'a> {
     windows: &'a mut Vec<ZebraApp>,
     front: usize,
+    next_id: &'a mut u32,
+    shared: &'a Shared,
+    empty: &'a mut bool,
+    ctx: egui::Context,
 }
 
 impl zebra_api::Documents for Docs<'_> {
     fn list(&self) -> Vec<zebra_api::DocInfo> {
-        // Front window first.
-        let mut v: Vec<zebra_api::DocInfo> =
-            self.windows.iter().enumerate().map(|(i, w)| zebra_api::doc_info(&w.doc_id, &w.editor, i == self.front)).collect();
+        // No window open: the hidden one waiting for a document isn't one.
+        if *self.empty {
+            return vec![];
+        }
+        // Front window first; one on its way out is gone already.
+        let mut v: Vec<zebra_api::DocInfo> = self
+            .windows
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| !w.close_me)
+            .map(|(i, w)| zebra_api::doc_info(&w.doc_id, &w.editor, i == self.front))
+            .collect();
         v.sort_by_key(|d| !d.front);
         v
     }
     fn editor(&mut self, id: &str) -> Option<&mut zebra_core::Editor> {
-        self.windows.iter_mut().find(|w| w.doc_id == id).map(|w| &mut w.editor)
+        self.windows.iter_mut().find(|w| w.doc_id == id && !w.close_me).map(|w| &mut w.editor)
+    }
+    fn any_editor(&mut self) -> Option<&mut zebra_core::Editor> {
+        Some(&mut self.windows[0].editor)
+    }
+    fn new_document(&mut self) -> Result<String, zebra_api::RpcError> {
+        // No window open: the hidden one shows again with the new document.
+        if *self.empty {
+            *self.empty = false;
+            let w = &mut self.windows[0];
+            w.opened_by_agent = true;
+            self.ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Visible(true));
+            self.ctx.request_repaint();
+            return Ok(w.doc_id.clone());
+        }
+        let id = format!("d{}", *self.next_id);
+        *self.next_id += 1;
+        let mut w = self.windows[self.front].new_window(id.clone());
+        self.shared.write(&mut w);
+        let doc = zebra_core::Document { theme: w.default_theme.clone(), ..Default::default() };
+        w.editor.load(doc, None);
+        w.after_load();
+        w.opened_by_agent = true;
+        self.windows.push(w);
+        self.ctx.request_repaint();
+        Ok(id)
+    }
+    fn asking(&self, id: &str) -> bool {
+        self.windows.iter().any(|w| w.doc_id == id && w.sheet_showing())
+    }
+    fn close(&mut self, id: &str, discard: bool) -> Result<(), zebra_api::RpcError> {
+        let Some(w) = self.windows.iter_mut().find(|w| w.doc_id == id && !w.close_me) else {
+            return Err(zebra_api::RpcError::app("not_found", "that document was just closed"));
+        };
+        if discard {
+            crate::files::discard_autosave(w);
+        }
+        w.force_quit = true;
+        w.close_me = true;
+        w.media.stop_all();
+        self.ctx.request_repaint();
+        Ok(())
     }
 }
 
@@ -436,7 +499,8 @@ impl eframe::App for Shell {
         for i in 1..self.windows.len() {
             let id = self.windows[i].doc_id.clone();
             let vid = egui::ViewportId::from_hash_of(("document", id.as_str()));
-            let builder = crate::window_builder(&placeholder_title(&id));
+            // A window an agent opened doesn't take the person's focus.
+            let builder = crate::window_builder(&placeholder_title(&id)).with_active(!self.windows[i].opened_by_agent);
             let w = &mut self.windows[i];
             let got_focus = ctx.show_viewport_immediate(vid, builder, |ui, _class| {
                 #[cfg(target_os = "macos")]

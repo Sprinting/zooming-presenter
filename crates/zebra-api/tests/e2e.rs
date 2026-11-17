@@ -497,3 +497,101 @@ fn an_agent_must_read_again_after_someone_else_changed_the_document() {
     b.call("apply", json!({"command":{"op":"delete","ids":["t1"]}})).unwrap();
     h.stop().unwrap();
 }
+
+/// A host that can open and close documents, like the app.
+struct Windows {
+    eds: Vec<(String, zebra_core::Editor)>,
+    next: u32,
+}
+
+impl zebra_api::Documents for Windows {
+    fn list(&self) -> Vec<zebra_api::DocInfo> {
+        self.eds.iter().enumerate().map(|(i, (id, e))| zebra_api::doc_info(id, e, i == 0)).collect()
+    }
+    fn editor(&mut self, id: &str) -> Option<&mut zebra_core::Editor> {
+        self.eds.iter_mut().find(|(i, _)| i == id).map(|(_, e)| e)
+    }
+    fn new_document(&mut self) -> Result<String, zebra_api::RpcError> {
+        let id = format!("d{}", self.next);
+        self.next += 1;
+        self.eds.push((id.clone(), zebra_core::Editor::default()));
+        Ok(id)
+    }
+    fn close(&mut self, id: &str, _discard: bool) -> Result<(), zebra_api::RpcError> {
+        self.eds.retain(|(i, _)| i != id);
+        Ok(())
+    }
+}
+
+fn windows_host(perm: Permission) -> (PathBuf, String, std::sync::Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<Vec<(String, usize, bool)>>) {
+    scratch();
+    use std::sync::Arc;
+    let waker: zebra_api::Waker = Arc::new(|| {});
+    let server = zebra_api::ApiServer::start(ApiOptions { socket: None, permission: perm }, waker).unwrap();
+    let (socket, token) = (server.socket_path().to_path_buf(), server.token().to_string());
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let host = std::thread::spawn(move || {
+        let mut person = zebra_core::Editor::default();
+        person.doc.title = "Pitch".into();
+        person.apply(zebra_core::Command::AddFrame { style: Default::default(), x: 0.0, y: 0.0, w: 800.0, h: 600.0, rotation: 0.0, name: None, id: Some("f1".into()), add_to_path: false, find_space: false }, zebra_core::Origin::Human).unwrap();
+        let mut docs = Windows { eds: vec![("d1".into(), person)], next: 2 };
+        let mut d = zebra_api::Dispatcher::new(Arc::new(zebra_render::Renderer::new()));
+        while !stop2.load(std::sync::atomic::Ordering::SeqCst) {
+            d.pump_docs(&server, &mut docs);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        docs.eds.iter().map(|(id, e)| (id.clone(), e.doc.elements.len(), e.dirty())).collect()
+    });
+    (socket, token, stop, host)
+}
+
+#[test]
+fn an_agent_makes_a_document_copies_into_it_and_closes_it() {
+    let (socket, token, stop, host) = windows_host(Permission::Edit);
+    let mut c = Client::connect_hello(&socket, "builder", &token).unwrap();
+    let made = c.call("new_document", json!({})).unwrap();
+    let id = made["document"]["id"].as_str().unwrap().to_string();
+    assert_eq!(id, "d2");
+    assert_eq!(made["document"]["front"], false, "the person's document stays in front");
+
+    // From the person's document into the new one, no clipboard involved.
+    let out = c.call("copy_to", json!({"document":"Pitch","ids":["f1"],"to":id,"at":{"x":2000,"y":0}})).unwrap();
+    assert_eq!(out["document"], "d2");
+    let new_frame = out["created"][0].as_str().unwrap().to_string();
+    let q = c.call("query", json!({"document":"d2","query":{"q":"element","id":new_frame}})).unwrap();
+    assert!(q.to_string().contains("2000"), "{q}");
+    let e = rpc_err(c.call("copy_to", json!({"ids":["nope"],"to":"d2"})));
+    assert_eq!(e.kind(), "not_found");
+
+    // Unsaved changes: closing is refused, and naming the document is required.
+    let e = rpc_err(c.call("close_document", json!({})));
+    assert_eq!(e.kind(), "invalid_params");
+    let e = rpc_err(c.call("close_document", json!({"document":"d2"})));
+    assert_eq!(e.kind(), "unsaved_changes");
+    // Throwing changes away takes full permission.
+    let e = rpc_err(c.call("close_document", json!({"document":"d2","discard":true})));
+    assert_eq!(e.kind(), "permission");
+
+    // An untouched new document closes without fuss.
+    let blank = c.call("new_document", json!({})).unwrap()["document"]["id"].as_str().unwrap().to_string();
+    c.call("close_document", json!({"document": blank})).unwrap();
+    let list = c.call("documents", json!({})).unwrap();
+    assert_eq!(list["documents"].as_array().unwrap().len(), 2);
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let left = host.join().unwrap();
+    assert_eq!(left, vec![("d1".to_string(), 1, true), ("d2".to_string(), 1, true)]);
+}
+
+#[test]
+fn discarding_needs_a_read_of_the_latest_version() {
+    let (socket, token, stop, host) = windows_host(Permission::Full);
+    let mut c = Client::connect_hello(&socket, "closer", &token).unwrap();
+    // The person's document has unsaved work this agent never read.
+    let e = rpc_err(c.call("close_document", json!({"document":"d1","discard":true})));
+    assert_eq!(e.kind(), "stale_revision", "{e}");
+    c.call("describe", json!({"document":"d1"})).unwrap();
+    c.call("close_document", json!({"document":"d1","discard":true})).unwrap();
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(host.join().unwrap().is_empty());
+}

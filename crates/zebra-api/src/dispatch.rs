@@ -191,6 +191,25 @@ impl Dispatcher {
             reply(server, p.client, &p.id, Ok(json!({ "documents": docs.list() })));
             return;
         }
+        if let Call::NewDocument = &p.call {
+            let r = self.new_document(docs, &p.origin);
+            self.flush_events(server, docs);
+            return reply(server, p.client, &p.id, r);
+        }
+        if let Call::CloseDocument { discard } = &p.call {
+            let r = match p.document.as_deref() {
+                None => Err(RpcError::invalid("`close_document` needs \"document\": the id or name of the document to close")
+                    .hint("call `documents` for the open documents")),
+                Some(want) => resolve(docs, Some(want)).and_then(|doc| self.close_document(docs, &doc, &p.origin, *discard)),
+            };
+            self.flush_events(server, docs);
+            return reply(server, p.client, &p.id, r);
+        }
+        if let Call::CopyTo { .. } = &p.call {
+            let r = self.copy_to(docs, p.document.as_deref(), &p.origin, p.call);
+            self.flush_events(server, docs);
+            return reply(server, p.client, &p.id, r);
+        }
         let doc = match resolve(docs, p.document.as_deref()) {
             Ok(d) => d,
             Err(e) => return reply(server, p.client, &p.id, Err(e)),
@@ -244,6 +263,83 @@ impl Dispatcher {
         // Events caused by this call go out before its reply.
         self.flush_events(server, docs);
         reply(server, p.client, &p.id, r);
+    }
+
+    fn new_document(&mut self, docs: &mut dyn Documents, origin: &Origin) -> Result<Value, RpcError> {
+        if let Some(e) = docs.any_editor() {
+            need_edit(e.view.agent_permission, "new_document")?;
+            if e.view.agent_paused {
+                return Err(RpcError::app("paused", "the human paused agents").hint("wait for the agents_paused event"));
+            }
+        }
+        let id = docs.new_document()?;
+        // A document you made yourself counts as read.
+        if let Some(e) = docs.editor(&id) {
+            self.seen.insert((id.clone(), origin.display()), e.revision);
+        }
+        let info = docs.list().into_iter().find(|d| d.id == id);
+        Ok(json!({ "document": info, "hint": format!("pass \"document\": \"{id}\" on your calls to work in it") }))
+    }
+
+    /// Never drops the person's work by accident: unsaved changes need
+    /// `discard`, full permission, and a read of the latest version.
+    fn close_document(&mut self, docs: &mut dyn Documents, doc: &str, origin: &Origin, discard: bool) -> Result<Value, RpcError> {
+        let key = (doc.to_string(), origin.display());
+        let seen = self.seen.get(&key).copied();
+        let Some(editor) = docs.editor(doc) else { return Err(RpcError::app("not_found", "that document was just closed")) };
+        need_edit(editor.view.agent_permission, "close_document")?;
+        check_agent_allowed(editor)?;
+        if editor.dirty() {
+            if !discard {
+                return Err(RpcError::app("unsaved_changes", "the document has unsaved changes")
+                    .hint("save it first (`save`, needs a path if it was never saved), or pass \"discard\": true to throw the changes away"));
+            }
+            need_full(editor.view.agent_permission, "close_document with discard")?;
+            if origin.is_agent() {
+                check_read(editor, seen)?;
+            }
+        }
+        if docs.asking(doc) {
+            return Err(RpcError::app("busy", "Zebra is asking the person something about this document").hint("wait for them to answer, then try again"));
+        }
+        docs.close(doc, discard)?;
+        self.seen.remove(&key);
+        Ok(json!({ "ok": true, "closed": doc }))
+    }
+
+    fn copy_to(&mut self, docs: &mut dyn Documents, from: Option<&str>, origin: &Origin, call: Call) -> Result<Value, RpcError> {
+        let Call::CopyTo { ids, to, at, offset } = call else { unreachable!() };
+        let src = resolve(docs, from)?;
+        let dst = resolve(docs, Some(&to))?;
+        let clip = {
+            let Some(e) = docs.editor(&src) else { return Err(RpcError::app("not_found", "that document was just closed")) };
+            if let Some(missing) = ids.iter().find(|id| e.doc.get(id).is_none()) {
+                return Err(RpcError::app("not_found", format!("no element '{missing}' in the document you copy from"))
+                    .hint("`query` {\"q\":\"elements\"} lists them; pass \"document\" for the one to copy from"));
+            }
+            zebra_core::clip::Clip::of(e, &ids)
+        };
+        let key = (dst.clone(), origin.display());
+        let seen = self.seen.get(&key).copied();
+        let Some(editor) = docs.editor(&dst) else { return Err(RpcError::app("not_found", "that document was just closed")) };
+        need_edit(editor.view.agent_permission, "copy_to")?;
+        check_agent_allowed(editor)?;
+        if origin.is_agent() {
+            check_read(editor, seen)?;
+        }
+        let (dx, dy) = match (at, clip.bounds()) {
+            (Some((x, y)), Some(b)) => (x - b.center().x, y - b.center().y),
+            _ => offset,
+        };
+        let label = format!("Copy from {}", docs.list().into_iter().find(|d| d.id == src).map(|d| d.name).unwrap_or(src.clone()));
+        let editor = docs.editor(&dst).expect("checked above");
+        let out = editor.paste_clip(&clip, dx, dy, Some(label), origin.clone())?;
+        self.seen.insert(key, editor.revision);
+        let mut v = to_value(out);
+        if let Value::Object(o) = &mut v {
+            o.insert("document".into(), json!(dst));
+        }
+        Ok(v)
     }
 
     fn execute(&mut self, server: &ApiServer, editor: &mut Editor, doc: &str, client: u64, origin: &Origin, call: Call) -> Result<Value, RpcError> {
@@ -330,7 +426,7 @@ impl Dispatcher {
                 json!({ "ok": true, "path": path })
             }
             Call::Export { format, path, capture } => Self::export(&self.renderer, editor, format, path, &capture, limited)?,
-            Call::Wait { .. } | Call::Documents => unreachable!("handled in run"),
+            Call::Wait { .. } | Call::Documents | Call::NewDocument | Call::CloseDocument { .. } | Call::CopyTo { .. } => unreachable!("handled in run"),
             Call::Disconnect => {
                 // Any agent may switch AI control off; only the human can turn
                 // it back on (there is deliberately no API to enable it).
@@ -494,6 +590,14 @@ fn need_full(perm: Permission, what: &str) -> Result<(), RpcError> {
     if perm != Permission::Full {
         return Err(RpcError::app("permission", format!("`{what}` needs 'full' agent permission"))
             .hint("the person can grant it from the AI button in Zebra's toolbar, or launch with --agent-permission full; `export` works without it"));
+    }
+    Ok(())
+}
+
+fn need_edit(perm: Permission, what: &str) -> Result<(), RpcError> {
+    if perm == Permission::Observe {
+        return Err(RpcError::app("permission", format!("`{what}` needs 'edit' agent permission"))
+            .hint("the person can grant it from the AI button in Zebra's toolbar"));
     }
     Ok(())
 }
