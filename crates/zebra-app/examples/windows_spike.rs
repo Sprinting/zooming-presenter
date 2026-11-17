@@ -5,8 +5,14 @@
 //!   cargo run --release -p zebra-app --example windows_spike
 
 fn main() -> eframe::Result<()> {
+    // Opens behind other apps, never taking focus.
     let opts = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("Spike A").with_inner_size([640.0, 400.0]),
+        viewport: egui::ViewportBuilder::default().with_title("Spike A").with_inner_size([640.0, 400.0]).with_active(false),
+        #[cfg(target_os = "macos")]
+        event_loop_builder: Some(Box::new(|b| {
+            use winit::platform::macos::EventLoopBuilderExtMacOS;
+            b.with_activate_ignoring_other_apps(false);
+        })),
         ..Default::default()
     };
     eframe::run_native("Spike", opts, Box::new(|_| Ok(Box::new(Spike::default()))))
@@ -39,7 +45,7 @@ impl eframe::App for Spike {
             let child_frames = &mut self.child_frames;
             let closed = ui.ctx().show_viewport_immediate(
                 egui::ViewportId::from_hash_of("doc-d2"),
-                egui::ViewportBuilder::default().with_title(TOKEN).with_inner_size([600.0, 380.0]),
+                egui::ViewportBuilder::default().with_title(TOKEN).with_inner_size([600.0, 380.0]).with_active(false),
                 |ui, class| {
                     *child_frames += 1;
                     egui::CentralPanel::default().show(ui, |ui| {
@@ -61,6 +67,8 @@ impl eframe::App for Spike {
             println!("spike: root frames {}, child frames {}", self.root_frames, self.child_frames);
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        // Background windows don't paint on their own: keep the passes coming.
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
@@ -118,8 +126,9 @@ mod mac {
             s.step = 4;
             println!("spike: frames so far: root {}, child {}", s.root_frames, s.child_frames);
             if let Some(w) = by_title("Spike B") {
-                w.makeKeyAndOrderFront(None);
-                println!("spike: selected tab B; is it key? {}", w.isKeyWindow());
+                // orderFront (not makeKey): shows tab B without activating the app.
+                w.orderFront(None);
+                println!("spike: brought tab B to the front of its group; visible {}", w.isVisible());
             }
         }
         if s.step == 4 && t > 6.0 {
