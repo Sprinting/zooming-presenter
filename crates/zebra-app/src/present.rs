@@ -47,7 +47,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
 
     egui::CentralPanel::no_frame().show(ui, |ui| {
         let rect = ui.max_rect();
-        crate::canvas::sync_viewport(app, rect);
+        crate::canvas::sync_viewport(app, rect, ui.ctx().content_rect().size());
         let resp = ui.interact(rect, egui::Id::unique("zebra-canvas"), Sense::click_and_drag());
         crate::canvas::paint_content(app, ui, rect, true);
 

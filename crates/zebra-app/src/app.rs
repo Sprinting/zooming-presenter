@@ -427,6 +427,9 @@ impl ZebraApp {
                     self.apply(Command::ClearPath);
                 }
             }
+            PresentStart | PresentCurrent if self.editor.doc.elements.is_empty() => {
+                self.toast("Nothing to present yet. Double-click the canvas to write something first.".to_string());
+            }
             PresentStart => self.view_cmd(ViewCommand::Present { step: None }),
             PresentCurrent => {
                 let step = self.current_step();
@@ -614,7 +617,19 @@ impl ZebraApp {
                 self.push_recent(p.to_path_buf());
                 self.recovered = crate::files::autosave_newer(p);
             }
-            Err(e) => self.toast(format!("Could not open {}: {}", p.display(), e.message)),
+            Err(e) => {
+                // Keep technical details out of the toast; log them instead.
+                eprintln!("zebra: could not open {}: {e}", p.display());
+                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
+                let why = match e.code {
+                    "bad_file" if e.message.contains("newer") => "it was made by a newer version of Zebra",
+                    "bad_file" => "it isn't a Zebra presentation, or it is damaged",
+                    _ if e.message.contains("No such file") => "the file no longer exists",
+                    _ if e.message.contains("ermission") => "you don't have permission to read it",
+                    _ => "the file couldn't be read",
+                };
+                self.toast(format!("Couldn't open \u{201c}{name}\u{201d}: {why}."));
+            }
         }
     }
 

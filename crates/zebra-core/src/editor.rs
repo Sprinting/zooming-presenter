@@ -616,9 +616,26 @@ impl Editor {
             }
             Command::Update { id, patch } => {
                 self.element_mut(&id)?;
+                // Changing a text's style (e.g. Body -> Title) must not push it
+                // out of the frame it sits in: remember the frame first.
+                let keep_in = if patch.style.is_some() && patch.scale.is_none() { self.doc.parent_frame(&id) } else { None };
+                let frame_box = keep_in.and_then(|f| self.doc.get(&f)).map(|f| (f.world_size(), f.transform.rotation));
                 let e = self.doc.elements.get_mut(&id).unwrap();
                 apply_patch(e, &patch)?;
                 measure_text(&*self.measure, &theme, e);
+                if let Some(((fw, fh), frot)) = frame_box {
+                    // Fit within 90% of the frame, measured in the frame's own axes
+                    // when the text shares its rotation (the usual case).
+                    let (w, h) = e.world_size();
+                    let k = if (normalize_deg(e.transform.rotation - frot)).abs() < 1.0 {
+                        (fw * 0.9 / w).min(fh * 0.9 / h)
+                    } else {
+                        fw.min(fh) * 0.9 / w.hypot(h)
+                    };
+                    if k < 1.0 {
+                        e.transform.scale *= k;
+                    }
+                }
                 out.changed.push(id);
             }
             Command::Move { ids, dx, dy, with_contents } => {

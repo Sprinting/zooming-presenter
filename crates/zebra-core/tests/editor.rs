@@ -126,3 +126,16 @@ fn schema_generates() {
     let j = serde_json::to_string(&s).unwrap();
     assert!(j.contains("add_text"));
 }
+
+#[test]
+fn style_change_keeps_text_inside_its_frame() {
+    let mut ed = Editor::default();
+    ed.apply_batch(vec![
+        cmd(serde_json::json!({"op":"add_frame","id":"f","x":0,"y":0,"w":480,"h":220})),
+        cmd(serde_json::json!({"op":"add_text","id":"t","text":"Why cities grow","x":0,"y":0})),
+    ], None, Origin::Human).unwrap();
+    assert_eq!(ed.doc.parent_frame("t").as_deref(), Some("f"));
+    ed.apply(cmd(serde_json::json!({"op":"update","id":"t","patch":{"style":"title"}})), Origin::Human).unwrap();
+    let fb = ed.doc.get("f").unwrap().bounds();
+    assert!(fb.contains_rect(&ed.doc.get("t").unwrap().bounds()), "title overflowed its frame");
+}

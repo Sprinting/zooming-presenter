@@ -174,3 +174,71 @@ fn path_edit_click_adds_steps() {
     h.run_steps(1);
     assert_eq!(h.state().editor.view.mode, Mode::Edit);
 }
+
+#[test]
+fn typing_a_new_text_stays_on_one_line() {
+    let mut h = harness(Some("empty"));
+    let c = h.state().canvas.rect.center();
+    click_at(&mut h, c, 2);
+    h.run_steps(2);
+    for ch in "Why cities grow".chars() {
+        h.event(Event::Text(ch.to_string()));
+        h.step();
+    }
+    h.run_steps(2);
+    let sz = h.state().canvas.text.as_ref().unwrap().size_px;
+    assert!(sz.x > sz.y * 4.0, "text box wraps while typing: {sz:?}");
+}
+
+#[test]
+fn selecting_near_the_edge_keeps_selection_visible() {
+    let mut h = harness(Some("sample"));
+    h.run_steps(10);
+    // Put the rotated frame half off the right edge, then select it as a
+    // click would: the properties panel opens over it.
+    let id = h.state().editor.doc.ordered().find(|e| e.transform.rotation.abs() > 1.0 && e.is_frame()).unwrap().id.clone();
+    {
+        let app = h.state_mut();
+        let _ = app.editor.view(zebra_core::ViewCommand::ZoomTo { id: id.clone(), animate: false }, Origin::Human);
+        let _ = app.editor.view(zebra_core::ViewCommand::Pan { dx: -500.0, dy: 0.0 }, Origin::Human);
+    }
+    h.run_steps(5);
+    h.state_mut().editor.view(zebra_core::ViewCommand::Select { ids: vec![id.clone()] }, Origin::Human).unwrap();
+    h.run_steps(80);
+    let app = h.state();
+    let b = app.editor.doc.get(&id).unwrap().bounds();
+    let c = app.canvas.w2s(&app.editor, b.center());
+    assert!(app.canvas.rect.contains(c), "selected frame centre {c:?} hidden outside canvas {:?}", app.canvas.rect);
+}
+
+#[test]
+fn leaving_present_mode_after_a_window_resize_keeps_view_centred() {
+    let mut h = harness(Some("sample"));
+    h.run_steps(10);
+    let centre_world = |h: &Harness<'static, ZebraApp>| {
+        let app = h.state();
+        app.canvas.s2w(&app.editor, app.canvas.rect.center())
+    };
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    h.run_steps(5);
+    assert_eq!(h.state().editor.view.mode, Mode::Present);
+    h.key_press(Key::Escape);
+    h.run_steps(5);
+    let before = centre_world(&h);
+    // Leaving full screen shrinks the window over a few frames.
+    h.set_size(egui::vec2(1200.0, 760.0));
+    h.run_steps(3);
+    h.set_size(egui::vec2(1100.0, 700.0));
+    h.run_steps(3);
+    let after = centre_world(&h);
+    let zoom = h.state().editor.view.camera.zoom;
+    assert!(((after.x - before.x) * zoom).abs() < 2.0 && ((after.y - before.y) * zoom).abs() < 2.0, "view drifted: {before:?} -> {after:?}");
+}
+
+#[test]
+fn present_on_an_empty_document_is_refused() {
+    let mut h = harness(Some("empty"));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    h.run_steps(5);
+    assert_eq!(h.state().editor.view.mode, Mode::Edit);
+}

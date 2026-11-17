@@ -88,6 +88,8 @@ pub struct CanvasState {
     pub step_hover: Option<usize>,
     pub rect_valid: bool,
     pub rect_presenting: bool,
+    /// Window content size when `rect` was last synced.
+    pub window_size: egui::Vec2,
 }
 
 impl Default for CanvasState {
@@ -103,6 +105,7 @@ impl Default for CanvasState {
             step_hover: None,
             rect_valid: false,
             rect_presenting: false,
+            window_size: egui::Vec2::ZERO,
         }
     }
 }
@@ -272,16 +275,20 @@ pub fn paint_content(app: &mut ZebraApp, ui: &mut Ui, rect: ERect, presenting: b
 }
 
 /// Keep the core's viewport equal to the canvas size.
-pub fn sync_viewport(app: &mut ZebraApp, rect: ERect) {
+pub fn sync_viewport(app: &mut ZebraApp, rect: ERect, window: egui::Vec2) {
     let vp = app.editor.view.viewport;
     let old = app.canvas.rect;
     if (vp.x - rect.width() as f64).abs() > 0.5 || (vp.y - rect.height() as f64).abs() > 0.5 {
         let _ = app.editor.view(ViewCommand::SetViewport { width: rect.width().max(1.0) as f64, height: rect.height().max(1.0) as f64 }, H);
     }
-    // When a panel opens or closes, keep the content still on screen rather
-    // than re-centring it (so nothing jumps under the pointer mid-gesture).
+    // When a side panel opens or closes inside an unchanged window, keep the
+    // content still on screen (nothing jumps under the pointer). When the
+    // window itself changes (resize, leaving full screen after presenting),
+    // keep the view centred instead, so nothing ends up under a panel.
     let same_mode = app.canvas.rect_presenting == (app.editor.view.mode == Mode::Present);
-    if same_mode && old != rect && app.canvas.rect_valid && app.editor.view.flight.is_none() {
+    let same_window = (app.canvas.window_size - window).length() < 0.5;
+    let changed = old != rect && app.canvas.rect_valid;
+    if same_mode && same_window && changed && app.editor.view.flight.is_none() {
         let d = old.center() - rect.center();
         if d.length() > 0.1 {
             let _ = app.editor.view(ViewCommand::Pan { dx: d.x as f64, dy: d.y as f64 }, H);
@@ -295,6 +302,47 @@ pub fn sync_viewport(app: &mut ZebraApp, rect: ERect) {
     app.canvas.rect = rect;
     app.canvas.rect_valid = true;
     app.canvas.rect_presenting = app.editor.view.mode == Mode::Present;
+    app.canvas.window_size = window;
+    // A panel that just opened (e.g. properties on selecting) must not hide
+    // the selection: pan it back into view.
+    if changed && app.editor.view.mode != Mode::Present && !app.editor.view.selection.is_empty() {
+        reveal_selection(app);
+    }
+}
+
+/// Pan (animated) so the human selection is inside the canvas, if it isn't.
+pub fn reveal_selection(app: &mut ZebraApp) {
+    let sel = app.editor.view.selection.clone();
+    let b = app.editor.bounds_of(&sel);
+    let ed = &app.editor;
+    let corners = [Vec2::new(b.x0, b.y0), Vec2::new(b.x1, b.y0), Vec2::new(b.x1, b.y1), Vec2::new(b.x0, b.y1)]
+        .map(|p| ed.view.camera.world_to_screen(p, ed.view.viewport));
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for c in corners {
+        x0 = x0.min(c.x);
+        y0 = y0.min(c.y);
+        x1 = x1.max(c.x);
+        y1 = y1.max(c.y);
+    }
+    let (w, h) = (ed.view.viewport.x, ed.view.viewport.y);
+    let m = 24.0;
+    let shift = |lo: f64, hi: f64, size: f64| -> f64 {
+        if hi - lo > size - 2.0 * m {
+            size / 2.0 - (lo + hi) / 2.0 // too big: centre it
+        } else if lo < m {
+            m - lo
+        } else if hi > size - m {
+            size - m - hi
+        } else {
+            0.0
+        }
+    };
+    let (dx, dy) = (shift(x0, x1, w), shift(y0, y1, h));
+    if dx.abs() > 0.5 || dy.abs() > 0.5 {
+        let mut cam = ed.view.target_camera();
+        cam.pan_screen(Vec2::new(dx, dy));
+        let _ = app.editor.view(ViewCommand::SetCamera { camera: cam, animate: true }, H);
+    }
 }
 
 /// Wheel / trackpad / pinch handling shared by edit and present mode.
@@ -353,7 +401,7 @@ pub fn handle_scroll(app: &mut ZebraApp, ui: &Ui, hovered: bool) -> bool {
 
 pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     let rect = ui.available_rect_before_wrap();
-    sync_viewport(app, rect);
+    sync_viewport(app, rect, ui.ctx().content_rect().size());
     let resp = ui.interact(rect, egui::Id::unique("zebra-canvas"), Sense::click_and_drag());
     paint_content(app, ui, rect, false);
 
@@ -945,6 +993,9 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
 
     let area = egui::Area::new(egui::Id::unique("zebra-text-edit")).fixed_pos(pos).order(egui::Order::Foreground).constrain(false);
     let r = area.show(ctx, |ui| {
+        // Areas otherwise remember last frame's (narrow) width, which made the
+        // text wrap a few letters per line while typing.
+        ui.set_min_width(width);
         let edit = egui::TextEdit::multiline(&mut t.buf)
             .font(font.clone())
             .text_color(color)

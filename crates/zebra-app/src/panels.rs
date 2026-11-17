@@ -663,7 +663,7 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         }
         ElementKind::Shape(s) => {
             section(ui, "Shape", p);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for k in [ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::Triangle, ShapeKind::Line, ShapeKind::Arrow] {
                     if ui.selectable_label(s.shape == k, format!("{k:?}")).clicked() {
                         patch_all = Some(ElementPatch { shape: Some(k), ..Default::default() });
