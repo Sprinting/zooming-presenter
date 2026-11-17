@@ -135,6 +135,10 @@ pub fn list() -> Vec<Instance> {
         inst.file = path.clone();
         if !pid_alive(inst.pid) || !inst.socket.exists() {
             let _ = fs::remove_file(&path);
+            if !pid_alive(inst.pid) {
+                // A killed or crashed instance leaves its socket behind.
+                let _ = fs::remove_file(&inst.socket);
+            }
             continue;
         }
         if !out.iter().any(|o| o.socket == inst.socket) {
@@ -180,6 +184,7 @@ pub fn default_socket_path(name: &str) -> std::io::Result<PathBuf> {
         dir = PathBuf::from(format!("/tmp/zebra-{uid}"));
     }
     ensure_private_dir(&dir)?;
+    sweep_dead_sockets(&dir);
     // Refuse a directory someone else owns.
     let meta = fs::metadata(&dir)?;
     use std::os::unix::fs::MetadataExt;
@@ -190,4 +195,39 @@ pub fn default_socket_path(name: &str) -> std::io::Result<PathBuf> {
         ));
     }
     Ok(dir.join(format!("{name}.sock")))
+}
+
+/// Remove `<pid>.sock` / `<pid>-<n>.sock` files whose process is gone
+/// (killed or crashed instances never ran their cleanup).
+pub fn sweep_dead_sockets(dir: &Path) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let path = e.path();
+        if path.extension().is_none_or(|x| x != "sock") {
+            continue;
+        }
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let Ok(pid) = stem.split('-').next().unwrap_or("").parse::<u32>() else { continue };
+        if !pid_alive(pid) {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod sweep_tests {
+    #[test]
+    fn dead_sockets_are_swept_live_ones_kept() {
+        let dir = std::env::temp_dir().join(format!("zebra-sweep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let me = std::process::id();
+        for name in [format!("{me}.sock"), "2147483000-1.sock".into(), "notes.txt".into()] {
+            std::fs::write(dir.join(name), b"").unwrap();
+        }
+        super::sweep_dead_sockets(&dir);
+        assert!(dir.join(format!("{me}.sock")).exists(), "live process keeps its socket");
+        assert!(!dir.join("2147483000-1.sock").exists(), "dead process's socket is removed");
+        assert!(dir.join("notes.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -1,7 +1,7 @@
 //! Document-modal questions as sheets, never toasts.
 //!
 //! On the Mac these are real `NSAlert`s attached to the window as sheets
-//! (rfd with the window as parent: `beginSheetModalForWindow`). NSAlert
+//! (rfd's async dialog with the window as parent: `beginSheetModalForWindow`, no modal loop). NSAlert
 //! gives Return to the first button, Esc to "Cancel" and ⌘D to "Don't
 //! Save" by itself. Elsewhere, and in UI tests, the same sheet is drawn in
 //! egui in the Big Sur alert style: narrow, centred under the toolbar, app
@@ -128,28 +128,47 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
     }
 }
 
+/// A native sheet on screen: its kind and the answer to come.
+#[cfg(target_os = "macos")]
+pub struct OpenSheet {
+    kind: SheetKind,
+    answer: std::pin::Pin<Box<dyn std::future::Future<Output = rfd::MessageDialogResult>>>,
+}
+
 /// Native sheets: call from `eframe::App::ui` where the window handle is.
-/// Returns true if a sheet was shown.
+/// The NSAlert is attached as a sheet without a modal loop (a blocking
+/// one spun the CPU at 100% while it was open); its answer is polled here
+/// each frame, and AppKit wakes us when a button is pressed.
+/// Returns true while a sheet is open.
 #[cfg(target_os = "macos")]
 pub fn run_native(app: &mut ZebraApp, frame: &eframe::Frame) -> bool {
     if !app.native_dialogs {
         return false;
     }
-    let Some(k) = app.sheet.take() else { return false };
-    let s = spec(app, &k);
-    let buttons = match s.buttons.as_slice() {
-        [(a, _)] => rfd::MessageButtons::OkCustom(a.clone()),
-        [(a, _), (b, _)] => rfd::MessageButtons::OkCancelCustom(a.clone(), b.clone()),
-        [(a, _), (b, _), (c, _)] => rfd::MessageButtons::YesNoCancelCustom(a.clone(), b.clone(), c.clone()),
-        _ => rfd::MessageButtons::Ok,
-    };
-    let r = rfd::MessageDialog::new()
-        .set_level(if s.warning { rfd::MessageLevel::Warning } else { rfd::MessageLevel::Info })
-        .set_title(&s.title)
-        .set_description(&s.message)
-        .set_buttons(buttons)
-        .set_parent(frame)
-        .show();
+    if app.open_sheet.is_none() {
+        let Some(k) = app.sheet.take() else { return false };
+        let s = spec(app, &k);
+        let buttons = match s.buttons.as_slice() {
+            [(a, _)] => rfd::MessageButtons::OkCustom(a.clone()),
+            [(a, _), (b, _)] => rfd::MessageButtons::OkCancelCustom(a.clone(), b.clone()),
+            [(a, _), (b, _), (c, _)] => rfd::MessageButtons::YesNoCancelCustom(a.clone(), b.clone(), c.clone()),
+            _ => rfd::MessageButtons::Ok,
+        };
+        let answer = rfd::AsyncMessageDialog::new()
+            .set_level(if s.warning { rfd::MessageLevel::Warning } else { rfd::MessageLevel::Info })
+            .set_title(&s.title)
+            .set_description(&s.message)
+            .set_buttons(buttons)
+            .set_parent(frame)
+            .show();
+        app.open_sheet = Some(OpenSheet { kind: k, answer: Box::pin(answer) });
+    }
+    let ctx = app.ctx.clone();
+    let waker = std::task::Waker::from(std::sync::Arc::new(Repaint(ctx)));
+    let mut cx = std::task::Context::from_waker(&waker);
+    let open = app.open_sheet.as_mut().expect("sheet");
+    let std::task::Poll::Ready(r) = open.answer.as_mut().poll(&mut cx) else { return true };
+    let k = app.open_sheet.take().expect("sheet").kind;
     let label = match r {
         rfd::MessageDialogResult::Custom(l) => l,
         rfd::MessageDialogResult::Ok => "OK".into(),
@@ -157,6 +176,17 @@ pub fn run_native(app: &mut ZebraApp, frame: &eframe::Frame) -> bool {
     };
     resolve(app, k, &label);
     true
+}
+
+/// Wakes the UI when a native sheet is answered.
+#[cfg(target_os = "macos")]
+struct Repaint(egui::Context);
+
+#[cfg(target_os = "macos")]
+impl std::task::Wake for Repaint {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.0.request_repaint();
+    }
 }
 
 /// egui-drawn sheet (non-Mac, tests, and the Mac before the window exists).

@@ -93,6 +93,9 @@ pub struct ZebraApp {
     /// Use native NSAlert sheets and system dialogs (macOS with a window);
     /// off in UI tests, where sheets are drawn in egui.
     pub native_dialogs: bool,
+    /// The native sheet on screen, waiting for its answer (macOS).
+    #[cfg(target_os = "macos")]
+    pub open_sheet: Option<crate::sheets::OpenSheet>,
     pub show_settings: bool,
     /// Debug: draw the icon sheet (`--demo icons`).
     pub show_icon_sheet: bool,
@@ -200,6 +203,8 @@ impl ZebraApp {
             toast: None,
             sheet: None,
             native_dialogs: cfg!(target_os = "macos") && has_window,
+            #[cfg(target_os = "macos")]
+            open_sheet: None,
             show_settings: false,
             show_icon_sheet: false,
             settings_pane: storage.and_then(|s| eframe::get_value(s, "settings_pane")).unwrap_or_default(),
@@ -942,6 +947,12 @@ impl ZebraApp {
     /// (eframe then runs no ui pass): answering the automation API, so
     /// `zebractl` never hangs on a background window.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // Debug screenshots must render even if the window opened behind
+        // others or on another Space (eframe otherwise skips the ui pass).
+        if self.screenshot.is_some() && !self.screenshot_requested {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         // Automation API
         if let (Some(server), Some(d)) = (&self.api, &mut self.dispatcher) {
             if d.pump(server, &mut self.editor) {
@@ -1250,9 +1261,8 @@ impl eframe::App for ZebraApp {
         #[cfg(target_os = "macos")]
         {
             crate::mac::sync_window(self, frame);
-            if crate::sheets::run_native(self, frame) {
-                ui.ctx().request_repaint();
-            }
+            // An open sheet is polled when AppKit wakes us, not every frame.
+            let _ = crate::sheets::run_native(self, frame);
         }
         let _ = frame;
     }
