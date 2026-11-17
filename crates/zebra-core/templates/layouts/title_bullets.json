@@ -1,0 +1,39 @@
+{
+  "description": "A heading over a bulleted list.",
+  "id": "title_bullets",
+  "name": "Title and bullets",
+  "pieces": [
+    {
+      "h": 0.625,
+      "kind": "frame",
+      "path": true,
+      "style": "bracket",
+      "w": 1,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.09,
+      "kind": "text",
+      "ph": true,
+      "style": "title",
+      "text": "Add a title",
+      "w": 0.85,
+      "x": 0,
+      "y": -0.21
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.34,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.8,
+      "x": 0,
+      "y": 0.06
+    }
+  ]
+}

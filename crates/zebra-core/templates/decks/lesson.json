@@ -1,0 +1,264 @@
+{
+  "description": "Objectives, three chapters with details to zoom into, and a recap.",
+  "id": "lesson",
+  "name": "Lesson",
+  "path": [
+    0,
+    3,
+    6,
+    9,
+    11,
+    14,
+    16,
+    19,
+    21
+  ],
+  "pieces": [
+    {
+      "h": 0.19,
+      "kind": "frame",
+      "name": "Title",
+      "style": "bracket",
+      "w": 0.3,
+      "x": -0.33,
+      "y": -0.17
+    },
+    {
+      "align": "center",
+      "h": 0.07,
+      "kind": "text",
+      "ph": true,
+      "style": "title",
+      "text": "Add a title",
+      "w": 0.25,
+      "x": -0.33,
+      "y": -0.18
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Course or class",
+      "w": 0.2,
+      "x": -0.33,
+      "y": -0.12
+    },
+    {
+      "h": 0.19,
+      "kind": "frame",
+      "name": "Objectives",
+      "style": "rectangle",
+      "w": 0.3,
+      "x": -0.33,
+      "y": 0.12
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "What you'll learn",
+      "w": 0.22,
+      "x": -0.33,
+      "y": 0.06
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.09,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.24,
+      "x": -0.33,
+      "y": 0.14
+    },
+    {
+      "h": 0.18,
+      "kind": "frame",
+      "name": "Chapter 1",
+      "style": "bracket",
+      "w": 0.42,
+      "x": 0.18,
+      "y": -0.2
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Chapter 1",
+      "w": 0.16,
+      "x": 0.07,
+      "y": -0.24
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.08,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.17,
+      "x": 0.07,
+      "y": -0.175
+    },
+    {
+      "h": 0.12,
+      "kind": "frame",
+      "name": "Detail",
+      "style": "circle",
+      "w": 0.12,
+      "x": 0.32,
+      "y": -0.2
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "A detail to zoom into",
+      "w": 0.08,
+      "x": 0.32,
+      "y": -0.2
+    },
+    {
+      "h": 0.18,
+      "kind": "frame",
+      "name": "Chapter 2",
+      "style": "bracket",
+      "w": 0.42,
+      "x": 0.18,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Chapter 2",
+      "w": 0.16,
+      "x": 0.07,
+      "y": -0.04
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.08,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.17,
+      "x": 0.07,
+      "y": 0.025
+    },
+    {
+      "h": 0.12,
+      "kind": "frame",
+      "name": "Detail",
+      "style": "circle",
+      "w": 0.12,
+      "x": 0.32,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "A detail to zoom into",
+      "w": 0.08,
+      "x": 0.32,
+      "y": 0
+    },
+    {
+      "h": 0.18,
+      "kind": "frame",
+      "name": "Chapter 3",
+      "style": "bracket",
+      "w": 0.42,
+      "x": 0.18,
+      "y": 0.2
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Chapter 3",
+      "w": 0.16,
+      "x": 0.07,
+      "y": 0.16
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.08,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.17,
+      "x": 0.07,
+      "y": 0.225
+    },
+    {
+      "h": 0.12,
+      "kind": "frame",
+      "name": "Detail",
+      "style": "circle",
+      "w": 0.12,
+      "x": 0.32,
+      "y": 0.2
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "A detail to zoom into",
+      "w": 0.08,
+      "x": 0.32,
+      "y": 0.2
+    },
+    {
+      "h": 0.1,
+      "kind": "frame",
+      "name": "Recap",
+      "style": "rectangle",
+      "w": 0.3,
+      "x": -0.33,
+      "y": 0.29
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Recap",
+      "w": 0.12,
+      "x": -0.33,
+      "y": 0.27
+    },
+    {
+      "align": "center",
+      "h": 0.025,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "The three things to remember",
+      "w": 0.24,
+      "x": -0.33,
+      "y": 0.31
+    }
+  ],
+  "theme": "paper"
+}

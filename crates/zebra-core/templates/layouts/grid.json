@@ -1,0 +1,131 @@
+{
+  "description": "Four frames in a two-by-two grid.",
+  "id": "grid",
+  "name": "Grid of four",
+  "pieces": [
+    {
+      "h": 0.29,
+      "kind": "frame",
+      "path": true,
+      "style": "rectangle",
+      "w": 0.48,
+      "x": -0.25,
+      "y": -0.155
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Heading",
+      "w": 0.36,
+      "x": -0.25,
+      "y": -0.225
+    },
+    {
+      "align": "center",
+      "h": 0.08,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add text",
+      "w": 0.36,
+      "x": -0.25,
+      "y": -0.115
+    },
+    {
+      "h": 0.29,
+      "kind": "frame",
+      "path": true,
+      "style": "rectangle",
+      "w": 0.48,
+      "x": 0.25,
+      "y": -0.155
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Heading",
+      "w": 0.36,
+      "x": 0.25,
+      "y": -0.225
+    },
+    {
+      "align": "center",
+      "h": 0.08,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add text",
+      "w": 0.36,
+      "x": 0.25,
+      "y": -0.115
+    },
+    {
+      "h": 0.29,
+      "kind": "frame",
+      "path": true,
+      "style": "rectangle",
+      "w": 0.48,
+      "x": -0.25,
+      "y": 0.155
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Heading",
+      "w": 0.36,
+      "x": -0.25,
+      "y": 0.085
+    },
+    {
+      "align": "center",
+      "h": 0.08,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add text",
+      "w": 0.36,
+      "x": -0.25,
+      "y": 0.195
+    },
+    {
+      "h": 0.29,
+      "kind": "frame",
+      "path": true,
+      "style": "rectangle",
+      "w": 0.48,
+      "x": 0.25,
+      "y": 0.155
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Heading",
+      "w": 0.36,
+      "x": 0.25,
+      "y": 0.085
+    },
+    {
+      "align": "center",
+      "h": 0.08,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add text",
+      "w": 0.36,
+      "x": 0.25,
+      "y": 0.195
+    }
+  ]
+}

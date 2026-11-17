@@ -1,0 +1,93 @@
+{
+  "description": "A heading over two framed columns.",
+  "id": "two_columns",
+  "name": "Two columns",
+  "pieces": [
+    {
+      "h": 0.625,
+      "kind": "frame",
+      "path": true,
+      "style": "bracket",
+      "w": 1,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.08,
+      "kind": "text",
+      "ph": true,
+      "style": "title",
+      "text": "Add a title",
+      "w": 0.85,
+      "x": 0,
+      "y": -0.23
+    },
+    {
+      "h": 0.42,
+      "kind": "frame",
+      "name": "Left",
+      "path": true,
+      "style": "rectangle",
+      "w": 0.44,
+      "x": -0.235,
+      "y": 0.06
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Heading",
+      "w": 0.36,
+      "x": -0.235,
+      "y": -0.08
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.22,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.36,
+      "x": -0.235,
+      "y": 0.09
+    },
+    {
+      "h": 0.42,
+      "kind": "frame",
+      "name": "Right",
+      "path": true,
+      "style": "rectangle",
+      "w": 0.44,
+      "x": 0.235,
+      "y": 0.06
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Heading",
+      "w": 0.36,
+      "x": 0.235,
+      "y": -0.08
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.22,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.36,
+      "x": 0.235,
+      "y": 0.09
+    }
+  ]
+}

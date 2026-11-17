@@ -1,0 +1,39 @@
+{
+  "description": "A frame with a title and a subtitle.",
+  "id": "title",
+  "name": "Title",
+  "pieces": [
+    {
+      "h": 0.625,
+      "kind": "frame",
+      "name": "Title",
+      "path": true,
+      "style": "bracket",
+      "w": 1,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.14,
+      "kind": "text",
+      "ph": true,
+      "style": "title",
+      "text": "Add a title",
+      "w": 0.8,
+      "x": 0,
+      "y": -0.05
+    },
+    {
+      "align": "center",
+      "h": 0.06,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Add a subtitle",
+      "w": 0.6,
+      "x": 0,
+      "y": 0.1
+    }
+  ]
+}

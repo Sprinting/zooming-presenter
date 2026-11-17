@@ -1,0 +1,58 @@
+{
+  "description": "Room for a picture next to a heading and text.",
+  "id": "picture",
+  "name": "Picture and caption",
+  "pieces": [
+    {
+      "h": 0.625,
+      "kind": "frame",
+      "path": true,
+      "style": "bracket",
+      "w": 1,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "fill": "theme:frame_fill",
+      "h": 0.46,
+      "kind": "shape",
+      "shape": "rectangle",
+      "w": 0.5,
+      "x": -0.2,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Drop a picture here",
+      "w": 0.3,
+      "x": -0.2,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.09,
+      "kind": "text",
+      "ph": true,
+      "style": "title",
+      "text": "Add a title",
+      "w": 0.4,
+      "x": 0.27,
+      "y": -0.1
+    },
+    {
+      "align": "center",
+      "h": 0.06,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Say what the picture shows",
+      "w": 0.4,
+      "x": 0.27,
+      "y": 0.07
+    }
+  ]
+}

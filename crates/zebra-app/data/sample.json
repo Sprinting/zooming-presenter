@@ -1,0 +1,348 @@
+{
+  "about": "File › New from Sample: the commands that build the sample presentation, exactly as an agent could send them.",
+  "commands": [
+    {
+      "op": "set_title",
+      "title": "Thinking in Zoom"
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "title",
+        "x": 0,
+        "y": -560,
+        "scale": 2.2,
+        "kind": {
+          "type": "text",
+          "text": "Thinking in Zoom",
+          "style": "title"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "subtitle",
+        "x": 0,
+        "y": -400,
+        "scale": 1.6,
+        "kind": {
+          "type": "text",
+          "text": "a tiny tour of a zooming canvas",
+          "style": "subtitle"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "why",
+        "x": -1150,
+        "y": 250,
+        "w": 900,
+        "h": 620,
+        "name": "Why zoom?",
+        "kind": {
+          "type": "frame",
+          "style": "bracket"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "why-title",
+        "x": -1150,
+        "y": 40,
+        "scale": 1.0,
+        "kind": {
+          "type": "text",
+          "text": "Why zoom?",
+          "style": "title"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "why-1",
+        "x": -1150,
+        "y": 200,
+        "scale": 1.4,
+        "kind": {
+          "type": "text",
+          "text": "Show the big picture first",
+          "style": "body",
+          "bullets": true
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "why-2",
+        "x": -1150,
+        "y": 290,
+        "scale": 1.4,
+        "kind": {
+          "type": "text",
+          "text": "Then dive into the details",
+          "style": "body",
+          "bullets": true
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "why-3",
+        "x": -1150,
+        "y": 380,
+        "scale": 1.4,
+        "kind": {
+          "type": "text",
+          "text": "Zoom out again to connect them",
+          "style": "body",
+          "bullets": true
+        }
+      }
+    },
+    {
+      "op": "align",
+      "ids": [
+        "why-title",
+        "why-1",
+        "why-2",
+        "why-3"
+      ],
+      "edge": "left"
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "circles",
+        "x": 0,
+        "y": 300,
+        "w": 720,
+        "h": 720,
+        "name": "Circles",
+        "kind": {
+          "type": "frame",
+          "style": "circle"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "circles-title",
+        "x": 0,
+        "y": 170,
+        "scale": 1.0,
+        "kind": {
+          "type": "text",
+          "text": "Frames come in four styles",
+          "style": "subtitle"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "circles-body",
+        "x": 0,
+        "y": 260,
+        "scale": 1.0,
+        "kind": {
+          "type": "text",
+          "text": "brackets · circles · rectangles · invisible",
+          "style": "body"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "dot",
+        "x": 0,
+        "y": 450,
+        "w": 64,
+        "h": 64,
+        "kind": {
+          "type": "shape",
+          "shape": "ellipse",
+          "stroke_width": 6.0,
+          "stroke": "theme:accent"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "secret",
+        "x": 0,
+        "y": 450,
+        "w": 26,
+        "h": 17,
+        "name": "A secret",
+        "kind": {
+          "type": "frame",
+          "style": "invisible"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "closer",
+        "x": 0,
+        "y": 400,
+        "scale": 0.6,
+        "kind": {
+          "type": "text",
+          "text": "Look closer…",
+          "style": "body"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "hidden",
+        "x": 0,
+        "y": 448,
+        "scale": 0.05,
+        "kind": {
+          "type": "text",
+          "text": "hidden in plain sight!",
+          "style": "body"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "angle",
+        "x": 1150,
+        "y": 260,
+        "w": 860,
+        "h": 560,
+        "name": "A new angle",
+        "kind": {
+          "type": "frame",
+          "style": "rectangle"
+        },
+        "rotation": -12
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "angle-title",
+        "x": 1163,
+        "y": 120,
+        "scale": 0.9,
+        "kind": {
+          "type": "text",
+          "text": "A new angle",
+          "style": "title"
+        },
+        "rotation": -12
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "angle-body",
+        "x": 1140,
+        "y": 330,
+        "scale": 1.2,
+        "kind": {
+          "type": "text",
+          "text": "Rotate a frame and the camera\nrolls to meet it when presenting.",
+          "style": "body"
+        },
+        "rotation": -12
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "arrow-1",
+        "x": -560,
+        "y": 280,
+        "w": 140,
+        "h": 40,
+        "kind": {
+          "type": "shape",
+          "shape": "arrow",
+          "stroke_width": 6.0,
+          "stroke": "theme:shape2"
+        }
+      }
+    },
+    {
+      "op": "add_element",
+      "element": {
+        "id": "arrow-2",
+        "x": 560,
+        "y": 280,
+        "w": 140,
+        "h": 40,
+        "kind": {
+          "type": "shape",
+          "shape": "arrow",
+          "stroke_width": 6.0,
+          "stroke": "theme:shape2"
+        },
+        "rotation": -6
+      }
+    },
+    {
+      "op": "add_step",
+      "target": {
+        "kind": "overview"
+      }
+    },
+    {
+      "op": "add_step",
+      "target": {
+        "kind": "element",
+        "id": "why"
+      },
+      "builds": [
+        "why-1",
+        "why-2",
+        "why-3"
+      ],
+      "notes": "Click to reveal each point."
+    },
+    {
+      "op": "add_step",
+      "target": {
+        "kind": "element",
+        "id": "circles"
+      }
+    },
+    {
+      "op": "add_step",
+      "target": {
+        "kind": "element",
+        "id": "secret"
+      }
+    },
+    {
+      "op": "add_step",
+      "target": {
+        "kind": "element",
+        "id": "angle"
+      }
+    },
+    {
+      "op": "add_step",
+      "target": {
+        "kind": "overview"
+      }
+    }
+  ]
+}

@@ -35,8 +35,8 @@ impl Previews {
             .spawn(move || {
                 let jobs = TEMPLATES
                     .iter()
-                    .map(|t| (format!("t:{}", t.id), Command::ApplyTemplate { template: t.id.into(), replace: false }))
-                    .chain(LAYOUTS.iter().map(|l| (format!("l:{}", l.id), Command::AddLayout { layout: l.id.into(), x: 0.0, y: 0.0, width: Some(1600.0), add_to_path: false })));
+                    .map(|t| (format!("t:{}", t.id), Command::ApplyTemplate { template: t.id.clone(), replace: false }))
+                    .chain(LAYOUTS.iter().map(|l| (format!("l:{}", l.id), Command::AddLayout { layout: l.id.clone(), x: 0.0, y: 0.0, width: Some(1600.0), add_to_path: false })));
                 for (key, cmd) in jobs {
                     let mut ed = Editor::new(Document::default());
                     ed.measure = renderer.measure();
@@ -146,7 +146,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
                 let tex = app.previews.as_ref().map(|p| &p.textures);
                 egui::Grid::new("templates").spacing([10.0, 10.0]).show(ui, |ui| {
                     for (i, t) in TEMPLATES.iter().enumerate() {
-                        let sel = Selection::Template(t.id);
+                        let sel = Selection::Template(t.id.as_str());
                         let r = card(ui, tex.and_then(|m| m.get(&format!("t:{}", t.id))), &crate::words::template_name(t), welcome.selected == sel, &p).on_hover_text(crate::words::template_description(t));
                         if r.clicked() {
                             welcome.selected = sel.clone();
@@ -277,7 +277,7 @@ pub fn layout_gallery(app: &mut ZebraApp, ctx: &egui::Context) {
         egui::Grid::new("layouts").spacing([10.0, 10.0]).show(ui, |ui| {
             for (i, l) in LAYOUTS.iter().enumerate() {
                 if card(ui, tex.and_then(|m| m.get(&format!("l:{}", l.id))), &crate::words::layout_name(l), false, &p).on_hover_text(crate::words::layout_description(l)).clicked() {
-                    pick = Some(l.id);
+                    pick = Some(l.id.as_str());
                 }
                 if i % 5 == 4 {
                     ui.end_row();

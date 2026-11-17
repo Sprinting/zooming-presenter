@@ -292,7 +292,7 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
             json!({ "steps": steps, "play": d.play })
         }
         Query::Themes => json!({ "current": d.theme, "themes": Theme::builtins(), "custom": d.themes }),
-        Query::Templates => json!({ "templates": crate::templates::TEMPLATES, "layouts": crate::templates::LAYOUTS }),
+        Query::Templates => json!({ "templates": &*crate::templates::TEMPLATES, "layouts": &*crate::templates::LAYOUTS }),
         Query::Fonts => json!({ "families": ed.measure.font_families(), "bundled": ["Sans", "Serif", "Mono", "Hand"] }),
         Query::Perf => {
             let mut v = ed.perf.report(ed.view.now);

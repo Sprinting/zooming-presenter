@@ -1452,8 +1452,8 @@ impl Editor {
                     group: None,
                     kind: ElementKind::Shape(ShapeData {
                         shape: *shape,
-                        fill: fill.map(String::from),
-                        stroke: stroke.map(String::from),
+                        fill: fill.clone(),
+                        stroke: stroke.clone(),
                         stroke_width: (width * 0.004).max(1.0),
                         ..Default::default()
                     }),

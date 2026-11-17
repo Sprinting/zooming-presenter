@@ -1,0 +1,100 @@
+{
+  "description": "Three circle frames in a row.",
+  "id": "three_circles",
+  "name": "Three circles",
+  "pieces": [
+    {
+      "h": 0.29,
+      "kind": "frame",
+      "path": true,
+      "style": "circle",
+      "w": 0.29,
+      "x": -0.33,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Topic",
+      "w": 0.2,
+      "x": -0.33,
+      "y": -0.05
+    },
+    {
+      "align": "center",
+      "h": 0.07,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "A line or two\nabout this topic",
+      "w": 0.2,
+      "x": -0.33,
+      "y": 0.04
+    },
+    {
+      "h": 0.29,
+      "kind": "frame",
+      "path": true,
+      "style": "circle",
+      "w": 0.29,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Topic",
+      "w": 0.2,
+      "x": 0,
+      "y": -0.05
+    },
+    {
+      "align": "center",
+      "h": 0.07,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "A line or two\nabout this topic",
+      "w": 0.2,
+      "x": 0,
+      "y": 0.04
+    },
+    {
+      "h": 0.29,
+      "kind": "frame",
+      "path": true,
+      "style": "circle",
+      "w": 0.29,
+      "x": 0.33,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Topic",
+      "w": 0.2,
+      "x": 0.33,
+      "y": -0.05
+    },
+    {
+      "align": "center",
+      "h": 0.07,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "A line or two\nabout this topic",
+      "w": 0.2,
+      "x": 0.33,
+      "y": 0.04
+    }
+  ]
+}

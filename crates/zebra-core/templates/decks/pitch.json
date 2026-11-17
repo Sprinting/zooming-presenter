@@ -1,0 +1,234 @@
+{
+  "description": "Problem, solution, market, model, team and the ask.",
+  "id": "pitch",
+  "name": "Pitch",
+  "path": [
+    0,
+    3,
+    6,
+    9,
+    12,
+    15,
+    18
+  ],
+  "pieces": [
+    {
+      "h": 0.16,
+      "kind": "frame",
+      "name": "Title",
+      "style": "bracket",
+      "w": 0.5,
+      "x": 0,
+      "y": -0.21
+    },
+    {
+      "align": "center",
+      "h": 0.08,
+      "kind": "text",
+      "ph": true,
+      "style": "title",
+      "text": "Add a title",
+      "w": 0.42,
+      "x": 0,
+      "y": -0.225
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "One line on what you do",
+      "w": 0.36,
+      "x": 0,
+      "y": -0.165
+    },
+    {
+      "h": 0.18,
+      "kind": "frame",
+      "name": "Problem",
+      "style": "rectangle",
+      "w": 0.3,
+      "x": -0.33,
+      "y": 0.02
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Problem",
+      "w": 0.22,
+      "x": -0.33,
+      "y": -0.03
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.09,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.24,
+      "x": -0.33,
+      "y": 0.045
+    },
+    {
+      "h": 0.18,
+      "kind": "frame",
+      "name": "Solution",
+      "style": "rectangle",
+      "w": 0.3,
+      "x": 0,
+      "y": 0.02
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Solution",
+      "w": 0.22,
+      "x": 0,
+      "y": -0.03
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.09,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.24,
+      "x": 0,
+      "y": 0.045
+    },
+    {
+      "h": 0.18,
+      "kind": "frame",
+      "name": "Market",
+      "style": "rectangle",
+      "w": 0.3,
+      "x": 0.33,
+      "y": 0.02
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Market",
+      "w": 0.22,
+      "x": 0.33,
+      "y": -0.03
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.09,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.24,
+      "x": 0.33,
+      "y": 0.045
+    },
+    {
+      "h": 0.18,
+      "kind": "frame",
+      "name": "Business model",
+      "style": "rectangle",
+      "w": 0.3,
+      "x": -0.33,
+      "y": 0.22
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Business model",
+      "w": 0.22,
+      "x": -0.33,
+      "y": 0.17
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.09,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.24,
+      "x": -0.33,
+      "y": 0.245
+    },
+    {
+      "h": 0.18,
+      "kind": "frame",
+      "name": "Team",
+      "style": "rectangle",
+      "w": 0.3,
+      "x": 0,
+      "y": 0.22
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Team",
+      "w": 0.22,
+      "x": 0,
+      "y": 0.17
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.09,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.24,
+      "x": 0,
+      "y": 0.245
+    },
+    {
+      "h": 0.18,
+      "kind": "frame",
+      "name": "The ask",
+      "style": "rectangle",
+      "w": 0.3,
+      "x": 0.33,
+      "y": 0.22
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "The ask",
+      "w": 0.22,
+      "x": 0.33,
+      "y": 0.17
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.09,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.24,
+      "x": 0.33,
+      "y": 0.245
+    }
+  ],
+  "theme": "classic"
+}

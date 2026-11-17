@@ -1,0 +1,261 @@
+{
+  "description": "A winding road of stops, each a little deeper than the last.",
+  "id": "journey",
+  "name": "Journey",
+  "path": [
+    0,
+    6,
+    9,
+    12,
+    15,
+    18,
+    21
+  ],
+  "pieces": [
+    {
+      "h": 0.5,
+      "kind": "frame",
+      "name": "The road ahead",
+      "style": "invisible",
+      "w": 1,
+      "x": 0,
+      "y": 0.02
+    },
+    {
+      "h": 0.01,
+      "kind": "shape",
+      "rot": -42.3974,
+      "shape": "line",
+      "stroke": "theme:frame",
+      "w": 0.3114,
+      "x": -0.245,
+      "y": 0.035
+    },
+    {
+      "h": 0.01,
+      "kind": "shape",
+      "rot": 43.5312,
+      "shape": "line",
+      "stroke": "theme:frame",
+      "w": 0.2759,
+      "x": -0.03,
+      "y": 0.025
+    },
+    {
+      "h": 0.01,
+      "kind": "shape",
+      "rot": -51.3402,
+      "shape": "line",
+      "stroke": "theme:frame",
+      "w": 0.2561,
+      "x": 0.15,
+      "y": 0.02
+    },
+    {
+      "h": 0.01,
+      "kind": "shape",
+      "rot": 54.7824,
+      "shape": "line",
+      "stroke": "theme:frame",
+      "w": 0.2081,
+      "x": 0.29,
+      "y": 0.005
+    },
+    {
+      "h": 0.01,
+      "kind": "shape",
+      "rot": -60.6422,
+      "shape": "line",
+      "stroke": "theme:frame",
+      "w": 0.1836,
+      "x": 0.395,
+      "y": 0.01
+    },
+    {
+      "h": 0.15,
+      "kind": "frame",
+      "name": "Start",
+      "rot": -8,
+      "style": "bracket",
+      "w": 0.24,
+      "x": -0.36,
+      "y": 0.14
+    },
+    {
+      "align": "center",
+      "h": 0.0288,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Where we start",
+      "w": 0.192,
+      "x": -0.36,
+      "y": 0.1208
+    },
+    {
+      "align": "center",
+      "h": 0.024,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add a note",
+      "w": 0.168,
+      "x": -0.36,
+      "y": 0.164
+    },
+    {
+      "h": 0.125,
+      "kind": "frame",
+      "rot": 6,
+      "style": "bracket",
+      "w": 0.2,
+      "x": -0.13,
+      "y": -0.07
+    },
+    {
+      "align": "center",
+      "h": 0.024,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "First stop",
+      "w": 0.16,
+      "x": -0.13,
+      "y": -0.086
+    },
+    {
+      "align": "center",
+      "h": 0.02,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add a note",
+      "w": 0.14,
+      "x": -0.13,
+      "y": -0.05
+    },
+    {
+      "h": 0.1063,
+      "kind": "frame",
+      "rot": -5,
+      "style": "bracket",
+      "w": 0.17,
+      "x": 0.07,
+      "y": 0.12
+    },
+    {
+      "align": "center",
+      "h": 0.0204,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Second stop",
+      "w": 0.136,
+      "x": 0.07,
+      "y": 0.1064
+    },
+    {
+      "align": "center",
+      "h": 0.017,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add a note",
+      "w": 0.119,
+      "x": 0.07,
+      "y": 0.137
+    },
+    {
+      "h": 0.0875,
+      "kind": "frame",
+      "rot": 9,
+      "style": "bracket",
+      "w": 0.14,
+      "x": 0.23,
+      "y": -0.08
+    },
+    {
+      "align": "center",
+      "h": 0.0168,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Third stop",
+      "w": 0.112,
+      "x": 0.23,
+      "y": -0.0912
+    },
+    {
+      "align": "center",
+      "h": 0.014,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add a note",
+      "w": 0.098,
+      "x": 0.23,
+      "y": -0.066
+    },
+    {
+      "h": 0.0688,
+      "kind": "frame",
+      "rot": -6,
+      "style": "bracket",
+      "w": 0.11,
+      "x": 0.35,
+      "y": 0.09
+    },
+    {
+      "align": "center",
+      "h": 0.0132,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Almost there",
+      "w": 0.088,
+      "x": 0.35,
+      "y": 0.0812
+    },
+    {
+      "align": "center",
+      "h": 0.011,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add a note",
+      "w": 0.077,
+      "x": 0.35,
+      "y": 0.101
+    },
+    {
+      "h": 0.05,
+      "kind": "frame",
+      "name": "Destination",
+      "style": "bracket",
+      "w": 0.08,
+      "x": 0.44,
+      "y": -0.07
+    },
+    {
+      "align": "center",
+      "h": 0.0096,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Where we arrive",
+      "w": 0.064,
+      "x": 0.44,
+      "y": -0.0764
+    },
+    {
+      "align": "center",
+      "h": 0.008,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add a note",
+      "w": 0.056,
+      "x": 0.44,
+      "y": -0.062
+    }
+  ],
+  "theme": "night"
+}

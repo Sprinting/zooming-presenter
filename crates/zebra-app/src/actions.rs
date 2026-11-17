@@ -109,7 +109,7 @@ impl Action {
             New => crate::t!("action-new"),
             NewFromSample => crate::t!("action-new-from-sample"),
             ShowTemplates => crate::t!("action-show-templates"),
-            NewFromTemplate(t) => crate::t!("action-new-from-template", name = zebra_core::templates::TEMPLATES.iter().find(|x| x.id == t).map(crate::words::template_name).unwrap_or_else(|| t.to_string())),
+            NewFromTemplate(t) => crate::t!("action-new-from-template", name = zebra_core::templates::TEMPLATES.iter().find(|x| x.id == *t).map(crate::words::template_name).unwrap_or_else(|| t.to_string())),
             NewFromTemplateFile(p) => p.file_stem().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
             SaveAsTemplate => crate::t!("action-save-as-template"),
             Open => crate::t!("action-open"),

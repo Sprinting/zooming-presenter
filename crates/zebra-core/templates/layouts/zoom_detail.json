@@ -1,0 +1,102 @@
+{
+  "description": "A big frame with three small frames to zoom into.",
+  "id": "zoom_detail",
+  "name": "Zoom into detail",
+  "pieces": [
+    {
+      "h": 0.625,
+      "kind": "frame",
+      "path": true,
+      "style": "bracket",
+      "w": 1,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.11,
+      "kind": "text",
+      "ph": true,
+      "style": "title",
+      "text": "Add a title",
+      "w": 0.55,
+      "x": -0.17,
+      "y": -0.12
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.22,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.55,
+      "x": -0.17,
+      "y": 0.08
+    },
+    {
+      "h": 0.125,
+      "kind": "frame",
+      "name": "Detail",
+      "path": true,
+      "style": "rectangle",
+      "w": 0.2,
+      "x": 0.36,
+      "y": -0.18
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Detail to zoom into",
+      "w": 0.16,
+      "x": 0.36,
+      "y": -0.18
+    },
+    {
+      "h": 0.125,
+      "kind": "frame",
+      "name": "Detail",
+      "path": true,
+      "style": "rectangle",
+      "w": 0.2,
+      "x": 0.36,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Detail to zoom into",
+      "w": 0.16,
+      "x": 0.36,
+      "y": 0
+    },
+    {
+      "h": 0.125,
+      "kind": "frame",
+      "name": "Detail",
+      "path": true,
+      "style": "rectangle",
+      "w": 0.2,
+      "x": 0.36,
+      "y": 0.18
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Detail to zoom into",
+      "w": 0.16,
+      "x": 0.36,
+      "y": 0.18
+    }
+  ]
+}

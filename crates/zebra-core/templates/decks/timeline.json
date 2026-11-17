@@ -1,0 +1,237 @@
+{
+  "description": "Six moments along an arrow, from left to right.",
+  "id": "timeline",
+  "name": "Timeline",
+  "path": [
+    0,
+    4,
+    7,
+    10,
+    13,
+    16,
+    19
+  ],
+  "pieces": [
+    {
+      "h": 0.16,
+      "kind": "frame",
+      "name": "Title",
+      "style": "bracket",
+      "w": 0.26,
+      "x": -0.36,
+      "y": -0.3
+    },
+    {
+      "align": "center",
+      "h": 0.06,
+      "kind": "text",
+      "ph": true,
+      "style": "title",
+      "text": "Add a title",
+      "w": 0.22,
+      "x": -0.36,
+      "y": -0.31
+    },
+    {
+      "align": "center",
+      "h": 0.025,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Add a subtitle",
+      "w": 0.2,
+      "x": -0.36,
+      "y": -0.26
+    },
+    {
+      "h": 0.03,
+      "kind": "shape",
+      "shape": "arrow",
+      "stroke": "theme:frame",
+      "w": 1,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "h": 0.1,
+      "kind": "frame",
+      "style": "rectangle",
+      "w": 0.14,
+      "x": -0.4,
+      "y": -0.11
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Year",
+      "w": 0.1,
+      "x": -0.4,
+      "y": -0.135
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "What happened",
+      "w": 0.11,
+      "x": -0.4,
+      "y": -0.09
+    },
+    {
+      "h": 0.1,
+      "kind": "frame",
+      "style": "rectangle",
+      "w": 0.14,
+      "x": -0.24,
+      "y": 0.11
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Year",
+      "w": 0.1,
+      "x": -0.24,
+      "y": 0.085
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "What happened",
+      "w": 0.11,
+      "x": -0.24,
+      "y": 0.13
+    },
+    {
+      "h": 0.1,
+      "kind": "frame",
+      "style": "rectangle",
+      "w": 0.14,
+      "x": -0.08,
+      "y": -0.11
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Year",
+      "w": 0.1,
+      "x": -0.08,
+      "y": -0.135
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "What happened",
+      "w": 0.11,
+      "x": -0.08,
+      "y": -0.09
+    },
+    {
+      "h": 0.1,
+      "kind": "frame",
+      "style": "rectangle",
+      "w": 0.14,
+      "x": 0.08,
+      "y": 0.11
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Year",
+      "w": 0.1,
+      "x": 0.08,
+      "y": 0.085
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "What happened",
+      "w": 0.11,
+      "x": 0.08,
+      "y": 0.13
+    },
+    {
+      "h": 0.1,
+      "kind": "frame",
+      "style": "rectangle",
+      "w": 0.14,
+      "x": 0.24,
+      "y": -0.11
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Year",
+      "w": 0.1,
+      "x": 0.24,
+      "y": -0.135
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "What happened",
+      "w": 0.11,
+      "x": 0.24,
+      "y": -0.09
+    },
+    {
+      "h": 0.1,
+      "kind": "frame",
+      "style": "rectangle",
+      "w": 0.14,
+      "x": 0.4,
+      "y": 0.11
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Year",
+      "w": 0.1,
+      "x": 0.4,
+      "y": 0.085
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "What happened",
+      "w": 0.11,
+      "x": 0.4,
+      "y": 0.13
+    }
+  ],
+  "theme": "paper"
+}

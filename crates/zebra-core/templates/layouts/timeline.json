@@ -1,0 +1,171 @@
+{
+  "description": "Five stops along an arrow.",
+  "id": "timeline",
+  "name": "Timeline",
+  "pieces": [
+    {
+      "h": 0.04,
+      "kind": "shape",
+      "shape": "arrow",
+      "stroke": "theme:frame",
+      "w": 0.98,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "h": 0.15,
+      "kind": "frame",
+      "path": true,
+      "style": "circle",
+      "w": 0.15,
+      "x": -0.38,
+      "y": -0.13
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Date",
+      "w": 0.11,
+      "x": -0.38,
+      "y": -0.155
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "What happened",
+      "w": 0.11,
+      "x": -0.38,
+      "y": -0.105
+    },
+    {
+      "h": 0.15,
+      "kind": "frame",
+      "path": true,
+      "style": "circle",
+      "w": 0.15,
+      "x": -0.19,
+      "y": 0.13
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Date",
+      "w": 0.11,
+      "x": -0.19,
+      "y": 0.105
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "What happened",
+      "w": 0.11,
+      "x": -0.19,
+      "y": 0.155
+    },
+    {
+      "h": 0.15,
+      "kind": "frame",
+      "path": true,
+      "style": "circle",
+      "w": 0.15,
+      "x": 0,
+      "y": -0.13
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Date",
+      "w": 0.11,
+      "x": 0,
+      "y": -0.155
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "What happened",
+      "w": 0.11,
+      "x": 0,
+      "y": -0.105
+    },
+    {
+      "h": 0.15,
+      "kind": "frame",
+      "path": true,
+      "style": "circle",
+      "w": 0.15,
+      "x": 0.19,
+      "y": 0.13
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Date",
+      "w": 0.11,
+      "x": 0.19,
+      "y": 0.105
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "What happened",
+      "w": 0.11,
+      "x": 0.19,
+      "y": 0.155
+    },
+    {
+      "h": 0.15,
+      "kind": "frame",
+      "path": true,
+      "style": "circle",
+      "w": 0.15,
+      "x": 0.38,
+      "y": -0.13
+    },
+    {
+      "align": "center",
+      "h": 0.04,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Date",
+      "w": 0.11,
+      "x": 0.38,
+      "y": -0.155
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "What happened",
+      "w": 0.11,
+      "x": 0.38,
+      "y": -0.105
+    }
+  ]
+}

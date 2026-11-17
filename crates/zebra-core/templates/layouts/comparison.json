@@ -1,0 +1,92 @@
+{
+  "description": "Two frames side by side.",
+  "id": "comparison",
+  "name": "Comparison",
+  "pieces": [
+    {
+      "h": 0.625,
+      "kind": "frame",
+      "style": "invisible",
+      "w": 1,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.08,
+      "kind": "text",
+      "ph": true,
+      "style": "title",
+      "text": "Add a title",
+      "w": 0.7,
+      "x": 0,
+      "y": -0.25
+    },
+    {
+      "h": 0.48,
+      "kind": "frame",
+      "name": "Before",
+      "path": true,
+      "style": "rectangle",
+      "w": 0.46,
+      "x": -0.25,
+      "y": 0.04
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Before",
+      "w": 0.3,
+      "x": -0.25,
+      "y": -0.12
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.24,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.38,
+      "x": -0.25,
+      "y": 0.07
+    },
+    {
+      "h": 0.48,
+      "kind": "frame",
+      "name": "After",
+      "path": true,
+      "style": "rectangle",
+      "w": 0.46,
+      "x": 0.25,
+      "y": 0.04
+    },
+    {
+      "align": "center",
+      "h": 0.05,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "After",
+      "w": 0.3,
+      "x": 0.25,
+      "y": -0.12
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.24,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.38,
+      "x": 0.25,
+      "y": 0.07
+    }
+  ]
+}

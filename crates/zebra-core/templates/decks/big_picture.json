@@ -1,0 +1,181 @@
+{
+  "description": "A central idea and four topics around it, with an overview at the start and end.",
+  "id": "big_picture",
+  "name": "Big picture",
+  "path": [
+    0,
+    1,
+    4,
+    7,
+    10,
+    13,
+    0
+  ],
+  "pieces": [
+    {
+      "h": 0.62,
+      "kind": "frame",
+      "name": "Overview",
+      "style": "invisible",
+      "w": 1,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "h": 0.3,
+      "kind": "frame",
+      "name": "Main idea",
+      "style": "circle",
+      "w": 0.3,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "align": "center",
+      "h": 0.07,
+      "kind": "text",
+      "ph": true,
+      "style": "title",
+      "text": "Add a title",
+      "w": 0.24,
+      "x": 0,
+      "y": -0.02
+    },
+    {
+      "align": "center",
+      "h": 0.03,
+      "kind": "text",
+      "ph": true,
+      "style": "subtitle",
+      "text": "Add a subtitle",
+      "w": 0.2,
+      "x": 0,
+      "y": 0.06
+    },
+    {
+      "h": 0.2,
+      "kind": "frame",
+      "name": "Topic 1",
+      "style": "circle",
+      "w": 0.2,
+      "x": -0.33,
+      "y": -0.19
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Topic 1",
+      "w": 0.13,
+      "x": -0.33,
+      "y": -0.23
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.06,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.13,
+      "x": -0.33,
+      "y": -0.165
+    },
+    {
+      "h": 0.2,
+      "kind": "frame",
+      "name": "Topic 2",
+      "style": "circle",
+      "w": 0.2,
+      "x": 0.33,
+      "y": -0.19
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Topic 2",
+      "w": 0.13,
+      "x": 0.33,
+      "y": -0.23
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.06,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.13,
+      "x": 0.33,
+      "y": -0.165
+    },
+    {
+      "h": 0.2,
+      "kind": "frame",
+      "name": "Topic 3",
+      "style": "circle",
+      "w": 0.2,
+      "x": 0.33,
+      "y": 0.19
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Topic 3",
+      "w": 0.13,
+      "x": 0.33,
+      "y": 0.15
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.06,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.13,
+      "x": 0.33,
+      "y": 0.215
+    },
+    {
+      "h": 0.2,
+      "kind": "frame",
+      "name": "Topic 4",
+      "style": "circle",
+      "w": 0.2,
+      "x": -0.33,
+      "y": 0.19
+    },
+    {
+      "align": "center",
+      "h": 0.035,
+      "kind": "text",
+      "style": "subtitle",
+      "text": "Topic 4",
+      "w": 0.13,
+      "x": -0.33,
+      "y": 0.15
+    },
+    {
+      "align": "left",
+      "bullets": true,
+      "h": 0.06,
+      "kind": "text",
+      "ph": true,
+      "style": "body",
+      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "w": 0.13,
+      "x": -0.33,
+      "y": 0.215
+    }
+  ],
+  "theme": "classic"
+}

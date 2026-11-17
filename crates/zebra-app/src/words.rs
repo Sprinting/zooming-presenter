@@ -50,16 +50,16 @@ pub fn theme_name(t: &zebra_core::Theme) -> String {
 }
 
 pub fn template_name(i: &zebra_core::templates::Info) -> String {
-    named("template-name", i.id, i.name)
+    named("template-name", &i.id, &i.name)
 }
 pub fn template_description(i: &zebra_core::templates::Info) -> String {
-    named("template-description", i.id, i.description)
+    named("template-description", &i.id, &i.description)
 }
 pub fn layout_name(i: &zebra_core::templates::Info) -> String {
-    named("layout-name", i.id, i.name)
+    named("layout-name", &i.id, &i.name)
 }
 pub fn layout_description(i: &zebra_core::templates::Info) -> String {
-    named("layout-description", i.id, i.description)
+    named("layout-description", &i.id, &i.description)
 }
 
 /// What a person reads when a command they gave fails, by error code.
@@ -139,11 +139,11 @@ mod tests {
         for t in zebra_core::Theme::builtins() {
             assert!(crate::i18n::LOADER.has(&format!("theme-name-{}", t.id.replace('_', "-"))), "missing theme {}", t.id);
         }
-        for i in zebra_core::templates::TEMPLATES {
+        for i in zebra_core::templates::TEMPLATES.iter() {
             assert!(crate::i18n::LOADER.has(&format!("template-name-{}", i.id.replace('_', "-"))), "missing template {}", i.id);
             assert!(crate::i18n::LOADER.has(&format!("template-description-{}", i.id.replace('_', "-"))), "missing template {}", i.id);
         }
-        for i in zebra_core::templates::LAYOUTS {
+        for i in zebra_core::templates::LAYOUTS.iter() {
             assert!(crate::i18n::LOADER.has(&format!("layout-name-{}", i.id.replace('_', "-"))), "missing layout {}", i.id);
             assert!(crate::i18n::LOADER.has(&format!("layout-description-{}", i.id.replace('_', "-"))), "missing layout {}", i.id);
         }
