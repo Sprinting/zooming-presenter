@@ -313,7 +313,7 @@ fn ai_control_is_switched_on_by_the_human_and_off_by_an_agent() {
     assert!(!socket.exists(), "socket should be removed");
     assert!(zebra_api::discovery::list().is_empty(), "discovery file should be removed");
     let err = zebra_api::client::Client::discover(None, None, None, "test-agent").err().unwrap().to_string();
-    assert!(err.contains("switched off") || err.contains("isn't accepting"), "{err}");
+    assert!(err.contains("AI control") && err.contains("Ask the person"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
 }
 

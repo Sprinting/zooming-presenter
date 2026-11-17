@@ -166,6 +166,9 @@ pub struct Dispatcher {
     initialized: std::collections::HashSet<String>,
     /// Who has a transaction open, per document id.
     tx_owner: std::collections::HashMap<String, u64>,
+    /// The revision each agent last read or wrote, per (document, agent):
+    /// an agent may change a document only if nobody else has since.
+    seen: std::collections::HashMap<(String, String), u64>,
     waits: Vec<dispatch::Wait>,
     deferred: std::collections::VecDeque<dispatch::Pending>,
     jobs: Vec<dispatch::Job>,
@@ -198,6 +201,7 @@ impl Dispatcher {
             events: vec![],
             initialized: Default::default(),
             tx_owner: Default::default(),
+            seen: Default::default(),
             waits: vec![],
             deferred: Default::default(),
             jobs: vec![],

@@ -121,6 +121,8 @@ pub struct Shell {
     pub windows: Vec<ZebraApp>,
     /// Index of the window the person is using.
     pub front: usize,
+    /// Says Zebra is open while it is (see `RunningNote`).
+    _running: Option<zebra_api::discovery::RunningNote>,
     shared: Shared,
     dispatcher: Option<zebra_api::Dispatcher>,
     next_id: u32,
@@ -147,7 +149,9 @@ impl Shell {
         let dispatcher = first.dispatcher.take();
         crate::mac::install_reopen_hook(&first.ctx);
         let reopen = std::mem::take(&mut first.reopen_untitled);
-        let mut shell = Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None };
+        // Lets zebractl say "AI control is off" rather than "isn't open".
+        let running = if first.wgpu.is_some() { zebra_api::discovery::RunningNote::write().ok() } else { None };
+        let mut shell = Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None, _running: running };
         // More untitled documents from the last run: a window each.
         for p in reopen {
             let id = format!("d{}", shell.next_id);

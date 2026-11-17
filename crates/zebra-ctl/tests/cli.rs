@@ -29,6 +29,18 @@ fn zebractl_end_to_end() {
     let (ok, out, err) = ctl(&h, &data, &["add", "frame", "--id", "a", "--x", "-100", "--path", "--name", "Intro"]);
     assert!(ok, "{err}");
     assert!(out.contains("\"a\""), "{out}");
+    // No --agent: it works, but says the name is shared.
+    assert!(err.contains("--agent"), "{err}");
+    // A named agent: a frame's --name and the agent's --agent don't clash,
+    // and it must read what "zebractl" did before changing anything.
+    let (ok, _, err) = ctl(&h, &data, &["--agent", "named", "add", "frame", "--id", "b", "--x", "900", "--name", "Two"]);
+    assert!(!ok && err.contains("stale_revision"), "{err}");
+    let (ok, _, _) = ctl(&h, &data, &["--agent", "named", "describe"]);
+    assert!(ok);
+    let (ok, _, err) = ctl(&h, &data, &["--agent", "named", "add", "frame", "--id", "b", "--x", "900", "--name", "Two"]);
+    assert!(ok && !err.contains("--agent"), "{err}");
+    let (ok, out, _) = ctl(&h, &data, &["describe"]);
+    assert!(ok && out.contains("Two"), "{out}");
     let (ok, _, err) = ctl(&h, &data, &["add", "text", "Hello CLI", "--inside", "a", "--style", "title"]);
     assert!(ok, "{err}");
     let (ok, out, _) = ctl(&h, &data, &["describe"]);

@@ -13,7 +13,9 @@ use zebra_api::client::{Client, ClientError};
 #[derive(Parser)]
 #[command(name = "zebractl", version, about = "Control Zebra, a zooming presentation app (like classic Prezi), from the command line",
     long_about = "Control Zebra, a zooming presentation app (like classic Prezi), from the command line.\n\n\
-Zebra must be open, and the person using it must have switched on \"Let AI agents control Zebra\" (the AI button in Zebra's toolbar). Agents cannot switch it on; `zebractl disconnect` switches it off. If you have to start Zebra yourself, start it without taking the person's focus: `open -g -a Zebra --args --background`. Everything you do shows up live in the person's window with your --name, and each change can be undone by them.\n\n\
+Zebra must be open, and the person using it must have switched on \"Let AI agents control Zebra\" (the AI button in Zebra's toolbar). Agents cannot switch it on; `zebractl disconnect` switches it off. If you have to start Zebra yourself, start it without taking the person's focus: `open -g -a Zebra --args --background`. Everything you do shows up live in the person's window with your --agent name, and each change can be undone by them.\n\n\
+NAME YOURSELF: pass --agent <your name> on every command (or set ZEBRA_AGENT_NAME once). Without it you share the name \"zebractl\" with every other unnamed agent.\n\n\
+READ BEFORE YOU CHANGE: if the person or another agent changed the document since you last read it (`describe`, `query`), edits fail with stale_revision. Read again, then retry.\n\n\
 HOW ZEBRA WORKS:\n  One infinite canvas. Elements (frames, text, shapes, images) have a centre x,y in world units (y points down), a scale and a rotation in degrees.\n  Frames (bracket, circle, rectangle, invisible) group whatever lies inside them and are the usual path stops.\n  The path is the ordered list of camera stops used when presenting; the camera flies, zooms and rotates between them.\n  Ids are short and stable (f1, t2, s3); read them with `describe` first.\n\n\
 START HERE:\n  zebractl describe                     outline of the canvas, ids and path\n  zebractl add frame --x 0 --y 0 --name Intro --path\n  zebractl add text \"Hello\" --inside f1 --style title\n  zebractl apply '[{\"op\":\"auto_path\"},{\"op\":\"set_theme\",\"theme\":\"night\"}]'\n  zebractl screenshot --step 0 -o step0.png   check your work (doesn't move the person's view)\n  zebractl commands                     every command with its JSON schema\n\n\
 MCP clients can use `zebractl mcp` as a stdio server instead.")]
@@ -39,9 +41,21 @@ struct Conn {
     /// documents`). Default: the one in front.
     #[arg(long, global = true)]
     document: Option<String>,
-    /// Client name shown to the human (history, status bar).
-    #[arg(long, global = true, default_value = "zebractl")]
-    name: String,
+    /// Who you are: the name the person sees on everything you do
+    /// (history, status bar, your cursor), and what keeps your work apart
+    /// from other agents'. Use your own name, the same on every command.
+    /// Also read from ZEBRA_AGENT_NAME.
+    #[arg(long, global = true, env = "ZEBRA_AGENT_NAME")]
+    agent: Option<String>,
+}
+
+/// Used when an agent gives no name: every unnamed agent shares it.
+const SHARED_NAME: &str = "zebractl";
+
+impl Conn {
+    fn name(&self) -> String {
+        self.agent.clone().filter(|a| !a.trim().is_empty()).unwrap_or_else(|| SHARED_NAME.to_string())
+    }
 }
 
 #[derive(Subcommand)]
@@ -127,10 +141,12 @@ enum Cmd {
         viewport: bool,
         #[arg(short, long, default_value = "zebra.png")]
         output: PathBuf,
-        #[arg(long, default_value_t = 1280)]
-        width: u32,
-        #[arg(long, default_value_t = 800)]
-        height: u32,
+        /// Default: the person's window size (up to 1600 wide), so a step
+        /// looks as it will when presenting. Give one side to keep that shape.
+        #[arg(long)]
+        width: Option<u32>,
+        #[arg(long)]
+        height: Option<u32>,
     },
     /// Export pdf | png | json | zebra.
     Export {
@@ -301,7 +317,7 @@ fn abs(p: &Path) -> Result<PathBuf> {
 }
 
 fn connect(c: &Conn) -> Result<Client> {
-    Client::discover(c.instance, c.socket.as_deref(), c.token.as_deref(), &c.name)
+    Client::discover(c.instance, c.socket.as_deref(), c.token.as_deref(), &c.name())
 }
 
 /// Connect through this agent's relay, starting it if needed (see
@@ -318,8 +334,8 @@ fn connect_agent(c: &Conn, direct: bool) -> Result<Client> {
             (inst.socket, c.token.clone().unwrap_or(inst.token))
         }
     };
-    let rs = zebra_api::relay::socket_for(&sock, &c.name);
-    if let Ok(cl) = Client::connect_hello(&rs, &c.name, &tok) {
+    let rs = zebra_api::relay::socket_for(&sock, &c.name());
+    if let Ok(cl) = Client::connect_hello(&rs, &c.name(), &tok) {
         return Ok(cl);
     }
     if let Ok(exe) = std::env::current_exe() {
@@ -330,8 +346,8 @@ fn connect_agent(c: &Conn, direct: bool) -> Result<Client> {
             .arg(&sock)
             .arg("--relay-socket")
             .arg(&rs)
-            .arg("--name")
-            .arg(&c.name)
+            .arg("--agent")
+            .arg(&c.name())
             .env("ZEBRA_TOKEN", &tok)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -346,14 +362,14 @@ fn connect_agent(c: &Conn, direct: bool) -> Result<Client> {
         }
         if cmd.spawn().is_ok() {
             for _ in 0..40 {
-                if let Ok(cl) = Client::connect_hello(&rs, &c.name, &tok) {
+                if let Ok(cl) = Client::connect_hello(&rs, &c.name(), &tok) {
                     return Ok(cl);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
     }
-    Client::connect_hello(&sock, &c.name, &tok).map_err(|e| anyhow!("{e}"))
+    Client::connect_hello(&sock, &c.name(), &tok).map_err(|e| anyhow!("{e}"))
 }
 
 fn print(v: &Value) {
@@ -401,10 +417,15 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Relay { zebra_socket, relay_socket } => {
             let token = cli.conn.token.clone().unwrap_or_default();
-            return zebra_api::relay::run(zebra_socket, &token, &cli.conn.name, relay_socket);
+            return zebra_api::relay::run(zebra_socket, &token, &cli.conn.name(), relay_socket);
         }
         Cmd::Mcp { spawn_headless, file, zebra_bin } => return mcp(&cli.conn, *spawn_headless, file.clone(), zebra_bin.clone()),
         _ => {}
+    }
+    if cli.conn.agent.as_deref().is_none_or(|a| a.trim().is_empty()) {
+        eprintln!(
+            "zebractl: you have no name, so you act as \"{SHARED_NAME}\", shared with every other unnamed agent. Pass --agent <your name> on every command, or set ZEBRA_AGENT_NAME."
+        );
     }
 
     // Event streams hold their own connection; everything else goes
@@ -688,7 +709,7 @@ fn spawn_headless(bin: &Path, file: Option<&Path>) -> Result<Headless> {
 }
 
 fn mcp(conn: &Conn, spawn: bool, file: Option<PathBuf>, bin: Option<PathBuf>) -> Result<()> {
-    let name = if conn.name == "zebractl" { "Claude".to_string() } else { conn.name.clone() };
+    let name = conn.agent.clone().filter(|a| !a.trim().is_empty()).unwrap_or_else(|| "Claude".to_string());
     let stdin = std::io::stdin().lock();
     let stdout = std::io::stdout().lock();
     if spawn {

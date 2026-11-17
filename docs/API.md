@@ -150,7 +150,8 @@ than one document open, events carry the `document` id they come from.
 ```
 
 * `add_image` accepts `"path": "/abs/file.png"` in place of `data_base64`. The server reads the file.
-* `if_revision` gives optimistic concurrency. If the document has moved past that revision, the call fails with `stale_revision`.
+* **Read before you write.** `apply`, `batch`, `begin`, `undo` and `redo` fail with `stale_revision` if anyone else (the person or another agent) changed the document since you last read it with `describe` or `query`. Your own changes don't count, and a new, untouched document needs no read. The error says who changed it. Read again, then retry. Agents are told apart by name (`--agent`).
+* `if_revision` adds a stricter check: the call fails with `stale_revision` unless the document is at exactly that revision.
 * An explicitly labelled `apply`, `batch` or transaction is always its own undo step. Single `apply` calls from the same agent that arrive less than 2 s apart are grouped into one step.
 * An agent that disconnects while its transaction is open has that transaction aborted.
 * **Sizes.** An element's own `w` and `h` are at scale 1; on the canvas it is that times its `transform.scale`. `bounds` (in `query element`) and the sizes `describe` prints are world units, scale included. So a box that should be 900 wide at scale 1.5 needs `w` 600.
@@ -170,7 +171,7 @@ than one document open, events carry the `document` id they come from.
 
 | Method | Params | Result |
 |---|---|---|
-| `capture` | `{"target"?, "width"?, "height"?, "path"?}` | `{"format":"png","width","height","target","data_base64"}`, or `{"path","bytes",…}` when `path` is given |
+| `capture` | `{"target"?, "width"?, "height"?, "path"?}` (size: default the person's window, up to 1600 wide; one side keeps the window's shape) | `{"format":"png","width","height","target","data_base64"}`, or `{"path","bytes",…}` when `path` is given |
 | `export` | `{"format": "pdf"\|"png"\|"json"\|"zebra", "path"?, "target"?, "width"?, "height"?}` | `{"path","bytes","mime"}`, or the data inline when no `path` is given (`json` returns `{"document": …}`) |
 | `open` | `{"path": "/abs/deck.zebra", "force"?: false}` | needs `full`; fails with `unsaved_changes` unless `force` is set |
 | `save` | `{"path"?: "/abs/deck.zebra"}` | needs `full`; with no `path` it saves to the current file |
@@ -238,7 +239,7 @@ Errors are JSON-RPC errors whose `data` explains how to fix the problem:
 | -32000 | `paused` | The person paused agents. Wait for `agents_paused {paused:false}`. |
 | -32000 | `presenting` | The person is presenting and edits are held. Wait for `mode_changed`. |
 | -32000 | `permission` | The call needs a higher permission level. The hint says which one. |
-| -32000 | `stale_revision` | The `if_revision` check failed. Re-read and retry. |
+| -32000 | `stale_revision` | Someone changed the document since you last read it (or the `if_revision` check failed). Read again and retry. |
 | -32000 | `no_transaction` | `commit` or `abort` without a matching `begin`. |
 | -32000 | `unsaved_changes` | `open` would discard the person's work. Pass `force`. |
 | -32000 | `timeout` | A `wait` condition was not met in time. |
@@ -269,7 +270,7 @@ zebractl add shape arrow --x 500 --y 0 --w 300 --h 60
 zebractl move f1 --dx 200 --dy 0 | delete t3 s1 | select t1 | set-text t1 "New"
 zebractl undo | redo
 zebractl present [step] | next | prev | stop   # or present --step N
-zebractl screenshot --step 2 -o step2.png --width 1600 --height 1000   # or --element f1 | --overview | --viewport
+zebractl screenshot --step 2 -o step2.png   # the person's window shape; or --width/--height; --build K; --element f1 | --overview | --viewport
 zebractl export pdf -o deck.pdf        # png | json | zebra
 zebractl open deck.zebra [--force] | save [path]
 zebractl events --follow [--filter document_changed,step_changed]   # JSON lines
@@ -286,7 +287,7 @@ Global options:
 | `--instance <pid>` | connect to the instance with this pid |
 | `--socket <path>` | connect to this socket |
 | `--token <t>` | auth token; also read from the `ZEBRA_TOKEN` env var |
-| `--name <client name>` | the name the person sees; default `zebractl` |
+| `--agent <your name>` | who you are: the name the person sees on your work, and what keeps it apart from other agents'. Also `ZEBRA_AGENT_NAME`. Without it you act as `zebractl`, shared with every other unnamed agent (zebractl warns) |
 
 Results are printed as JSON. Errors go to stderr with their code, hint and
 valid values, and set exit status 1.
@@ -306,7 +307,7 @@ claude mcp add zebra-headless -- zebractl mcp --spawn-headless
 `zebractl mcp` is a stdio MCP server that supports protocol version
 `2025-06-18`. It connects to Zebra the first time a tool is called, and
 reconnects if Zebra restarts. In MCP the agent's default name is `Claude`;
-change it with `--name`. It offers eight tools. Their schemas come from the
+change it with `--agent`. It offers eight tools. Their schemas come from the
 same Rust types as the API.
 
 | Tool | Does |

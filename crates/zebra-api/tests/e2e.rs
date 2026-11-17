@@ -474,3 +474,26 @@ fn agents_list_documents_and_address_one_by_name_or_id() {
     stop.store(true, std::sync::atomic::Ordering::SeqCst);
     assert_eq!(host.join().unwrap(), vec![1, 2]);
 }
+
+#[test]
+fn an_agent_must_read_again_after_someone_else_changed_the_document() {
+    let h = start(Permission::Edit);
+    let mut a = connect(&h, "alpha");
+    let mut b = connect(&h, "beta");
+    // A new, untouched document needs no read.
+    a.call("apply", json!({"command":{"op":"add_text","id":"t1","text":"one"}})).unwrap();
+    // beta never read it.
+    let e = rpc_err(b.call("apply", json!({"command":{"op":"delete","ids":["t1"]}})));
+    assert_eq!(e.kind(), "stale_revision");
+    b.call("describe", json!({})).unwrap();
+    // alpha's own writes keep it current; beta's read is now out of date.
+    a.call("apply", json!({"command":{"op":"add_text","id":"t2","text":"two"}})).unwrap();
+    a.call("apply", json!({"command":{"op":"add_text","id":"t3","text":"three"}})).unwrap();
+    let e = rpc_err(b.call("apply", json!({"command":{"op":"delete","ids":["t1"]}})));
+    assert_eq!(e.kind(), "stale_revision");
+    assert!(e.message.contains("by alpha"), "{e}");
+    // Any query counts as reading.
+    b.call("query", json!({"query":{"q":"element","id":"t1"}})).unwrap();
+    b.call("apply", json!({"command":{"op":"delete","ids":["t1"]}})).unwrap();
+    h.stop().unwrap();
+}

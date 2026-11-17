@@ -246,7 +246,24 @@ impl Dispatcher {
         reply(server, p.client, &p.id, r);
     }
 
-    fn execute(&mut self, _server: &ApiServer, editor: &mut Editor, doc: &str, client: u64, origin: &Origin, call: Call) -> Result<Value, RpcError> {
+    fn execute(&mut self, server: &ApiServer, editor: &mut Editor, doc: &str, client: u64, origin: &Origin, call: Call) -> Result<Value, RpcError> {
+        // Read before write: an agent may change the document only if it
+        // has read it since anyone else last changed it.
+        let key = (doc.to_string(), origin.display());
+        // Reading it, or opening one yourself, counts as having read it.
+        let reads = matches!(call, Call::Describe | Call::Query(_) | Call::Open { .. });
+        let writes = matches!(call, Call::Apply { .. } | Call::Batch { .. } | Call::Begin { .. } | Call::Undo | Call::Redo);
+        if writes && origin.is_agent() {
+            check_read(editor, self.seen.get(&key).copied())?;
+        }
+        let r = self.execute_inner(server, editor, doc, client, origin, call);
+        if r.is_ok() && (reads || writes) {
+            self.seen.insert(key, editor.revision);
+        }
+        r
+    }
+
+    fn execute_inner(&mut self, _server: &ApiServer, editor: &mut Editor, doc: &str, client: u64, origin: &Origin, call: Call) -> Result<Value, RpcError> {
         let perm = editor.view.agent_permission;
         let limited = perm != Permission::Full;
         Ok(match call {
@@ -336,11 +353,18 @@ impl Dispatcher {
 
     fn render(r: &zebra_render::Renderer, editor: &Editor, req: &CaptureReq, limited: bool) -> Result<(Vec<u8>, u32, u32, CaptureTarget), RpcError> {
         let target = req.target.clone().unwrap_or(if limited { CaptureTarget::AgentView } else { CaptureTarget::Viewport });
+        // Unless told otherwise, the shape of the person's window, so a step
+        // shows exactly what they will see when presenting.
+        let vp = editor.view.viewport;
+        let aspect = if vp.x > 1.0 && vp.y > 1.0 { vp.y / vp.x } else { 0.625 };
         let (w, h) = match (req.width, req.height) {
             (Some(w), Some(h)) => (w, h),
-            (Some(w), None) => (w, (w as f64 * 0.625).round().max(16.0) as u32),
-            (None, Some(h)) => ((h as f64 * 1.6).round().max(16.0) as u32, h),
-            (None, None) => (1280, 800),
+            (Some(w), None) => (w, (w as f64 * aspect).round().max(16.0) as u32),
+            (None, Some(h)) => ((h as f64 / aspect).round().max(16.0) as u32, h),
+            (None, None) => {
+                let s = (1600.0 / vp.x.max(vp.y).max(1.0)).min(1.0);
+                if vp.x > 1.0 && vp.y > 1.0 { ((vp.x * s).round() as u32, (vp.y * s).round() as u32) } else { (1280, 800) }
+            }
         };
         if let CaptureTarget::Element { id } = &target {
             if editor.doc.get(id).is_none() {
@@ -437,6 +461,33 @@ fn check_rev(editor: &Editor, r: Option<u64>) -> Result<(), RpcError> {
         .hint("someone changed the document; re-read it (`describe`) and retry with the current revision")),
         _ => Ok(()),
     }
+}
+
+/// Has the document changed since this agent last read or wrote it (at
+/// revision `seen`)? A brand-new, untouched document needs no read.
+fn check_read(editor: &Editor, seen: Option<u64>) -> Result<(), RpcError> {
+    let now = editor.revision;
+    let Some(seen) = seen else {
+        if now == 0 {
+            return Ok(());
+        }
+        return Err(RpcError::app("stale_revision", format!("you haven't read this document yet (it is at revision {now})"))
+            .hint("read it first (`describe`, or `query` for what you need), then make your change"));
+    };
+    if seen == now {
+        return Ok(());
+    }
+    // Who changed it since: the person and/or other agents.
+    let mut who: Vec<String> = vec![];
+    for h in editor.history().iter().filter(|h| h.revision > seen) {
+        let n = if h.origin.is_agent() { h.origin.display() } else { "the person".to_string() };
+        if !who.contains(&n) {
+            who.push(n);
+        }
+    }
+    let by = if who.is_empty() { String::new() } else { format!(" by {}", who.join(", ")) };
+    Err(RpcError::app("stale_revision", format!("the document changed{by} since you last read it (you read revision {seen}; it is now at {now})"))
+        .hint("read it again (`describe`, or `query` for the parts you are changing), then retry"))
 }
 
 fn need_full(perm: Permission, what: &str) -> Result<(), RpcError> {

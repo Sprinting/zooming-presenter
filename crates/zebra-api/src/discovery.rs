@@ -194,6 +194,63 @@ pub fn list() -> Vec<Instance> {
     out
 }
 
+/// A note that Zebra is open, written whether AI control is on or off.
+/// It holds no socket and no token: it only lets `zebractl` tell "Zebra
+/// isn't open" from "AI control is off". Removed when dropped (the app
+/// quitting); a crashed app's note is ignored and swept by pid.
+pub struct RunningNote(PathBuf);
+
+impl RunningNote {
+    pub fn write() -> std::io::Result<RunningNote> {
+        let dir = instances_dir();
+        ensure_private_dir(&dir)?;
+        let pid = std::process::id();
+        let path = dir.join(format!("{pid}.running"));
+        let body = serde_json::json!({ "pid": pid, "version": env!("CARGO_PKG_VERSION") });
+        let mut f = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;
+        f.write_all(body.to_string().as_bytes())?;
+        Ok(RunningNote(path))
+    }
+}
+
+impl Drop for RunningNote {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+/// Pids of Zebra apps that are open (with AI control on or off).
+pub fn running_apps() -> Vec<u32> {
+    let mut out = vec![];
+    for entry in search_dirs().iter().filter_map(|d| fs::read_dir(d).ok()).flat_map(|rd| rd.flatten()) {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "running") {
+            continue;
+        }
+        let pid = path.file_stem().and_then(|s| s.to_str()).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+        if pid_alive(pid) {
+            out.push(pid);
+        } else {
+            let _ = fs::remove_file(&path);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// What to tell an agent when no instance accepts AI control.
+pub fn not_accepting_message() -> String {
+    match running_apps().as_slice() {
+        [] => "Zebra isn't open. Ask the person to open Zebra and switch on AI control (the AI button in Zebra's toolbar). An agent can't switch it on. Developers: `zebra --headless --api` runs a private instance.".to_string(),
+        [pid] => format!("Zebra is open (pid {pid}), but AI control is switched off. Ask the person to switch it on (the AI button in Zebra's toolbar). An agent can't switch it on."),
+        pids => format!(
+            "Zebra is open (pids {}), but AI control is switched off. Ask the person to switch it on (the AI button in Zebra's toolbar). An agent can't switch it on.",
+            pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
 /// Find an instance: by pid, by socket path, or the newest live one.
 pub fn find(pid: Option<u32>, socket: Option<&Path>) -> anyhow::Result<Instance> {
     let all = list();
@@ -205,12 +262,7 @@ pub fn find(pid: Option<u32>, socket: Option<&Path>) -> anyhow::Result<Instance>
     if let Some(p) = pid {
         return all.into_iter().find(|i| i.pid == p).ok_or_else(|| anyhow::anyhow!("no running Zebra instance with pid {p}"));
     }
-    all.into_iter().next().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Zebra isn't accepting AI control right now. Either Zebra isn't open, or \"Let AI agents control Zebra\" is switched off. Ask the person to open Zebra and switch it on (the AI button in the toolbar); an agent cannot turn it on. Developers: `zebra --headless --api` runs a private instance. (Looked in: {})",
-            search_dirs().iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", ")
-        )
-    })
+    all.into_iter().next().ok_or_else(|| anyhow::anyhow!("{}", not_accepting_message()))
 }
 
 /// Default socket path: `$TMPDIR/zebra-<uid>/<name>.sock` (per-user, 0700
