@@ -252,3 +252,43 @@ fn saved_media_is_memory_mapped_and_survives_resave() {
     assert_eq!(again.assets.len(), 1, "only used media is saved");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn icons_and_library_shapes_via_commands() {
+    let mut ed = Editor::default();
+    let h = Origin::Human;
+    ed.apply(cmd(serde_json::json!({"op":"add_icon","id":"n1","name":"lightbulb","x":10,"y":20,"size":120})), h.clone()).unwrap();
+    let e = ed.doc.get("n1").unwrap();
+    assert_eq!((e.size.w, e.size.h), (120.0, 120.0));
+    // Unknown names fail with suggestions.
+    let err = ed.apply(cmd(serde_json::json!({"op":"add_icon","name":"light-bulb"})), h.clone()).unwrap_err();
+    assert!(serde_json::to_string(&err).unwrap().contains("lightbulb"), "{err:?}");
+    // Recolour, reweight and swap.
+    ed.apply(cmd(serde_json::json!({"op":"update","id":"n1","patch":{"color":"theme:accent","stroke_width":1.5,"icon":"rocket"}})), h.clone()).unwrap();
+    match &ed.doc.get("n1").unwrap().kind {
+        ElementKind::Icon(i) => assert_eq!((i.name.as_str(), i.color.as_str(), i.stroke_width), ("rocket", "theme:accent", 1.5)),
+        k => panic!("{k:?}"),
+    }
+    assert!(ed.apply(cmd(serde_json::json!({"op":"update","id":"n1","patch":{"fill":"#ff0000"}})), h.clone()).is_err());
+    // Every library shape can be added; sticky notes default to yellow.
+    for k in ShapeKind::ALL {
+        let o = ed.apply(Command::AddShape { shape: *k, x: 0.0, y: 0.0, w: 100.0, h: 80.0, rotation: 0.0, fill: None, stroke: None, id: None }, h.clone()).unwrap();
+        if *k == ShapeKind::StickyNote {
+            match &ed.doc.get(&o.created[0]).unwrap().kind {
+                ElementKind::Shape(s) => assert_eq!(s.fill.as_deref(), Some("#ffe98a")),
+                k => panic!("{k:?}"),
+            }
+        }
+    }
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"rr","shape":"rounded_rect"})), h.clone()).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"update","id":"rr","patch":{"corner_radius":30,"dash":"dotted"}})), h.clone()).unwrap();
+    let saved = serde_json::to_value(ed.doc.get("rr").unwrap()).unwrap();
+    assert_eq!(saved["kind"]["corner_radius"], 30.0);
+    assert_eq!(saved["kind"]["dash"], "dotted");
+    // Queries.
+    let q = ed.query(Query::Icons { query: "idea".into(), limit: 5 }).unwrap();
+    assert!(q["icons"].as_array().unwrap().iter().any(|i| i["name"] == "lightbulb"), "{q}");
+    let q = ed.query(Query::Shapes).unwrap();
+    assert_eq!(q.as_array().unwrap().len(), ShapeKind::ALL.len());
+    assert!(describe::describe(&ed).contains("icon rocket"));
+}

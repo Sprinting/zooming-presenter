@@ -25,6 +25,7 @@ Coordinates: world units, y grows DOWN, x/y are the CENTRE of an element. Defaul
 Path: steps are 0-based. add_frame with "add_to_path": true appends the frame as the next step; add_step {target:{kind:"element",id}} for anything else; builds = elements that fade in one by one at that step; auto_path orders all frames top-left to bottom-right.
 
 Rich text: add_text with "markdown": true takes **bold**, *italic*, ~~strike~~, [links](https://…), "- " bullets and "1. " numbers (indent to nest). format_text styles part of a text (by "find" or a character range); format_paragraphs sets lists, indent and alignment. describe shows rich text back as md"…".
+Shapes and icons: the shapes query lists ~40 shapes (stars, clouds, speech bubbles, sticky notes, block arrows, cylinders…); add_shape takes any of them, with corner_radius and dash ("dashed"/"dotted") via update. The icons query searches ~2,000 line icons by keyword; add_icon places one (recolour with update color, swap with update icon).
 
 Themes: classic, chalkboard, blueprint, paper, night (set_theme). Colours: "#rrggbb" or theme slots "theme:accent", "theme:title", "theme:frame", "theme:shape1".."theme:shape4" (prefer slots so themes restyle your work). Frame styles: bracket, circle, rectangle, invisible.
 

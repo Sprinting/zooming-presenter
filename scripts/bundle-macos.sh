@@ -23,6 +23,7 @@ for bin in zebra zebractl; do
 done
 sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
 [ -f packaging/macos/Zebra.icns ] && cp packaging/macos/Zebra.icns "$APP/Contents/Resources/"
+cp assets/icons/LICENSE-lucide.txt "$APP/Contents/Resources/"
 
 ID=${SIGN_ID:--}
 if [ "${APPSTORE:-0}" = 1 ]; then

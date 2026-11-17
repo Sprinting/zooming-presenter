@@ -318,3 +318,46 @@ fn rich_text_bold_selection_and_list_from_keyboard() {
     assert!(!t.bold, "the box itself is not bold");
     assert_eq!(t.paras.first().map(|p| p.indent), Some(1));
 }
+
+#[test]
+fn library_inserts_shapes_and_icons_and_replaces_an_icon() {
+    let mut h = harness(Some("empty"));
+    h.state_mut().queued.push(zebra_app::actions::Action::ShowLibrary);
+    h.run_steps(3);
+    assert!(h.state().library.open);
+    h.get_by_label("Burst").click();
+    h.run_steps(3);
+    h.get_by_label("Icons").click();
+    h.run_steps(2);
+    h.event(Event::Text("rocket".into()));
+    h.run_steps(3);
+    h.get_by_label("rocket").click();
+    h.run_steps(3);
+    let app = h.state();
+    let kinds: Vec<String> = app
+        .editor
+        .doc
+        .ordered()
+        .map(|e| match &e.kind {
+            ElementKind::Shape(s) => format!("{:?}", s.shape),
+            ElementKind::Icon(i) => i.name.clone(),
+            k => k.type_name().into(),
+        })
+        .collect();
+    assert_eq!(kinds, ["Burst", "rocket"]);
+    let icon = app.editor.view.selection.first().cloned().expect("the new icon is selected");
+    // Replace it from the inspector's "Replace…".
+    h.state_mut().library.open_replace(icon.clone());
+    h.run_steps(2);
+    h.event(Event::Key { key: Key::A, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.event(Event::Text("lightbulb".into()));
+    h.run_steps(3);
+    h.get_by_label("lightbulb").click();
+    h.run_steps(3);
+    let app = h.state();
+    assert!(!app.library.open, "replacing closes the picker");
+    match &app.editor.doc.get(&icon).unwrap().kind {
+        ElementKind::Icon(i) => assert_eq!(i.name, "lightbulb"),
+        k => panic!("{k:?}"),
+    }
+}

@@ -146,6 +146,8 @@ pub enum ElementKind {
     Image(ImageData),
     /// Freehand pen / highlighter stroke. Points are local coordinates.
     Ink(InkData),
+    /// A line icon from the built-in library (see `icons`).
+    Icon(IconData),
 }
 
 impl ElementKind {
@@ -156,6 +158,7 @@ impl ElementKind {
             ElementKind::Shape(_) => "shape",
             ElementKind::Image(_) => "image",
             ElementKind::Ink(_) => "ink",
+            ElementKind::Icon(_) => "icon",
         }
     }
     pub fn id_prefix(&self) -> &'static str {
@@ -165,6 +168,7 @@ impl ElementKind {
             ElementKind::Shape(_) => "s",
             ElementKind::Image(_) => "i",
             ElementKind::Ink(_) => "k",
+            ElementKind::Icon(_) => "n",
         }
     }
 }
@@ -307,17 +311,90 @@ fn is_zero_u8(v: &u8) -> bool {
     *v == 0
 }
 
+macro_rules! shape_kinds {
+    ($($(#[$m:meta])* $v:ident => $label:literal),* $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
+        #[serde(rename_all = "snake_case")]
+        pub enum ShapeKind {
+            #[default]
+            $($(#[$m])* $v),*
+        }
+        impl ShapeKind {
+            /// Every shape, in library order.
+            pub const ALL: &'static [ShapeKind] = &[$(ShapeKind::$v),*];
+            /// Human name for menus and the library.
+            pub fn label(self) -> &'static str {
+                match self { $(ShapeKind::$v => $label),* }
+            }
+        }
+    };
+}
+
+shape_kinds! {
+    Rectangle => "Rectangle",
+    RoundedRect => "Rounded Rectangle",
+    Ellipse => "Oval",
+    Triangle => "Triangle",
+    RightTriangle => "Right Triangle",
+    Diamond => "Diamond",
+    Pentagon => "Pentagon",
+    Hexagon => "Hexagon",
+    Octagon => "Octagon",
+    Parallelogram => "Parallelogram",
+    Trapezoid => "Trapezoid",
+    Star => "Star",
+    Sparkle => "Four-Point Star",
+    Burst => "Burst",
+    Heart => "Heart",
+    Plus => "Plus",
+    Ring => "Ring",
+    Moon => "Moon",
+    Lightning => "Lightning",
+    Cloud => "Cloud",
+    SpeechBubble => "Speech Bubble",
+    Callout => "Callout",
+    ThoughtBubble => "Thought Bubble",
+    StickyNote => "Sticky Note",
+    Document => "Document",
+    Cylinder => "Cylinder",
+    Cube => "Cube",
+    Pill => "Pill",
+    Delay => "Half Round",
+    Chevron => "Chevron",
+    Tag => "Tag",
+    BlockArrowRight => "Block Arrow Right",
+    BlockArrowLeft => "Block Arrow Left",
+    BlockArrowUp => "Block Arrow Up",
+    BlockArrowDown => "Block Arrow Down",
+    BlockArrowBoth => "Block Arrow Both Ways",
+    /// Horizontal line across the local box (rotate to angle it).
+    Line => "Line",
+    /// Arrow pointing right across the local box.
+    Arrow => "Arrow",
+    /// Line with arrowheads at both ends.
+    DoubleArrow => "Double Arrow",
+}
+
+impl ShapeKind {
+    /// Lines and arrows: drawn with the stroke only, never filled.
+    pub fn is_line(self) -> bool {
+        matches!(self, ShapeKind::Line | ShapeKind::Arrow | ShapeKind::DoubleArrow)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum ShapeKind {
+pub enum Dash {
     #[default]
-    Rectangle,
-    Ellipse,
-    Triangle,
-    /// Horizontal line across the local box (rotate to angle it).
-    Line,
-    /// Arrow pointing right across the local box.
-    Arrow,
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+impl Dash {
+    pub fn is_solid(&self) -> bool {
+        *self == Dash::Solid
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
@@ -330,6 +407,32 @@ pub struct ShapeData {
     /// Local units.
     #[serde(default = "default_stroke_width")]
     pub stroke_width: f64,
+    /// Corner rounding in local units for rectangles, callouts and sticky
+    /// notes. 0 means the shape's own default.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub corner_radius: f64,
+    #[serde(default, skip_serializing_if = "Dash::is_solid")]
+    pub dash: Dash,
+}
+
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
+}
+
+/// A line icon. Icons are drawn from a 24x24 grid scaled uniformly to fit
+/// the element box.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct IconData {
+    /// Library name, e.g. "lightbulb". See the `list_icons` query.
+    pub name: String,
+    pub color: ColorRef,
+    /// Stroke width on the 24-unit icon grid (Lucide's default is 2).
+    #[serde(default = "default_icon_stroke")]
+    pub stroke_width: f64,
+}
+
+fn default_icon_stroke() -> f64 {
+    2.0
 }
 
 fn default_stroke_width() -> f64 {

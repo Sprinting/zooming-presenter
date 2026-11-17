@@ -12,6 +12,7 @@ pub mod describe;
 pub mod editor;
 pub mod error;
 pub mod geom;
+pub mod icons;
 pub mod io;
 pub mod model;
 pub mod rich;

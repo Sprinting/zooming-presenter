@@ -581,7 +581,8 @@ impl Editor {
             Command::AddShape { shape, x, y, w, h, rotation, fill, stroke, id } => {
                 let (fill, stroke) = match (fill, stroke) {
                     (None, None) => match shape {
-                        ShapeKind::Line | ShapeKind::Arrow => (None, Some("theme:shape1".to_string())),
+                        k if k.is_line() => (None, Some("theme:shape1".to_string())),
+                        ShapeKind::StickyNote => (Some("#ffe98a".to_string()), None),
                         _ => (Some("theme:shape1".to_string()), None),
                     },
                     fs => fs,
@@ -592,7 +593,25 @@ impl Editor {
                     size: Size { w, h },
                     locked: false,
                     name: String::new(),
-                    kind: ElementKind::Shape(ShapeData { shape, fill, stroke, stroke_width: 4.0 }),
+                    kind: ElementKind::Shape(ShapeData { shape, fill, stroke, stroke_width: 4.0, ..Default::default() }),
+                };
+                self.insert_element(e, out)?;
+            }
+            Command::AddIcon { name, x, y, size, color, id } => {
+                if crate::icons::get(&name).is_none() {
+                    let near: Vec<String> = crate::icons::search(&name.replace('-', " "), 8).iter().map(|i| i.name.to_string()).collect();
+                    return Err(ZError::invalid(format!("no icon named '{name}'")).hint("search with the icons query").values(near));
+                }
+                if !(size.is_finite() && size > 0.0) {
+                    return Err(ZError::invalid("size must be > 0"));
+                }
+                let e = Element {
+                    id: id.unwrap_or_default(),
+                    transform: Transform::at(x, y),
+                    size: Size { w: size, h: size },
+                    locked: false,
+                    name: String::new(),
+                    kind: ElementKind::Icon(IconData { name, color: color.unwrap_or_else(|| "theme:body".into()), stroke_width: 2.0 }),
                 };
                 self.insert_element(e, out)?;
             }
@@ -1448,6 +1467,7 @@ fn default_size(k: &ElementKind) -> (f64, f64) {
         ElementKind::Shape(_) => (200.0, 200.0),
         ElementKind::Image(_) => (400.0, 300.0),
         ElementKind::Ink(_) => (100.0, 100.0),
+        ElementKind::Icon(_) => (96.0, 96.0),
     }
 }
 
@@ -1489,6 +1509,12 @@ fn validate_element(e: &Element, doc: &Document) -> ZResult<()> {
         }
         ElementKind::Frame(d) => check(&d.color)?,
         ElementKind::Ink(d) => check(&Some(d.color.clone()))?,
+        ElementKind::Icon(d) => {
+            check(&Some(d.color.clone()))?;
+            if crate::icons::get(&d.name).is_none() {
+                return Err(ZError::invalid(format!("no icon named '{}'", d.name)).hint("search with the icons query"));
+            }
+        }
         ElementKind::Image(i) => {
             if !doc.assets.contains_key(&i.asset) {
                 return Err(ZError::invalid(format!("unknown asset '{}'", i.asset)).hint("use add_image"));
@@ -1584,12 +1610,34 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
             ElementKind::Text(t) => t.color = c,
             ElementKind::Frame(f) => f.color = c,
             ElementKind::Ink(i) => i.color = c.unwrap_or_else(|| "theme:accent".into()),
+            ElementKind::Icon(i) => i.color = c.unwrap_or_else(|| "theme:body".into()),
             ElementKind::Shape(s) => s.fill = c,
             _ => return Err(wrong("color")),
         }
     }
-    if p.shape.is_some() || p.fill.is_some() || p.stroke.is_some() || p.stroke_width.is_some() {
-        let ElementKind::Shape(s) = &mut e.kind else { return Err(wrong("shape/fill/stroke/stroke_width")) };
+    if let ElementKind::Icon(i) = &mut e.kind {
+        if p.shape.is_some() || p.fill.is_some() || p.stroke.is_some() || p.corner_radius.is_some() || p.dash.is_some() {
+            return Err(wrong("shape/fill/stroke/corner_radius/dash"));
+        }
+        if let Some(v) = p.stroke_width {
+            i.stroke_width = v.clamp(0.25, 6.0);
+        }
+        if let Some(n) = &p.icon {
+            if crate::icons::get(n).is_none() {
+                return Err(ZError::invalid(format!("no icon named '{n}'")).hint("search with the icons query"));
+            }
+            i.name = n.clone();
+        }
+    } else if p.icon.is_some() {
+        return Err(wrong("icon"));
+    } else if p.shape.is_some() || p.fill.is_some() || p.stroke.is_some() || p.stroke_width.is_some() || p.corner_radius.is_some() || p.dash.is_some() {
+        let ElementKind::Shape(s) = &mut e.kind else { return Err(wrong("shape/fill/stroke/stroke_width/corner_radius/dash")) };
+        if let Some(v) = p.corner_radius {
+            s.corner_radius = v.max(0.0);
+        }
+        if let Some(v) = p.dash {
+            s.dash = v;
+        }
         if let Some(v) = p.shape {
             s.shape = v;
         }
@@ -1629,6 +1677,7 @@ pub fn command_label(c: &Command) -> String {
         Command::AddFrame { .. } => "Add frame".into(),
         Command::AddShape { shape, .. } => format!("Add {}", serde_json::to_value(shape).unwrap().as_str().unwrap_or("shape")),
         Command::AddImage { .. } => "Insert image".into(),
+        Command::AddIcon { name, .. } => format!("Add icon {name}"),
         Command::AddInk { highlighter, .. } => if *highlighter { "Highlight" } else { "Draw" }.into(),
         Command::Update { patch, .. } if patch.text.is_some() => "Edit text".into(),
         Command::FormatText { .. } => "Format text".into(),

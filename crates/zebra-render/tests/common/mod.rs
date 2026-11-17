@@ -39,6 +39,7 @@ pub fn shape(shape: ShapeKind, fill: Option<&str>, stroke: Option<&str>, sw: f64
         fill: fill.map(Into::into),
         stroke: stroke.map(Into::into),
         stroke_width: sw,
+        ..Default::default()
     })
 }
 

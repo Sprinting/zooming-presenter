@@ -49,7 +49,7 @@ fn shape(ed: &mut Editor, shape: ShapeKind, x: f64, y: f64, w: f64, h: f64, rot:
         w: Some(w),
         h: Some(h),
         name: String::new(),
-        kind: ElementKind::Shape(ShapeData { shape, fill: fill.map(Into::into), stroke: stroke.map(Into::into), stroke_width: 6.0 }),
+        kind: ElementKind::Shape(ShapeData { shape, fill: fill.map(Into::into), stroke: stroke.map(Into::into), stroke_width: 6.0, ..Default::default() }),
     };
     ed.apply(Command::AddElement { element: el }, H).expect("sample shape").created[0].clone()
 }
@@ -161,6 +161,31 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 }
             }
             "shortcuts" => app.show_shortcuts = true,
+            "library" | "icons" => {
+                app.library.toggle();
+                if part.trim() == "icons" {
+                    app.library.tab = crate::library::Tab::Icons;
+                    app.library.query = "chart".into();
+                }
+            }
+            "shapes" => {
+                // Gallery of every shape plus a row of icons.
+                app.editor.load(Document::default(), None);
+                app.after_load();
+                let fills = ["theme:shape1", "theme:shape2", "theme:shape3", "theme:shape4"];
+                for (i, &k) in ShapeKind::ALL.iter().enumerate() {
+                    let (col, row) = ((i % 8) as f64, (i / 8) as f64);
+                    let (w, h) = if k.is_line() { (150.0, 20.0) } else { (150.0, 110.0) };
+                    let _ = app.editor.apply(
+                        Command::AddShape { shape: k, x: col * 190.0, y: row * 160.0, w, h, rotation: 0.0, fill: Some(fills[i % 4].into()).filter(|_| !k.is_line()), stroke: None, id: None },
+                        H,
+                    );
+                }
+                for (i, n) in ["lightbulb", "rocket", "chart-line", "users", "target", "calendar", "map-pin", "heart-handshake"].iter().enumerate() {
+                    let _ = app.editor.apply(Command::AddIcon { name: n.to_string(), x: i as f64 * 190.0, y: 5.0 * 160.0, size: 100.0, color: None, id: None }, H);
+                }
+                let _ = app.editor.view(ViewCommand::FitAll { animate: false }, H);
+            }
             "palette" => app.palette = Some(("fra".into(), 0)),
             "seltext" => {
                 let found = app.editor.doc.ordered().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text == "Why zoom?")).map(|e| e.id.clone());

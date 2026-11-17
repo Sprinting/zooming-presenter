@@ -263,3 +263,33 @@ fn rich_text_links_hit_and_formats_draw() {
     let list = r.build_display_list(&ed, &cam, [800.0, 600.0], 1.0, &Default::default());
     assert!(list.items.iter().any(|i| matches!(i, zebra_render::display::Item::Fill { .. })), "underline drawn");
 }
+
+#[test]
+fn ring_has_a_hole_and_icons_draw_strokes() {
+    let r = Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    ed.view.viewport = Vec2::new(400.0, 200.0);
+    let th = Theme::resolve("classic");
+    add(&mut ed, "ring", -100.0, 0.0, 160.0, 160.0, 1.0, 0.0, shape(ShapeKind::Ring, Some("#ff0000"), None, 0.0));
+    add(
+        &mut ed,
+        "n",
+        100.0,
+        0.0,
+        160.0,
+        160.0,
+        1.0,
+        0.0,
+        ElementKind::Icon(IconData { name: "minus".into(), color: "#0000ff".into(), stroke_width: 2.0 }),
+    );
+    let cam = Camera { cx: 0.0, cy: 0.0, zoom: 1.0, rotation: 0.0 };
+    let png = r.capture(&ed, &CaptureTarget::Camera { camera: cam }, 400, 200).unwrap();
+    std::fs::write(out_dir().join("ring-icon.png"), &png).unwrap();
+    let img = decode(&png);
+    assert!(close(px(&img, 100, 100), th.color(&th.background), 2), "ring centre is a hole: {:?}", px(&img, 100, 100));
+    assert!(close(px(&img, 100, 30), [255, 0, 0, 255], 2), "ring band is filled");
+    // Lucide "minus" is a horizontal stroke across the middle of the grid.
+    assert!(close(px(&img, 300, 100), [0, 0, 255, 255], 8), "icon stroke: {:?}", px(&img, 300, 100));
+    assert!(close(px(&img, 300, 60), th.color(&th.background), 2), "icon is a stroke, not a fill");
+}

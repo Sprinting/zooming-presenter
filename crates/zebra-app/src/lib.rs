@@ -5,6 +5,7 @@ pub mod canvas;
 pub mod cli;
 pub mod fallback;
 pub mod files;
+pub mod library;
 pub mod menus;
 pub mod panels;
 pub mod present;

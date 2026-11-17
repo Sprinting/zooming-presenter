@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use kurbo::{Affine, BezPath, Cap, Ellipse, Join, Point, Rect, RoundedRect, Shape, Stroke};
 use zebra_core::{
-    Camera, Editor, Element, ElementKind, FrameStyle, ShapeKind, Theme, Vec2,
+    Camera, Dash, Editor, Element, ElementKind, FrameStyle, ShapeKind, Theme, Vec2,
 };
 
 use crate::text::{wrap_for, TextLayout};
@@ -165,6 +165,7 @@ fn overhang(e: &Element) -> f64 {
     let local = match &e.kind {
         ElementKind::Ink(i) => i.width,
         ElementKind::Shape(s) => s.stroke_width,
+        ElementKind::Icon(i) => i.stroke_width * e.size.w.min(e.size.h) / 24.0,
         _ => 0.0,
     };
     local * e.transform.scale
@@ -276,6 +277,12 @@ fn stroke(items: &mut Vec<Item>, shape: &impl Shape, a: &Affine, color: Rgba, mu
     items.push(Item::Stroke { path, color, stroke: st });
 }
 
+/// Darken (k < 1) a colour, keeping alpha.
+fn shade(c: Rgba, k: f32) -> Rgba {
+    let f = |v: u8| (v as f32 * k).round().clamp(0.0, 255.0) as u8;
+    [f(c[0]), f(c[1]), f(c[2]), c[3]]
+}
+
 fn with_alpha(mut c: Rgba, k: f32) -> Rgba {
     c[3] = (c[3] as f32 * k).round().clamp(0.0, 255.0) as u8;
     c
@@ -362,55 +369,66 @@ impl Ctx<'_> {
                 }
             }
             ElementKind::Shape(s) => {
-                let closed = !matches!(s.shape, ShapeKind::Line | ShapeKind::Arrow);
+                let closed = !s.shape.is_line();
                 let (fill_c, stroke_c) = match (&s.fill, &s.stroke) {
                     (None, None) if closed => (Some(th.color(&"theme:shape1".to_string())), None),
                     (None, None) => (None, Some(th.color(&"theme:shape1".to_string()))),
                     (f, st) => (f.as_ref().map(|c| th.color(c)), st.as_ref().map(|c| th.color(c))),
                 };
                 let sw = s.stroke_width.max(0.0);
-                match s.shape {
-                    ShapeKind::Rectangle | ShapeKind::Ellipse | ShapeKind::Triangle => {
-                        let path = match s.shape {
-                            ShapeKind::Rectangle => lr.to_path(0.01),
-                            ShapeKind::Ellipse => Ellipse::from_rect(lr).to_path(0.01),
-                            _ => {
-                                let mut p = BezPath::new();
-                                p.move_to((0.0, -h / 2.0));
-                                p.line_to((w / 2.0, h / 2.0));
-                                p.line_to((-w / 2.0, h / 2.0));
-                                p.close_path();
-                                p
-                            }
-                        };
-                        if let Some(c) = fill_c {
-                            fill(items, &path, a, c);
-                        }
-                        if let Some(c) = stroke_c {
-                            stroke(items, &path, a, c, Stroke::new(sw).with_join(Join::Miter));
+                let dashed = |st: Stroke| match s.dash {
+                    Dash::Solid => st,
+                    Dash::Dashed => st.with_dashes(0.0, [sw * 3.0, sw * 2.0]),
+                    Dash::Dotted => st.with_caps(Cap::Round).with_dashes(0.0, [0.0, sw * 2.0]),
+                };
+                if closed {
+                    let g = crate::shapes::geometry(s.shape, w, h, s.corner_radius);
+                    if let Some(c) = fill_c {
+                        fill(items, &g.outline, a, c);
+                    }
+                    if let Some(c) = stroke_c {
+                        stroke(items, &g.outline, a, c, dashed(Stroke::new(sw).with_join(Join::Miter)));
+                    }
+                    if let Some(d) = &g.detail {
+                        // Rims and folds: the stroke colour, else a shade of the fill.
+                        let c = stroke_c.or(fill_c.map(|c| shade(c, 0.78)));
+                        if let Some(c) = c {
+                            let dw = if stroke_c.is_some() { sw } else { (w.min(h) * 0.012).max(1e-9) };
+                            stroke(items, d, a, c, Stroke::new(dw).with_join(Join::Round).with_caps(Cap::Round));
                         }
                     }
-                    ShapeKind::Line | ShapeKind::Arrow => {
-                        // Lines use the stroke colour, else the fill colour.
-                        let Some(c) = stroke_c.or(fill_c) else { return };
-                        let hw = w / 2.0;
-                        let st = Stroke::new(sw).with_caps(Cap::Round);
-                        if s.shape == ShapeKind::Line {
-                            stroke(items, &kurbo::Line::new((-hw, 0.0), (hw, 0.0)), a, c, st);
-                        } else {
-                            let head = (sw * 4.0).max(w * 0.06).min(w * 0.45);
-                            let half = head * 0.6;
-                            let shaft_end = hw - head * 0.9;
-                            stroke(items, &kurbo::Line::new((-hw, 0.0), (shaft_end, 0.0)), a, c, st);
+                } else {
+                    // Lines use the stroke colour, else the fill colour.
+                    let Some(c) = stroke_c.or(fill_c) else { return };
+                    let hw = w / 2.0;
+                    let st = dashed(Stroke::new(sw).with_caps(Cap::Round));
+                    let head = (sw * 4.0).max(w * 0.06).min(w * 0.45);
+                    let half = head * 0.6;
+                    let (start_head, end_head) = match s.shape {
+                        ShapeKind::Arrow => (false, true),
+                        ShapeKind::DoubleArrow => (true, true),
+                        _ => (false, false),
+                    };
+                    let x0 = if start_head { -hw + head * 0.9 } else { -hw };
+                    let x1 = if end_head { hw - head * 0.9 } else { hw };
+                    stroke(items, &kurbo::Line::new((x0, 0.0), (x1, 0.0)), a, c, st);
+                    for (on, dir) in [(end_head, 1.0), (start_head, -1.0)] {
+                        if on {
                             let mut p = BezPath::new();
-                            p.move_to((hw, 0.0));
-                            p.line_to((hw - head, -half));
-                            p.line_to((hw - head, half));
+                            p.move_to((hw * dir, 0.0));
+                            p.line_to(((hw - head) * dir, -half));
+                            p.line_to(((hw - head) * dir, half));
                             p.close_path();
                             fill(items, &p, a, c);
                         }
                     }
                 }
+            }
+            ElementKind::Icon(icon) => {
+                let Some(path) = crate::shapes::icon_path(&icon.name) else { return };
+                let ia = *a * crate::shapes::icon_affine(w, h);
+                let st = Stroke::new(icon.stroke_width.max(0.0)).with_caps(Cap::Round).with_join(Join::Round);
+                stroke(items, &*path, &ia, th.color(&icon.color), st);
             }
             ElementKind::Image(img) => {
                 let levels = self.r.images.levels(self.editor, &img.asset);

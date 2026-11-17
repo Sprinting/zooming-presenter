@@ -56,6 +56,7 @@ pub use display::DisplayList;
 pub mod text;
 pub mod cpu;
 mod pdf;
+pub mod shapes;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 

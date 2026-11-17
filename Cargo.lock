@@ -5669,6 +5669,7 @@ dependencies = [
  "egui-wgpu",
  "egui_kittest",
  "image",
+ "kurbo",
  "muda",
  "rfd",
  "serde",

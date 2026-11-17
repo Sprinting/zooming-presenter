@@ -16,6 +16,7 @@ path = "src/lib.rs"
 [dependencies]
 zebra-core.workspace = true
 zebra-render.workspace = true
+kurbo.workspace = true
 zebra-api.workspace = true
 eframe.workspace = true
 egui.workspace = true

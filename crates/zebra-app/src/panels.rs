@@ -57,6 +57,7 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     });
     let rect = app.canvas.rect;
     floating(app, &ctx, rect, &p);
+    crate::library::ui(app, &ctx, &p);
     dialogs(app, &ctx, &p);
 }
 
@@ -348,6 +349,7 @@ pub enum Icon {
     Plus,
     Minus,
     Home,
+    Library,
 }
 
 pub fn paint_icon(painter: &egui::Painter, r: Rect, icon: Icon, c: Color32) {
@@ -391,6 +393,12 @@ pub fn paint_icon(painter: &egui::Painter, r: Rect, icon: Icon, c: Color32) {
         }
         Icon::Ellipse => {
             painter.circle_stroke(m, 6.8 * u, s);
+        }
+        Icon::Library => {
+            // Square, circle and triangle: the shape library.
+            painter.rect_stroke(Rect::from_min_max(p(-7.5, -7.5), p(-0.5, -0.5)), 1.0, s, egui::StrokeKind::Middle);
+            painter.circle_stroke(p(4.0, -4.0), 3.6 * u, s);
+            painter.add(Shape::closed_line(vec![p(0.0, 1.0), p(4.5, 7.5), p(-4.5, 7.5)], s));
         }
         Icon::Line => {
             painter.line_segment([p(-6.5, 6.5), p(6.5, -6.5)], s);
@@ -483,7 +491,7 @@ fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     let cur = app.editor.view.tool;
                     let fs = app.editor.view.frame_style;
-                    let items: [(Icon, Option<Tool>, &str, Action); 10] = [
+                    let items: [(Icon, Option<Tool>, &str, Action); 11] = [
                         (Icon::Select, Some(Tool::Select), "Select  V", Action::SetTool(Tool::Select)),
                         (Icon::Hand, Some(Tool::Hand), "Hand — drag to pan  H  (or hold Space)", Action::SetTool(Tool::Hand)),
                         (Icon::Text, Some(Tool::Text), "Text  T  (or double-click anywhere)", Action::SetTool(Tool::Text)),
@@ -493,6 +501,7 @@ fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
                         (Icon::Line, Some(Tool::Line), "Line  L", Action::SetTool(Tool::Line)),
                         (Icon::Arrow, Some(Tool::Arrow), "Arrow  A", Action::SetTool(Tool::Arrow)),
                         (Icon::Pen, Some(Tool::Pen), "Pen  D", Action::SetTool(Tool::Pen)),
+                        (Icon::Library, None, "Shapes & icons…", Action::ShowLibrary),
                         (Icon::Image, None, "Insert image…  I  (or drop files on the canvas)", Action::InsertImage),
                     ];
                     for (icon, tool, tip, action) in items {
@@ -658,9 +667,10 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let kind_name = match &e.kind {
         ElementKind::Frame(f) => format!("{} frame", frame_name(f.style)),
         ElementKind::Text(t) => format!("{:?} text", t.style),
-        ElementKind::Shape(s) => format!("{:?}", s.shape),
+        ElementKind::Shape(s) => s.shape.label().to_string(),
         ElementKind::Image(_) => "Image".into(),
         ElementKind::Ink(_) => "Drawing".into(),
+        ElementKind::Icon(_) => "Icon".into(),
     };
     ui.horizontal(|ui| {
         ui.heading(kind_name);
@@ -755,13 +765,24 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         }
         ElementKind::Shape(s) => {
             section(ui, "Shape", p);
-            ui.horizontal_wrapped(|ui| {
-                for k in [ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::Triangle, ShapeKind::Line, ShapeKind::Arrow] {
-                    if ui.selectable_label(s.shape == k, format!("{k:?}")).clicked() {
+            egui::ComboBox::from_id_salt("shape-kind").selected_text(s.shape.label()).width(200.0).show_ui(ui, |ui| {
+                for &k in ShapeKind::ALL {
+                    if ui.selectable_label(s.shape == k, k.label()).clicked() {
                         patch_all = Some(ElementPatch { shape: Some(k), ..Default::default() });
                     }
                 }
             });
+            if matches!(s.shape, ShapeKind::Rectangle | ShapeKind::RoundedRect | ShapeKind::Callout | ShapeKind::SpeechBubble | ShapeKind::StickyNote) {
+                let mut cr = s.corner_radius;
+                ui.horizontal(|ui| {
+                    ui.label("Corners");
+                    let r = ui.add(egui::DragValue::new(&mut cr).speed(0.5).range(0.0..=e.size.w.min(e.size.h) / 2.0).max_decimals(0));
+                    gesture_active |= r.dragged() || r.has_focus();
+                    if r.changed() {
+                        patch_all = Some(ElementPatch { corner_radius: Some(cr), ..Default::default() });
+                    }
+                });
+            }
             for (label, cur, is_fill) in [("Fill", s.fill.clone(), true), ("Stroke", s.stroke.clone(), false)] {
                 section(ui, label, p);
                 ui.horizontal_wrapped(|ui| {
@@ -781,6 +802,41 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             ui.horizontal(|ui| {
                 ui.label("Stroke width");
                 let r = ui.add(egui::DragValue::new(&mut sw).speed(0.2).range(0.0..=200.0));
+                gesture_active |= r.dragged() || r.has_focus();
+                if r.changed() {
+                    patch_all = Some(ElementPatch { stroke_width: Some(sw), ..Default::default() });
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Line");
+                for (d, l) in [(zebra_core::Dash::Solid, "Solid"), (zebra_core::Dash::Dashed, "Dashed"), (zebra_core::Dash::Dotted, "Dotted")] {
+                    if ui.selectable_label(s.dash == d, l).clicked() {
+                        patch_all = Some(ElementPatch { dash: Some(d), ..Default::default() });
+                    }
+                }
+            });
+        }
+        ElementKind::Icon(i) => {
+            section(ui, "Icon", p);
+            ui.horizontal(|ui| {
+                ui.label(&i.name);
+                if ui.button("Replace…").on_hover_text("Pick another icon from the library").clicked() {
+                    app.library.open_replace(e.id.clone());
+                }
+            });
+            section(ui, "Colour", p);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for slot in ["theme:body", "theme:title", "theme:accent", "theme:shape1", "theme:shape2", "theme:shape3", "theme:shape4", "theme:background"] {
+                    if swatch(ui, style::c32(theme.color(&slot.to_string())), i.color == slot, slot) {
+                        patch_all = Some(ElementPatch { color: Some(slot.into()), ..Default::default() });
+                    }
+                }
+            });
+            let mut sw = i.stroke_width;
+            ui.horizontal(|ui| {
+                ui.label("Line weight");
+                let r = ui.add(egui::Slider::new(&mut sw, 0.5..=4.0).step_by(0.25));
                 gesture_active |= r.dragged() || r.has_focus();
                 if r.changed() {
                     patch_all = Some(ElementPatch { stroke_width: Some(sw), ..Default::default() });

@@ -85,29 +85,31 @@ pub fn paint(
             ElementKind::Shape(s) => {
                 let fill = s.fill.as_deref().map(col).unwrap_or(Color32::TRANSPARENT);
                 let stroke = s.stroke.as_deref().map(|c| Stroke::new((s.stroke_width as f32 * px).max(1.0), col(c))).unwrap_or(Stroke::NONE);
-                match s.shape {
-                    ShapeKind::Rectangle => {
-                        painter.add(Shape::convex_polygon(quad(), fill, stroke));
+                if s.shape.is_line() {
+                    let st = if stroke == Stroke::NONE { Stroke::new((s.stroke_width as f32 * px).max(1.0), fill) } else { stroke };
+                    painter.line_segment([local(-hw, 0.0), local(hw, 0.0)], st);
+                    let head = (e.size.h * 0.5).min(e.size.w * 0.3).max(s.stroke_width * 3.0);
+                    if s.shape != ShapeKind::Line {
+                        painter.add(Shape::line(vec![local(hw - head, -head * 0.6), local(hw, 0.0), local(hw - head, head * 0.6)], st));
                     }
-                    ShapeKind::Ellipse => {
-                        let pts = (0..48)
-                            .map(|i| {
-                                let a = i as f64 / 48.0 * std::f64::consts::TAU;
-                                local(a.cos() * hw, a.sin() * hh)
-                            })
-                            .collect();
+                    if s.shape == ShapeKind::DoubleArrow {
+                        painter.add(Shape::line(vec![local(-hw + head, -head * 0.6), local(-hw, 0.0), local(-hw + head, head * 0.6)], st));
+                    }
+                } else {
+                    let fill = if s.fill.is_none() && s.stroke.is_none() { col("theme:shape1") } else { fill };
+                    let g = zebra_render::shapes::geometry(s.shape, e.size.w, e.size.h, s.corner_radius);
+                    for pts in flatten(&g.outline, &local) {
                         painter.add(Shape::convex_polygon(pts, fill, stroke));
                     }
-                    ShapeKind::Triangle => {
-                        painter.add(Shape::convex_polygon(vec![local(0.0, -hh), local(hw, hh), local(-hw, hh)], fill, stroke));
-                    }
-                    ShapeKind::Line | ShapeKind::Arrow => {
-                        let st = if stroke == Stroke::NONE { Stroke::new((s.stroke_width as f32 * px).max(1.0), fill) } else { stroke };
-                        painter.line_segment([local(-hw, 0.0), local(hw, 0.0)], st);
-                        if s.shape == ShapeKind::Arrow {
-                            let head = (e.size.h * 0.5).min(e.size.w * 0.3).max(s.stroke_width * 3.0);
-                            painter.add(Shape::line(vec![local(hw - head, -head * 0.6), local(hw, 0.0), local(hw - head, head * 0.6)], st));
-                        }
+                }
+            }
+            ElementKind::Icon(i) => {
+                if let Some(path) = zebra_render::shapes::icon_path(&i.name) {
+                    let mut p = (*path).clone();
+                    p.apply_affine(zebra_render::shapes::icon_affine(e.size.w, e.size.h));
+                    let st = Stroke::new((i.stroke_width * e.size.w.min(e.size.h) / 24.0 * px as f64).max(1.0) as f32, col(&i.color));
+                    for pts in flatten(&p, &local) {
+                        painter.add(Shape::line(pts, st));
                     }
                 }
             }
@@ -131,4 +133,26 @@ pub fn paint(
 /// Theme lookups used across the UI.
 pub fn theme_color(theme: &Theme, c: &str) -> Color32 {
     c32(theme.color(&c.to_string()))
+}
+
+/// Flatten a local-space path into screen polylines, one per subpath.
+fn flatten(path: &kurbo::BezPath, local: &dyn Fn(f64, f64) -> Pos2) -> Vec<Vec<Pos2>> {
+    let mut out: Vec<Vec<Pos2>> = Vec::new();
+    kurbo::flatten(path, 0.5, |el| match el {
+        kurbo::PathEl::MoveTo(p) => out.push(vec![local(p.x, p.y)]),
+        kurbo::PathEl::LineTo(p) => {
+            if let Some(v) = out.last_mut() {
+                v.push(local(p.x, p.y));
+            }
+        }
+        kurbo::PathEl::ClosePath => {
+            if let Some(v) = out.last_mut() {
+                if let Some(&f) = v.first() {
+                    v.push(f);
+                }
+            }
+        }
+        _ => {}
+    });
+    out
 }

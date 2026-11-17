@@ -762,7 +762,7 @@ fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
             };
             let shape = if tool == Tool::Arrow { ShapeKind::Arrow } else { ShapeKind::Line };
             let ang = if shift { (ang / 15.0).round() * 15.0 } else { ang };
-            (ElementKind::Shape(ShapeData { shape, fill: None, stroke: Some("theme:shape1".into()), stroke_width: 3.0 }), ang, len.max(8.0), 24.0)
+            (ElementKind::Shape(ShapeData { shape, fill: None, stroke: Some("theme:shape1".into()), stroke_width: 3.0, ..Default::default() }), ang, len.max(8.0), 24.0)
         }
         _ => {
             let shape = match tool {
@@ -770,7 +770,7 @@ fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
                 Tool::Triangle => ShapeKind::Triangle,
                 _ => ShapeKind::Rectangle,
             };
-            (ElementKind::Shape(ShapeData { shape, fill: Some("theme:shape1".into()), stroke: None, stroke_width: 3.0 }), rot, w, h)
+            (ElementKind::Shape(ShapeData { shape, fill: Some("theme:shape1".into()), stroke: None, stroke_width: 3.0, ..Default::default() }), rot, w, h)
         }
     };
     let is_frame = matches!(kind, ElementKind::Frame(_));

@@ -91,6 +91,22 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<ElementId>,
     },
+    /// A line icon from the built-in library, centred at x, y. Find names
+    /// with the `icons` query.
+    AddIcon {
+        name: String,
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
+        /// Width and height of the icon's square box.
+        #[serde(default = "d_icon")]
+        size: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<ColorRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<ElementId>,
+    },
     /// Freehand pen / highlighter stroke in world coordinates.
     AddInk {
         points: Vec<[f64; 2]>,
@@ -241,6 +257,12 @@ fn d_frame_h() -> f64 {
 fn d_shape() -> f64 {
     200.0
 }
+fn d_icon() -> f64 {
+    96.0
+}
+fn d_icon_limit() -> usize {
+    50
+}
 fn d_dup() -> f64 {
     40.0
 }
@@ -381,8 +403,16 @@ pub struct ElementPatch {
     /// Empty string = no stroke.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<ColorRef>,
+    /// Shapes: local units. Icons: units on the 24-unit icon grid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner_radius: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash: Option<Dash>,
+    /// Icons: swap to another library icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     // frame
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_style: Option<FrameStyle>,
@@ -477,6 +507,16 @@ pub enum Query {
     HitTestScreen { x: f64, y: f64 },
     Path,
     Themes,
+    /// Search the icon library by name or keyword (e.g. "idea", "arrow
+    /// right"). Empty query lists names only.
+    Icons {
+        #[serde(default)]
+        query: String,
+        #[serde(default = "d_icon_limit")]
+        limit: usize,
+    },
+    /// The shape kinds with their human names.
+    Shapes,
     History,
     /// Layout lint: overlaps, text unreadable at its step, empty steps...
     Lint,

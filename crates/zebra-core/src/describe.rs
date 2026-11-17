@@ -50,6 +50,9 @@ fn one_line(ed: &Editor, e: &Element) -> String {
         ElementKind::Shape(d) => {
             let _ = write!(s, " {}", serde_json::to_value(d.shape).unwrap().as_str().unwrap());
         }
+        ElementKind::Icon(i) => {
+            let _ = write!(s, " {}", i.name);
+        }
         ElementKind::Image(i) if !i.alt.is_empty() => {
             let _ = write!(s, " alt={:?}", truncate(&i.alt, 40));
         }
@@ -246,6 +249,19 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
             json!({ "steps": steps })
         }
         Query::Themes => json!({ "current": d.theme, "themes": Theme::builtins() }),
+        Query::Icons { query, limit } => {
+            let hits = crate::icons::search(&query, limit);
+            let total = if query.trim().is_empty() { crate::icons::all().len() } else { hits.len() };
+            json!({
+                "total": total,
+                "icons": hits.iter().map(|i| json!({ "name": i.name, "tags": i.tags })).collect::<Vec<_>>(),
+                "licence": "Lucide icons, ISC licence",
+            })
+        }
+        Query::Shapes => json!(crate::model::ShapeKind::ALL
+            .iter()
+            .map(|k| json!({ "shape": k, "name": k.label(), "line": k.is_line() }))
+            .collect::<Vec<_>>()),
         Query::History => {
             let h: Vec<Value> = ed
                 .history()

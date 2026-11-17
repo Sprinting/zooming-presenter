@@ -35,6 +35,7 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
                 A(SetTool(Tool::Line)),
                 A(SetTool(Tool::Arrow)),
                 A(SetTool(Tool::Pen)),
+                A(ShowLibrary),
                 A(InsertImage),
                 Sep,
                 A(WrapInFrame),

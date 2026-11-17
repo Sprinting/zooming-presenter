@@ -78,6 +78,7 @@ pub struct ZebraApp {
     pub show_activity: bool,
     pub palette: Option<(String, usize)>,
     pub show_shortcuts: bool,
+    pub library: crate::library::Library,
     pub show_about: bool,
     pub selected_step: Option<usize>,
     pub clipboard: Vec<Element>,
@@ -147,6 +148,7 @@ impl ZebraApp {
             show_activity: false,
             palette: None,
             show_shortcuts: false,
+            library: Default::default(),
             show_about: false,
             selected_step: None,
             clipboard: vec![],
@@ -465,6 +467,7 @@ impl ZebraApp {
             }
             CommandPalette => self.palette = Some((String::new(), 0)),
             ShowShortcuts => self.show_shortcuts = !self.show_shortcuts,
+            ShowLibrary => self.library.toggle(),
             TogglePathEdit => {
                 let m = if self.editor.view.mode == Mode::PathEdit { Mode::Edit } else { Mode::PathEdit };
                 self.view_cmd(ViewCommand::SetMode { mode: m });
