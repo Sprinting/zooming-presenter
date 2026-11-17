@@ -611,7 +611,7 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     // Chip tooltips (critique 27).
     if let (Some(p), Some((r, _)), Gesture::None) = (pointer, &app.canvas.frame_chip, &app.canvas.gesture) {
         if r.contains(p) && app.canvas.renaming.is_none() {
-            let tip = if app.canvas.chip_chevron.is_some_and(|c| c.contains(p)) { "Zoom into Frame" } else { "Double-click to rename" };
+            let tip = if app.canvas.chip_chevron.is_some_and(|c| c.contains(p)) { crate::t!("canvas-chip-zoom-into-frame") } else { crate::t!("canvas-chip-rename-hint") };
             resp.clone().on_hover_text(tip);
         }
     }
@@ -674,7 +674,7 @@ fn rename_overlay(app: &mut ZebraApp, ui: &mut Ui) {
         if text.trim() != current {
             let patch = zebra_core::ElementPatch { name: Some(text.trim().to_string()), ..Default::default() };
             if app.editor.apply(Command::Update { id, patch }, H).is_err() {
-                app.toast("Couldn't rename the frame.");
+                app.toast(crate::t!("canvas-toast-rename-failed"));
             }
         }
         return;
@@ -717,7 +717,7 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
     if let Some(id) = sole_connector(app) {
         if let Some(ends) = connector_ends(app, &id) {
             for (i, w) in ends.iter().enumerate() {
-                if app.canvas.w2s(&app.editor, *w).distance(start) < 9.0 && app.editor.begin("Move connector end", H).is_ok() {
+                if app.canvas.w2s(&app.editor, *w).distance(start) < 9.0 && app.editor.begin(crate::t!("canvas-undo-move-connector-end"), H).is_ok() {
                     app.canvas.gesture = Gesture::ConnectorEnd { id, to_end: i == 1 };
                     return;
                 }
@@ -734,7 +734,7 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
                     return;
                 }
                 let d = world - sb.center;
-                let _ = app.editor.begin("Rotate", H);
+                let _ = app.editor.begin(crate::t!("canvas-undo-rotate"), H);
                 app.canvas.gesture = Gesture::Rotate {
                     ids: moving_ids(app, &ids),
                     center: sb.center,
@@ -750,7 +750,7 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
                     return;
                 }
                 let anchor = sb.world[(i + 2) % 4];
-                let _ = app.editor.begin("Resize", H);
+                let _ = app.editor.begin(crate::t!("canvas-undo-resize"), H);
                 app.canvas.gesture = Gesture::Scale {
                     ids: moving_ids(app, &ids),
                     anchor,
@@ -794,7 +794,7 @@ fn begin_move(app: &mut ZebraApp, origin: Vec2) {
     }
     let ids = moving_ids(app, &sel);
     let start_bounds = app.editor.bounds_of(&sel);
-    if app.editor.begin("Move", H).is_err() {
+    if app.editor.begin(crate::t!("canvas-undo-move"), H).is_err() {
         return;
     }
     let moving = ids.iter().cloned().collect();
@@ -897,7 +897,7 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
         Gesture::Badge { step } => {
             if let Some(id) = hit(app, p, true) {
                 app.apply(Command::UpdateStep { index: step, target: Some(StepTarget::Element { id }), builds: None, notes: None, duration: None, dwell: None, hide_builds: None });
-                app.toast(format!("Step {} now points here", step + 1));
+                app.toast(crate::t!("canvas-toast-step-retargeted", step = step + 1));
             }
         }
         Gesture::ConnectorEnd { id, to_end } => {
@@ -997,7 +997,7 @@ fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
         if is_frame {
             let n = out.created.first().map(|id| app.editor.doc.frame_contents(id).len()).unwrap_or(0);
             if n > 0 {
-                app.toast(format!("Framed {n} object{}", if n == 1 { "" } else { "s" }));
+                app.toast(crate::t!("canvas-toast-framed-objects", count = n));
             }
         }
     }
@@ -1017,7 +1017,7 @@ fn click(app: &mut ZebraApp, p: Pos2, shift: bool) {
             app.apply(Command::AddStep { target: StepTarget::Element { id }, index: None, builds: vec![], notes: String::new() });
             let n = app.editor.doc.path.len();
             app.selected_step = Some(n - 1);
-            app.toast(format!("Added step {n}"));
+            app.toast(crate::t!("canvas-toast-added-step", step = n));
         }
         return;
     }
@@ -1115,7 +1115,7 @@ pub fn begin_text_on_shape(app: &mut ZebraApp, shape: ElementId) {
         return;
     }
     if e.locked {
-        app.toast("This shape is locked — unlock it to type on it (⌘L)");
+        app.toast(crate::i18n::with_shortcut(crate::t!("canvas-toast-shape-locked"), &crate::actions::Action::ToggleLock));
         return;
     }
     commit_text_edit(app);
@@ -1172,7 +1172,7 @@ pub fn begin_edit_existing(app: &mut ZebraApp, id: ElementId) {
     let Some(e) = app.editor.doc.get(&id) else { return };
     let ElementKind::Text(t) = &e.kind else { return };
     if e.locked {
-        app.toast("This text is locked — unlock it to edit (⌘L)");
+        app.toast(crate::i18n::with_shortcut(crate::t!("canvas-toast-text-locked"), &crate::actions::Action::ToggleLock));
         return;
     }
     app.canvas.text = Some(TextEditState {
@@ -1249,7 +1249,7 @@ pub fn commit_text_edit(app: &mut ZebraApp) {
             if let (Some(h), Some(id)) = (&host, id) {
                 cmds.push(Command::Group { ids: vec![h.id.clone(), id], id: None });
             }
-            let r = app.editor.apply_batch(cmds, Some("Add text".into()), H);
+            let r = app.editor.apply_batch(cmds, Some(crate::t!("canvas-undo-add-text")), H);
             if let Some(out) = app.report(r) {
                 app.select(out.created);
             }
@@ -1283,7 +1283,7 @@ pub fn commit_text_edit(app: &mut ZebraApp) {
                 patch.paras = Some(t.rich.paras.clone());
             }
             if patch != ElementPatch::default() {
-                let r = app.editor.apply_batch(vec![Command::Update { id: id.clone(), patch }], Some("Edit text".into()), H);
+                let r = app.editor.apply_batch(vec![Command::Update { id: id.clone(), patch }], Some(crate::t!("canvas-undo-edit-text")), H);
                 app.report(r);
             }
         }
@@ -1397,7 +1397,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     t.rich.italic = t.italic;
     t.rich.bullets = t.bullets;
     let pos = app.canvas.w2s(&app.editor, t.anchor);
-    let measure_text = if t.buf.is_empty() { "Type something".to_string() } else { t.buf.clone() + " " };
+    let measure_text = if t.buf.is_empty() { crate::t!("canvas-text-placeholder") } else { t.buf.clone() + " " };
     let gw = {
         let job = rich_job(&t.rich, &measure_text, &theme, &font, &ts.font, color, f32::INFINITY);
         ctx.fonts_mut(|f| f.layout_job(job).size().x)
@@ -1485,7 +1485,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
             .desired_rows(1)
             .lock_focus(true)
             .layouter(&mut layouter)
-            .hint_text(egui::RichText::new("Type something").color(color.gamma_multiply(0.35)).font(font.clone()))
+            .hint_text(egui::RichText::new(crate::t!("canvas-text-placeholder")).color(color.gamma_multiply(0.35)).font(font.clone()))
             .id(edit_id);
         let out = edit.show(ui);
         let resp = out.response.clone();
@@ -1555,33 +1555,41 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         style::float_frame(&p).inner_margin(egui::Margin::same(3)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                for (s, label) in [(TextStyle::Title, "Title"), (TextStyle::Subtitle, "Subtitle"), (TextStyle::Body, "Body")] {
+                for (s, label) in [(TextStyle::Title, crate::t!("canvas-text-style-title")), (TextStyle::Subtitle, crate::t!("canvas-text-style-subtitle")), (TextStyle::Body, crate::t!("canvas-text-style-body"))] {
                     if ui.selectable_label(t.style == s, label).clicked() {
                         t.style = s;
                         refocus = true;
                     }
                 }
                 ui.separator();
-                if ui.selectable_label(is_bold, egui::RichText::new("B").strong()).on_hover_text("Bold (⌘B)").clicked() {
+                if ui.selectable_label(is_bold, egui::RichText::new("B").strong()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-bold"), &crate::actions::Action::Bold)).clicked() {
                     fx.push(Fx::Bold);
                 }
-                if ui.selectable_label(is_italic, egui::RichText::new("I").italics()).on_hover_text("Italic (⌘I)").clicked() {
+                if ui.selectable_label(is_italic, egui::RichText::new("I").italics()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-italic"), &crate::actions::Action::Italic)).clicked() {
                     fx.push(Fx::Italic);
                 }
-                if ui.selectable_label(is_under, egui::RichText::new("U").underline()).on_hover_text("Underline (⌘U)").clicked() {
+                if ui.selectable_label(is_under, egui::RichText::new("U").underline()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-underline"), &crate::actions::Action::Underline)).clicked() {
                     fx.push(Fx::Underline);
                 }
-                if ui.selectable_label(is_strike, egui::RichText::new("S").strikethrough()).on_hover_text("Strikethrough").clicked() {
+                if ui.selectable_label(is_strike, egui::RichText::new("S").strikethrough()).on_hover_text(crate::t!("canvas-text-strikethrough")).clicked() {
                     fx.push(Fx::Strike);
                 }
-                if ui.button("A+").on_hover_text("Bigger").clicked() {
+                if ui.button("A+").on_hover_text(crate::t!("canvas-text-bigger")).clicked() {
                     fx.push(Fx::Bigger);
                 }
-                if ui.button("A−").on_hover_text("Smaller").clicked() {
+                if ui.button("A−").on_hover_text(crate::t!("canvas-text-smaller")).clicked() {
                     fx.push(Fx::Smaller);
                 }
-                ui.menu_button("Colour", |ui| {
-                    for (slot, name) in [("", "Default"), ("theme:title", "Title"), ("theme:accent", "Accent"), ("theme:shape1", "Colour 1"), ("theme:shape2", "Colour 2"), ("theme:shape3", "Colour 3"), ("theme:shape4", "Colour 4")] {
+                ui.menu_button(crate::t!("canvas-text-colour"), |ui| {
+                    for (slot, name) in [
+                        ("", crate::t!("canvas-colour-default")),
+                        ("theme:title", crate::t!("canvas-colour-title")),
+                        ("theme:accent", crate::t!("canvas-colour-accent")),
+                        ("theme:shape1", crate::t!("canvas-colour-n", n = 1)),
+                        ("theme:shape2", crate::t!("canvas-colour-n", n = 2)),
+                        ("theme:shape3", crate::t!("canvas-colour-n", n = 3)),
+                        ("theme:shape4", crate::t!("canvas-colour-n", n = 4)),
+                    ] {
                         let c = if slot.is_empty() { color } else { crate::fallback::theme_color(&theme, slot) };
                         if ui.button(egui::RichText::new(format!("■  {name}")).color(c)).clicked() {
                             fx.push(Fx::Color(slot.to_string()));
@@ -1589,43 +1597,43 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                         }
                     }
                 });
-                if ui.selectable_label(t.link_draft.is_some(), "Link").on_hover_text("Link (⌘K)").clicked() {
+                if ui.selectable_label(t.link_draft.is_some(), crate::t!("canvas-text-link")).on_hover_text(with_key(crate::t!("canvas-text-link"), "⌘K")).clicked() {
                     fx.push(Fx::Link);
                 }
                 ui.separator();
-                if ui.selectable_label(cur_list == ListKind::Bullet, "•").on_hover_text("Bulleted list").clicked() {
+                if ui.selectable_label(cur_list == ListKind::Bullet, "•").on_hover_text(crate::t!("canvas-text-bulleted-list")).clicked() {
                     fx.push(Fx::List(if cur_list == ListKind::Bullet { ListKind::None } else { ListKind::Bullet }));
                 }
-                if ui.selectable_label(cur_list == ListKind::Number, "1.").on_hover_text("Numbered list").clicked() {
+                if ui.selectable_label(cur_list == ListKind::Number, "1.").on_hover_text(crate::t!("canvas-text-numbered-list")).clicked() {
                     fx.push(Fx::List(if cur_list == ListKind::Number { ListKind::None } else { ListKind::Number }));
                 }
-                if ui.button("⇤").on_hover_text("Decrease indent (⇧⇥)").clicked() {
+                if ui.button("⇤").on_hover_text(with_key(crate::t!("canvas-text-decrease-indent"), "⇧⇥")).clicked() {
                     fx.push(Fx::Indent(-1));
                 }
-                if ui.button("⇥").on_hover_text("Increase indent (⇥)").clicked() {
+                if ui.button("⇥").on_hover_text(with_key(crate::t!("canvas-text-increase-indent"), "⇥")).clicked() {
                     fx.push(Fx::Indent(1));
                 }
                 ui.separator();
-                if ui.button("Done").clicked() {
+                if ui.button(crate::t!("canvas-text-done")).clicked() {
                     committed = true;
                 }
             });
             if let Some(mut url) = t.link_draft.take() {
                 let mut keep = true;
                 ui.horizontal(|ui| {
-                    ui.label("Link to");
+                    ui.label(crate::t!("canvas-link-to"));
                     let r = ui.add(egui::TextEdit::singleline(&mut url).hint_text("https://…").desired_width(240.0));
                     if !r.has_focus() && !r.lost_focus() && url.is_empty() {
                         r.request_focus();
                     }
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                    if ui.button("Apply").clicked() || enter {
+                    if ui.button(crate::t!("canvas-link-apply")).clicked() || enter {
                         let fmt = SpanFormat { link: Some(url.trim().to_string()), ..Default::default() };
                         rich::apply_format(&mut t.rich, ra, rb, &fmt);
                         keep = false;
                         refocus = true;
                     }
-                    if ui.button("Remove").clicked() {
+                    if ui.button(crate::t!("canvas-link-remove")).clicked() {
                         rich::apply_format(&mut t.rich, ra, rb, &SpanFormat { link: Some(String::new()), ..Default::default() });
                         keep = false;
                         refocus = true;
@@ -1897,7 +1905,7 @@ pub fn draw_agent_presence(app: &ZebraApp, painter: &Painter) -> Option<ERect> {
                 let e = c0 + d * tx.min(ty);
                 let perp = egui::vec2(-d.y, d.x);
                 painter.add(Shape::convex_polygon(vec![e + d * 9.0, e - d * 5.0 + perp * 7.0, e - d * 5.0 - perp * 7.0], agent, Stroke::NONE));
-                let galley = painter.layout_no_wrap(format!("{name} is editing here"), style::ui_font(11.0), white);
+                let galley = painter.layout_no_wrap(crate::t!("canvas-agent-editing-here", name = name.to_string()), style::ui_font(11.0), white);
                 let size = galley.size() + egui::vec2(14.0, 6.0);
                 // Place the label inward from the arrow, kept inside the canvas.
                 let centre = e - d * (14.0 + size.length() / 2.0);
@@ -2074,7 +2082,7 @@ fn draw_transform_tool(app: &ZebraApp, painter: &Painter, sb: &SelBox) {
     painter.add(Shape::line(q, Stroke::new(1.5, col)));
     if locked {
         let c = sb.screen[0];
-        painter.text(c + egui::vec2(2.0, -4.0), Align2::LEFT_BOTTOM, "Locked", style::ui_font(11.0), col);
+        painter.text(c + egui::vec2(2.0, -4.0), Align2::LEFT_BOTTOM, crate::t!("canvas-locked"), style::ui_font(11.0), col);
         return;
     }
     // rotation handle: thin stem + zebra-striped disc
@@ -2095,7 +2103,7 @@ fn draw_transform_tool(app: &ZebraApp, painter: &Painter, sb: &SelBox) {
         }
         Gesture::None => {
             let hover = painter.ctx().pointer_hover_pos();
-            hover.filter(|p| matches!(hit_handle(sb, *p), Some(Handle::Rotate))).map(|_| "Rotate  ·  ⇧ snaps to 15°".to_string())
+            hover.filter(|p| matches!(hit_handle(sb, *p), Some(Handle::Rotate))).map(|_| crate::t!("canvas-rotate-hint", modifier = "⇧"))
         }
         _ => None,
     };
@@ -2259,7 +2267,7 @@ fn context_menu(app: &mut ZebraApp, resp: &egui::Response) {
         let sel = app.selection();
         let one = (sel.len() == 1).then(|| app.editor.doc.get(&sel[0]).cloned()).flatten();
         if sel.is_empty() {
-            if w::menu_item(ui, "Add Text Here", None).clicked() {
+            if w::menu_item(ui, &crate::t!("canvas-menu-add-text-here"), None).clicked() {
                 if let Some(p) = app.canvas.menu_at {
                     begin_new_text(app, p);
                 }
@@ -2277,20 +2285,20 @@ fn context_menu(app: &mut ZebraApp, resp: &egui::Response) {
         // Object-specific actions first.
         match one.as_ref().map(|e| &e.kind) {
             Some(ElementKind::Shape(s)) if !s.shape.is_line() => {
-                let label = if one.as_ref().and_then(|e| shape_label(app, e)).is_some() { "Edit Text" } else { "Add Text" };
-                if w::menu_item(ui, label, None).clicked() {
+                let label = if one.as_ref().and_then(|e| shape_label(app, e)).is_some() { crate::t!("canvas-menu-edit-text") } else { crate::t!("canvas-menu-add-text") };
+                if w::menu_item(ui, &label, None).clicked() {
                     begin_text_on_shape(app, sel[0].clone());
                 }
                 w::menu_separator(ui);
             }
             Some(ElementKind::Text(_)) => {
-                if w::menu_item(ui, "Edit Text", None).clicked() {
+                if w::menu_item(ui, &crate::t!("canvas-menu-edit-text"), None).clicked() {
                     begin_edit_existing(app, sel[0].clone());
                 }
                 w::menu_separator(ui);
             }
             Some(ElementKind::Icon(_)) => {
-                if w::menu_item(ui, "Replace Icon…", None).clicked() {
+                if w::menu_item(ui, &crate::t!("canvas-menu-replace-icon"), None).clicked() {
                     app.library.open_replace(sel[0].clone());
                 }
                 w::menu_separator(ui);
@@ -2325,4 +2333,11 @@ fn context_menu(app: &mut ZebraApp, resp: &egui::Response) {
         item(ui, app, Action::AddToPath);
         item(ui, app, Action::ZoomToSelection);
     });
+}
+
+/// `text` followed by a fixed key hint (keys handled inside the text
+/// editor, not by an [`Action`](crate::actions::Action)), in the same
+/// layout as [`crate::i18n::with_shortcut`].
+fn with_key(text: String, key: &str) -> String {
+    format!("{text}  {key}")
 }

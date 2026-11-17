@@ -65,7 +65,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
                 let link = app.editor.doc.ordered().rev().filter(|e| e.bounds().contains(w)).find_map(|e| app.renderer.link_at(&app.editor, e, w));
                 if let Some(url) = link {
                     crate::app::open_url(&url);
-                    app.toast(format!("Opened {url}"));
+                    app.toast(crate::t!("present-toast-opened-link", url = url.as_str()));
                     return;
                 }
                 match crate::canvas::hit(app, p, false) {
@@ -110,15 +110,15 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
             // leave, so mouse users can step without the keyboard (critique 21).
             let n = app.editor.doc.path.len();
             let txt = match app.editor.view.present.step {
-                Some(s) if app.editor.view.present.off_path => format!("{} of {n}  ·  → returns to the path", s + 1),
-                Some(s) => format!("{} of {n}", s + 1),
-                None => format!("Overview  ·  {n} steps"),
+                Some(s) if app.editor.view.present.off_path => crate::t!("present-hud-off-path", step = s + 1, count = n, key = "→"),
+                Some(s) => crate::t!("present-hud-step-of", step = s + 1, count = n),
+                None => crate::t!("present-hud-overview", count = n),
             };
             let a = ((2.0 - idle) / 0.4).clamp(0.0, 1.0) as f32;
             let white = Color32::WHITE.gamma_multiply(a);
             let font = crate::style::ui_font(13.0);
             let galley = painter.layout_no_wrap(txt, font.clone(), white);
-            let esc = painter.layout_no_wrap("Esc to exit".into(), crate::style::ui_font(11.0), Color32::from_gray(200).gamma_multiply(a));
+            let esc = painter.layout_no_wrap(crate::t!("present-hud-exit", key = "Esc"), crate::style::ui_font(11.0), Color32::from_gray(200).gamma_multiply(a));
             let btn = egui::vec2(30.0, 30.0);
             let w = btn.x * 2.0 + galley.size().x + 24.0 + 1.0 + esc.size().x + 28.0;
             let hud = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.bottom() - 44.0), egui::vec2(w, 38.0));
@@ -127,7 +127,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
             let step_btn = |painter: &egui::Painter, ui: &mut egui::Ui, x: f32, icon: Icon, id: &str, enabled: bool| -> bool {
                 let r = egui::Rect::from_min_size(egui::pos2(x, hud.center().y - btn.y / 2.0), btn);
                 let resp = ui.interact(r, egui::Id::unique(("present-hud", id)), Sense::click());
-                let label = if id == "prev" { "Previous Step" } else { "Next Step" };
+                let label = if id == "prev" { crate::t!("present-hud-previous-step") } else { crate::t!("present-hud-next-step") };
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, enabled, label));
                 if resp.hovered() && enabled {
                     painter.rect_filled(r, 6.0, Color32::from_white_alpha((40.0 * a) as u8));

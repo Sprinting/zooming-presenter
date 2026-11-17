@@ -120,7 +120,7 @@ fn build_items(sub: &Submenu, items: &[Item], m: &mut MacMenu, next: &mut u32, a
                 let _ = sub.append(&PredefinedMenuItem::separator());
             }
             Item::Sub(t, children) => {
-                let s = Submenu::new(*t, true);
+                let s = Submenu::new(t, true);
                 build_items(&s, children, m, next, app);
                 let _ = sub.append(&s);
             }
@@ -135,16 +135,16 @@ impl MacMenu {
     /// Call once the event loop is running (first frame).
     pub fn install(app: &ZebraApp) -> MacMenu {
         let menu = Menu::new();
-        let mut m = MacMenu { _menu: menu, ids: HashMap::new(), entries: vec![], recent: Submenu::new("Open Recent", true), recent_shown: vec![] };
+        let mut m = MacMenu { _menu: menu, ids: HashMap::new(), entries: vec![], recent: Submenu::new(crate::t!("menu-open-recent"), true), recent_shown: vec![] };
         let mut next = 0u32;
 
         // App menu
-        let app_menu = Submenu::new("Zebra", true);
-        let about = MenuItem::with_id("zebra.about", "About Zebra", true, None);
+        let app_menu = Submenu::new(crate::t!("menu-mac-app"), true);
+        let about = MenuItem::with_id("zebra.about", Action::About.label(), true, None);
         m.ids.insert("zebra.about".to_string(), Action::About);
-        let settings = MenuItem::with_id("zebra.settings", "Settings…", true, "CmdOrCtrl+Comma".parse().ok());
+        let settings = MenuItem::with_id("zebra.settings", Action::Settings.label(), true, "CmdOrCtrl+Comma".parse().ok());
         m.ids.insert("zebra.settings".to_string(), Action::Settings);
-        let quit = MenuItem::with_id("zebra.quit", "Quit Zebra", true, "CmdOrCtrl+Q".parse().ok());
+        let quit = MenuItem::with_id("zebra.quit", Action::Quit.label(), true, "CmdOrCtrl+Q".parse().ok());
         m.ids.insert("zebra.quit".to_string(), Action::Quit);
         let _ = app_menu.append_items(&[
             &about,
@@ -162,12 +162,13 @@ impl MacMenu {
         let _ = m._menu.append(&app_menu);
 
         let mut help: Option<Submenu> = None;
+        let help_title = crate::t!("menu-help");
         for (title, items) in spec() {
-            let sub = Submenu::new(title, true);
+            let sub = Submenu::new(&title, true);
             build_items(&sub, &items, &mut m, &mut next, app);
-            if title == "Help" {
+            if title == help_title {
                 // Window menu goes before Help, macOS convention.
-                let win = Submenu::new("Window", true);
+                let win = Submenu::new(crate::t!("menu-mac-window"), true);
                 let _ = win.append_items(&[
                     &PredefinedMenuItem::minimize(None),
                     &PredefinedMenuItem::maximize(None),
