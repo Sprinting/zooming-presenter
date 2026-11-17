@@ -74,6 +74,13 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
 
     // Footer first, so the list takes exactly the space that is left.
     egui::Panel::bottom("path-footer").exact_size(34.0).frame(egui::Frame::new().fill(p.sidebar)).show(ui, |ui| footer(app, ui, p));
+    // Speaker notes for the current step (stream 4), above the footer.
+    if app.current_step().is_some() {
+        egui::Panel::bottom("path-notes")
+            .exact_size(118.0)
+            .frame(egui::Frame::new().fill(p.sidebar).inner_margin(egui::Margin::symmetric(8, 4)))
+            .show(ui, |ui| crate::presenting::sidebar_notes(app, ui, p));
+    }
 
     let selected = selected_steps(app);
     let current = if app.editor.view.mode == Mode::Present { app.editor.view.present.step } else { app.selected_step };

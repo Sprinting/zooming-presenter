@@ -16,7 +16,9 @@ pub mod geom;
 pub mod icons;
 pub mod io;
 pub mod model;
+pub mod perf;
 pub mod rich;
+pub mod templates;
 pub mod theme;
 pub mod view;
 
@@ -26,7 +28,7 @@ pub use editor::{Editor, HistoryEntry, Origin, Outcome, TextMeasure};
 pub use error::{ZError, ZResult};
 pub use geom::{Rect, Transform, Vec2};
 pub use model::*;
-pub use theme::{Theme, TextStyleDef};
+pub use theme::{BackgroundLayer, Theme, TextStyleDef};
 pub use view::{Mode, Tool, ViewState};
 
 /// Bumped whenever the on-disk document format changes.

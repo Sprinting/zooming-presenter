@@ -24,6 +24,7 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
             "File",
             vec![
                 A(New),
+                A(ShowTemplates),
                 A(NewFromSample),
                 A(Open),
                 Recent,
@@ -31,6 +32,7 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
                 A(Close),
                 A(Save),
                 A(SaveAs),
+                A(SaveAsTemplate),
                 Sep,
                 Sub("Export To", vec![A(ExportPdf), A(ExportPng)]),
             ],
@@ -52,6 +54,7 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
                 A(InsertImage),
                 A(InsertVideo),
                 A(InsertAudio),
+                A(InsertLayout),
                 Sep,
                 A(WrapInFrame),
             ],
@@ -61,7 +64,7 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
             vec![
                 Sub("Font", vec![A(Bold), A(Italic), A(Underline)]),
                 Sep,
-                Sub("Theme", Theme::ids().into_iter().map(|t| A(SetTheme(t))).collect()),
+                Sub("Theme", Theme::ids().into_iter().map(|t| A(SetTheme(t))).chain([Sep, A(ThemeEditor)]).collect()),
             ],
         ),
         (
@@ -83,7 +86,7 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
             ],
         ),
         ("Path", vec![A(TogglePathEdit), A(AddToPath), A(AddCurrentView), Sep, A(AutoPath), A(ClearPath)]),
-        ("Play", vec![A(PresentStart), A(PresentCurrent)]),
+        ("Play", vec![A(PresentStart), A(PresentCurrent), Sep, A(TogglePresenterView), A(PlaybackOptions)]),
         (
             "Agent",
             vec![A(ToggleAiControl), Sep, A(PauseAgents), A(StopAgents), A(FollowAgent), Sep, A(RevertAgent)],

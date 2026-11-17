@@ -112,6 +112,12 @@ impl Renderer {
         cpu::capture_list(self, editor, target, width, height)
     }
 
+    /// Cache sizes for the `perf` query: name -> bytes or count.
+    pub fn cache_stats(&self) -> Vec<(&'static str, u64)> {
+        let (n, bytes) = self.images.stats();
+        vec![("image_kb", bytes / 1024), ("images", n as u64), ("text_layouts", self.fonts.cached_layouts() as u64)]
+    }
+
     /// Bundled font check: (family, faces found, files bundled).
     #[doc(hidden)]
     pub fn font_report(&self) -> Vec<(&'static str, usize, usize)> {

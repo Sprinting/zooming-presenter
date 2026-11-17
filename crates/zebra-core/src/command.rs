@@ -255,6 +255,9 @@ pub enum Command {
         /// Seconds; negative clears the override.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration: Option<f64>,
+        /// Autoplay time on this step, seconds; negative clears it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dwell: Option<f64>,
     },
     ClearPath,
     /// Replace the path with every frame in reading order (top-left to
@@ -264,6 +267,51 @@ pub enum Command {
     // ---- document ----
     SetTheme { theme: String },
     SetTitle { title: String },
+    /// Autoplay and loop for the whole presentation. Only given fields change.
+    SetPlayback {
+        /// Seconds per step and build; 0 or negative turns autoplay off.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        autoplay: Option<f64>,
+        #[serde(default, rename = "loop", skip_serializing_if = "Option::is_none")]
+        looping: Option<bool>,
+    },
+    /// Add or replace a custom theme in this document (the theme editor's
+    /// Save). Built-in ids can't be replaced: copy one under a new id.
+    /// Fonts that aren't bundled are embedded in the file automatically.
+    SaveTheme {
+        theme: crate::theme::Theme,
+        /// Also make it the presentation's theme.
+        #[serde(default)]
+        apply: bool,
+    },
+    /// Remove a custom theme. If it's in use, its base built-in (or classic) takes over.
+    DeleteTheme { id: String },
+    /// Store an image (base64) for use as a theme background or 3D layer.
+    /// The new asset key is returned in `assets`.
+    AddAsset { data_base64: String },
+    /// Start from a template (see the `templates` query): frames, placeholder
+    /// text, a path and a theme. Needs an empty canvas unless `replace`.
+    ApplyTemplate {
+        template: String,
+        /// Clear the current canvas and path first.
+        #[serde(default)]
+        replace: bool,
+    },
+    /// Insert a layout (see the `templates` query): a frame arrangement with
+    /// placeholder text, centred at `x`,`y`, `width` world units wide.
+    AddLayout {
+        layout: String,
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
+        /// Default 1600.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f64>,
+        /// Append the layout's frames to the path.
+        #[serde(default = "yes")]
+        add_to_path: bool,
+    },
 }
 
 fn yes() -> bool {
@@ -527,6 +575,8 @@ pub enum ViewCommand {
     FollowAgent { on: bool },
     PauseAgents { paused: bool },
     SetAgentPermission { permission: Permission },
+    /// Pause or resume autoplay while presenting.
+    PauseAutoplay { paused: bool },
 }
 
 /// Read-only questions.
@@ -573,6 +623,12 @@ pub enum Query {
     History,
     /// Layout lint: overlaps, text unreadable at its step, empty steps...
     Lint,
+    /// Templates and layouts that `apply_template` / `add_layout` accept.
+    Templates,
+    /// Font families installed on this machine (any can be used in a theme).
+    Fonts,
+    /// Memory and speed: heap in use, cache sizes, frame times, repaints.
+    Perf,
 }
 
 /// Result of a [`Query`].

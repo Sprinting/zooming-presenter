@@ -105,6 +105,8 @@ fn diff_with(a: &Document, b: &Document, ids: &[&ElementId]) -> Patch {
     scalar("title", to_value(&a.title), to_value(&b.title));
     scalar("theme", to_value(&a.theme), to_value(&b.theme));
     scalar("next_id", to_value(&a.next_id), to_value(&b.next_id));
+    scalar("themes", to_value(&a.themes), to_value(&b.themes));
+    scalar("play", to_value(&a.play), to_value(&b.play));
 
     // Elements: diff only the ones that differ.
     let (mut left, mut right) = (Map::new(), Map::new());
@@ -200,6 +202,8 @@ pub fn apply(doc: &mut Document, patch: &Patch) -> Result<(), String> {
             "title" => to_value(&doc.title),
             "theme" => to_value(&doc.theme),
             "next_id" => to_value(&doc.next_id),
+            "themes" => to_value(&doc.themes),
+            "play" => to_value(&doc.play),
             "z_order" => to_value(&doc.z_order),
             "path" => to_value(&doc.path),
             "elements" => Value::Object(ids.iter().filter_map(|id| doc.elements.get(id).map(|e| (id.clone(), to_value(e)))).collect()),
@@ -222,6 +226,8 @@ pub fn apply(doc: &mut Document, patch: &Patch) -> Result<(), String> {
     let title: Option<String> = take(&mut view, "title")?;
     let theme: Option<String> = take(&mut view, "theme")?;
     let next_id: Option<u64> = take(&mut view, "next_id")?;
+    let themes: Option<Vec<crate::theme::Theme>> = take(&mut view, "themes")?;
+    let play: Option<crate::model::PlaySettings> = take(&mut view, "play")?;
     let z_order: Option<Vec<ElementId>> = take(&mut view, "z_order")?;
     let path: Option<Vec<PathStep>> = take(&mut view, "path")?;
     let elements: Option<BTreeMap<ElementId, Element>> = take(&mut view, "elements")?;
@@ -237,6 +243,12 @@ pub fn apply(doc: &mut Document, patch: &Patch) -> Result<(), String> {
     }
     if let Some(v) = next_id {
         doc.next_id = v;
+    }
+    if let Some(v) = themes {
+        doc.themes = v;
+    }
+    if let Some(v) = play {
+        doc.play = v;
     }
     if let Some(v) = z_order {
         doc.z_order = v;

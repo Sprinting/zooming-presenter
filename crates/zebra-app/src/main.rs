@@ -7,6 +7,11 @@ use clap::Parser;
 use zebra_api::{ApiOptions, Permission};
 use zebra_app::{AppOptions, ZebraApp};
 
+/// Counts live heap bytes for the `perf` query (two relaxed atomics per
+/// allocation).
+#[global_allocator]
+static ALLOC: zebra_core::perf::CountingAlloc = zebra_core::perf::CountingAlloc;
+
 #[derive(Parser, Debug)]
 #[command(name = "zebra", version, about = "Zebra — a zooming canvas for presentations")]
 struct Cli {

@@ -59,11 +59,17 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::Command, r#"{"op":"add_step","target":{"kind":"element","id":"f1"},"builds":["t2","t3"],"notes":"Say hi"}"#),
     (Kind::Command, r#"{"op":"remove_step","index":2}"#),
     (Kind::Command, r#"{"op":"move_step","from":3,"to":0}"#),
-    (Kind::Command, r#"{"op":"update_step","index":0,"notes":"Open with a question","duration":2.5}"#),
+    (Kind::Command, r#"{"op":"update_step","index":0,"notes":"Open with a question","duration":2.5,"dwell":8}"#),
     (Kind::Command, r#"{"op":"clear_path"}"#),
     (Kind::Command, r#"{"op":"auto_path"}"#),
     (Kind::Command, r#"{"op":"set_theme","theme":"chalkboard"}"#),
     (Kind::Command, r#"{"op":"set_title","title":"Quarterly review"}"#),
+    (Kind::Command, r#"{"op":"set_playback","autoplay":10,"loop":true}"#),
+    (Kind::Command, r##"{"op":"save_theme","apply":true,"theme":{"id":"my-theme","name":"My theme","background":"#101820","title":{"font":"Avenir Next","color":"#ffffff","size":72},"subtitle":{"font":"Sans","color":"#f2aa4c","size":40},"body":{"font":"Sans","color":"#dddddd","size":24},"frame":"#f2aa4c","frame_fill":"#1b2733","accent":"#f2aa4c","shapes":["#f2aa4c","#5fb3b3","#ffffff","#888888"],"layers":[{"asset":"<key from add_asset>","depth":0.2}]}}"##),
+    (Kind::Command, r#"{"op":"delete_theme","id":"my-theme"}"#),
+    (Kind::Command, r#"{"op":"add_asset","data_base64":"iVBORw0KGgo..."}"#),
+    (Kind::Command, r#"{"op":"apply_template","template":"big_picture"}"#),
+    (Kind::Command, r#"{"op":"add_layout","layout":"two_columns","x":4000,"y":0,"width":1600}"#),
     // ---- view commands
     (Kind::View, r#"{"op":"set_camera","camera":{"cx":0,"cy":0,"zoom":0.5,"rotation":0},"animate":true}"#),
     (Kind::View, r#"{"op":"zoom","factor":2}"#),
@@ -90,6 +96,7 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::View, r#"{"op":"follow_agent","on":true}"#),
     (Kind::View, r#"{"op":"pause_agents","paused":true}"#),
     (Kind::View, r#"{"op":"set_agent_permission","permission":"full"}"#),
+    (Kind::View, r#"{"op":"pause_autoplay","paused":true}"#),
     // ---- queries
     (Kind::Query, r#"{"q":"describe"}"#),
     (Kind::Query, r#"{"q":"state"}"#),
@@ -104,6 +111,9 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::Query, r#"{"q":"themes"}"#),
     (Kind::Query, r#"{"q":"history"}"#),
     (Kind::Query, r#"{"q":"lint"}"#),
+    (Kind::Query, r#"{"q":"templates"}"#),
+    (Kind::Query, r#"{"q":"fonts"}"#),
+    (Kind::Query, r#"{"q":"perf"}"#),
 ];
 
 pub struct Schemas {

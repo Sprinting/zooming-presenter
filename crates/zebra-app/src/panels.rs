@@ -224,6 +224,13 @@ fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         if w::menu_item(ui, "Play from Current Step", Action::PresentCurrent.shortcut_text().as_deref()).clicked() {
             app.queued.push(Action::PresentCurrent);
         }
+        w::menu_separator(ui);
+        if w::menu_check(ui, app.stage.presenter_view, "Presenter View", None).clicked() {
+            app.queued.push(Action::TogglePresenterView);
+        }
+        if w::menu_item(ui, "Playback Options…", None).clicked() {
+            app.queued.push(Action::PlaybackOptions);
+        }
     });
     w::toolbar_separator(ui);
 
@@ -311,7 +318,8 @@ fn menu_icon_row(ui: &mut Ui, icon: Icon, label: &str, on: bool) -> egui::Respon
 
 fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
     let p = Palette::of(ui.ctx());
-    for t in Theme::builtins() {
+    let all: Vec<Theme> = Theme::builtins().into_iter().chain(app.editor.doc.themes.iter().cloned()).collect();
+    for t in all {
         let selected = t.id == app.editor.doc.theme;
         let (r, resp) = ui.allocate_exact_size(EVec2::new(ui.available_width().max(214.0), 40.0), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &t.name));
@@ -337,6 +345,21 @@ fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
             app.queued.push(Action::SetTheme(t.id.clone()));
             ui.close();
         }
+    }    let mine = crate::library::list_themes();
+    if !mine.is_empty() {
+        ui.separator();
+        ui.label(RichText::new("My Themes").size(11.0).weak());
+        for (_, doc, t) in mine {
+            if ui.button(&t.name).clicked() {
+                crate::theme_editor::apply_library_theme(app, &doc, &t);
+                ui.close();
+            }
+        }
+    }
+    ui.separator();
+    if ui.button("Customize Theme…").on_hover_text("Colours, fonts, background picture and 3D background").clicked() {
+        app.queued.push(Action::ThemeEditor);
+        ui.close();
     }
 }
 

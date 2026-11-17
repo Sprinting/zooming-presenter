@@ -119,3 +119,17 @@ pub fn sections(insp: &mut Insp, ui: &mut Ui, tab: Tab) {
         _ => {}
     }
 }
+
+/// Stream 4's speaker notes and timings for the step this element is, on
+/// the Path tab.
+pub fn path_step(insp: &mut Insp, ui: &mut Ui, tab: Tab) {
+    if tab != Tab::Path || insp.sel.len() != 1 {
+        return;
+    }
+    let id = insp.el.id.clone();
+    let step = insp.app.editor.doc.path.iter().position(|s| matches!(&s.target, zebra_core::StepTarget::Element { id: t } if *t == id));
+    if let Some(step) = step {
+        let p = crate::style::Palette::of(ui.ctx());
+        crate::presenting::step_section(insp.app, ui, &p, step);
+    }
+}

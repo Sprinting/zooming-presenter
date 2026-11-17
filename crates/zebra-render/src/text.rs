@@ -178,6 +178,8 @@ struct Key {
 }
 
 struct Inner {
+    /// Embedded theme fonts already registered (asset keys).
+    registered: std::collections::HashSet<String>,
     font_cx: FontContext,
     layout_cx: LayoutContext<[u8; 4]>,
     cache: HashMap<Key, Arc<TextLayout>>,
@@ -208,6 +210,7 @@ impl Fonts {
         let font_cx = FontContext { collection, source_cache: SourceCache::default() };
         Fonts {
             inner: Arc::new(Mutex::new(Inner {
+                registered: Default::default(),
                 font_cx,
                 layout_cx: LayoutContext::new(),
                 cache: HashMap::new(),
@@ -283,6 +286,76 @@ impl Fonts {
                 (b.family, n, b.files.len())
             })
             .collect()
+    }
+
+    /// Register the fonts a document's theme embeds, once each, so text
+    /// set in them renders on a machine where they aren't installed.
+    pub fn register_doc_fonts(&self, doc: &zebra_core::Document) {
+        if doc.themes.iter().all(|t| t.fonts.is_empty()) {
+            return;
+        }
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut added = false;
+        for key in doc.themes.iter().flat_map(|t| t.fonts.values().flatten()) {
+            if g.registered.contains(key) {
+                continue;
+            }
+            if let Some(a) = doc.assets.get(key) {
+                // Shares the (possibly memory-mapped) bytes; no copy.
+                let blob: Blob<u8> = Blob::new(Arc::new(a.bytes.clone()));
+                g.font_cx.collection.register_fonts(blob, None);
+                added = true;
+            }
+            g.registered.insert(key.clone());
+        }
+        if added {
+            // Layouts made with a fallback font are stale now.
+            g.cache.clear();
+            g.used.clear();
+        }
+    }
+
+    /// Installed font families (system and bundled), sorted, without
+    /// hidden system families (names starting with '.').
+    pub fn families(&self) -> Vec<String> {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut v: Vec<String> = g.font_cx.collection.family_names().filter(|n| !n.starts_with('.')).map(|n| n.to_string()).collect();
+        v.sort_by_key(|a| a.to_lowercase());
+        v.dedup();
+        v
+    }
+
+    /// Files of an installed (system) family: (bytes, extension). Bundled
+    /// families return nothing; they ship with the app.
+    pub fn family_files(&self, family: &str) -> Vec<(Vec<u8>, String)> {
+        use parley::fontique::SourceKind;
+        if BUNDLED.iter().any(|b| b.family == family) || family_for(family) != family {
+            return vec![];
+        }
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(fam) = g.font_cx.collection.family_by_name(family) else { return vec![] };
+        let mut paths = vec![];
+        for f in fam.fonts() {
+            if let SourceKind::Path(p) = &f.source().kind {
+                let p = p.to_path_buf();
+                if !paths.contains(&p) {
+                    paths.push(p);
+                }
+            }
+        }
+        paths
+            .into_iter()
+            .filter_map(|p| {
+                let ext = p.extension()?.to_string_lossy().to_lowercase();
+                let ext = if matches!(ext.as_str(), "ttf" | "otf" | "ttc") { ext } else { "ttf".into() };
+                Some((std::fs::read(&p).ok()?, ext))
+            })
+            .collect()
+    }
+
+    /// Cached layouts (for the perf query).
+    pub fn cached_layouts(&self) -> usize {
+        self.inner.lock().map(|g| g.cache.len()).unwrap_or(0)
     }
 
     /// Mark a frame boundary for cache eviction.
@@ -552,6 +625,15 @@ impl zebra_core::TextMeasure for ParleyMeasure {
     fn measure(&self, text: &TextData, theme: &Theme, wrap_width: Option<f64>) -> (f64, f64) {
         let l = self.fonts.layout(text, theme, wrap_width);
         (l.width, l.height)
+    }
+    fn prepare(&self, doc: &zebra_core::Document) {
+        self.fonts.register_doc_fonts(doc);
+    }
+    fn font_files(&self, family: &str) -> Vec<(Vec<u8>, String)> {
+        self.fonts.family_files(family)
+    }
+    fn font_families(&self) -> Vec<String> {
+        self.fonts.families()
     }
 }
 

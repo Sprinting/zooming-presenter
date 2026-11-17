@@ -74,7 +74,7 @@ pub type DocSectionFn = fn(&mut ZebraApp, &mut Ui);
 
 /// Sections added by other streams (media, text, presenting). Order here is
 /// the order on screen, after the built-in sections of the same tab.
-pub static EXTRA_SECTIONS: &[SectionFn] = &[crate::inspector_s3::sections];
+pub static EXTRA_SECTIONS: &[SectionFn] = &[crate::inspector_s3::sections, crate::inspector_s3::path_step];
 
 /// Document sections added by other streams (theme editor, autoplay...).
 pub static EXTRA_DOC_SECTIONS: &[DocSectionFn] = &[];
@@ -626,7 +626,7 @@ fn path_tab(insp: &mut Insp, ui: &mut Ui, _p: &Palette) {
                     } else {
                         b.retain(|x| *x != id);
                     }
-                    insp.app.apply(Command::UpdateStep { index: si, target: None, builds: Some(b), notes: None, duration: None });
+                    insp.app.apply(Command::UpdateStep { index: si, target: None, builds: Some(b), notes: None, duration: None, dwell: None });
                 }
             });
         }

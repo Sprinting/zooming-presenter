@@ -82,6 +82,13 @@ pub(crate) struct ImageCache {
 const MAX_IMAGE_DIM: u32 = 8192;
 
 impl ImageCache {
+    /// (images decoded, bytes of decoded pixels across all mip levels).
+    pub(crate) fn stats(&self) -> (usize, u64) {
+        let m = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        let bytes = m.values().flatten().flat_map(|l| l.iter()).map(|l| l.width as u64 * l.height as u64 * 4).sum();
+        (m.len(), bytes)
+    }
+
     pub(crate) fn levels(&self, editor: &Editor, key: &str) -> Option<ImageLevels> {
         if let Some(v) = self.map.lock().unwrap_or_else(|e| e.into_inner()).get(key) {
             return v.clone();
@@ -155,6 +162,14 @@ pub fn element_affine(e: &Element, cam: &Camera, vp: [f64; 2], ppp: f64) -> Affi
         * Affine::scale(e.transform.scale)
 }
 
+/// The smallest mip level at least `on_screen_px` wide.
+fn pick_level(levels: &ImageLevels, on_screen_px: f64, full_res: bool) -> Arc<ImageLevel> {
+    if full_res {
+        return levels[0].clone();
+    }
+    levels.iter().rev().find(|l| l.width as f64 >= on_screen_px).unwrap_or(&levels[0]).clone()
+}
+
 /// Uniform scale factor of a similarity transform.
 pub fn affine_scale(a: &Affine) -> f64 {
     a.determinant().abs().sqrt()
@@ -196,15 +211,21 @@ pub(crate) fn build_with(
         return list;
     }
     r.fonts.next_generation();
+    r.fonts.register_doc_fonts(&editor.doc);
     let view = cam.visible_bounds(Vec2::new(vp[0], vp[1]));
     let px_per_world = cam.zoom * ppp;
     let ctx = Ctx { r, editor, theme: &theme, presenting: o.presenting, full_res_images, ppp };
+    ctx.backdrop(cam, vp, &mut list.items);
 
     for e in editor.doc.ordered() {
         if o.skip.as_deref() == Some(e.id.as_str()) || (o.presenting && o.hidden.contains(&e.id)) {
             continue;
         }
         if o.presenting && matches!(&e.kind, ElementKind::Frame(f) if f.style == FrameStyle::Invisible) {
+            continue;
+        }
+        // Layout placeholders: faint while editing, gone when presenting.
+        if o.presenting && e.placeholder {
             continue;
         }
         let pad = overhang(e);
@@ -216,7 +237,10 @@ pub(crate) fn build_with(
         if (ww.max(wh) + 2.0 * pad) * px_per_world < MIN_PIXELS {
             continue;
         }
-        let opacity = o.opacity.iter().rev().find(|(id, _)| *id == e.id).map(|(_, a)| a.clamp(0.0, 1.0)).unwrap_or(1.0);
+        let mut opacity = o.opacity.iter().rev().find(|(id, _)| *id == e.id).map(|(_, a)| a.clamp(0.0, 1.0)).unwrap_or(1.0);
+        if e.placeholder {
+            opacity *= PLACEHOLDER_OPACITY;
+        }
         if opacity <= 0.0 {
             continue;
         }
@@ -290,7 +314,67 @@ fn with_alpha(mut c: Rgba, k: f32) -> Rgba {
     c
 }
 
+/// How strongly layout placeholders show while editing.
+pub const PLACEHOLDER_OPACITY: f32 = 0.45;
+
 impl Ctx<'_> {
+    /// The theme's background picture (fixed to the screen, scaled to
+    /// cover it) and its 3D layers, which follow the camera only partly.
+    fn backdrop(&self, cam: &Camera, vp: [f64; 2], items: &mut Vec<Item>) {
+        let th = self.theme;
+        let (wpx, hpx) = (vp[0] * self.ppp, vp[1] * self.ppp);
+        if let Some(key) = &th.background_image {
+            if let Some(levels) = self.r.images.levels(self.editor, key) {
+                let l0 = &levels[0];
+                let k = (wpx / l0.width as f64).max(hpx / l0.height as f64);
+                let (iw, ih) = (l0.width as f64 * k, l0.height as f64 * k);
+                let level = pick_level(&levels, iw, self.full_res_images);
+                let t = Affine::translate(((wpx - iw) / 2.0, (hpx - ih) / 2.0))
+                    * Affine::scale_non_uniform(iw / level.width as f64, ih / level.height as f64);
+                items.push(Item::Image { image: level, transform: t });
+            }
+        }
+        if th.layers.is_empty() {
+            return;
+        }
+        let Some(b) = self.editor.doc.bounds() else { return };
+        let home = Camera::fit_rect(&b, Vec2::new(vp[0], vp[1]), 0.06);
+        if !(home.zoom.is_finite() && home.zoom > 0.0) {
+            return;
+        }
+        for layer in &th.layers {
+            let Some(levels) = self.r.images.levels(self.editor, &layer.asset) else { continue };
+            let d = layer.depth.clamp(0.0, 1.0);
+            // The layer's own camera: part of the way from the overview
+            // camera to the real one (zoom interpolated geometrically).
+            let zoom = home.zoom * (cam.zoom / home.zoom).powf(d);
+            let (cx, cy) = (home.cx + (cam.cx - home.cx) * d, home.cy + (cam.cy - home.cy) * d);
+            let rot = cam.rotation * d;
+            // At the overview the layer covers the screen with a margin.
+            let l0 = &levels[0];
+            let (vw, vh) = (vp[0] / home.zoom * 1.3, vp[1] / home.zoom * 1.3);
+            let k = (vw / l0.width as f64).max(vh / l0.height as f64);
+            let (lw, lh) = (l0.width as f64 * k, l0.height as f64 * k);
+            let level = pick_level(&levels, lw * zoom * self.ppp, self.full_res_images);
+            let t = Affine::translate((wpx * 0.5, hpx * 0.5))
+                * Affine::scale(zoom * self.ppp)
+                * Affine::rotate(-rot.to_radians())
+                * Affine::translate((home.cx - cx - lw / 2.0, home.cy - cy - lh / 2.0))
+                * Affine::scale_non_uniform(lw / level.width as f64, lh / level.height as f64);
+            let a = layer.opacity.clamp(0.0, 1.0) as f32;
+            if a <= 0.0 {
+                continue;
+            }
+            if a < 1.0 {
+                items.push(Item::PushOpacity(a));
+            }
+            items.push(Item::Image { image: level, transform: t });
+            if a < 1.0 {
+                items.push(Item::PopOpacity);
+            }
+        }
+    }
+
     fn element(&self, e: &Element, a: &Affine, items: &mut Vec<Item>) {
         let th = self.theme;
         let lr = local_rect(e);
@@ -527,11 +611,7 @@ impl Ctx<'_> {
                     return;
                 };
                 let on_screen = w * affine_scale(a);
-                let level = if self.full_res_images {
-                    levels[0].clone()
-                } else {
-                    levels.iter().rev().find(|l| l.width as f64 >= on_screen).unwrap_or(&levels[0]).clone()
-                };
+                let level = pick_level(&levels, on_screen, self.full_res_images);
                 let transform = *a
                     * Affine::translate((-w / 2.0, -h / 2.0))
                     * Affine::scale_non_uniform(w / level.width as f64, h / level.height as f64);
