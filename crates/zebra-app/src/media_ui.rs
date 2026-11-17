@@ -60,6 +60,8 @@ pub struct Media {
     /// objects: pasting it again means "paste the copied objects".
     pub clipboard_marker: Option<String>,
     reported: HashSet<String>,
+    /// Background work that ends with a message (exports).
+    pub background: Vec<Receiver<String>>,
 }
 
 struct Insert {
@@ -85,6 +87,7 @@ impl Default for Media {
             crop: None,
             clipboard_marker: None,
             reported: HashSet::new(),
+            background: vec![],
         }
     }
 }
@@ -218,6 +221,20 @@ pub fn tick(app: &mut ZebraApp) {
     let now = app.editor.view.now;
     let ppp = app.ctx.pixels_per_point() as f64;
     let presenting = app.editor.view.mode == Mode::Present;
+
+    // Finished background work.
+    let mut msgs = vec![];
+    app.media.background.retain(|rx| match rx.try_recv() {
+        Ok(m) => {
+            msgs.push(m);
+            false
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => true,
+        Err(_) => false,
+    });
+    for m in msgs {
+        app.toast(m);
+    }
 
     // Finished inserts.
     let mut done = vec![];

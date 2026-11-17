@@ -120,6 +120,7 @@ pub struct Dispatcher {
     tx_owner: Option<u64>,
     waits: Vec<dispatch::Wait>,
     deferred: std::collections::VecDeque<dispatch::Pending>,
+    jobs: Vec<dispatch::Job>,
 }
 
 impl Dispatcher {
@@ -143,6 +144,7 @@ impl Dispatcher {
             tx_owner: None,
             waits: vec![],
             deferred: Default::default(),
+            jobs: vec![],
         }
     }
     /// Apply all queued requests, push events to subscribers. Returns true if

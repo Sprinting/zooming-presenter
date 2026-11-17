@@ -39,7 +39,7 @@ impl Dispatcher {
         // 1. Calls deferred because a human gesture was in progress.
         let mut still = VecDeque::new();
         while let Some(p) = self.deferred.pop_front() {
-            let blocked_client = still.iter().any(|q: &Pending| q.client == p.client);
+            let blocked_client = still.iter().any(|q: &Pending| q.client == p.client) || self.jobs.iter().any(|j| j.client == p.client);
             if blocked_client || (editor.human_gesture_active() && Instant::now() < p.deadline) {
                 still.push_back(p);
                 continue;
@@ -68,6 +68,7 @@ impl Dispatcher {
                 Inbound::Call { client, id, origin, call } => {
                     let p = Pending { client, id, origin, call, deadline: Instant::now() + HUMAN_GRACE };
                     let must_queue = self.deferred.iter().any(|q| q.client == client)
+                        || self.jobs.iter().any(|j| j.client == client)
                         || (p.call.mutates() && editor.human_gesture_active());
                     if must_queue {
                         self.deferred.push_back(p);
@@ -78,7 +79,24 @@ impl Dispatcher {
             }
         }
 
-        // 3. Waits.
+        // 3. Renders finished on workers.
+        let mut j = 0;
+        while j < self.jobs.len() {
+            match self.jobs[j].rx.try_recv() {
+                Ok(r) => {
+                    let job = self.jobs.remove(j);
+                    reply(server, job.client, &job.id, r);
+                    handled = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => j += 1,
+                Err(_) => {
+                    let job = self.jobs.remove(j);
+                    reply(server, job.client, &job.id, Err(RpcError::app("render_failed", "the render thread stopped")));
+                }
+            }
+        }
+
+        // 4. Waits.
         let now = Instant::now();
         let mut i = 0;
         while i < self.waits.len() {
@@ -99,10 +117,10 @@ impl Dispatcher {
             }
         }
 
-        // 4. Events nobody has drained yet (e.g. human edits).
+        // 5. Events nobody has drained yet (e.g. human edits).
         self.flush_events(server, editor);
 
-        inner.shared.poll.store(!self.waits.is_empty() || !self.deferred.is_empty(), std::sync::atomic::Ordering::SeqCst);
+        inner.shared.poll.store(!self.waits.is_empty() || !self.deferred.is_empty() || !self.jobs.is_empty(), std::sync::atomic::Ordering::SeqCst);
         handled
     }
 
@@ -126,6 +144,34 @@ impl Dispatcher {
                 reply(server, p.client, &p.id, Ok(wait_result(editor)));
             } else {
                 self.waits.push(Wait { client: p.client, id: p.id, until: until.clone(), deadline: Instant::now() + *timeout });
+            }
+            return;
+        }
+        // Captures and exports render a snapshot on a worker so the window
+        // never stalls on a big render; the reply is sent when it's done.
+        let heavy = matches!(&p.call, Call::Capture(_))
+            || matches!(&p.call, Call::Export { format: ExportFormat::Png | ExportFormat::Pdf, .. });
+        if heavy && !self.headless {
+            let limited = editor.view.agent_permission != Permission::Full;
+            let mut snap = Editor::new(editor.doc.clone());
+            snap.view = editor.view.clone();
+            snap.measure = self.renderer.measure();
+            let renderer = self.renderer.clone();
+            let call = p.call;
+            let (tx, rx) = std::sync::mpsc::channel();
+            let waker = server.inner.shared.waker.clone();
+            let spawned = std::thread::Builder::new().name("zebra-capture".into()).spawn(move || {
+                let r = match call {
+                    Call::Capture(req) => Self::capture(&renderer, &snap, &req, limited),
+                    Call::Export { format, path, capture } => Self::export(&renderer, &snap, format, path, &capture, limited),
+                    _ => unreachable!(),
+                };
+                let _ = tx.send(r);
+                waker();
+            });
+            match spawned {
+                Ok(_) => self.jobs.push(Job { client: p.client, id: p.id, rx }),
+                Err(e) => reply(server, p.client, &p.id, Err(RpcError::app("io", format!("cannot start a render thread: {e}")))),
             }
             return;
         }
@@ -180,7 +226,7 @@ impl Dispatcher {
             Call::State => editor.query(Query::State)?,
             Call::Undo => json!({ "undone": editor.undo(origin.clone())?, "revision": editor.revision }),
             Call::Redo => json!({ "redone": editor.redo(origin.clone())?, "revision": editor.revision }),
-            Call::Capture(req) => self.capture(editor, &req, limited)?,
+            Call::Capture(req) => Self::capture(&self.renderer, editor, &req, limited)?,
             Call::Open { path, force } => {
                 need_full(perm, "open")?;
                 check_agent_allowed(editor)?;
@@ -201,7 +247,7 @@ impl Dispatcher {
                 editor.mark_saved(Some(path.clone()));
                 json!({ "ok": true, "path": path })
             }
-            Call::Export { format, path, capture } => self.export(editor, format, path, &capture, limited)?,
+            Call::Export { format, path, capture } => Self::export(&self.renderer, editor, format, path, &capture, limited)?,
             Call::Wait { .. } => unreachable!("handled in run"),
             Call::Disconnect => {
                 // Any agent may switch AI control off; only the human can turn
@@ -223,7 +269,7 @@ impl Dispatcher {
         })
     }
 
-    fn render(&self, editor: &Editor, req: &CaptureReq, limited: bool) -> Result<(Vec<u8>, u32, u32, CaptureTarget), RpcError> {
+    fn render(r: &zebra_render::Renderer, editor: &Editor, req: &CaptureReq, limited: bool) -> Result<(Vec<u8>, u32, u32, CaptureTarget), RpcError> {
         let target = req.target.clone().unwrap_or(if limited { CaptureTarget::AgentView } else { CaptureTarget::Viewport });
         let (w, h) = match (req.width, req.height) {
             (Some(w), Some(h)) => (w, h),
@@ -241,12 +287,12 @@ impl Dispatcher {
                 return Err(RpcError::invalid(format!("step {index} does not exist; the path has {} steps (0-based)", editor.doc.path.len())));
             }
         }
-        let png = self.renderer.capture(editor, &target, w, h)?;
+        let png = r.capture(editor, &target, w, h)?;
         Ok((png, w, h, target))
     }
 
-    fn capture(&self, editor: &Editor, req: &CaptureReq, limited: bool) -> Result<Value, RpcError> {
-        let (png, w, h, target) = self.render(editor, req, limited)?;
+    fn capture(r: &zebra_render::Renderer, editor: &Editor, req: &CaptureReq, limited: bool) -> Result<Value, RpcError> {
+        let (png, w, h, target) = Self::render(r, editor, req, limited)?;
         let tgt = serde_json::to_value(&target).unwrap_or(Value::Null);
         if let Some(p) = &req.path {
             write_file(p, &png)?;
@@ -257,7 +303,7 @@ impl Dispatcher {
         }
     }
 
-    fn export(&self, editor: &Editor, format: ExportFormat, path: Option<std::path::PathBuf>, cap: &CaptureReq, limited: bool) -> Result<Value, RpcError> {
+    fn export(r: &zebra_render::Renderer, editor: &Editor, format: ExportFormat, path: Option<std::path::PathBuf>, cap: &CaptureReq, limited: bool) -> Result<Value, RpcError> {
         let (bytes, mime) = match format {
             ExportFormat::Png => {
                 let mut cap = cap.clone();
@@ -265,9 +311,9 @@ impl Dispatcher {
                     cap.target = Some(CaptureTarget::Overview);
                 }
                 cap.path = None;
-                (self.render(editor, &cap, limited)?.0, "image/png")
+                (Self::render(r, editor, &cap, limited)?.0, "image/png")
             }
-            ExportFormat::Pdf => (self.renderer.export_pdf(editor)?, "application/pdf"),
+            ExportFormat::Pdf => (r.export_pdf(editor)?, "application/pdf"),
             ExportFormat::Json => {
                 let json = zebra_core::io::to_json(&editor.doc);
                 if path.is_none() {
@@ -286,6 +332,13 @@ impl Dispatcher {
                                "data_base64": base64::engine::general_purpose::STANDARD.encode(&bytes) })),
         }
     }
+}
+
+/// A capture or export rendering on a worker thread.
+pub(crate) struct Job {
+    client: u64,
+    id: Option<Value>,
+    rx: std::sync::mpsc::Receiver<Result<Value, RpcError>>,
 }
 
 pub(crate) struct Wait {
