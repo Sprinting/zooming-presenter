@@ -54,7 +54,10 @@ run_app ""
 sleep 14   # past launch, so the last 10 s are pure idle
 P=$(perf)
 check "heap MB" "$(echo "$P" | field '["heap_mb"]')" "<=" 40
-check "repaints in 10 s idle" "$(echo "$P" | field '["repaints_last_10s"]')" "<=" 2
+# The perf query itself wakes the window (API waker, dispatcher pump): the
+# frames it causes land in the last few ms. Count only frames drawn before it.
+idle_frames() { echo "$1" | python3 -c "import json,sys; print(sum(1 for a in json.load(sys.stdin).get('frames_last_10s_ago', []) if a > 0.25))"; }
+check "repaints in 10 s idle" "$(idle_frames "$P")" "<=" 2
 echo "       repaint causes: $(echo "$P" | field '.get("repaint_causes_last_10s", {})')"
 # The perf call above left an agent connected (zebractl keeps one
 # connection per agent). Idle must stay idle with it open. 13 s, not 11:
@@ -62,7 +65,8 @@ echo "       repaint causes: $(echo "$P" | field '.get("repaint_causes_last_10s"
 # measured 10 s window, so only true idle is counted.
 sleep 13
 P=$(perf)
-check "repaints in 10 s idle, agent connected" "$(echo "$P" | field '["repaints_last_10s"]')" "<=" 2
+check "repaints in 10 s idle, agent connected" "$(idle_frames "$P")" "<=" 2
+echo "       (all frames incl. this query's own: $(echo "$P" | field '["repaints_last_10s"]'))"
 echo "       repaint causes: $(echo "$P" | field '.get("repaint_causes_last_10s", {})')"
 echo "       frames, seconds ago: $(echo "$P" | field '.get("frames_last_10s_ago", [])')"
 echo "       causes, seconds ago: $(echo "$P" | field '.get("repaint_causes_last_10s_ago", [])')"
