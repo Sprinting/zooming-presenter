@@ -856,8 +856,11 @@ impl ZebraApp {
             let has_cmd = modifiers.command;
             // While typing: only ⌘ shortcuts that text fields don't use.
             if text_focus {
+                // In a canvas text box ⌘B/⌘I/⌘U format and ⌘K adds a link.
+                let rich_keys = self.canvas.text.is_some() && matches!(key, egui::Key::B | egui::Key::I | egui::Key::U | egui::Key::K);
                 let text_uses = matches!(key, egui::Key::A | egui::Key::C | egui::Key::V | egui::Key::X | egui::Key::Z | egui::Key::Y)
-                    || !has_cmd;
+                    || !has_cmd
+                    || rich_keys;
                 if text_uses {
                     continue;
                 }
@@ -953,6 +956,20 @@ impl ZebraApp {
     pub fn blank(&self) -> Option<Blank> {
         self.editor.view.present.blank
     }
+}
+
+/// Open a web or mail link in the default app. Other schemes are refused.
+pub fn open_url(url: &str) {
+    let u = url.trim();
+    if !(u.starts_with("https://") || u.starts_with("http://") || u.starts_with("mailto:")) {
+        eprintln!("zebra: not opening link with unsupported scheme: {u}");
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let cmd = "/usr/bin/open";
+    #[cfg(not(target_os = "macos"))]
+    let cmd = "xdg-open";
+    let _ = std::process::Command::new(cmd).arg(u).spawn();
 }
 
 pub fn permission_name(p: zebra_core::view::Permission) -> &'static str {

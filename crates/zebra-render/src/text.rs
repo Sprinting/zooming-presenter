@@ -13,7 +13,8 @@ use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, IndentOptions, LayoutContext,
     LineHeight, PositionedLayoutItem, StyleProperty,
 };
-use zebra_core::{Align, TextData, Theme};
+use zebra_core::rich;
+use zebra_core::{Align, ListKind, SpanFormat, TextData, Theme};
 
 pub use parley::FontData;
 
@@ -100,6 +101,30 @@ pub struct GlyphRunData {
     /// Synthetic italic skew in degrees (fonts without an italic face).
     pub skew: Option<f32>,
     pub glyphs: Vec<PGlyph>,
+    /// Index into [`TextLayout::formats`] when this run has its own
+    /// formatting (colour, link...).
+    pub format: Option<u16>,
+}
+
+/// An underline or strike-through line, in layout space.
+#[derive(Debug, Clone, Copy)]
+pub struct Decoration {
+    pub x0: f32,
+    pub x1: f32,
+    /// Centre of the line.
+    pub y: f32,
+    pub thickness: f32,
+    pub format: u16,
+}
+
+/// A clickable link area, in layout space.
+#[derive(Debug, Clone)]
+pub struct LinkArea {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub url: String,
 }
 
 /// A finished layout: what drawing and measuring share.
@@ -110,6 +135,31 @@ pub struct TextLayout {
     pub width: f64,
     pub height: f64,
     pub runs: Vec<GlyphRunData>,
+    /// Character formats used by runs and decorations (the text's spans).
+    pub formats: Vec<SpanFormat>,
+    pub decorations: Vec<Decoration>,
+    pub links: Vec<LinkArea>,
+}
+
+impl TextLayout {
+    /// The link under a point in layout space, if any.
+    pub fn link_at(&self, x: f32, y: f32) -> Option<&str> {
+        self.links.iter().find(|l| x >= l.x0 && x <= l.x1 && y >= l.y0 && y <= l.y1).map(|l| l.url.as_str())
+    }
+}
+
+/// A span's layout-relevant formatting, hashable.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct SpanKey {
+    start: usize,
+    end: usize,
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underline: Option<bool>,
+    strike: Option<bool>,
+    color: Option<String>,
+    link: Option<String>,
+    size_bits: Option<u64>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -122,6 +172,9 @@ struct Key {
     align: u8,
     bullets: bool,
     wrap_bits: Option<u64>,
+    spans: Vec<SpanKey>,
+    /// (indent, list, align) per paragraph entry.
+    paras: Vec<(u8, u8, u8)>,
 }
 
 struct Inner {
@@ -180,6 +233,26 @@ impl Fonts {
             align: t.align as u8,
             bullets: t.bullets,
             wrap_bits: wrap.filter(|w| w.is_finite() && *w > 0.0).map(|w| w.to_bits()),
+            spans: t
+                .spans
+                .iter()
+                .map(|s| SpanKey {
+                    start: s.start,
+                    end: s.end,
+                    bold: s.format.bold,
+                    italic: s.format.italic,
+                    underline: s.format.underline,
+                    strike: s.format.strike,
+                    color: s.format.color.clone(),
+                    link: s.format.link.clone(),
+                    size_bits: s.format.size.map(f64::to_bits),
+                })
+                .collect(),
+            paras: t
+                .paras
+                .iter()
+                .map(|p| (p.indent, p.list.map(|l| l as u8 + 1).unwrap_or(0), p.align.map(|a| a as u8 + 1).unwrap_or(0)))
+                .collect(),
         };
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let gen_now = g.generation;
@@ -226,91 +299,248 @@ impl Default for Fonts {
     }
 }
 
+/// Rebuild the `TextData` a key was made from (layout only needs these).
+fn data_of(key: &Key) -> TextData {
+    let align = |a: u8| match a {
+        x if x == Align::Center as u8 => Align::Center,
+        x if x == Align::Right as u8 => Align::Right,
+        _ => Align::Left,
+    };
+    TextData {
+        text: key.text.clone(),
+        bold: key.bold,
+        italic: key.italic,
+        align: align(key.align),
+        bullets: key.bullets,
+        spans: key
+            .spans
+            .iter()
+            .map(|s| zebra_core::TextSpan {
+                start: s.start,
+                end: s.end,
+                format: SpanFormat {
+                    bold: s.bold,
+                    italic: s.italic,
+                    underline: s.underline,
+                    strike: s.strike,
+                    color: s.color.clone(),
+                    link: s.link.clone(),
+                    size: s.size_bits.map(f64::from_bits),
+                },
+            })
+            .collect(),
+        paras: key
+            .paras
+            .iter()
+            .map(|&(indent, list, al)| zebra_core::ParaFormat {
+                indent,
+                list: match list {
+                    1 => Some(ListKind::None),
+                    2 => Some(ListKind::Bullet),
+                    3 => Some(ListKind::Number),
+                    _ => None,
+                },
+                align: (al > 0).then(|| align(al - 1)),
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+const BULLETS: [&str; 3] = ["\u{2022}", "\u{25E6}", "\u{25AA}"];
+
+/// Lays out each paragraph on its own (so each can have its own indent,
+/// list marker and alignment) and stacks them.
 fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
-    const BULLET: &str = "\u{2022}\u{2002}";
-    let text: String = if key.bullets {
-        key.text.split('\n').map(|p| format!("{BULLET}{p}")).collect::<Vec<_>>().join("\n")
-    } else {
-        key.text.clone()
-    };
+    let t = data_of(key);
     let Inner { font_cx, layout_cx, .. } = g;
-    let mut b = layout_cx.ranged_builder(font_cx, &text, 1.0, true);
-    b.push_default(StyleProperty::FontFamily(FontFamily::named(&key.family)));
-    b.push_default(StyleProperty::FontSize(size));
-    b.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(LINE_HEIGHT)));
-    if key.bold {
-        b.push_default(StyleProperty::FontWeight(FontWeight::BOLD));
-    }
-    if key.italic {
-        b.push_default(StyleProperty::FontStyle(FontStyle::Italic));
-    }
-    let mut layout = b.build(&text);
-
-    if key.bullets {
-        // Hanging indent: wrapped lines line up after the bullet.
-        let mut bb = layout_cx.ranged_builder(font_cx, BULLET, 1.0, true);
-        bb.push_default(StyleProperty::FontFamily(FontFamily::named(&key.family)));
-        bb.push_default(StyleProperty::FontSize(size));
-        if key.bold {
-            bb.push_default(StyleProperty::FontWeight(FontWeight::BOLD));
-        }
-        let mut bl = bb.build(BULLET);
-        bl.break_all_lines(None);
-        let indent = bl.full_width();
-        layout.set_text_indent(indent, IndentOptions { each_line: true, hanging: true });
-    }
-    let alignment = match key.align {
-        x if x == Align::Center as u8 => Alignment::Center,
-        x if x == Align::Right as u8 => Alignment::Right,
-        _ => Alignment::Left,
-    };
-    layout.set_alignment(alignment, AlignmentOptions::default());
     let wrap = key.wrap_bits.map(|b| f64::from_bits(b) as f32);
-    layout.break_all_lines(wrap);
+    let paras: Vec<&str> = t.text.split('\n').collect();
+    let formats: Vec<SpanFormat> = t.spans.iter().map(|s| s.format.clone()).collect();
 
-    let mut runs = Vec::new();
-    for line in layout.lines() {
-        for item in line.items() {
-            let PositionedLayoutItem::GlyphRun(gr) = item else { continue };
-            let run = gr.run();
-            let synthesis = run.synthesis();
-            let ranges: Vec<Range<usize>> = run
-                .visual_clusters()
-                .flat_map(|c| {
-                    let r = c.text_range();
-                    std::iter::repeat_n(r, c.glyphs().count())
-                })
-                .collect();
-            let whole = run.text_range();
-            let glyphs: Vec<PGlyph> = gr
-                .positioned_glyphs()
-                .enumerate()
-                .map(|(i, pg)| {
-                    let r = ranges.get(i).cloned().unwrap_or_else(|| whole.clone());
-                    PGlyph { id: pg.id, x: pg.x, y: pg.y, advance: pg.advance, start: r.start as u32, end: r.end as u32 }
-                })
-                .collect();
-            if glyphs.is_empty() {
+    // Paragraph text with its list marker, and where the text starts.
+    struct P {
+        text: String,
+        marker_len: usize,
+        indent_x: f32,
+        align: Align,
+        char0: usize,
+    }
+    let mut ps = vec![];
+    let mut numbers = [0usize; 9];
+    let mut char0 = 0;
+    for (i, p) in paras.iter().enumerate() {
+        let (list, indent, align) = rich::para(&t, i);
+        let lvl = indent.min(8) as usize;
+        for n in numbers.iter_mut().skip(lvl + 1) {
+            *n = 0;
+        }
+        let marker = match list {
+            ListKind::Bullet => {
+                numbers[lvl] = 0;
+                format!("{}\u{2002}", BULLETS[lvl % 3])
+            }
+            ListKind::Number => {
+                numbers[lvl] += 1;
+                format!("{}.\u{2002}", numbers[lvl])
+            }
+            ListKind::None => {
+                numbers[lvl] = 0;
+                String::new()
+            }
+        };
+        ps.push(P { marker_len: marker.len(), text: format!("{marker}{p}"), indent_x: indent as f32 * size * 1.25, align, char0 });
+        char0 += p.chars().count() + 1;
+    }
+
+    let build = |font_cx: &mut FontContext, layout_cx: &mut LayoutContext<[u8; 4]>, p: &P| {
+        let mut b = layout_cx.ranged_builder(font_cx, &p.text, 1.0, true);
+        b.push_default(StyleProperty::FontFamily(FontFamily::named(&key.family)));
+        b.push_default(StyleProperty::FontSize(size));
+        b.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(LINE_HEIGHT)));
+        if key.bold {
+            b.push_default(StyleProperty::FontWeight(FontWeight::BOLD));
+        }
+        if key.italic {
+            b.push_default(StyleProperty::FontStyle(FontStyle::Italic));
+        }
+        let pchars = p.text[p.marker_len..].chars().count();
+        for (si, s) in t.spans.iter().enumerate() {
+            let (a, z) = (s.start.max(p.char0), s.end.min(p.char0 + pchars));
+            if a >= z {
                 continue;
             }
-            runs.push(GlyphRunData {
-                font: run.font().clone(),
-                font_size: run.font_size(),
-                coords: run.normalized_coords().iter().map(|c| c.to_bits()).collect(),
-                skew: synthesis.skew(),
-                glyphs,
-            });
+            let body = &p.text[p.marker_len..];
+            let r = p.marker_len + rich::byte_at(body, a - p.char0)..p.marker_len + rich::byte_at(body, z - p.char0);
+            let f = &s.format;
+            if let Some(v) = f.bold {
+                b.push(StyleProperty::FontWeight(if v { FontWeight::BOLD } else { FontWeight::NORMAL }), r.clone());
+            }
+            if let Some(v) = f.italic {
+                b.push(StyleProperty::FontStyle(if v { FontStyle::Italic } else { FontStyle::Normal }), r.clone());
+            }
+            if let Some(k) = f.size {
+                b.push(StyleProperty::FontSize(size * k as f32), r.clone());
+            }
+            let n = (si + 1) as u16;
+            b.push(StyleProperty::Brush([n as u8, (n >> 8) as u8, 0, 0]), r);
+        }
+        let mut layout = b.build(&p.text);
+        if p.marker_len > 0 {
+            // Hanging indent: wrapped lines line up after the marker.
+            let marker = &p.text[..p.marker_len];
+            let mut bb = layout_cx.ranged_builder(font_cx, marker, 1.0, true);
+            bb.push_default(StyleProperty::FontFamily(FontFamily::named(&key.family)));
+            bb.push_default(StyleProperty::FontSize(size));
+            if key.bold {
+                bb.push_default(StyleProperty::FontWeight(FontWeight::BOLD));
+            }
+            let mut bl = bb.build(marker);
+            bl.break_all_lines(None);
+            layout.set_text_indent(bl.full_width(), IndentOptions { each_line: true, hanging: true });
+        }
+        layout
+    };
+    let alignment = |a: Align| match a {
+        Align::Center => Alignment::Center,
+        Align::Right => Alignment::Right,
+        Align::Left => Alignment::Left,
+    };
+
+    let mut layouts = vec![];
+    for p in &ps {
+        let mut l = build(font_cx, layout_cx, p);
+        l.set_alignment(alignment(p.align), AlignmentOptions::default());
+        l.break_all_lines(wrap.map(|w| (w - p.indent_x).max(size)));
+        layouts.push(l);
+    }
+    // Without wrapping, align paragraphs within the widest one.
+    let natural = ps.iter().zip(&layouts).map(|(p, l)| p.indent_x + l.width()).fold(0.0f32, f32::max);
+    if wrap.is_none() {
+        for (p, l) in ps.iter().zip(layouts.iter_mut()) {
+            if p.align != Align::Left {
+                l.break_all_lines(Some((natural - p.indent_x).max(1.0)));
+            }
         }
     }
 
-    let line_h = size as f64 * LINE_HEIGHT as f64;
-    let height = (layout.height() as f64).max(line_h);
-    let natural = layout.width() as f64;
+    let line_h = size * LINE_HEIGHT;
+    let mut runs = Vec::new();
+    let mut decorations = Vec::new();
+    let mut links = Vec::new();
+    let mut y0 = 0.0f32;
+    let mut byte0 = 0usize;
+    for (p, layout) in ps.iter().zip(&layouts) {
+        for line in layout.lines() {
+            for item in line.items() {
+                let PositionedLayoutItem::GlyphRun(gr) = item else { continue };
+                let run = gr.run();
+                let synthesis = run.synthesis();
+                let ranges: Vec<Range<usize>> = run
+                    .visual_clusters()
+                    .flat_map(|c| {
+                        let r = c.text_range();
+                        std::iter::repeat_n(r, c.glyphs().count())
+                    })
+                    .collect();
+                let whole = run.text_range();
+                let glyphs: Vec<PGlyph> = gr
+                    .positioned_glyphs()
+                    .enumerate()
+                    .map(|(i, pg)| {
+                        let r = ranges.get(i).cloned().unwrap_or_else(|| whole.clone());
+                        PGlyph {
+                            id: pg.id,
+                            x: pg.x + p.indent_x,
+                            y: pg.y + y0,
+                            advance: pg.advance,
+                            start: (r.start + byte0) as u32,
+                            end: (r.end + byte0) as u32,
+                        }
+                    })
+                    .collect();
+                if glyphs.is_empty() {
+                    continue;
+                }
+                let brush = gr.style().brush;
+                let fi = u16::from(brush[0]) | (u16::from(brush[1]) << 8);
+                let format = (fi > 0).then(|| fi - 1);
+                if let Some(f) = format.and_then(|i| formats.get(i as usize).map(|f| (i, f))) {
+                    let (i, f) = f;
+                    let fs = run.font_size();
+                    let (x0, x1) = (gr.offset() + p.indent_x, gr.offset() + gr.advance() + p.indent_x);
+                    let base = gr.baseline() + y0;
+                    if f.underline == Some(true) || (f.link.is_some() && f.underline != Some(false)) {
+                        decorations.push(Decoration { x0, x1, y: base + fs * 0.11, thickness: (fs * 0.06).max(0.5), format: i });
+                    }
+                    if f.strike == Some(true) {
+                        decorations.push(Decoration { x0, x1, y: base - fs * 0.28, thickness: (fs * 0.06).max(0.5), format: i });
+                    }
+                    if let Some(url) = &f.link {
+                        links.push(LinkArea { x0, x1, y0: base - fs * 0.95, y1: base + fs * 0.3, url: url.clone() });
+                    }
+                }
+                runs.push(GlyphRunData {
+                    font: run.font().clone(),
+                    font_size: run.font_size(),
+                    coords: run.normalized_coords().iter().map(|c| c.to_bits()).collect(),
+                    skew: synthesis.skew(),
+                    glyphs,
+                    format,
+                });
+            }
+        }
+        y0 += layout.height().max(line_h);
+        byte0 += p.text.len() + 1;
+    }
+
+    let height = (y0 as f64).max(line_h as f64);
     let width = match wrap {
         Some(w) => w as f64,
-        None => natural.max(size as f64 * 0.3),
+        None => (natural as f64).max(size as f64 * 0.3),
     };
-    TextLayout { text: text.into(), width, height, runs }
+    let text: String = ps.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n");
+    TextLayout { text: text.into(), width, height, runs, formats, decorations, links }
 }
 
 /// The measurer installed in `Editor::measure`.

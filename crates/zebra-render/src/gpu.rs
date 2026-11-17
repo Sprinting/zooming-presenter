@@ -21,10 +21,10 @@ pub fn encode_scene(scene: &mut Scene, list: &DisplayList) {
         match item {
             Item::Fill { path, color: c } => scene.fill(Fill::NonZero, Affine::IDENTITY, color(*c), None, path),
             Item::Stroke { path, color: c, stroke } => scene.stroke(stroke, Affine::IDENTITY, color(*c), None, path),
-            Item::Text { layout, transform, color: c } => {
+            Item::Text { layout, transform, color: c, run_colors } => {
                 let (s, rest) = split_scale(transform);
-                let brush = color(*c);
-                for run in &layout.runs {
+                for (ri, run) in layout.runs.iter().enumerate() {
+                    let brush = color(run_colors.get(ri).copied().unwrap_or(*c));
                     // vello GPU glyph space is y-up, vello_cpu y-down: the signs differ.
                     let skew = run.skew.map(|a| Affine::skew((a as f64).to_radians().tan(), 0.0));
                     scene

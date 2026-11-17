@@ -141,7 +141,7 @@ fn tool_shortcuts_and_frame_cycle() {
     // Drawing a frame around a text wraps it.
     {
         let app = h.state_mut();
-        app.editor.apply(Command::AddText { text: "inside".into(), x: 0.0, y: 0.0, style: Default::default(), scale: Some(1.0), place: None, id: None }, Origin::Human).unwrap();
+        app.editor.apply(Command::AddText { text: "inside".into(), x: 0.0, y: 0.0, style: Default::default(), scale: Some(1.0), place: None, id: None, markdown: false }, Origin::Human).unwrap();
     }
     h.run_steps(1);
     let (a, b) = {
@@ -281,4 +281,40 @@ fn ai_control_is_switched_on_by_the_human_and_off_by_an_agent() {
     let err = zebra_api::client::Client::discover(None, None, None, "test-agent").err().unwrap().to_string();
     assert!(err.contains("switched off") || err.contains("isn't accepting"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn rich_text_bold_selection_and_list_from_keyboard() {
+    let mut h = harness(Some("empty"));
+    let c = h.state().canvas.rect.center();
+    click_at(&mut h, c, 2);
+    h.run_steps(2);
+    h.event(Event::Text("Hello world".into()));
+    h.run_steps(2);
+    // Select the last word with ⇧⌥← and make it bold.
+    h.event(Event::Key { key: Key::ArrowLeft, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT | Modifiers::ALT });
+    h.run_steps(2);
+    h.event(Event::Key { key: Key::B, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(2);
+    // Tab makes the paragraph a deeper indent level.
+    h.event(Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    let app = h.state();
+    let t = app
+        .editor
+        .doc
+        .ordered()
+        .find_map(|e| match &e.kind {
+            ElementKind::Text(t) => Some(t.clone()),
+            _ => None,
+        })
+        .expect("a text was created");
+    assert_eq!(t.text, "Hello world");
+    assert_eq!(t.spans.len(), 1, "{:?}", t.spans);
+    assert_eq!((t.spans[0].start, t.spans[0].end), (6, 11), "only the selected word is bold");
+    assert_eq!(t.spans[0].format.bold, Some(true));
+    assert!(!t.bold, "the box itself is not bold");
+    assert_eq!(t.paras.first().map(|p| p.indent), Some(1));
 }

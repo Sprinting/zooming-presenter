@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use egui::{Align2, Color32, CursorIcon, FontId, Key, Painter, PointerButton, Pos2, Rect as ERect, Sense, Shape, Stroke, Ui};
 use zebra_core::{
     Command, ElementId, ElementKind, ElementPatch, FrameData, FrameStyle, Mode, NewElement, Origin, Rect, ShapeData,
-    ShapeKind, StepTarget, TextData, TextStyle, Tool, Vec2, ViewCommand,
+    ListKind, ShapeKind, SpanFormat, StepTarget, TextData, TextStyle, Tool, Vec2, ViewCommand,
 };
 
 use crate::app::{ScrollMode, ZebraApp};
@@ -75,6 +75,12 @@ pub struct TextEditState {
     pub focused_once: bool,
     pub size_px: egui::Vec2,
     pub zoom: f64,
+    /// Character and paragraph formatting, kept in step with `buf`.
+    pub rich: TextData,
+    /// Selected characters (start, end) as of the last frame.
+    pub sel: (usize, usize),
+    /// The link field is open with this URL.
+    pub link_draft: Option<String>,
 }
 
 pub struct CanvasState {
@@ -869,6 +875,9 @@ pub fn begin_new_text(app: &mut ZebraApp, p: Pos2) {
         focused_once: false,
         size_px: egui::Vec2::ZERO,
         zoom,
+        rich: TextData::default(),
+        sel: (0, 0),
+        link_draft: None,
     });
     let _ = app.editor.view(ViewCommand::ClearSelection, H);
 }
@@ -894,6 +903,9 @@ pub fn begin_edit_existing(app: &mut ZebraApp, id: ElementId) {
         focused_once: false,
         size_px: egui::Vec2::ZERO,
         zoom: app.editor.view.camera.zoom,
+        rich: t.clone(),
+        sel: (0, 0),
+        link_draft: None,
     });
     app.select(vec![id]);
 }
@@ -905,8 +917,9 @@ pub fn cancel_text_edit(app: &mut ZebraApp) {
 
 /// Apply the in-place edit as one command (Add text / Edit text).
 pub fn commit_text_edit(app: &mut ZebraApp) {
-    let Some(t) = app.canvas.text.take() else { return };
+    let Some(mut t) = app.canvas.text.take() else { return };
     let text = t.buf.trim_end().to_string();
+    zebra_core::rich::edit_text(&mut t.rich, &text);
     match &t.id {
         None => {
             if text.trim().is_empty() {
@@ -924,7 +937,16 @@ pub fn commit_text_edit(app: &mut ZebraApp) {
                 w: None,
                 h: None,
                 name: String::new(),
-                kind: ElementKind::Text(TextData { text, style: t.style, bold: t.bold, italic: t.italic, bullets: t.bullets, ..Default::default() }),
+                kind: ElementKind::Text(TextData {
+                    text,
+                    style: t.style,
+                    bold: t.bold,
+                    italic: t.italic,
+                    bullets: t.bullets,
+                    spans: t.rich.spans.clone(),
+                    paras: t.rich.paras.clone(),
+                    ..Default::default()
+                }),
             };
             let r = app.editor.apply_batch(vec![Command::AddElement { element: el }], Some("Add text".into()), H);
             if let Some(out) = app.report(r) {
@@ -953,6 +975,12 @@ pub fn commit_text_edit(app: &mut ZebraApp) {
             if t.bullets != old.bullets {
                 patch.bullets = Some(t.bullets);
             }
+            if t.rich.spans != old.spans || patch.text.is_some() {
+                patch.spans = Some(t.rich.spans.clone());
+            }
+            if t.rich.paras != old.paras || patch.text.is_some() {
+                patch.paras = Some(t.rich.paras.clone());
+            }
             if patch != ElementPatch::default() {
                 let r = app.editor.apply_batch(vec![Command::Update { id: id.clone(), patch }], Some("Edit text".into()), H);
                 app.report(r);
@@ -961,7 +989,79 @@ pub fn commit_text_edit(app: &mut ZebraApp) {
     }
 }
 
+/// Build the editing view of a rich text: one egui section per run of
+/// equal formatting, paragraph indents as leading space.
+fn rich_job(rich: &TextData, text: &str, theme: &zebra_core::Theme, base: &FontId, font_name: &str, color: Color32, wrap: f32) -> egui::text::LayoutJob {
+    use zebra_core::rich;
+    let mut r = rich.clone();
+    rich::edit_text(&mut r, text);
+    let mut job = egui::text::LayoutJob { wrap: egui::text::TextWrapping { max_width: wrap, ..Default::default() }, ..Default::default() };
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let n = chars.len();
+    let byte = |i: usize| chars.get(i).map(|c| c.0).unwrap_or(text.len());
+    let mut cuts: Vec<usize> = vec![0, n];
+    for sp in &r.spans {
+        cuts.push(sp.start.min(n));
+        cuts.push(sp.end.min(n));
+    }
+    let mut para_starts = vec![0usize];
+    for (i, (_, c)) in chars.iter().enumerate() {
+        if *c == '\n' {
+            para_starts.push(i + 1);
+            cuts.push(i + 1);
+        }
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let size = base.size;
+    for w in cuts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if a >= b {
+            continue;
+        }
+        let f = r.spans.iter().find(|sp| sp.start <= a && b <= sp.end).map(|sp| sp.format.clone()).unwrap_or_default();
+        let bold = f.bold.unwrap_or(rich.bold);
+        let italic = f.italic.unwrap_or(rich.italic);
+        let k = f.size.unwrap_or(1.0) as f32;
+        let c = match (&f.color, &f.link) {
+            (Some(c), _) => crate::fallback::theme_color(theme, c),
+            (None, Some(_)) => crate::fallback::theme_color(theme, "theme:accent"),
+            _ => color,
+        };
+        let line = Stroke::new((size * k * 0.06).max(1.0), c);
+        let mut fmt = egui::TextFormat {
+            font_id: FontId::new((size * k).max(1.0), style::doc_family(font_name, bold, italic)),
+            color: c,
+            ..Default::default()
+        };
+        if f.underline == Some(true) || (f.link.is_some() && f.underline != Some(false)) {
+            fmt.underline = line;
+        }
+        if f.strike == Some(true) {
+            fmt.strikethrough = line;
+        }
+        let lead = match para_starts.iter().position(|p| *p == a) {
+            Some(pi) => {
+                let (list, indent, _) = rich::para(&r, pi);
+                indent as f32 * size * 1.25 + if list == ListKind::None { 0.0 } else { size * 1.2 }
+            }
+            None => 0.0,
+        };
+        job.append(&text[byte(a)..byte(b)], lead, fmt);
+    }
+    if job.sections.is_empty() {
+        job.append("", 0.0, egui::TextFormat { font_id: base.clone(), color, ..Default::default() });
+    }
+    job
+}
+
+/// Whether every selected character is `on` for a property.
+fn all_on(r: &TextData, a: usize, b: usize, get: impl Fn(&SpanFormat) -> Option<bool>, default: bool) -> bool {
+    (a..b).all(|i| r.spans.iter().find(|s| s.start <= i && i < s.end).and_then(|s| get(&s.format)).unwrap_or(default))
+}
+
 fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
+    use zebra_core::rich;
     let Some(mut t) = app.canvas.text.take() else { return };
     // The element may have been deleted (e.g. by an agent).
     if let Some(id) = &t.id {
@@ -984,18 +1084,72 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         TextStyle::Subtitle => "theme:subtitle",
         TextStyle::Body => "theme:body",
     });
+    rich::edit_text(&mut t.rich, &t.buf);
+    t.rich.bold = t.bold;
+    t.rich.italic = t.italic;
+    t.rich.bullets = t.bullets;
     let pos = app.canvas.w2s(&app.editor, t.anchor);
-    let measure = if t.buf.is_empty() { "Type something".to_string() } else { t.buf.clone() + " " };
-    let gw = ctx.fonts_mut(|f| f.layout_no_wrap(measure, font.clone(), color).size().x);
+    let measure_text = if t.buf.is_empty() { "Type something".to_string() } else { t.buf.clone() + " " };
+    let gw = {
+        let job = rich_job(&t.rich, &measure_text, &theme, &font, &ts.font, color, f32::INFINITY);
+        ctx.fonts_mut(|f| f.layout_job(job).size().x)
+    };
     let width = gw.max(size * 2.0);
     let mut committed = false;
     let mut refocus = false;
+    let edit_id = egui::Id::unique("zebra-text-edit-field");
+    let focused = ctx.memory(|m| m.has_focus(edit_id));
+
+    // Formatting actions, from the keyboard or the toolbar.
+    #[derive(PartialEq)]
+    enum Fx {
+        Bold,
+        Italic,
+        Underline,
+        Strike,
+        Bigger,
+        Smaller,
+        Color(String),
+        List(ListKind),
+        Indent(i32),
+        Link,
+    }
+    let mut fx: Vec<Fx> = vec![];
+    if focused {
+        ctx.input_mut(|i| {
+            if i.consume_key(egui::Modifiers::COMMAND, Key::B) {
+                fx.push(Fx::Bold);
+            }
+            if i.consume_key(egui::Modifiers::COMMAND, Key::I) {
+                fx.push(Fx::Italic);
+            }
+            if i.consume_key(egui::Modifiers::COMMAND, Key::U) {
+                fx.push(Fx::Underline);
+            }
+            if i.consume_key(egui::Modifiers::COMMAND, Key::K) {
+                fx.push(Fx::Link);
+            }
+            if i.consume_key(egui::Modifiers::SHIFT, Key::Tab) {
+                fx.push(Fx::Indent(-1));
+            } else if i.consume_key(egui::Modifiers::NONE, Key::Tab) {
+                fx.push(Fx::Indent(1));
+            }
+        });
+    }
 
     let area = egui::Area::new(egui::Id::unique("zebra-text-edit")).fixed_pos(pos).order(egui::Order::Foreground).constrain(false);
+    let rich_now = t.rich.clone();
+    let font_name = ts.font.clone();
+    let theme2 = theme.clone();
+    let font2 = font.clone();
     let r = area.show(ctx, |ui| {
         // Areas otherwise remember last frame's (narrow) width, which made the
         // text wrap a few letters per line while typing.
         ui.set_min_width(width);
+        let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+            let job = rich_job(&rich_now, buf.as_str(), &theme2, &font2, &font_name, color, wrap);
+            ui.fonts_mut(|f| f.layout_job(job))
+        };
         let edit = egui::TextEdit::multiline(&mut t.buf)
             .font(font.clone())
             .text_color(color)
@@ -1003,12 +1157,47 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
             .margin(egui::Margin::ZERO)
             .desired_width(width)
             .desired_rows(1)
+            .lock_focus(true)
+            .layouter(&mut layouter)
             .hint_text(egui::RichText::new("Type something").color(color.gamma_multiply(0.35)).font(font.clone()))
-            .id(egui::Id::unique("zebra-text-edit-field"));
-        let resp = ui.add(edit);
+            .id(edit_id);
+        let out = edit.show(ui);
+        let resp = out.response.clone();
         if !t.focused_once {
             resp.request_focus();
             t.focused_once = true;
+        }
+        // List markers, drawn in the margin the indent left free.
+        let mut r2 = t.rich.clone();
+        rich::edit_text(&mut r2, &t.buf);
+        let mut numbers = [0usize; 9];
+        let mut at = 0usize;
+        for (pi, p) in t.buf.split('\n').enumerate() {
+            let (list, indent, _) = rich::para(&r2, pi);
+            let lvl = indent.min(8) as usize;
+            for n in numbers.iter_mut().skip(lvl + 1) {
+                *n = 0;
+            }
+            let marker = match list {
+                ListKind::Bullet => {
+                    numbers[lvl] = 0;
+                    ["\u{2022}", "\u{25E6}", "\u{25AA}"][lvl % 3].to_string()
+                }
+                ListKind::Number => {
+                    numbers[lvl] += 1;
+                    format!("{}.", numbers[lvl])
+                }
+                ListKind::None => {
+                    numbers[lvl] = 0;
+                    String::new()
+                }
+            };
+            if !marker.is_empty() {
+                let c = out.galley.pos_from_cursor(egui::text::CCursor::new(at));
+                let p0 = out.galley_pos + egui::vec2(c.min.x - size * 1.2, c.center().y - out.galley_pos.y + 0.0);
+                ui.painter().text(egui::pos2(p0.x, out.galley_pos.y + c.center().y), Align2::LEFT_CENTER, marker, font.clone(), color);
+            }
+            at += p.chars().count() + 1;
         }
         let r = resp.rect.expand(4.0);
         ui.painter().add(Shape::dashed_line(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], Stroke::new(1.0, ACCENT), 4.0, 3.0));
@@ -1016,10 +1205,26 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     });
     let resp = r.inner;
     t.size_px = resp.rect.size();
+    if let Some(cr) = egui::TextEdit::load_state(ctx, edit_id).and_then(|s| s.cursor.char_range()) {
+        let (a, b) = (cr.primary.index, cr.secondary.index);
+        t.sel = (usize::from(a.min(b)), usize::from(a.max(b)));
+    }
 
-    // Mini text toolbar (style, bold, italic, bullets), like Prezi's.
+    // Mini text toolbar, like Prezi's: box style, then character and
+    // paragraph formatting for the selection.
     let tb_pos = resp.rect.left_top() - egui::vec2(4.0, 44.0);
     let p = style::Palette::of(ctx);
+    let (sa, sb) = t.sel;
+    let has_sel = sa < sb;
+    let n_chars = t.buf.chars().count();
+    let (ra, rb) = if has_sel { (sa, sb) } else { (0, n_chars) };
+    let is_bold = all_on(&t.rich, ra, rb, |f| f.bold, t.bold);
+    let is_italic = all_on(&t.rich, ra, rb, |f| f.italic, t.italic);
+    let is_under = all_on(&t.rich, ra, rb, |f| f.underline, false);
+    let is_strike = all_on(&t.rich, ra, rb, |f| f.strike, false);
+    let pa = rich::paragraph_of(&t.rich, sa);
+    let pb = rich::paragraph_of(&t.rich, sb);
+    let cur_list = rich::para(&t.rich, pa).0;
     let tb = egui::Area::new(egui::Id::unique("zebra-text-toolbar")).fixed_pos(tb_pos).order(egui::Order::Foreground).show(ctx, |ui| {
         style::float_frame(&p).inner_margin(egui::Margin::same(3)).show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1031,29 +1236,138 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                     }
                 }
                 ui.separator();
-                if ui.selectable_label(t.bold, egui::RichText::new("B").strong()).on_hover_text("Bold").clicked() {
-                    t.bold = !t.bold;
-                    refocus = true;
+                if ui.selectable_label(is_bold, egui::RichText::new("B").strong()).on_hover_text("Bold (⌘B)").clicked() {
+                    fx.push(Fx::Bold);
                 }
-                if ui.selectable_label(t.italic, egui::RichText::new("I").italics()).on_hover_text("Italic").clicked() {
-                    t.italic = !t.italic;
-                    refocus = true;
+                if ui.selectable_label(is_italic, egui::RichText::new("I").italics()).on_hover_text("Italic (⌘I)").clicked() {
+                    fx.push(Fx::Italic);
                 }
-                if ui.selectable_label(t.bullets, "• List").on_hover_text("Bullets").clicked() {
-                    t.bullets = !t.bullets;
-                    refocus = true;
+                if ui.selectable_label(is_under, egui::RichText::new("U").underline()).on_hover_text("Underline (⌘U)").clicked() {
+                    fx.push(Fx::Underline);
+                }
+                if ui.selectable_label(is_strike, egui::RichText::new("S").strikethrough()).on_hover_text("Strikethrough").clicked() {
+                    fx.push(Fx::Strike);
+                }
+                if ui.button("A+").on_hover_text("Bigger").clicked() {
+                    fx.push(Fx::Bigger);
+                }
+                if ui.button("A−").on_hover_text("Smaller").clicked() {
+                    fx.push(Fx::Smaller);
+                }
+                ui.menu_button("Colour", |ui| {
+                    for (slot, name) in [("", "Default"), ("theme:title", "Title"), ("theme:accent", "Accent"), ("theme:shape1", "Colour 1"), ("theme:shape2", "Colour 2"), ("theme:shape3", "Colour 3"), ("theme:shape4", "Colour 4")] {
+                        let c = if slot.is_empty() { color } else { crate::fallback::theme_color(&theme, slot) };
+                        if ui.button(egui::RichText::new(format!("■  {name}")).color(c)).clicked() {
+                            fx.push(Fx::Color(slot.to_string()));
+                            ui.close();
+                        }
+                    }
+                });
+                if ui.selectable_label(t.link_draft.is_some(), "Link").on_hover_text("Link (⌘K)").clicked() {
+                    fx.push(Fx::Link);
+                }
+                ui.separator();
+                if ui.selectable_label(cur_list == ListKind::Bullet, "•").on_hover_text("Bulleted list").clicked() {
+                    fx.push(Fx::List(if cur_list == ListKind::Bullet { ListKind::None } else { ListKind::Bullet }));
+                }
+                if ui.selectable_label(cur_list == ListKind::Number, "1.").on_hover_text("Numbered list").clicked() {
+                    fx.push(Fx::List(if cur_list == ListKind::Number { ListKind::None } else { ListKind::Number }));
+                }
+                if ui.button("⇤").on_hover_text("Decrease indent (⇧⇥)").clicked() {
+                    fx.push(Fx::Indent(-1));
+                }
+                if ui.button("⇥").on_hover_text("Increase indent (⇥)").clicked() {
+                    fx.push(Fx::Indent(1));
                 }
                 ui.separator();
                 if ui.button("Done").clicked() {
                     committed = true;
                 }
             });
+            if let Some(mut url) = t.link_draft.take() {
+                let mut keep = true;
+                ui.horizontal(|ui| {
+                    ui.label("Link to");
+                    let r = ui.add(egui::TextEdit::singleline(&mut url).hint_text("https://…").desired_width(240.0));
+                    if !r.has_focus() && !r.lost_focus() && url.is_empty() {
+                        r.request_focus();
+                    }
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if ui.button("Apply").clicked() || enter {
+                        let fmt = SpanFormat { link: Some(url.trim().to_string()), ..Default::default() };
+                        rich::apply_format(&mut t.rich, ra, rb, &fmt);
+                        keep = false;
+                        refocus = true;
+                    }
+                    if ui.button("Remove").clicked() {
+                        rich::apply_format(&mut t.rich, ra, rb, &SpanFormat { link: Some(String::new()), ..Default::default() });
+                        keep = false;
+                        refocus = true;
+                    }
+                });
+                if keep {
+                    t.link_draft = Some(url);
+                }
+            }
         });
     });
+
+    for f in fx {
+        refocus = true;
+        let fmt = match f {
+            Fx::Bold if !has_sel => {
+                t.bold = !t.bold;
+                None
+            }
+            Fx::Italic if !has_sel => {
+                t.italic = !t.italic;
+                None
+            }
+            Fx::Bold => Some(SpanFormat { bold: Some(!is_bold), ..Default::default() }),
+            Fx::Italic => Some(SpanFormat { italic: Some(!is_italic), ..Default::default() }),
+            Fx::Underline => Some(SpanFormat { underline: Some(!is_under), ..Default::default() }),
+            Fx::Strike => Some(SpanFormat { strike: Some(!is_strike), ..Default::default() }),
+            Fx::Bigger | Fx::Smaller => {
+                let k = if f == Fx::Bigger { 1.25 } else { 0.8 };
+                // Scale each run's own size.
+                let cur: Vec<(usize, f64)> = (ra..rb).map(|i| (i, t.rich.spans.iter().find(|s| s.start <= i && i < s.end).and_then(|s| s.format.size).unwrap_or(1.0))).collect();
+                for (i, s) in cur {
+                    rich::apply_format(&mut t.rich, i, i + 1, &SpanFormat { size: Some((s * k).clamp(0.25, 8.0)), ..Default::default() });
+                }
+                None
+            }
+            Fx::Color(c) => Some(SpanFormat { color: Some(c), ..Default::default() }),
+            Fx::Link => {
+                if t.link_draft.is_some() {
+                    t.link_draft = None;
+                } else {
+                    let cur = rich::common_format(&t.rich, ra, rb).link.unwrap_or_default();
+                    t.link_draft = Some(cur);
+                    refocus = false;
+                }
+                None
+            }
+            Fx::List(l) => {
+                rich::format_paragraphs(&mut t.rich, pa, pb, Some(l), None, 0, None);
+                None
+            }
+            Fx::Indent(d) => {
+                rich::format_paragraphs(&mut t.rich, pa, pb, None, None, d, None);
+                None
+            }
+        };
+        if let Some(fmt) = fmt {
+            rich::apply_format(&mut t.rich, ra, rb, &fmt);
+        }
+    }
+
     app.canvas.text_toolbar = Some(tb.response.rect);
     let over_toolbar = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| tb.response.rect.contains(p));
-    if refocus || (resp.lost_focus() && over_toolbar && !committed) {
-        resp.request_focus();
+    let link_open = t.link_draft.is_some();
+    if (refocus && !link_open) || (resp.lost_focus() && (over_toolbar || link_open) && !committed) {
+        if !link_open {
+            resp.request_focus();
+        }
     } else if resp.lost_focus() {
         committed = true;
     }

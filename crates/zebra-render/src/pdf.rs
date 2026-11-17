@@ -129,11 +129,11 @@ fn draw_list(s: &mut Surface<'_>, list: &DisplayList, editor: &Editor, res: &mut
                     s.set_stroke(None);
                 }
             }
-            Item::Text { layout, transform, color } => {
+            Item::Text { layout, transform, color, run_colors } => {
                 s.set_stroke(None);
-                s.set_fill(Some(fill_of(*color)));
                 s.push_transform(&tf(transform));
-                for run in &layout.runs {
+                for (ri, run) in layout.runs.iter().enumerate() {
+                    s.set_fill(Some(fill_of(run_colors.get(ri).copied().unwrap_or(*color))));
                     let key = (run.font.data.id(), run.font.index);
                     let font = res
                         .fonts

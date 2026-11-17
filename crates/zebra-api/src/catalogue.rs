@@ -35,12 +35,15 @@ impl Kind {
 pub const EXAMPLES: &[(Kind, &str)] = &[
     // ---- document commands
     (Kind::Command, r#"{"op":"add_text","text":"Hello world","x":0,"y":-200,"style":"title"}"#),
+    (Kind::Command, r#"{"op":"add_text","markdown":true,"text":"Why **zebras** have stripes\n\n- flies get *confused*\n- [more](https://example.com)","x":0,"y":200}"#),
     (Kind::Command, r#"{"op":"add_frame","x":0,"y":0,"w":800,"h":600,"style":"bracket","name":"Intro","add_to_path":true}"#),
     (Kind::Command, r#"{"op":"add_shape","shape":"arrow","x":500,"y":0,"w":300,"h":60,"fill":"theme:accent"}"#),
     (Kind::Command, r#"{"op":"add_image","path":"/Users/me/logo.png","x":0,"y":300,"width":400,"alt":"Logo"}"#),
     (Kind::Command, r#"{"op":"add_ink","points":[[0,0],[50,40],[120,10]],"color":"theme:accent","width":6}"#),
     (Kind::Command, r#"{"op":"add_element","element":{"x":0,"y":0,"kind":{"type":"shape","shape":"ellipse"},"w":150,"h":150}}"#),
     (Kind::Command, r##"{"op":"update","id":"t1","patch":{"text":"New text","bold":true,"color":"#cc3333"}}"##),
+    (Kind::Command, r##"{"op":"format_text","id":"t1","find":"zebras","format":{"bold":true,"color":"theme:accent"}}"##),
+    (Kind::Command, r#"{"op":"format_paragraphs","id":"t1","first":1,"last":3,"list":"bullet","indent_by":1}"#),
     (Kind::Command, r#"{"op":"move","ids":["f1"],"dx":200,"dy":0}"#),
     (Kind::Command, r#"{"op":"scale","ids":["t1"],"factor":0.5}"#),
     (Kind::Command, r#"{"op":"rotate","ids":["f2"],"degrees":-15}"#),

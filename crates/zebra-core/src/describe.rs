@@ -38,8 +38,14 @@ fn one_line(ed: &Editor, e: &Element) -> String {
         }
         ElementKind::Text(d) => {
             let _ = write!(s, " {}", serde_json::to_value(d.style).unwrap().as_str().unwrap());
-            let txt = truncate(&d.text.replace('\n', " / "), 60);
-            let _ = write!(s, " {:?}", txt);
+            if d.spans.is_empty() && d.paras.is_empty() {
+                let txt = truncate(&d.text.replace('\n', " / "), 60);
+                let _ = write!(s, " {:?}", txt);
+            } else {
+                // Rich text reads back as Markdown (the same subset add_text accepts).
+                let txt = truncate(&crate::rich::to_markdown(d).replace('\n', " / "), 90);
+                let _ = write!(s, " md{:?}", txt);
+            }
         }
         ElementKind::Shape(d) => {
             let _ = write!(s, " {}", serde_json::to_value(d.shape).unwrap().as_str().unwrap());

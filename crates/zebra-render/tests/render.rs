@@ -243,3 +243,23 @@ fn italic_rotation_and_deep_text_samples() {
     };
     std::fs::write(out_dir().join("italic.pdf"), &pdf).unwrap();
 }
+
+#[test]
+fn rich_text_links_hit_and_formats_draw() {
+    let r = zebra_render::Renderer::new();
+    let mut ed = zebra_core::Editor::default();
+    ed.measure = r.measure();
+    let cmd: zebra_core::Command = serde_json::from_value(serde_json::json!({"op":"add_text","id":"t","x":100,"y":50,"markdown":true,"text":"[Open the site](https://example.com) **now**"})).unwrap();
+    ed.apply(cmd, zebra_core::Origin::Human).unwrap();
+    let e = ed.doc.get("t").unwrap().clone();
+    let (w, _h) = e.world_size();
+    // Left part of the text is the link; the far right ("now") is not.
+    let left = zebra_core::Vec2::new(100.0 - w / 2.0 + w * 0.15, 50.0);
+    let right = zebra_core::Vec2::new(100.0 + w / 2.0 - 2.0, 50.0);
+    assert_eq!(r.link_at(&ed, &e, left).as_deref(), Some("https://example.com"));
+    assert_eq!(r.link_at(&ed, &e, right), None);
+    // The link is underlined: the display list has a filled decoration.
+    let cam = zebra_core::Camera { cx: 100.0, cy: 50.0, zoom: 1.0, rotation: 0.0 };
+    let list = r.build_display_list(&ed, &cam, [800.0, 600.0], 1.0, &Default::default());
+    assert!(list.items.iter().any(|i| matches!(i, zebra_render::display::Item::Fill { .. })), "underline drawn");
+}

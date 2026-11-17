@@ -236,6 +236,75 @@ pub struct TextData {
     /// False: the box grows with the text (auto width). True: wraps at `size.w`.
     #[serde(default)]
     pub fixed_width: bool,
+    /// Character formatting on parts of the text (bold word, coloured
+    /// phrase, link). Ranges are in characters (Unicode scalar values), not
+    /// bytes. Kept sorted and non-overlapping; see [`crate::rich`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spans: Vec<TextSpan>,
+    /// Per-paragraph formatting, one entry per `\n`-separated paragraph
+    /// (missing entries use the defaults: `bullets` for the list, indent 0).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paras: Vec<ParaFormat>,
+}
+
+/// Formatting for the characters `start..end` of a text. Unset fields
+/// inherit the text box's own settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct TextSpan {
+    pub start: usize,
+    pub end: usize,
+    #[serde(flatten)]
+    pub format: SpanFormat,
+}
+
+/// Character formatting. `None` leaves a property as it is (when applying)
+/// or inherited (when stored).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct SpanFormat {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strike: Option<bool>,
+    /// `#rrggbb` or a theme slot. An empty string clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorRef>,
+    /// URL opened when the text is clicked while presenting. An empty
+    /// string removes the link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+    /// Size relative to the text style (1.0 = normal, 2.0 = twice as big).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ListKind {
+    #[default]
+    None,
+    Bullet,
+    Number,
+}
+
+/// Formatting of one paragraph.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ParaFormat {
+    /// Indent level, 0 to 8.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub indent: u8,
+    /// `None` here means "use the box's `bullets` setting".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<ListKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<Align>,
+}
+
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]

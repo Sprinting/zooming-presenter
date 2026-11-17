@@ -137,7 +137,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             "agent" => {
                 let agent = Origin::agent("Claude");
                 app.demo_agent = Some("Claude".into());
-                let _ = app.editor.apply(Command::AddText { text: "Added by the agent".into(), x: 0.0, y: -250.0, style: TextStyle::Subtitle, scale: Some(1.2), place: None, id: None }, agent.clone());
+                let _ = app.editor.apply(Command::AddText { text: "Added by the agent".into(), x: 0.0, y: -250.0, style: TextStyle::Subtitle, scale: Some(1.2), place: None, id: None, markdown: false }, agent.clone());
                 let found = app.editor.doc.ordered().find(|e| e.name == "Why zoom?").map(|e| e.id.clone());
                 if let Some(c) = found {
                     let _ = app.editor.apply(Command::Update { id: c.clone(), patch: zebra_core::ElementPatch { frame_style: Some(FrameStyle::Bracket), ..Default::default() } }, agent.clone());
@@ -150,6 +150,14 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 crate::canvas::begin_new_text(app, p);
                 if let Some(t) = &mut app.canvas.text {
                     t.buf = "Hello, canvas".into();
+                }
+            }
+            "richtext" => {
+                let p = app.canvas.rect.center();
+                crate::canvas::begin_new_text(app, p);
+                if let Some(t) = &mut app.canvas.text {
+                    t.rich = zebra_core::rich::from_markdown("Why **zebras** have *stripes*\n\n- flies get [confused](https://example.com)\n  - really ~~maybe~~\n1. first\n2. second");
+                    t.buf = t.rich.text.clone();
                 }
             }
             "shortcuts" => app.show_shortcuts = true,

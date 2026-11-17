@@ -37,7 +37,8 @@ pub enum Item {
     Stroke { path: BezPath, color: Rgba, stroke: Stroke },
     /// Text: glyph runs in layout space, mapped to device by `transform`
     /// (a similarity: rotation + uniform scale + translation).
-    Text { layout: Arc<TextLayout>, transform: Affine, color: Rgba },
+    /// `run_colors[i]` colours `layout.runs[i]` (empty: all `color`).
+    Text { layout: Arc<TextLayout>, transform: Affine, color: Rgba, run_colors: Arc<[Rgba]> },
     /// An image level drawn with `transform` mapping image pixels to device.
     Image { image: Arc<ImageLevel>, transform: Affine },
     /// Group opacity for the items up to the matching [`Item::PopOpacity`].
@@ -332,7 +333,33 @@ impl Ctx<'_> {
                 let style = th.text_style(t.style);
                 let color = th.color(t.color.as_ref().unwrap_or(&style.color));
                 let transform = *a * Affine::translate((-w / 2.0, -h / 2.0));
-                items.push(Item::Text { layout, transform, color });
+                // Per-format colours: explicit colour, else links in the accent.
+                let fmt_colors: Vec<Rgba> = layout
+                    .formats
+                    .iter()
+                    .map(|f| match (&f.color, &f.link) {
+                        (Some(c), _) => th.color(c),
+                        (None, Some(_)) => th.color(&"theme:accent".to_string()),
+                        _ => color,
+                    })
+                    .collect();
+                let run_colors: Arc<[Rgba]> = if layout.runs.iter().any(|r| r.format.is_some()) {
+                    layout.runs.iter().map(|r| r.format.and_then(|i| fmt_colors.get(i as usize).copied()).unwrap_or(color)).collect()
+                } else {
+                    Arc::from([])
+                };
+                let decos: Vec<(kurbo::Rect, Rgba)> = layout
+                    .decorations
+                    .iter()
+                    .map(|d| {
+                        let r = kurbo::Rect::new(d.x0 as f64, (d.y - d.thickness / 2.0) as f64, d.x1 as f64, (d.y + d.thickness / 2.0) as f64);
+                        (r, fmt_colors.get(d.format as usize).copied().unwrap_or(color))
+                    })
+                    .collect();
+                items.push(Item::Text { layout, transform, color, run_colors });
+                for (r, c) in decos {
+                    fill(items, &r, &transform, c);
+                }
             }
             ElementKind::Shape(s) => {
                 let closed = !matches!(s.shape, ShapeKind::Line | ShapeKind::Arrow);

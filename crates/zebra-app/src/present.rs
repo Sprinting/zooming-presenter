@@ -58,7 +58,14 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
         }
         if resp.clicked() {
             if let Some(p) = resp.interact_pointer_pos() {
-                // Click an object to zoom to it (off-path); click empty space = next.
+                // A link in text opens; an object zooms (off-path); empty space = next.
+                let w = app.canvas.s2w(&app.editor, p);
+                let link = app.editor.doc.ordered().rev().filter(|e| e.bounds().contains(w)).find_map(|e| app.renderer.link_at(&app.editor, e, w));
+                if let Some(url) = link {
+                    crate::app::open_url(&url);
+                    app.toast(format!("Opened {url}"));
+                    return;
+                }
                 match crate::canvas::hit(app, p, false) {
                     Some(id) => {
                         let _ = app.editor.view(ViewCommand::ZoomTo { id, animate: true }, H);

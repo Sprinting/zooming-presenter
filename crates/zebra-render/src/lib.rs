@@ -69,6 +69,19 @@ impl Renderer {
         Renderer { fonts: text::Fonts::new(), images: display::ImageCache::default() }
     }
 
+    /// The link URL under world point `p` on text element `e`, if any.
+    pub fn link_at(&self, editor: &Editor, e: &zebra_core::Element, p: zebra_core::Vec2) -> Option<String> {
+        let zebra_core::ElementKind::Text(t) = &e.kind else { return None };
+        if t.spans.iter().all(|s| s.format.link.is_none()) {
+            return None;
+        }
+        let tr = &e.transform;
+        let local = (p - zebra_core::Vec2::new(tr.x, tr.y)).rotate_deg(-tr.rotation) * (1.0 / tr.scale);
+        let layout = self.fonts.layout(t, &editor.theme(), text::wrap_for(t, e.size.w));
+        let (x, y) = (local.x + e.size.w / 2.0, local.y + e.size.h / 2.0);
+        layout.link_at(x as f32, y as f32).map(str::to_string)
+    }
+
     /// Text measurer to install in `Editor::measure`.
     pub fn measure(&self) -> Box<dyn zebra_core::TextMeasure> {
         self.fonts.measurer()

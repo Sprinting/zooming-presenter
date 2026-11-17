@@ -33,11 +33,11 @@ pub fn render_pixmap(list: &DisplayList) -> Pixmap {
                 ctx.set_stroke(stroke.clone());
                 ctx.stroke_path(path);
             }
-            Item::Text { layout, transform, color: c } => {
-                ctx.set_paint(color(*c));
+            Item::Text { layout, transform, color: c, run_colors } => {
                 let (s, rest) = split_scale(transform);
                 ctx.set_transform(rest);
-                for run in &layout.runs {
+                for (ri, run) in layout.runs.iter().enumerate() {
+                    ctx.set_paint(color(run_colors.get(ri).copied().unwrap_or(*c)));
                     let glyphs = run.glyphs.iter().map(|g| vello_cpu::Glyph {
                         id: g.id,
                         x: g.x * s as f32,

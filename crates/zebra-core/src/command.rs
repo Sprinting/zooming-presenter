@@ -30,6 +30,10 @@ pub enum Command {
         place: Option<Placement>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<ElementId>,
+        /// Read `text` as Markdown: `**bold**`, `*italic*`, `~~strike~~`,
+        /// `[text](url)`, `- ` bullets, `1. ` numbers, nested by indenting.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        markdown: bool,
     },
     /// Add a frame. `w`,`h` are world units at scale 1 (default 800x600).
     AddFrame {
@@ -99,6 +103,39 @@ pub enum Command {
     },
     /// Change properties of one element. Only given fields change.
     Update { id: ElementId, patch: ElementPatch },
+    /// Format part of a text box: bold, italic, underline, strike, colour,
+    /// link or relative size on characters `start..end` (counted in
+    /// characters), or on every occurrence of `find`. With neither, the
+    /// whole text. Unset fields in `format` are left as they are; `false` or
+    /// `""` turns a property off.
+    FormatText {
+        id: ElementId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        find: Option<String>,
+        format: crate::model::SpanFormat,
+    },
+    /// Paragraph formatting in a text box: list kind (none, bullet,
+    /// number), indent level (0-8, or `indent_by` +1/-1) and alignment.
+    /// `first`..=`last` are paragraph indices (0-based; default all).
+    FormatParagraphs {
+        id: ElementId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        first: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        list: Option<crate::model::ListKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        indent: Option<u8>,
+        #[serde(default)]
+        indent_by: i32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        align: Option<crate::model::Align>,
+    },
     /// Move elements by a world delta. Frames carry their contents.
     Move {
         ids: Vec<ElementId>,
@@ -316,6 +353,12 @@ pub struct ElementPatch {
     // text
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Replace all character formatting (see `format_text` for edits).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spans: Option<Vec<crate::model::TextSpan>>,
+    /// Replace all paragraph formatting (see `format_paragraphs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paras: Option<Vec<crate::model::ParaFormat>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<TextStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

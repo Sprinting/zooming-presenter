@@ -14,6 +14,7 @@ pub mod error;
 pub mod geom;
 pub mod io;
 pub mod model;
+pub mod rich;
 pub mod theme;
 pub mod view;
 

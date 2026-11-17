@@ -547,14 +547,15 @@ impl Editor {
                 };
                 self.insert_element(e, out)?;
             }
-            Command::AddText { text, x, y, style, scale, place, id } => {
+            Command::AddText { text, x, y, style, scale, place, id, markdown } => {
+                let data = if markdown { TextData { style, ..crate::rich::from_markdown(&text) } } else { TextData { text, style, ..Default::default() } };
                 let mut e = Element {
                     id: id.unwrap_or_default(),
                     transform: Transform { x, y, scale: scale.unwrap_or(1.0), rotation: 0.0 },
                     size: Size { w: 0.0, h: 0.0 },
                     locked: false,
                     name: String::new(),
-                    kind: ElementKind::Text(TextData { text, style, ..Default::default() }),
+                    kind: ElementKind::Text(data),
                 };
                 measure_text(&*self.measure, &theme, &mut e);
                 if let Some(p) = place {
@@ -652,6 +653,52 @@ impl Editor {
                         e.transform.scale *= k;
                     }
                 }
+                out.changed.push(id);
+            }
+            Command::FormatText { id, start, end, find, format } => {
+                self.check_unlocked(std::slice::from_ref(&id))?;
+                self.element_mut(&id)?;
+                let e = self.doc.elements.get_mut(&id).unwrap();
+                let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
+                if let Some(c) = format.color.as_deref().filter(|c| !c.is_empty() && !valid_color(c)) {
+                    return Err(ZError::invalid(format!("bad colour '{c}'")).values(Theme::COLOR_SLOTS.iter().map(|s| s.to_string()).collect()));
+                }
+                let n = t.text.chars().count();
+                let ranges: Vec<(usize, usize)> = match (&find, start, end) {
+                    (Some(f), _, _) if !f.is_empty() => {
+                        let found: Vec<(usize, usize)> = t
+                            .text
+                            .match_indices(f.as_str())
+                            .map(|(b, m)| {
+                                let s = t.text[..b].chars().count();
+                                (s, s + m.chars().count())
+                            })
+                            .collect();
+                        if found.is_empty() {
+                            return Err(ZError::invalid(format!("\"{f}\" does not occur in {id}")).hint("`find` is case-sensitive and matches the plain text"));
+                        }
+                        found
+                    }
+                    _ => vec![(start.unwrap_or(0).min(n), end.unwrap_or(n).min(n))],
+                };
+                for (a, b) in ranges {
+                    crate::rich::apply_format(t, a, b, &format);
+                }
+                measure_text(&*self.measure, &theme, e);
+                out.changed.push(id);
+            }
+            Command::FormatParagraphs { id, first, last, list, indent, indent_by, align } => {
+                self.check_unlocked(std::slice::from_ref(&id))?;
+                self.element_mut(&id)?;
+                let e = self.doc.elements.get_mut(&id).unwrap();
+                let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
+                let count = t.text.split('\n').count();
+                let first = first.unwrap_or(0);
+                if first >= count {
+                    return Err(ZError::invalid(format!("{id} has {count} paragraph(s); first is {first}")));
+                }
+                crate::rich::format_paragraphs(t, first, last.unwrap_or(count - 1), list, indent, indent_by, align);
+                measure_text(&*self.measure, &theme, e);
                 out.changed.push(id);
             }
             Command::Move { ids, dx, dy, with_contents } => {
@@ -1500,10 +1547,20 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
         e.name = v.clone();
     }
     let is = |k: &str| kind == k;
-    if p.text.is_some() || p.style.is_some() || p.bold.is_some() || p.italic.is_some() || p.align.is_some() || p.bullets.is_some() {
+    if p.text.is_some() || p.style.is_some() || p.bold.is_some() || p.italic.is_some() || p.align.is_some() || p.bullets.is_some() || p.spans.is_some() || p.paras.is_some() {
         let ElementKind::Text(t) = &mut e.kind else { return Err(wrong("text/style/bold/italic/align/bullets")) };
         if let Some(v) = &p.text {
-            t.text = v.clone();
+            // Formatting stays on the characters that survive the edit.
+            crate::rich::edit_text(t, v);
+        }
+        if let Some(v) = &p.spans {
+            t.spans = v.clone();
+        }
+        if let Some(v) = &p.paras {
+            t.paras = v.clone();
+        }
+        if p.spans.is_some() || p.paras.is_some() {
+            crate::rich::normalize(t);
         }
         if let Some(v) = p.style {
             t.style = v;
@@ -1574,6 +1631,8 @@ pub fn command_label(c: &Command) -> String {
         Command::AddImage { .. } => "Insert image".into(),
         Command::AddInk { highlighter, .. } => if *highlighter { "Highlight" } else { "Draw" }.into(),
         Command::Update { patch, .. } if patch.text.is_some() => "Edit text".into(),
+        Command::FormatText { .. } => "Format text".into(),
+        Command::FormatParagraphs { .. } => "Format paragraphs".into(),
         Command::Update { .. } => "Change properties".into(),
         Command::Move { .. } => "Move".into(),
         Command::Scale { .. } => "Resize".into(),
