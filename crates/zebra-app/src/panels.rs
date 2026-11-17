@@ -1,16 +1,33 @@
-//! Editor chrome: top bar, path sidebar, bottom tool bar, zoom stack,
-//! properties / agent activity panel, dialogs. Plain direct manipulation:
-//! nothing here requires knowing a command.
-use egui::{Align, Align2, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, Sense, Shape, Stroke, Ui, Vec2 as EVec2};
-use zebra_core::{
-    Command, ElementKind, ElementPatch, FrameStyle, Mode, Origin, ShapeKind, StepTarget, TextStyle, Theme, Tool,
-};
+//! Editor chrome, classic Mac layout (Keynote is the reference):
+//! - a unified title bar + toolbar across the top (icon over label);
+//! - the path sidebar on the left (opaque source list);
+//! - the Format inspector on the right, persistent while shown (⌥⌘I);
+//! - the canvas in the middle, with nothing floating over it except the
+//!   empty-document hint, "Back to Content" and the HUD bezel.
+//!
+//! Nothing here requires knowing a command; every control queues an
+//! [`Action`] or applies a core command, like the menus do.
+use egui::{Align, Align2, Color32, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2 as EVec2};
+use zebra_core::{FrameStyle, Mode, Origin, Theme, Tool};
 
-use crate::actions::{frame_name, tool_name, Action};
-use crate::app::{ScrollMode, ZebraApp};
-use crate::style::{self, Palette, ACCENT, AGENT, PRESENT};
+use crate::actions::{frame_name, Action};
+use crate::app::ZebraApp;
+use crate::icons::Icon;
+use crate::style::{self, accent, Palette, AGENT};
+use crate::widgets::{self as w, ToolbarState};
+
+pub use crate::icons::paint_icon;
 
 const H: Origin = Origin::Human;
+
+/// Height of the title row the native title bar draws into (macOS only:
+/// the window uses a full-size content view with a transparent title bar,
+/// so the traffic lights, title, edited dot and proxy icon are AppKit's).
+pub const TITLE_ROW: f32 = if cfg!(target_os = "macos") { 28.0 } else { 0.0 };
+/// Toolbar row under it: 44 pt items plus padding.
+pub const TOOLBAR_ROW: f32 = 50.0;
+/// Path sidebar width.
+pub const SIDEBAR_W: f32 = 220.0;
 
 pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
@@ -18,37 +35,36 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
 
     #[cfg(not(target_os = "macos"))]
     egui::Panel::top("menubar")
-        .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin::symmetric(8, 2)))
+        .frame(egui::Frame::new().fill(p.toolbar).inner_margin(egui::Margin::symmetric(8, 2)))
         .show(ui, |ui| crate::menus::egui_menu_bar(app, ui));
 
-    egui::Panel::top("topbar")
-        .exact_size(50.0)
-        .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin::symmetric(12, 8)).stroke(Stroke::new(1.0, p.border)))
-        .show(ui, |ui| top_bar(app, ui, &p));
+    egui::Panel::top("toolbar")
+        .exact_size(TITLE_ROW + TOOLBAR_ROW)
+        .frame(egui::Frame::new().fill(p.toolbar))
+        .show(ui, |ui| toolbar(app, ui, &p));
 
     if app.show_sidebar {
         egui::Panel::left("path")
-            .exact_size(212.0)
+            .exact_size(SIDEBAR_W)
             .resizable(false)
-            .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin::symmetric(10, 10)).stroke(Stroke::new(1.0, p.border)))
+            .frame(egui::Frame::new().fill(p.sidebar).inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 0 }).stroke(Stroke::new(1.0, p.border)))
             .show(ui, |ui| crate::sidebar::ui(app, ui, &p));
     }
 
-    let has_sel = !app.editor.view.selection.is_empty();
-    if app.show_activity || (app.show_props && has_sel) {
-        egui::Panel::right("props")
-            .exact_size(256.0)
+    if app.show_props {
+        egui::Panel::right("inspector")
+            .exact_size(crate::inspector::WIDTH)
             .resizable(false)
-            .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin::symmetric(12, 10)).stroke(Stroke::new(1.0, p.border)))
+            .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin { left: 16, right: 12, top: 0, bottom: 0 }).stroke(Stroke::new(1.0, p.border)))
+            .show(ui, |ui| crate::inspector::ui(app, ui));
+    }
+    if app.show_activity {
+        egui::Panel::right("activity")
+            .exact_size(260.0)
+            .resizable(false)
+            .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin::symmetric(14, 10)).stroke(Stroke::new(1.0, p.border)))
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    ui.set_max_width(228.0);
-                    if app.show_activity {
-                        activity_panel(app, ui, &p);
-                    } else {
-                        properties(app, ui, &p);
-                    }
-                });
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| activity_panel(app, ui, &p));
             });
     }
 
@@ -57,119 +73,266 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     });
     let rect = app.canvas.rect;
     floating(app, &ctx, rect, &p);
+    crate::sheets::ui(app, &ctx);
     crate::library::ui(app, &ctx, &p);
     dialogs(app, &ctx, &p);
 }
 
 // ----------------------------------------------------------------------
-// Top bar
+// Toolbar (Keynote order: View · Zoom · Add Step | Play | Text · Frame ·
+// Shape · Line · Media | Theme · Export · AI · Format)
 
-fn top_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
-    ui.horizontal_centered(|ui| {
-        // Logo: zebra-striped disc.
-        let (r, _) = ui.allocate_exact_size(EVec2::splat(24.0), Sense::hover());
-        crate::canvas::draw_zebra_disc(ui.painter(), r.center(), 10.0);
-        ui.add_space(4.0);
+fn toolbar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
+    let full = ui.max_rect();
+    // Bottom hairline (the toolbar's separator from content).
+    ui.painter().line_segment([full.left_bottom() - EVec2::new(0.0, 0.5), full.right_bottom() - EVec2::new(0.0, 0.5)], Stroke::new(1.0, p.border));
+    // Empty toolbar space drags the window, as in AppKit.
+    let bg = ui.interact(full, egui::Id::unique("toolbar-bg"), Sense::click_and_drag());
+    if bg.drag_started() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+    if bg.double_clicked() && cfg!(target_os = "macos") {
+        let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+    }
 
-        // Editable document title.
-        let mut title = app.title_buf.clone().unwrap_or_else(|| app.editor.doc.title.clone());
-        let title_w = ui.fonts_mut(|f| f.layout_no_wrap(title.clone(), style::bold(15.0), p.text).size().x + 12.0).clamp(60.0, 320.0);
-        let resp = ui.add(
-            egui::TextEdit::singleline(&mut title)
-                .font(style::bold(15.0))
-                .frame(egui::Frame::NONE)
-                .desired_width(title_w)
-                .id(egui::Id::unique("doc-title")),
-        );
-        if resp.has_focus() {
-            app.title_buf = Some(title.clone());
-        }
-        if resp.lost_focus() {
-            app.title_buf = None;
-            let t = title.trim().to_string();
-            if !t.is_empty() && t != app.editor.doc.title {
-                app.apply(Command::SetTitle { title: t });
-            }
-        }
-        resp.on_hover_text("Rename presentation");
-        let status = if app.editor.dirty() { "Edited" } else if app.editor.file_path.is_some() { "Saved" } else { "Not saved yet" };
-        ui.label(RichText::new(status).size(12.0).color(p.weak));
+    let row = Rect::from_min_max(Pos2::new(full.left(), full.top() + TITLE_ROW), Pos2::new(full.right(), full.top() + TITLE_ROW + TOOLBAR_ROW - 3.0));
+    let inset = if cfg!(target_os = "macos") { 12.0 } else { 10.0 };
 
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(4.0);
-        let undo_tip = app.editor.undo_label().map(|l| format!("Undo {l}  ⌘Z")).unwrap_or_else(|| "Nothing to undo".into());
-        if icon_button(ui, Icon::Undo, app.editor.can_undo(), false, p).on_hover_text(undo_tip).clicked() {
-            app.queued.push(Action::Undo);
-        }
-        if icon_button(ui, Icon::Redo, app.editor.can_redo(), false, p).on_hover_text("Redo  ⇧⌘Z").clicked() {
-            app.queued.push(Action::Redo);
-        }
+    // Left group
+    let mut left = ui.new_child(egui::UiBuilder::new().max_rect(row.shrink2(EVec2::new(inset, 0.0))).layout(Layout::left_to_right(Align::Center)));
+    left.spacing_mut().item_spacing.x = 2.0;
+    view_item(app, &mut left);
+    zoom_item(app, &mut left, p);
+    let add_tip = if app.editor.view.selection.is_empty() { "Add the current view as a step  ⇧⌘A" } else { "Add the selection as a step  ⇧⌘A" };
+    if w::toolbar_item(&mut left, Icon::AddStep, "Add Step", ToolbarState { enabled: !app.editor.doc.elements.is_empty(), ..st() }).on_hover_text(add_tip).clicked() {
+        app.queued.push(Action::AddToPath);
+    }
+    let left_end = left.min_rect().right();
 
-        if app.editor.view.mode == Mode::PathEdit {
-            ui.add_space(12.0);
-            egui::Frame::new().fill(style::PATH).corner_radius(CornerRadius::same(12)).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
-                ui.label(RichText::new("Editing path — click objects to add steps · Esc to finish").size(12.0).color(Color32::WHITE));
-            });
+    // Right group (right to left)
+    let mut right = ui.new_child(egui::UiBuilder::new().max_rect(row.shrink2(EVec2::new(inset, 0.0))).layout(Layout::right_to_left(Align::Center)));
+    right.spacing_mut().item_spacing.x = 2.0;
+    if w::toolbar_item(&mut right, Icon::Format, "Format", ToolbarState { active: app.show_props, ..st() }).on_hover_text(if app.show_props { "Hide the inspector  ⌥⌘I" } else { "Show the inspector  ⌥⌘I" }).clicked() {
+        app.queued.push(Action::ToggleProperties);
+    }
+    ai_item(app, &mut right, p);
+    let ex = w::toolbar_item(&mut right, Icon::Share, "Export", ToolbarState { menu: true, enabled: !app.editor.doc.elements.is_empty(), ..st() }).on_hover_text("Export as PDF or PNG");
+    egui::Popup::menu(&ex).width(220.0).show(|ui| {
+        if w::menu_item(ui, "PDF…", Action::ExportPdf.shortcut_text().as_deref()).clicked() {
+            app.queued.push(Action::ExportPdf);
         }
+        if w::menu_item(ui, "PNG of Current View…", None).clicked() {
+            app.queued.push(Action::ExportPng);
+        }
+    });
+    let th = w::toolbar_item(&mut right, Icon::Theme, "Theme", ToolbarState { menu: true, ..st() }).on_hover_text("Change the presentation's colours and fonts");
+    egui::Popup::menu(&th).width(230.0).show(|ui| theme_menu(app, ui));
+    let right_start = right.min_rect().left();
 
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            // Present (primary).
-            let present = egui::Button::new(RichText::new("▶  Present").size(14.0).color(Color32::WHITE).strong())
-                .fill(PRESENT)
-                .corner_radius(CornerRadius::same(8))
-                .min_size(EVec2::new(104.0, 32.0));
-            let r = ui.add(present).on_hover_text("Present from the start  F5 / ⌘↵\nFrom the current step  ⇧F5 / ⌥⌘↵");
-            if r.clicked() {
-                app.queued.push(Action::PresentStart);
-            }
-            egui::Popup::context_menu(&r).show(|ui| {
-                if ui.button("Present from Start").clicked() {
-                    app.queued.push(Action::PresentStart);
-                }
-                if ui.button("Present from Current Step").clicked() {
-                    app.queued.push(Action::PresentCurrent);
-                }
-            });
-            ui.add_space(4.0);
-            let ex = ui.add(egui::Button::new("Export").min_size(EVec2::new(0.0, 30.0))).on_hover_text("Export as PDF or PNG");
-            egui::Popup::menu(&ex).show(|ui| {
-                if ui.button("PDF — one page per step…").clicked() {
-                    app.queued.push(Action::ExportPdf);
-                }
-                if ui.button("PNG of current view…").clicked() {
-                    app.queued.push(Action::ExportPng);
-                }
-            });
-            let th = ui.add(egui::Button::new(format!("Theme: {}", app.editor.theme().name)).min_size(EVec2::new(0.0, 30.0))).on_hover_text("Change the presentation's colours and fonts");
-            egui::Popup::menu(&th).width(220.0).show(|ui| theme_menu(app, ui));
-            ui.add_space(4.0);
-            agent_pill(app, ui, p);
-        });
+    // Centre group, centred in the window when it fits between the others.
+    let cw_id = egui::Id::unique("toolbar-centre-w");
+    let cw: f32 = ui.data(|d| d.get_temp(cw_id)).unwrap_or(380.0);
+    let mut cx = full.center().x - cw / 2.0;
+    cx = cx.max(left_end + 16.0).min(right_start - 16.0 - cw);
+    let crect = Rect::from_min_max(Pos2::new(cx, row.top()), Pos2::new(cx + cw + 40.0, row.bottom()));
+    let mut centre = ui.new_child(egui::UiBuilder::new().max_rect(crect).layout(Layout::left_to_right(Align::Center)));
+    centre.spacing_mut().item_spacing.x = 2.0;
+    centre_group(app, &mut centre, p);
+    let used = centre.min_rect().width();
+    if (used - cw).abs() > 0.5 {
+        ui.data_mut(|d| d.insert_temp(cw_id, used));
+        ui.ctx().request_repaint();
+    }
+}
+
+fn st() -> ToolbarState {
+    ToolbarState { enabled: true, ..Default::default() }
+}
+
+fn view_item(app: &mut ZebraApp, ui: &mut Ui) {
+    let r = w::toolbar_item(ui, Icon::SidebarLeft, "View", ToolbarState { menu: true, ..st() }).on_hover_text("Show or hide the path sidebar and inspector");
+    egui::Popup::menu(&r).width(230.0).show(|ui| {
+        if w::menu_check(ui, app.show_sidebar, "Path Sidebar", Action::ToggleSidebar.shortcut_text().as_deref()).clicked() {
+            app.queued.push(Action::ToggleSidebar);
+        }
+        if w::menu_check(ui, app.show_props, "Inspector", Action::ToggleProperties.shortcut_text().as_deref()).clicked() {
+            app.queued.push(Action::ToggleProperties);
+        }
+        if w::menu_check(ui, app.show_activity, "Agent Activity", Action::ToggleActivity.shortcut_text().as_deref()).clicked() {
+            app.queued.push(Action::ToggleActivity);
+        }
+        w::menu_separator(ui);
+        if w::menu_check(ui, app.editor.view.mode == Mode::PathEdit, "Edit Path", Some("P")).clicked() {
+            app.queued.push(Action::TogglePathEdit);
+        }
     });
 }
 
+/// Zoom: a small pop-up showing the zoom level, labelled "Zoom".
+fn zoom_item(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
+    let zoom = app.editor.view.camera.zoom;
+    let txt = if zoom >= 100.0 || zoom < 0.01 { format!("{:.0e}%", zoom * 100.0) } else { format!("{:.0}%", zoom * 100.0) };
+    let (rect, resp) = ui.allocate_exact_size(EVec2::new(64.0, 44.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, format!("Zoom {txt}")));
+    let bez = Rect::from_center_size(Pos2::new(rect.center().x, rect.top() + 14.0), EVec2::new(58.0, 21.0));
+    w::paint_bezel(ui, bez, resp.is_pointer_button_down_on(), true);
+    let painter = ui.painter();
+    painter.text(Pos2::new(bez.left() + 8.0, bez.center().y), Align2::LEFT_CENTER, &txt, style::ui_font(12.0), p.text);
+    paint_icon(painter, Rect::from_center_size(Pos2::new(bez.right() - 9.0, bez.center().y), EVec2::splat(10.0)), Icon::UpDown, p.weak);
+    let galley = painter.layout_no_wrap("Zoom".into(), style::ui_font(10.0), p.text.gamma_multiply(0.9));
+    painter.galley(Pos2::new(rect.center().x - galley.size().x / 2.0, rect.bottom() - galley.size().y - 1.0), galley, p.text);
+    let resp = resp.on_hover_text("Zoom");
+    egui::Popup::menu(&resp).width(200.0).show(|ui| {
+        if w::menu_item(ui, "Zoom to Fit", Some("⇧1")).clicked() {
+            app.queued.push(Action::FitAll);
+        }
+        let has_sel = !app.editor.view.selection.is_empty();
+        if w::menu_row(ui, None, "Zoom to Selection", Some("⇧2"), has_sel).clicked() {
+            app.queued.push(Action::ZoomToSelection);
+        }
+        w::menu_separator(ui);
+        for (z, l) in [(0.5, "50%"), (1.0, "100%"), (2.0, "200%")] {
+            if w::menu_check(ui, (zoom - z).abs() < 0.005, l, if z == 1.0 { Some("⌘0") } else { None }).clicked() {
+                let mut c = app.editor.view.target_camera();
+                c.zoom = z;
+                app.view_cmd(zebra_core::ViewCommand::SetCamera { camera: c, animate: true });
+            }
+        }
+        w::menu_separator(ui);
+        if w::menu_item(ui, "Zoom In", Some("⌘=")).clicked() {
+            app.queued.push(Action::ZoomIn);
+        }
+        if w::menu_item(ui, "Zoom Out", Some("⌘−")).clicked() {
+            app.queued.push(Action::ZoomOut);
+        }
+    });
+}
+
+fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
+    let tool = app.editor.view.tool;
+    let has = !app.editor.doc.elements.is_empty();
+    let play = w::toolbar_item(ui, Icon::Play, "Play", ToolbarState { enabled: has, tint: Some(accent()), ..st() })
+        .on_hover_text("Play from the start  ⌥⌘P\nRight-click to play from the current step");
+    if play.clicked() {
+        app.queued.push(Action::PresentStart);
+    }
+    egui::Popup::context_menu(&play).show(|ui| {
+        if w::menu_item(ui, "Play from Start", Action::PresentStart.shortcut_text().as_deref()).clicked() {
+            app.queued.push(Action::PresentStart);
+        }
+        if w::menu_item(ui, "Play from Current Step", Action::PresentCurrent.shortcut_text().as_deref()).clicked() {
+            app.queued.push(Action::PresentCurrent);
+        }
+    });
+    w::toolbar_separator(ui);
+
+    if w::toolbar_item(ui, Icon::Text, "Text", ToolbarState { active: tool == Tool::Text, ..st() }).on_hover_text("Text  T\nOr double-click anywhere on the canvas").clicked() {
+        app.queued.push(Action::SetTool(Tool::Text));
+    }
+    let fs = app.editor.view.frame_style;
+    let fr = w::toolbar_item(ui, Icon::Frame(fs), "Frame", ToolbarState { active: tool == Tool::Frame, menu: true, ..st() }).on_hover_text("Frame  F\nPress F again to change the style");
+    egui::Popup::menu(&fr).width(190.0).show(|ui| {
+        for s in FrameStyle::ALL {
+            if menu_icon_row(ui, Icon::Frame(s), frame_name(s), fs == s && tool == Tool::Frame).clicked() {
+                app.queued.push(Action::SetFrameStyle(s));
+            }
+        }
+        w::menu_separator(ui);
+        let has_sel = !app.editor.view.selection.is_empty();
+        if w::menu_row(ui, None, "Frame Selection", Action::WrapInFrame.shortcut_text().as_deref(), has_sel).clicked() {
+            app.queued.push(Action::WrapInFrame);
+        }
+    });
+    let shape_active = matches!(tool, Tool::Rectangle | Tool::Ellipse | Tool::Triangle);
+    let sh = w::toolbar_item(ui, Icon::Shapes, "Shape", ToolbarState { active: shape_active, menu: true, ..st() }).on_hover_text("Shapes and icons");
+    egui::Popup::menu(&sh).width(200.0).show(|ui| {
+        for (i, t, l) in [(Icon::Rect, Tool::Rectangle, "Rectangle"), (Icon::Ellipse, Tool::Ellipse, "Ellipse")] {
+            if menu_icon_row(ui, i, l, tool == t).clicked() {
+                app.queued.push(Action::SetTool(t));
+            }
+        }
+        w::menu_separator(ui);
+        if w::menu_item(ui, "Shapes and Icons…", None).clicked() {
+            app.queued.push(Action::ShapeLibrary);
+        }
+    });
+    let line_active = matches!(tool, Tool::Line | Tool::Arrow | Tool::Pen | Tool::Highlighter);
+    let line_icon = match tool {
+        Tool::Line => Icon::Line,
+        Tool::Pen | Tool::Highlighter => Icon::Pen,
+        _ => Icon::Arrow,
+    };
+    let ln = w::toolbar_item(ui, line_icon, "Line", ToolbarState { active: line_active, menu: true, ..st() }).on_hover_text("Lines, arrows and drawing");
+    egui::Popup::menu(&ln).width(190.0).show(|ui| {
+        for (i, t, l) in [(Icon::Line, Tool::Line, "Line"), (Icon::Arrow, Tool::Arrow, "Arrow"), (Icon::Pen, Tool::Pen, "Draw")] {
+            if menu_icon_row(ui, i, l, tool == t).clicked() {
+                app.queued.push(Action::SetTool(t));
+            }
+        }
+    });
+    let md = w::toolbar_item(ui, Icon::Media, "Media", ToolbarState { menu: true, ..st() }).on_hover_text("Images, video and audio\nOr drop files on the canvas");
+    egui::Popup::menu(&md).width(200.0).show(|ui| {
+        if menu_icon_row(ui, Icon::Image, "Image…", false).clicked() {
+            app.queued.push(Action::InsertImage);
+        }
+        if menu_icon_row(ui, Icon::Video, "Video…", false).clicked() {
+            app.queued.push(Action::InsertVideo);
+        }
+        if menu_icon_row(ui, Icon::Note, "Audio…", false).clicked() {
+            app.queued.push(Action::InsertAudio);
+        }
+    });
+    let _ = p;
+}
+
+/// A menu row with a leading icon and a trailing ✓ when on.
+fn menu_icon_row(ui: &mut Ui, icon: Icon, label: &str, on: bool) -> egui::Response {
+    let p = Palette::of(ui.ctx());
+    let wdt = ui.available_width().max(150.0);
+    let (rect, resp) = ui.allocate_exact_size(EVec2::new(wdt, 24.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
+    let hot = resp.hovered();
+    let painter = ui.painter();
+    if hot {
+        painter.rect_filled(rect, 4.0, accent());
+    }
+    let c = if hot { w::on_accent() } else { p.text };
+    paint_icon(painter, Rect::from_center_size(Pos2::new(rect.left() + 16.0, rect.center().y), EVec2::splat(16.0)), icon, c);
+    painter.text(Pos2::new(rect.left() + 32.0, rect.center().y), Align2::LEFT_CENTER, label, style::ui_font(13.0), c);
+    if on {
+        paint_icon(painter, Rect::from_center_size(Pos2::new(rect.right() - 12.0, rect.center().y), EVec2::splat(11.0)), Icon::Check, c);
+    }
+    if resp.clicked() {
+        ui.close();
+    }
+    resp
+}
+
 fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
+    let p = Palette::of(ui.ctx());
     for t in Theme::builtins() {
         let selected = t.id == app.editor.doc.theme;
-        let (r, resp) = ui.allocate_exact_size(EVec2::new(210.0, 40.0), Sense::click());
+        let (r, resp) = ui.allocate_exact_size(EVec2::new(ui.available_width().max(214.0), 40.0), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &t.name));
         let painter = ui.painter();
-        if resp.hovered() || selected {
-            painter.rect_filled(r, 6.0, ui.visuals().widgets.hovered.bg_fill);
+        let hot = resp.hovered();
+        if hot {
+            painter.rect_filled(r, 4.0, accent());
         }
-        let sw = Rect::from_min_size(r.min + EVec2::new(6.0, 5.0), EVec2::new(46.0, 30.0));
-        painter.rect(sw, 4.0, style::c32(t.color(&"theme:background".into())), Stroke::new(1.0, Color32::from_gray(200)), egui::StrokeKind::Inside);
-        // bracket + title line
+        let sw = Rect::from_min_size(r.min + EVec2::new(22.0, 5.0), EVec2::new(46.0, 30.0));
+        painter.rect(sw, 3.0, style::c32(t.color(&"theme:background".into())), Stroke::new(0.6, Color32::from_black_alpha(50)), egui::StrokeKind::Inside);
         let fc = style::c32(t.color(&"theme:frame".into()));
-        let st = Stroke::new(1.5, fc);
-        painter.add(Shape::line(vec![sw.left_top() + EVec2::new(10.0, 5.0), sw.left_top() + EVec2::new(6.0, 5.0), sw.left_bottom() + EVec2::new(6.0, -5.0), sw.left_bottom() + EVec2::new(10.0, -5.0)], st));
-        painter.add(Shape::line(vec![sw.right_top() + EVec2::new(-10.0, 5.0), sw.right_top() + EVec2::new(-6.0, 5.0), sw.right_bottom() + EVec2::new(-6.0, -5.0), sw.right_bottom() + EVec2::new(-10.0, -5.0)], st));
+        let stv = Stroke::new(1.5, fc);
+        painter.add(egui::Shape::line(vec![sw.left_top() + EVec2::new(10.0, 5.0), sw.left_top() + EVec2::new(6.0, 5.0), sw.left_bottom() + EVec2::new(6.0, -5.0), sw.left_bottom() + EVec2::new(10.0, -5.0)], stv));
+        painter.add(egui::Shape::line(vec![sw.right_top() + EVec2::new(-10.0, 5.0), sw.right_top() + EVec2::new(-6.0, 5.0), sw.right_bottom() + EVec2::new(-6.0, -5.0), sw.right_bottom() + EVec2::new(-10.0, -5.0)], stv));
         painter.line_segment([sw.center() + EVec2::new(-12.0, -3.0), sw.center() + EVec2::new(12.0, -3.0)], Stroke::new(3.0, style::c32(t.color(&"theme:title".into()))));
         painter.line_segment([sw.center() + EVec2::new(-9.0, 4.0), sw.center() + EVec2::new(9.0, 4.0)], Stroke::new(1.5, style::c32(t.color(&"theme:subtitle".into()))));
-        painter.text(r.min + EVec2::new(62.0, 20.0), Align2::LEFT_CENTER, &t.name, FontId::proportional(13.5), ui.visuals().text_color());
+        let tc = if hot { w::on_accent() } else { p.text };
         if selected {
-            painter.text(r.right_center() - EVec2::new(10.0, 0.0), Align2::RIGHT_CENTER, "✓", FontId::proportional(14.0), ACCENT);
+            paint_icon(painter, Rect::from_center_size(Pos2::new(r.left() + 11.0, r.center().y), EVec2::splat(11.0)), Icon::Check, tc);
         }
+        painter.text(r.min + EVec2::new(78.0, 20.0), Align2::LEFT_CENTER, &t.name, style::ui_font(13.0), tc);
         if resp.clicked() {
             app.queued.push(Action::SetTheme(t.id.clone()));
             ui.close();
@@ -177,895 +340,258 @@ fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
     }
 }
 
-fn agent_pill(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
+/// The AI toolbar item. Off: a plain "AI" item. On: a violet glyph, with
+/// the agent's name as the label while one is connected.
+fn ai_item(app: &mut ZebraApp, ui: &mut Ui, _p: &Palette) {
     let on = app.api.is_some() || app.demo_agent.is_some();
     let connected = app.agent_connected();
     let paused = app.editor.view.agent_paused;
-    let (dot, text) = if let Some(e) = &app.api_error {
-        (Color32::from_rgb(220, 60, 60), format!("AI: error · {}", crate::files::short(e, 32)))
-    } else if !on {
-        (p.weak, "AI: Off".to_string())
-    } else if !connected {
-        (Color32::from_rgb(70, 170, 90), "AI: On · waiting".to_string())
-    } else if paused {
-        (Color32::from_rgb(230, 160, 40), format!("{} · paused", app.agent_name()))
+    let label = if app.api_error.is_some() {
+        "AI: Error".to_string()
+    } else if connected {
+        crate::files::short(&app.agent_name(), 12)
     } else {
-        let busy = app.editor.activity.back().is_some_and(|a| a.origin.is_agent() && app.editor.view.now - a.time < 2.0);
-        (AGENT, format!("{} connected · {}", app.agent_name(), if busy { "editing" } else { "idle" }))
+        "AI".to_string()
     };
-    let fill = if connected && !paused { AGENT.gamma_multiply(0.12) } else { p.hover };
-    let tc = if connected { AGENT } else { p.weak };
-    let galley = ui.painter().layout_no_wrap(text.clone(), FontId::proportional(12.5), tc);
-    let size = EVec2::new(galley.size().x + 34.0, 28.0);
-    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &text));
-    ui.painter().rect_filled(rect, 14.0, if r.hovered() { fill.gamma_multiply(1.6) } else { fill });
-    ui.painter().circle_filled(Pos2::new(rect.min.x + 14.0, rect.center().y), 4.0, dot);
-    ui.painter().galley(Pos2::new(rect.min.x + 24.0, rect.center().y - galley.size().y / 2.0), galley, tc);
-    let r = r.on_hover_text(if on { "AI control is on. Click for agent controls" } else { "Let an AI agent work in Zebra" });
+    let tint = if app.api_error.is_some() {
+        Some(Color32::from_rgb(0xff, 0x3b, 0x30))
+    } else if connected && !paused {
+        Some(AGENT)
+    } else if connected && paused {
+        Some(Color32::from_rgb(0xff, 0x9f, 0x0a))
+    } else {
+        None
+    };
+    let tip = if !on {
+        "Let an AI agent work in Zebra"
+    } else if !connected {
+        "AI control is on, waiting for an agent"
+    } else if paused {
+        "Agent paused. Click for agent controls"
+    } else {
+        "Agent connected. Click for agent controls"
+    };
+    let r = w::toolbar_item(ui, Icon::Sparkles, &label, ToolbarState { tint, active: on && !connected, ..st() });
+    if connected && !paused {
+        // a small live dot on the glyph, like a status item
+        let busy = app.editor.activity.back().is_some_and(|a| a.origin.is_agent() && app.editor.view.now - a.time < 2.0);
+        let c = Pos2::new(r.rect.center().x + 10.0, r.rect.top() + 6.0);
+        ui.painter().circle(c, 3.5, if busy { AGENT } else { Color32::from_rgb(0x34, 0xc7, 0x59) }, Stroke::new(1.0, Palette::of(ui.ctx()).toolbar));
+    }
+    let r = r.on_hover_text(tip);
     let mut popup = egui::Popup::menu(&r);
     if std::mem::take(&mut app.open_ai_panel) {
         popup = popup.open_memory(egui::SetOpenCommand::Bool(true));
     }
-    popup.width(320.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| ai_panel(app, ui, on, connected, paused));
+    popup.width(330.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.spacing_mut().item_spacing.y = 6.0;
+        egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| ai_panel(app, ui, on, connected, paused));
+    });
 }
 
 /// The AI popover: the human-only switch, how to connect an agent, and
 /// (when on) the agent controls.
 fn ai_panel(app: &mut ZebraApp, ui: &mut Ui, on: bool, connected: bool, paused: bool) {
-    let weak = ui.visuals().weak_text_color();
+    let p = Palette::of(ui.ctx());
     let mut want = on;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Let AI agents control Zebra").strong());
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if toggle_switch(ui, &mut want).on_hover_text("Only you can switch this on. An agent can switch it off.").changed() {
+        ui.label(RichText::new("Let AI agents control Zebra").font(style::semibold(13.0)));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if w::switch(ui, &mut want, "Let AI agents control Zebra").on_hover_text("Only you can switch this on. An agent can switch it off.").changed() {
                 app.queued.push(Action::ToggleAiControl);
             }
         });
     });
-    ui.label(
-        RichText::new(if on {
+    w::caption(
+        ui,
+        if on {
             "Agents on this Mac that can run a command (Claude Code, Codex, Cursor, Gemini CLI, your own scripts) can now see and edit this window. You can watch, undo, pause or stop them at any time."
         } else {
             "Off: nothing outside Zebra can see or change your work. Switch it on to let an AI agent on this Mac build or edit presentations with you."
-        })
-        .small()
-        .color(weak),
+        },
     );
     if let Some(e) = &app.api_error {
-        ui.label(RichText::new(e).small().color(Color32::from_rgb(220, 60, 60)));
+        ui.label(RichText::new(e).font(style::ui_font(11.0)).color(Color32::from_rgb(0xff, 0x3b, 0x30)));
     }
     if !on {
         return;
     }
 
-    ui.separator();
-    ui.label(RichText::new("Connect an agent").strong());
-    ui.label(RichText::new("Paste this into your agent's chat:").small().color(weak));
+    w::separator(ui);
+    ui.label(RichText::new("Connect an Agent").font(style::semibold(13.0)));
+    w::caption(ui, "Paste this into your agent's chat:");
     let ctl = crate::cli::zebractl_command();
     let prompt = crate::cli::agent_prompt(&ctl);
     copy_box(ui, &prompt, "agent-prompt");
     ui.horizontal_wrapped(|ui| {
         if let Some(installed) = crate::cli::install_state() {
             if installed {
-                ui.label(RichText::new("✓ zebractl is installed on this Mac").small().color(weak));
-            } else if ui.button("Install command-line tool…").on_hover_text("Adds `zebractl` to /usr/local/bin so agents can type just `zebractl`. macOS asks for your password.").clicked() {
+                w::caption(ui, "✓ zebractl is installed on this Mac");
+            } else if w::push_button(ui, "Install Command-Line Tool…").on_hover_text("Adds `zebractl` to /usr/local/bin so agents can type just `zebractl`. macOS asks for your password.").clicked() {
                 match crate::cli::install() {
                     Ok(()) => app.toast("Installed zebractl. Agents can now run `zebractl --help`."),
                     Err(e) => app.toast(format!("Couldn't install zebractl: {e}")),
                 }
             }
         }
-        ui.menu_button("Use with MCP", |ui| {
-            ui.set_max_width(320.0);
-            ui.label(RichText::new("Optional. For apps that take an MCP server config (Claude Desktop, Cursor, and others):").small().color(weak));
-            copy_box(ui, &crate::cli::mcp_config(&ctl), "mcp-json");
+        let mcp = w::push_button(ui, "MCP Setup…");
+        egui::Popup::menu(&mcp).width(330.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            egui::Frame::new().inner_margin(8).show(ui, |ui| {
+                w::caption(ui, "Optional. For apps that take an MCP server config (Claude Desktop, Cursor, and others):");
+                copy_box(ui, &crate::cli::mcp_config(&ctl), "mcp-json");
+            });
         });
     });
 
-    ui.separator();
+    w::separator(ui);
     if !connected {
-        ui.label(RichText::new("No agent connected yet.").small().color(weak));
-    }
-    if connected {
-        if ui.button(if paused { "Resume agent" } else { "Pause agent" }).on_hover_text("Temporarily stop the agent from making changes").clicked() {
-            app.queued.push(Action::PauseAgents);
-        }
+        w::caption(ui, "No agent connected yet.");
+    } else {
+        ui.horizontal(|ui| {
+            if w::push_button(ui, if paused { "Resume" } else { "Pause" }).on_hover_text("Temporarily stop the agent from making changes").clicked() {
+                app.queued.push(Action::PauseAgents);
+            }
+            if w::push_button(ui, "Revert Changes…").on_hover_text("Undo everything the agent did since your last change").clicked() {
+                app.queued.push(Action::RevertAgent);
+            }
+        });
         let mut follow = app.editor.view.follow_agent;
-        if ui.checkbox(&mut follow, "Follow agent's camera").on_hover_text("Move your view to wherever the agent is working").changed() {
+        if w::checkbox(ui, &mut follow, "Follow the agent's camera").on_hover_text("Move your view to wherever the agent is working").changed() {
             app.queued.push(Action::FollowAgent);
         }
-        if ui.button("Revert agent's changes").on_hover_text("Undo everything the agent did since your last change").clicked() {
-            app.queued.push(Action::RevertAgent);
-        }
     }
-    if ui.button("Activity…  (⌘J)").clicked() {
+    if w::push_button(ui, "Show Activity").on_hover_text("⌘J").clicked() {
         app.queued.push(Action::ToggleActivity);
     }
     ui.add_space(2.0);
-    ui.label(RichText::new("What agents may do").small().color(weak));
+    ui.label(RichText::new("What agents may do").font(style::semibold(11.0)).color(p.weak));
     let cur = app.editor.view.agent_permission;
     for (perm, label) in [
         (zebra_core::view::Permission::Observe, "Look only"),
         (zebra_core::view::Permission::Edit, "Edit the presentation (default)"),
         (zebra_core::view::Permission::Full, "Full control (also your view, files, presenting)"),
     ] {
-        if ui.radio(cur == perm, label).clicked() {
-            let _ = app.editor.view(zebra_core::ViewCommand::SetAgentPermission { permission: perm }, H);
+        if w::radio(ui, cur == perm, label).clicked() && cur != perm {
+            app.queued.push(Action::SetAgentPermission(perm));
         }
     }
 }
 
 /// A read-only text block with a Copy button.
 fn copy_box(ui: &mut Ui, text: &str, id: &str) {
-    egui::Frame::new().fill(ui.visuals().extreme_bg_color).corner_radius(6.0).inner_margin(8.0).show(ui, |ui| {
+    let p = Palette::of(ui.ctx());
+    egui::Frame::new().fill(p.field).stroke(Stroke::new(0.6, p.control_edge)).corner_radius(4.0).inner_margin(8.0).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.add(egui::Label::new(RichText::new(text).monospace().size(11.0)).wrap());
     });
     let copied_id = ui.scope_id().with(("copied", id));
     let copied_at: Option<f64> = ui.data(|d| d.get_temp(copied_id));
     let now = ui.input(|i| i.time);
-    let label = if copied_at.is_some_and(|t| now - t < 1.5) { "Copied ✓" } else { "Copy" };
-    if ui.small_button(label).clicked() {
+    let copied = copied_at.is_some_and(|t| now - t < 1.5);
+    if w::push_button_ext(ui, if copied { "Copied" } else { "Copy" }, w::Size::Small, true, None).clicked() {
         ui.ctx().copy_text(text.to_string());
         ui.data_mut(|d| d.insert_temp(copied_id, now));
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(1600));
     }
-}
-
-/// iOS/macOS-style on/off switch.
-fn toggle_switch(ui: &mut Ui, on: &mut bool) -> egui::Response {
-    let size = EVec2::new(36.0, 20.0);
-    let (rect, mut r) = ui.allocate_exact_size(size, Sense::click());
-    if r.clicked() {
-        *on = !*on;
-        r.mark_changed();
-    }
-    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, ui.is_enabled(), *on, "Let AI agents control Zebra"));
-    let t = ui.ctx().animate_bool_responsive(r.id, *on);
-    let bg = Color32::from_gray(190).lerp_to_gamma(Color32::from_rgb(52, 199, 89), t);
-    ui.painter().rect_filled(rect, 10.0, bg);
-    let x = egui::lerp((rect.left() + 10.0)..=(rect.right() - 10.0), t);
-    ui.painter().circle(Pos2::new(x, rect.center().y), 8.0, Color32::WHITE, Stroke::new(0.5, Color32::from_gray(150)));
-    r
 }
 
 // ----------------------------------------------------------------------
-// Icons (painted, so the chrome needs no icon font)
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum Icon {
-    Select,
-    Hand,
-    Text,
-    Frame(FrameStyle),
-    Rect,
-    Ellipse,
-    Line,
-    Arrow,
-    Pen,
-    Image,
-    Undo,
-    Redo,
-    Plus,
-    Minus,
-    Home,
-    Library,
-}
-
-pub fn paint_icon(painter: &egui::Painter, r: Rect, icon: Icon, c: Color32) {
-    let s = Stroke::new(1.6, c);
-    let m = r.center();
-    let u = r.width().min(r.height()) / 20.0; // unit
-    let p = |x: f32, y: f32| m + EVec2::new(x * u, y * u);
-    match icon {
-        Icon::Select => {
-            painter.add(Shape::convex_polygon(vec![p(-4.0, -7.0), p(-4.0, 6.0), p(-0.8, 3.0), p(1.6, 8.0), p(3.6, 7.0), p(1.2, 2.2), p(5.4, 2.0)], Color32::TRANSPARENT, s));
-            painter.add(Shape::closed_line(vec![p(-4.0, -7.0), p(-4.0, 6.0), p(-0.8, 3.0), p(1.6, 8.0), p(3.6, 7.0), p(1.2, 2.2), p(5.4, 2.0)], s));
-        }
-        Icon::Hand => {
-            for (x, top) in [(-3.6, -4.0), (-1.2, -6.5), (1.2, -6.0), (3.6, -4.0)] {
-                painter.line_segment([p(x, top), p(x, 1.0)], Stroke::new(1.8, c));
-            }
-            painter.add(Shape::line(vec![p(-6.5, 0.0), p(-4.6, 4.5), p(-2.0, 7.5), p(3.0, 7.5), p(4.8, 3.0), p(4.8, -2.5)], s));
-            painter.line_segment([p(-6.5, 0.0), p(-4.6, 1.5)], s);
-        }
-        Icon::Text => {
-            painter.text(m, Align2::CENTER_CENTER, "T", style::bold(16.0 * u), c);
-        }
-        Icon::Frame(st) => match st {
-            FrameStyle::Circle => {
-                painter.circle_stroke(m, 7.0 * u, s);
-            }
-            FrameStyle::Rectangle => {
-                painter.rect(Rect::from_center_size(m, EVec2::new(15.0 * u, 11.0 * u)), 1.0, c.gamma_multiply(0.25), s, egui::StrokeKind::Middle);
-            }
-            FrameStyle::Invisible => {
-                let pts = vec![p(-7.5, -5.5), p(7.5, -5.5), p(7.5, 5.5), p(-7.5, 5.5), p(-7.5, -5.5)];
-                painter.extend(Shape::dashed_line(&pts, s, 2.5 * u, 2.0 * u));
-            }
-            FrameStyle::Bracket => {
-                painter.add(Shape::line(vec![p(-4.0, -6.5), p(-7.0, -6.5), p(-7.0, 6.5), p(-4.0, 6.5)], Stroke::new(2.0, c)));
-                painter.add(Shape::line(vec![p(4.0, -6.5), p(7.0, -6.5), p(7.0, 6.5), p(4.0, 6.5)], Stroke::new(2.0, c)));
-            }
-        },
-        Icon::Rect => {
-            painter.rect_stroke(Rect::from_center_size(m, EVec2::new(14.0 * u, 11.0 * u)), 2.0, s, egui::StrokeKind::Middle);
-        }
-        Icon::Ellipse => {
-            painter.circle_stroke(m, 6.8 * u, s);
-        }
-        Icon::Library => {
-            // Square, circle and triangle: the shape library.
-            painter.rect_stroke(Rect::from_min_max(p(-7.5, -7.5), p(-0.5, -0.5)), 1.0, s, egui::StrokeKind::Middle);
-            painter.circle_stroke(p(4.0, -4.0), 3.6 * u, s);
-            painter.add(Shape::closed_line(vec![p(0.0, 1.0), p(4.5, 7.5), p(-4.5, 7.5)], s));
-        }
-        Icon::Line => {
-            painter.line_segment([p(-6.5, 6.5), p(6.5, -6.5)], s);
-        }
-        Icon::Arrow => {
-            painter.line_segment([p(-6.5, 6.5), p(6.0, -6.0)], s);
-            painter.add(Shape::line(vec![p(0.0, -6.5), p(6.5, -6.5), p(6.5, 0.0)], s));
-        }
-        Icon::Pen => {
-            painter.add(Shape::closed_line(vec![p(-6.5, 6.5), p(-5.5, 2.8), p(3.8, -6.5), p(6.5, -3.8), p(-2.8, 5.5)], s));
-            painter.line_segment([p(1.8, -4.5), p(4.5, -1.8)], s);
-        }
-        Icon::Image => {
-            let rr = Rect::from_center_size(m, EVec2::new(15.0 * u, 12.0 * u));
-            painter.rect_stroke(rr, 2.0, s, egui::StrokeKind::Middle);
-            painter.add(Shape::line(vec![p(-7.0, 4.5), p(-2.5, -0.5), p(1.0, 2.5), p(3.0, 0.8), p(7.0, 4.5)], s));
-            painter.circle_filled(p(3.0, -2.8), 1.4 * u, c);
-        }
-        Icon::Undo | Icon::Redo => {
-            let flip = if icon == Icon::Redo { -1.0 } else { 1.0 };
-            let q = |x: f32, y: f32| p(x * flip, y);
-            let arc: Vec<Pos2> = (0..=12)
-                .map(|i| {
-                    let a = std::f32::consts::PI * (1.0 - i as f32 / 12.0) * 1.0 - std::f32::consts::FRAC_PI_2 * 0.0;
-                    q(-5.0 * a.cos() * -1.0 + 0.0, -5.5 * a.sin() + 3.0)
-                })
-                .collect();
-            let _ = arc;
-            // simple hook arrow
-            let path: Vec<Pos2> = (0..=14)
-                .map(|i| {
-                    let t = i as f32 / 14.0;
-                    let a = std::f32::consts::PI * (0.5 + t);
-                    q(1.5 + 5.0 * -a.cos(), 0.5 - 4.5 * a.sin())
-                })
-                .collect();
-            let start = path[0];
-            let mut full = vec![q(-6.5, 5.0)];
-            full.extend(path.into_iter().rev());
-            let _ = start;
-            painter.add(Shape::line(vec![q(-6.0, -4.0), q(2.0, -4.0)], s));
-            let curve: Vec<Pos2> = (0..=12)
-                .map(|i| {
-                    let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * i as f32 / 12.0;
-                    q(2.0 + 4.0 * a.cos(), 0.0 + 4.0 * a.sin())
-                })
-                .collect();
-            painter.add(Shape::line(curve, s));
-            painter.add(Shape::line(vec![q(2.0, 4.0), q(-3.0, 4.0)], s));
-            painter.add(Shape::line(vec![q(-3.0, -7.0), q(-6.0, -4.0), q(-3.0, -1.0)], s));
-            let _ = full;
-        }
-        Icon::Plus => {
-            painter.line_segment([p(-6.0, 0.0), p(6.0, 0.0)], s);
-            painter.line_segment([p(0.0, -6.0), p(0.0, 6.0)], s);
-        }
-        Icon::Minus => {
-            painter.line_segment([p(-6.0, 0.0), p(6.0, 0.0)], s);
-        }
-        Icon::Home => {
-            painter.add(Shape::closed_line(vec![p(-6.5, -0.5), p(0.0, -7.0), p(6.5, -0.5), p(4.5, -0.5), p(4.5, 6.5), p(-4.5, 6.5), p(-4.5, -0.5)], s));
-        }
-    }
-}
-
-pub fn icon_button(ui: &mut Ui, icon: Icon, enabled: bool, active: bool, p: &Palette) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(EVec2::splat(32.0), if enabled { Sense::click() } else { Sense::hover() });
-    let painter = ui.painter();
-    if active {
-        painter.rect_filled(r, 7.0, ACCENT.gamma_multiply(if p.dark { 0.45 } else { 0.14 }));
-    } else if resp.hovered() && enabled {
-        painter.rect_filled(r, 7.0, p.hover);
-    }
-    let c = if !enabled { p.weak.gamma_multiply(0.5) } else if active { ACCENT } else { p.text };
-    paint_icon(painter, r.shrink(6.0), icon, c);
-    resp
-}
-
-// ----------------------------------------------------------------------
-// Floating tool bar, zoom stack, hints
+// Over the canvas: empty-document hint, Back to Content, HUD, recovery
 
 fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
-    // Bottom-centre tool bar.
-    egui::Area::new(egui::Id::unique("toolbar"))
-        .anchor(Align2::CENTER_BOTTOM, EVec2::new(rect.center().x - ctx.content_rect().center().x, -(ctx.content_rect().bottom() - rect.bottom()) - 16.0))
-        .order(egui::Order::Middle)
-        .show(ctx, |ui| {
-            style::float_frame(p).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    let cur = app.editor.view.tool;
-                    let fs = app.editor.view.frame_style;
-                    let items: [(Icon, Option<Tool>, &str, Action); 11] = [
-                        (Icon::Select, Some(Tool::Select), "Select  V", Action::SetTool(Tool::Select)),
-                        (Icon::Hand, Some(Tool::Hand), "Hand — drag to pan  H  (or hold Space)", Action::SetTool(Tool::Hand)),
-                        (Icon::Text, Some(Tool::Text), "Text  T  (or double-click anywhere)", Action::SetTool(Tool::Text)),
-                        (Icon::Frame(fs), Some(Tool::Frame), "Frame  F  (press F again to change style)", Action::SetTool(Tool::Frame)),
-                        (Icon::Rect, Some(Tool::Rectangle), "Rectangle  R", Action::SetTool(Tool::Rectangle)),
-                        (Icon::Ellipse, Some(Tool::Ellipse), "Ellipse  O", Action::SetTool(Tool::Ellipse)),
-                        (Icon::Line, Some(Tool::Line), "Line  L", Action::SetTool(Tool::Line)),
-                        (Icon::Arrow, Some(Tool::Arrow), "Arrow  A", Action::SetTool(Tool::Arrow)),
-                        (Icon::Pen, Some(Tool::Pen), "Pen  D", Action::SetTool(Tool::Pen)),
-                        (Icon::Library, None, "Shapes & icons…", Action::ShowLibrary),
-                        (Icon::Image, None, "Insert image…  I  (or drop files on the canvas)", Action::InsertImage),
-                    ];
-                    for (icon, tool, tip, action) in items {
-                        let active = tool == Some(cur);
-                        let r = icon_button(ui, icon, true, active, p).on_hover_text(tip);
-                        if r.clicked() {
-                            app.queued.push(action);
-                        }
-                        if tool == Some(Tool::Frame) {
-                            // small style picker caret
-                            let (cr, cresp) = ui.allocate_exact_size(EVec2::new(12.0, 32.0), Sense::click());
-                            let c = cr.center();
-                            ui.painter().add(Shape::convex_polygon(vec![c + EVec2::new(-3.5, -2.0), c + EVec2::new(3.5, -2.0), c + EVec2::new(0.0, 2.5)], p.weak, Stroke::NONE));
-                            egui::Popup::menu(&cresp).show(|ui| {
-                                for s in FrameStyle::ALL {
-                                    ui.horizontal(|ui| {
-                                        let (ir, _) = ui.allocate_exact_size(EVec2::splat(20.0), Sense::hover());
-                                        paint_icon(ui.painter(), ir, Icon::Frame(s), ui.visuals().text_color());
-                                        if ui.selectable_label(fs == s, frame_name(s)).clicked() {
-                                            app.queued.push(Action::SetFrameStyle(s));
-                                            ui.close();
-                                        }
-                                    });
-                                }
-                            });
-                        }
-                        if tool == Some(Tool::Text) {
-                            ui.add_space(2.0);
-                            ui.separator();
-                            ui.add_space(2.0);
-                        }
-                    }
-                });
-            });
-        });
-
-    // Right-edge zoom stack (+ − ⌂), Prezi style.
-    egui::Area::new(egui::Id::unique("zoomstack"))
-        .fixed_pos(Pos2::new(rect.right() - 54.0, rect.center().y - 60.0))
-        .order(egui::Order::Middle)
-        .show(ctx, |ui| {
-            style::float_frame(p).inner_margin(egui::Margin::same(3)).show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                if icon_button(ui, Icon::Plus, true, false, p).on_hover_text("Zoom in  ⌘=").clicked() {
-                    app.queued.push(Action::ZoomIn);
-                }
-                if icon_button(ui, Icon::Minus, true, false, p).on_hover_text("Zoom out  ⌘−").clicked() {
-                    app.queued.push(Action::ZoomOut);
-                }
-                if icon_button(ui, Icon::Home, true, false, p).on_hover_text("Show everything  ⇧1").clicked() {
+    // Empty-document hint (full-strength secondary text, 13 pt minimum).
+    if app.editor.doc.elements.is_empty() && app.canvas.text.is_none() {
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::unique("hint"))).with_clip_rect(rect);
+        let bg = style::c32(app.editor.theme().color(&"theme:background".into()));
+        let dark_bg = (bg.r() as u32 + bg.g() as u32 + bg.b() as u32) < 380;
+        let (c1, c2) = if dark_bg { (Color32::from_gray(0xd0), Color32::from_gray(0xa8)) } else { (Color32::from_gray(0x55), Color32::from_gray(0x6b)) };
+        painter.text(rect.center() - EVec2::new(0.0, 14.0), Align2::CENTER_CENTER, "Double-click anywhere to write", style::semibold(20.0), c1);
+        painter.text(rect.center() + EVec2::new(0.0, 16.0), Align2::CENTER_CENTER, "Press F for a frame, drop images here, or choose File › New from Sample", FontId::proportional(13.0), c2);
+    } else if app.editor.doc.bounds().is_some_and(|b| !b.intersects(&app.editor.view.camera.visible_bounds(app.editor.view.viewport))) {
+        egui::Area::new(egui::Id::unique("backtocontent"))
+            .anchor(Align2::CENTER_TOP, EVec2::new(rect.center().x - ctx.content_rect().center().x, rect.top() + 14.0))
+            .show(ctx, |ui| {
+                if w::push_button(ui, "Back to Content").on_hover_text("Zoom to fit everything  ⇧1").clicked() {
                     app.queued.push(Action::FitAll);
                 }
             });
-        });
-
-    // Bottom-right zoom %.
-    let zoom = app.editor.view.camera.zoom;
-    egui::Area::new(egui::Id::unique("zoompct")).fixed_pos(Pos2::new(rect.right() - 74.0, rect.bottom() - 42.0)).order(egui::Order::Middle).show(ctx, |ui| {
-        let txt = if zoom >= 100.0 || zoom < 0.01 { format!("{:.0e}%", zoom * 100.0) } else { format!("{:.0}%", zoom * 100.0) };
-        let r = ui.add(egui::Button::new(RichText::new(txt).size(12.0).color(p.weak)).fill(p.float).stroke(Stroke::new(1.0, p.border)).corner_radius(8).min_size(EVec2::new(58.0, 26.0)));
-        if r.on_hover_text("Click: 100%   ⌘0").clicked() {
-            app.queued.push(Action::ZoomReset);
-        }
-    });
-
-    // Empty-document hint.
-    if app.editor.doc.elements.is_empty() && app.canvas.text.is_none() {
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::unique("hint")));
-        let painter = painter.with_clip_rect(rect);
-        painter.text(rect.center() - EVec2::new(0.0, 14.0), Align2::CENTER_CENTER, "Double-click anywhere to write", style::bold(22.0), p.weak.gamma_multiply(0.85));
-        painter.text(rect.center() + EVec2::new(0.0, 18.0), Align2::CENTER_CENTER, "F for frames  ·  drop images here  ·  File › New from Sample to see an example", FontId::proportional(14.0), p.weak.gamma_multiply(0.75));
-    } else if app.editor.doc.bounds().is_some_and(|b| !b.intersects(&app.editor.view.camera.visible_bounds(app.editor.view.viewport))) {
-        // "Back to content" pill when lost in empty space.
-        egui::Area::new(egui::Id::unique("backtocontent")).anchor(Align2::CENTER_TOP, EVec2::new(rect.center().x - ctx.content_rect().center().x, rect.top() + 16.0)).show(ctx, |ui| {
-            if ui.add(egui::Button::new("Back to content").fill(p.float).stroke(Stroke::new(1.0, p.border)).corner_radius(14)).clicked() {
-                app.queued.push(Action::FitAll);
-            }
-        });
     }
 
-    // Toast.
+    // HUD bezel for the few messages that can't be shown in place.
     if let Some(t) = app.toast.clone() {
-        egui::Area::new(egui::Id::unique("toast")).anchor(Align2::CENTER_BOTTOM, EVec2::new(rect.center().x - ctx.content_rect().center().x, -(ctx.content_rect().bottom() - rect.bottom()) - 76.0)).order(egui::Order::Tooltip).interactable(false).show(ctx, |ui| {
-            egui::Frame::new().fill(Color32::from_rgba_unmultiplied(30, 32, 36, 235)).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 7)).show(ui, |ui| {
-                ui.label(RichText::new(t.text).color(Color32::WHITE).size(13.0));
-            });
-        });
+        let left = t.until - app.now();
+        let a = (left / 0.3).clamp(0.0, 1.0) as f32;
+        w::hud(ctx, rect, &t.text, a);
     }
 
-    // Autosave recovery banner.
+    // Autosave recovery: an opaque info bar under the toolbar.
     if let Some(rp) = app.recovered.clone() {
-        egui::Area::new(egui::Id::unique("recover")).anchor(Align2::CENTER_TOP, EVec2::new(rect.center().x - ctx.content_rect().center().x, rect.top() + 12.0)).order(egui::Order::Foreground).show(ctx, |ui| {
-            style::float_frame(p).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Unsaved changes from an earlier session were found.");
-                    if ui.button("Restore").clicked() {
-                        if let Ok(doc) = zebra_core::io::load(&rp) {
-                            let path = app.editor.file_path.clone();
-                            app.editor.load(doc, path);
-                            app.toast("Restored — save to keep it");
+        egui::Area::new(egui::Id::unique("recover"))
+            .anchor(Align2::CENTER_TOP, EVec2::new(rect.center().x - ctx.content_rect().center().x, rect.top() + 12.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                style::float_frame(p).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        paint_icon(ui.painter(), Rect::from_min_size(ui.cursor().min + EVec2::new(0.0, 2.0), EVec2::splat(18.0)), Icon::Warning, Color32::from_rgb(0xff, 0x9f, 0x0a));
+                        ui.add_space(24.0);
+                        ui.label("Unsaved changes from an earlier session were found.");
+                        if w::push_button(ui, "Dismiss").clicked() {
+                            app.recovered = None;
                         }
-                        app.recovered = None;
-                    }
-                    if ui.button("Dismiss").clicked() {
-                        app.recovered = None;
-                    }
-                });
-            });
-        });
-    }
-}
-
-// ----------------------------------------------------------------------
-// Properties panel
-
-fn section(ui: &mut Ui, title: &str, p: &Palette) {
-    ui.add_space(6.0);
-    ui.label(RichText::new(title.to_uppercase()).size(10.5).color(p.weak).strong());
-}
-
-fn swatch(ui: &mut Ui, c: Color32, selected: bool, tip: &str) -> bool {
-    let (r, resp) = ui.allocate_exact_size(EVec2::splat(22.0), Sense::click());
-    let painter = ui.painter();
-    if c == Color32::TRANSPARENT {
-        painter.circle_stroke(r.center(), 8.5, Stroke::new(1.0, Color32::from_gray(160)));
-        painter.line_segment([r.center() + EVec2::new(-6.0, 6.0), r.center() + EVec2::new(6.0, -6.0)], Stroke::new(1.2, Color32::from_rgb(220, 60, 60)));
-    } else {
-        painter.circle(r.center(), 8.5, c, Stroke::new(1.0, Color32::from_black_alpha(40)));
-    }
-    if selected {
-        painter.circle_stroke(r.center(), 11.0, Stroke::new(2.0, ACCENT));
-    }
-    resp.on_hover_text(tip).clicked()
-}
-
-fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
-    let sel = app.selection();
-    let theme = app.editor.theme();
-    let mut patch_all: Option<ElementPatch> = None;
-    let mut gesture_active = false;
-
-    if sel.len() > 1 {
-        ui.heading(format!("{} objects", sel.len()));
-        section(ui, "Arrange", p);
-        ui.horizontal_wrapped(|ui| {
-            for (l, edge) in [("Left", zebra_core::command::AlignEdge::Left), ("Centre", zebra_core::command::AlignEdge::CenterX), ("Right", zebra_core::command::AlignEdge::Right), ("Top", zebra_core::command::AlignEdge::Top), ("Middle", zebra_core::command::AlignEdge::CenterY), ("Bottom", zebra_core::command::AlignEdge::Bottom)] {
-                if ui.button(l).on_hover_text(format!("Align {l}")).clicked() {
-                    app.apply(Command::Align { ids: sel.clone(), edge });
-                }
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            for (l, layout) in [("Row", zebra_core::command::Layout::Row), ("Column", zebra_core::command::Layout::Column), ("Grid", zebra_core::command::Layout::Grid), ("Circle", zebra_core::command::Layout::Circle)] {
-                if ui.button(l).on_hover_text(format!("Arrange in a {l}")).clicked() {
-                    app.apply(Command::Arrange { ids: sel.clone(), layout, gap: None });
-                }
-            }
-        });
-        common_actions(app, ui, p);
-        return;
-    }
-    let Some(e) = sel.first().and_then(|id| app.editor.doc.get(id)).cloned() else { return };
-    let kind_name = match &e.kind {
-        ElementKind::Frame(f) => format!("{} frame", frame_name(f.style)),
-        ElementKind::Text(t) => format!("{:?} text", t.style),
-        ElementKind::Shape(s) => s.shape.label().to_string(),
-        ElementKind::Image(_) => "Image".into(),
-        ElementKind::Ink(_) => "Drawing".into(),
-        ElementKind::Icon(_) => "Icon".into(),
-        ElementKind::Connector(_) => "Connector".into(),
-    };
-    ui.horizontal(|ui| {
-        ui.heading(kind_name);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(RichText::new(&e.id).size(11.0).color(p.weak)).on_hover_text("Element id (what an agent uses to refer to it)");
-        });
-    });
-
-    // Name (frames: shown in the path sidebar)
-    if e.is_frame() {
-        let mut name = e.name.clone();
-        ui.horizontal(|ui| {
-            ui.label("Name");
-            let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(e.label(&app.editor.doc)).desired_width(170.0));
-            if r.changed() {
-                patch_all = Some(ElementPatch { name: Some(name.clone()), ..Default::default() });
-            }
-            gesture_active |= r.has_focus();
-        });
-    }
-
-    section(ui, "Position", p);
-    let mut x = e.transform.x;
-    let mut y = e.transform.y;
-    let mut scale = e.transform.scale;
-    let mut rot = e.transform.rotation;
-    egui::Grid::new("xform").num_columns(4).spacing([6.0, 6.0]).show(ui, |ui| {
-        let sp = (1.0 / app.editor.view.camera.zoom).max(1e-6);
-        ui.label("X");
-        let r1 = ui.add(egui::DragValue::new(&mut x).speed(sp).max_decimals(1));
-        ui.label("Y");
-        let r2 = ui.add(egui::DragValue::new(&mut y).speed(sp).max_decimals(1));
-        ui.end_row();
-        ui.label("Scale");
-        let r3 = ui.add(egui::DragValue::new(&mut scale).speed(e.transform.scale * 0.01).range(1e-6..=1e6).max_decimals(3));
-        ui.label("Rot");
-        let r4 = ui.add(egui::DragValue::new(&mut rot).speed(0.5).suffix("°").max_decimals(1));
-        ui.end_row();
-        for r in [&r1, &r2, &r3, &r4] {
-            gesture_active |= r.dragged() || r.has_focus();
-        }
-        if r1.changed() || r2.changed() || r3.changed() || r4.changed() {
-            patch_all = Some(ElementPatch { x: Some(x), y: Some(y), scale: Some(scale), rotation: Some(rot), ..Default::default() });
-        }
-    });
-
-    match &e.kind {
-        ElementKind::Text(t) => {
-            section(ui, "Text", p);
-            ui.horizontal(|ui| {
-                for s in [TextStyle::Title, TextStyle::Subtitle, TextStyle::Body] {
-                    if ui.selectable_label(t.style == s, format!("{s:?}")).on_hover_text(format!("{s:?} text style")).clicked() {
-                        patch_all = Some(ElementPatch { style: Some(s), ..Default::default() });
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                if ui.selectable_label(t.bold, RichText::new(" B ").strong()).on_hover_text("Bold").clicked() {
-                    patch_all = Some(ElementPatch { bold: Some(!t.bold), ..Default::default() });
-                }
-                if ui.selectable_label(t.italic, RichText::new(" I ").italics()).on_hover_text("Italic").clicked() {
-                    patch_all = Some(ElementPatch { italic: Some(!t.italic), ..Default::default() });
-                }
-                if ui.selectable_label(t.bullets, "• List").on_hover_text("Bulleted list").clicked() {
-                    patch_all = Some(ElementPatch { bullets: Some(!t.bullets), ..Default::default() });
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Align");
-                for (a, l) in [(zebra_core::Align::Left, "⇤"), (zebra_core::Align::Center, "↔"), (zebra_core::Align::Right, "⇥")] {
-                    if ui.selectable_label(t.align == a, l).on_hover_text(format!("Align {a:?}")).clicked() {
-                        patch_all = Some(ElementPatch { align: Some(a), ..Default::default() });
-                    }
-                }
-            });
-            if ui.button("Edit text  ↵").on_hover_text("Edit the text in place  ↵ / double-click").clicked() {
-                crate::canvas::begin_edit_existing(app, e.id.clone());
-            }
-            section(ui, "Colour", p);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                let cur = t.color.clone().unwrap_or_default();
-                if swatch(ui, style::c32(theme.color(&format!("theme:{}", format!("{:?}", t.style).to_lowercase()))), cur.is_empty(), "Theme default") {
-                    patch_all = Some(ElementPatch { color: Some(String::new()), ..Default::default() });
-                }
-                for slot in ["theme:title", "theme:subtitle", "theme:body", "theme:accent", "theme:shape1", "theme:shape2", "theme:shape3", "theme:shape4"] {
-                    if swatch(ui, style::c32(theme.color(&slot.to_string())), cur == slot, slot) {
-                        patch_all = Some(ElementPatch { color: Some(slot.into()), ..Default::default() });
-                    }
-                }
-            });
-        }
-        ElementKind::Shape(s) => {
-            section(ui, "Shape", p);
-            egui::ComboBox::from_id_salt("shape-kind").selected_text(s.shape.label()).width(200.0).show_ui(ui, |ui| {
-                for &k in ShapeKind::ALL {
-                    if ui.selectable_label(s.shape == k, k.label()).clicked() {
-                        patch_all = Some(ElementPatch { shape: Some(k), ..Default::default() });
-                    }
-                }
-            });
-            if matches!(s.shape, ShapeKind::Rectangle | ShapeKind::RoundedRect | ShapeKind::Callout | ShapeKind::SpeechBubble | ShapeKind::StickyNote) {
-                let mut cr = s.corner_radius;
-                ui.horizontal(|ui| {
-                    ui.label("Corners");
-                    let r = ui.add(egui::DragValue::new(&mut cr).speed(0.5).range(0.0..=e.size.w.min(e.size.h) / 2.0).max_decimals(0));
-                    gesture_active |= r.dragged() || r.has_focus();
-                    if r.changed() {
-                        patch_all = Some(ElementPatch { corner_radius: Some(cr), ..Default::default() });
-                    }
-                });
-            }
-            for (label, cur, is_fill) in [("Fill", s.fill.clone(), true), ("Stroke", s.stroke.clone(), false)] {
-                section(ui, label, p);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    let cur = cur.unwrap_or_default();
-                    if swatch(ui, Color32::TRANSPARENT, cur.is_empty(), "None") {
-                        patch_all = Some(if is_fill { ElementPatch { fill: Some(String::new()), ..Default::default() } } else { ElementPatch { stroke: Some(String::new()), ..Default::default() } });
-                    }
-                    for slot in ["theme:shape1", "theme:shape2", "theme:shape3", "theme:shape4", "theme:accent", "theme:frame", "theme:title", "theme:background"] {
-                        if swatch(ui, style::c32(theme.color(&slot.to_string())), cur == slot, slot) {
-                            patch_all = Some(if is_fill { ElementPatch { fill: Some(slot.into()), ..Default::default() } } else { ElementPatch { stroke: Some(slot.into()), ..Default::default() } });
-                        }
-                    }
-                });
-            }
-            let mut sw = s.stroke_width;
-            ui.horizontal(|ui| {
-                ui.label("Stroke width");
-                let r = ui.add(egui::DragValue::new(&mut sw).speed(0.2).range(0.0..=200.0));
-                gesture_active |= r.dragged() || r.has_focus();
-                if r.changed() {
-                    patch_all = Some(ElementPatch { stroke_width: Some(sw), ..Default::default() });
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Line");
-                for (d, l) in [(zebra_core::Dash::Solid, "Solid"), (zebra_core::Dash::Dashed, "Dashed"), (zebra_core::Dash::Dotted, "Dotted")] {
-                    if ui.selectable_label(s.dash == d, l).clicked() {
-                        patch_all = Some(ElementPatch { dash: Some(d), ..Default::default() });
-                    }
-                }
-            });
-        }
-        ElementKind::Connector(c) => {
-            use zebra_core::{Arrowhead, Route};
-            section(ui, "Connector", p);
-            ui.horizontal(|ui| {
-                for (r, l) in [(Route::Straight, "Straight"), (Route::Elbow, "Elbow"), (Route::Curved, "Curved")] {
-                    if ui.selectable_label(c.route == r, l).clicked() {
-                        patch_all = Some(ElementPatch { route: Some(r), ..Default::default() });
-                    }
-                }
-            });
-            let heads = [(Arrowhead::None, "None"), (Arrowhead::Arrow, "Arrow"), (Arrowhead::Open, "Open arrow"), (Arrowhead::Dot, "Dot")];
-            for (label, cur, is_end) in [("Start", c.start, false), ("End", c.end, true)] {
-                ui.horizontal(|ui| {
-                    ui.label(label);
-                    let name = heads.iter().find(|h| h.0 == cur).map(|h| h.1).unwrap_or("None");
-                    egui::ComboBox::from_id_salt(("head", is_end)).selected_text(name).show_ui(ui, |ui| {
-                        for (h, l) in heads {
-                            if ui.selectable_label(cur == h, l).clicked() {
-                                patch_all = Some(if is_end { ElementPatch { end_head: Some(h), ..Default::default() } } else { ElementPatch { start_head: Some(h), ..Default::default() } });
+                        if w::default_button(ui, "Restore").clicked() {
+                            if let Ok(doc) = zebra_core::io::load(&rp) {
+                                let path = app.editor.file_path.clone();
+                                app.editor.load(doc, path);
+                                // Restored work is unsaved: mark the document edited.
+                                app.editor.revision += 1;
                             }
+                            app.recovered = None;
                         }
                     });
                 });
-            }
-            let mut label = c.label.clone();
-            ui.horizontal(|ui| {
-                ui.label("Label");
-                let r = ui.add(egui::TextEdit::singleline(&mut label).hint_text("Text on the line").desired_width(160.0));
-                gesture_active |= r.has_focus();
-                if r.changed() {
-                    patch_all = Some(ElementPatch { label: Some(label.clone()), ..Default::default() });
-                }
             });
-            section(ui, "Colour", p);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                for slot in ["theme:body", "theme:title", "theme:accent", "theme:shape1", "theme:shape2", "theme:shape3", "theme:shape4", "theme:frame"] {
-                    if swatch(ui, style::c32(theme.color(&slot.to_string())), c.color == slot, slot) {
-                        patch_all = Some(ElementPatch { color: Some(slot.into()), ..Default::default() });
-                    }
-                }
-            });
-            let mut w = c.width;
-            ui.horizontal(|ui| {
-                ui.label("Width");
-                let r = ui.add(egui::DragValue::new(&mut w).speed(0.1).range(0.1..=200.0).max_decimals(1));
-                gesture_active |= r.dragged() || r.has_focus();
-                if r.changed() {
-                    patch_all = Some(ElementPatch { stroke_width: Some(w), ..Default::default() });
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Line");
-                for (d, l) in [(zebra_core::Dash::Solid, "Solid"), (zebra_core::Dash::Dashed, "Dashed"), (zebra_core::Dash::Dotted, "Dotted")] {
-                    if ui.selectable_label(c.dash == d, l).clicked() {
-                        patch_all = Some(ElementPatch { dash: Some(d), ..Default::default() });
-                    }
-                }
-            });
-            let ends = [&c.from, &c.to].iter().filter(|e| e.element.is_some()).count();
-            ui.label(RichText::new(format!("{ends} of 2 ends attached. Drag an end onto an object to stick it there.")).size(11.5).color(p.weak));
-        }
-        ElementKind::Icon(i) => {
-            section(ui, "Icon", p);
-            ui.horizontal(|ui| {
-                ui.label(&i.name);
-                if ui.button("Replace…").on_hover_text("Pick another icon from the library").clicked() {
-                    app.library.open_replace(e.id.clone());
-                }
-            });
-            section(ui, "Colour", p);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                for slot in ["theme:body", "theme:title", "theme:accent", "theme:shape1", "theme:shape2", "theme:shape3", "theme:shape4", "theme:background"] {
-                    if swatch(ui, style::c32(theme.color(&slot.to_string())), i.color == slot, slot) {
-                        patch_all = Some(ElementPatch { color: Some(slot.into()), ..Default::default() });
-                    }
-                }
-            });
-            let mut sw = i.stroke_width;
-            ui.horizontal(|ui| {
-                ui.label("Line weight");
-                let r = ui.add(egui::Slider::new(&mut sw, 0.5..=4.0).step_by(0.25));
-                gesture_active |= r.dragged() || r.has_focus();
-                if r.changed() {
-                    patch_all = Some(ElementPatch { stroke_width: Some(sw), ..Default::default() });
-                }
-            });
-        }
-        ElementKind::Frame(f) => {
-            section(ui, "Frame style", p);
-            ui.horizontal(|ui| {
-                for s in FrameStyle::ALL {
-                    let r = icon_button(ui, Icon::Frame(s), true, f.style == s, p).on_hover_text(frame_name(s));
-                    if r.clicked() {
-                        patch_all = Some(ElementPatch { frame_style: Some(s), ..Default::default() });
-                    }
-                }
-            });
-            section(ui, "Colour", p);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                let cur = f.color.clone().unwrap_or_default();
-                for (slot, tip) in [("", "Theme frame colour"), ("theme:accent", "Accent"), ("theme:shape1", "Colour 1"), ("theme:shape2", "Colour 2"), ("theme:shape3", "Colour 3"), ("theme:shape4", "Colour 4"), ("theme:title", "Title")] {
-                    let c = style::c32(theme.color(&(if slot.is_empty() { "theme:frame" } else { slot }).to_string()));
-                    if swatch(ui, c, cur == slot, tip) {
-                        patch_all = Some(ElementPatch { color: Some(slot.into()), ..Default::default() });
-                    }
-                }
-            });
-            let n = app.editor.doc.frame_contents(&e.id).len();
-            ui.label(RichText::new(format!("Contains {n} object{}", if n == 1 { "" } else { "s" })).size(12.0).color(p.weak));
-            if ui.button("Zoom into frame").on_hover_text("Move the camera to fit this frame").clicked() {
-                let _ = app.editor.view(zebra_core::ViewCommand::ZoomTo { id: e.id.clone(), animate: true }, H);
-            }
-        }
-        ElementKind::Image(i) => {
-            section(ui, "Image", p);
-            let mut alt = i.alt.clone();
-            ui.label("Description (alt text)");
-            let r = ui.add(egui::TextEdit::singleline(&mut alt).desired_width(220.0));
-            gesture_active |= r.has_focus();
-            if r.changed() {
-                patch_all = Some(ElementPatch { alt: Some(alt), ..Default::default() });
-            }
-        }
-        ElementKind::Ink(_) => {}
-    }
-
-    // Fade-in builds: classic Prezi "Animate" within a step.
-    let steps: Vec<usize> = (0..app.editor.doc.path.len())
-        .filter(|i| match &app.editor.doc.path[*i].target {
-            StepTarget::Element { id } => *id != e.id && app.editor.doc.frame_contents(id).contains(&e.id),
-            _ => false,
-        })
-        .collect();
-    if let Some(&si) = steps.last() {
-        section(ui, "Animation", p);
-        let builds = app.editor.doc.path[si].builds.clone();
-        let mut on = builds.contains(&e.id);
-        if ui.checkbox(&mut on, format!("Fade in on step {}", si + 1)).on_hover_text("Appears with a click after the camera arrives").changed() {
-            let mut b = builds;
-            if on {
-                b.push(e.id.clone());
-            } else {
-                b.retain(|x| *x != e.id);
-            }
-            app.apply(Command::UpdateStep { index: si, target: None, builds: Some(b), notes: None, duration: None });
-        }
-    }
-
-    // Live edits from the panel are one undo step per interaction.
-    if let Some(patch) = patch_all {
-        if gesture_active && !app.editor.in_transaction() {
-            let _ = app.editor.begin("Change properties", H);
-        }
-        let r = app.editor.apply(Command::Update { id: e.id.clone(), patch }, H);
-        app.report(r);
-    }
-    if !gesture_active && app.editor.human_gesture_active() && matches!(app.canvas.gesture, crate::canvas::Gesture::None) {
-        app.editor.commit();
-    }
-
-    common_actions(app, ui, p);
-}
-
-fn common_actions(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
-    let sel = app.selection();
-    let locked = !sel.is_empty() && sel.iter().all(|id| app.editor.doc.get(id).is_some_and(|e| e.locked));
-    let in_path = sel.iter().any(|id| !app.editor.doc.steps_using(id).is_empty());
-    section(ui, "Arrange", p);
-    ui.horizontal_wrapped(|ui| {
-        if ui.button("Forward").on_hover_text("Bring forward one layer  ]").clicked() {
-            app.queued.push(Action::BringForward);
-        }
-        if ui.button("Backward").on_hover_text("Send backward one layer  [").clicked() {
-            app.queued.push(Action::SendBackward);
-        }
-        if ui.button("To front").on_hover_text("Bring to front  ⌘]").clicked() {
-            app.queued.push(Action::BringToFront);
-        }
-        if ui.button("To back").on_hover_text("Send to back  ⌘[").clicked() {
-            app.queued.push(Action::SendToBack);
-        }
-    });
-    ui.horizontal_wrapped(|ui| {
-        if ui.button(if locked { "Unlock" } else { "Lock" }).on_hover_text(if locked { "Unlock so it can be moved and edited  ⌘L" } else { "Lock in place  ⌘L" }).clicked() {
-            app.queued.push(Action::ToggleLock);
-        }
-        if ui.button("Duplicate").on_hover_text("Duplicate the selection  ⌘D").clicked() {
-            app.queued.push(Action::Duplicate);
-        }
-        if ui.button("Frame it").on_hover_text("Draw a frame around the selection  ⌘G").clicked() {
-            app.queued.push(Action::WrapInFrame);
-        }
-    });
-    section(ui, "Path", p);
-    ui.horizontal_wrapped(|ui| {
-        if ui.button("+ Add to path").on_hover_text("Add a path step that zooms to the selection  ⇧⌘A").clicked() {
-            app.queued.push(Action::AddToPath);
-        }
-        if in_path {
-            ui.label(RichText::new("✓ on the path").size(12.0).color(p.weak));
-        }
-    });
-    ui.add_space(10.0);
-    let del = egui::Button::new(RichText::new("Delete").color(Color32::from_rgb(200, 50, 50)));
-    if ui.add_enabled(!locked, del).on_hover_text("Delete the selection  ⌫").on_disabled_hover_text("Unlock to delete  ⌘L").clicked() {
-        app.queued.push(Action::Delete);
     }
 }
 
 // ----------------------------------------------------------------------
-// Agent activity panel (⌘J)
+// Agent activity (⌘J): its own pane, beside the inspector.
 
 fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     ui.horizontal(|ui| {
-        ui.heading("Agent activity");
+        ui.label(RichText::new("Agent Activity").font(style::semibold(13.0)));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.small_button("Close").on_hover_text("Close the activity panel  ⌘J").clicked() {
+            if w::icon_button(ui, Icon::Close, 20.0, true, false).on_hover_text("Close  ⌘J").clicked() {
                 app.show_activity = false;
             }
         });
     });
-    ui.label(RichText::new("Every change an agent makes appears here and on your undo stack.").size(12.0).color(p.weak));
+    w::caption(ui, "Every change an agent makes appears here and on your undo stack.");
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         let paused = app.editor.view.agent_paused;
-        if ui.button(if paused { "Resume" } else { "Pause" }).on_hover_text(if paused { "Let the agent continue" } else { "Temporarily stop the agent from making changes" }).clicked() {
+        if w::push_button(ui, if paused { "Resume" } else { "Pause" }).on_hover_text(if paused { "Let the agent continue" } else { "Temporarily stop the agent from making changes" }).clicked() {
             app.queued.push(Action::PauseAgents);
         }
-        let mut follow = app.editor.view.follow_agent;
-        if ui.checkbox(&mut follow, "Follow").on_hover_text("Move your view to wherever the agent is working").changed() {
-            app.queued.push(Action::FollowAgent);
-        }
-        if ui.button("Revert all").on_hover_text("Undo everything the agent did since your last change").clicked() {
+        if w::push_button(ui, "Revert…").on_hover_text("Undo everything the agent did since your last change").clicked() {
             app.queued.push(Action::RevertAgent);
         }
     });
-    ui.separator();
+    let mut follow = app.editor.view.follow_agent;
+    if w::checkbox(ui, &mut follow, "Follow the agent").on_hover_text("Move your view to wherever the agent is working").changed() {
+        app.queued.push(Action::FollowAgent);
+    }
+    ui.add_space(4.0);
+    w::separator(ui);
     let now = app.editor.view.now;
     let items: Vec<_> = app.editor.activity.iter().rev().filter(|a| a.origin.is_agent()).take(200).cloned().collect();
     if items.is_empty() {
-        ui.label(RichText::new("No agent changes yet.").color(p.weak));
+        ui.add_space(6.0);
+        w::caption(ui, "No agent changes yet.");
     }
     for a in items {
         let ago = now - a.time;
-        let when = if ago < 60.0 { format!("{:.0}s ago", ago.max(0.0)) } else { format!("{:.0} min ago", ago / 60.0) };
-        let r = egui::Frame::new().inner_margin(egui::Margin::symmetric(6, 4)).corner_radius(6).show(ui, |ui| {
+        let when = if ago < 60.0 { format!("{:.0} s ago", ago.max(0.0)) } else { format!("{:.0} min ago", ago / 60.0) };
+        let r = egui::Frame::new().inner_margin(egui::Margin::symmetric(6, 4)).corner_radius(5).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(EVec2::splat(8.0), Sense::hover());
@@ -1076,7 +602,7 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         });
         let resp = r.response.interact(Sense::click()).on_hover_text("Click to show these objects");
         if resp.hovered() {
-            ui.painter().rect_stroke(resp.rect, 6.0, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
+            ui.painter().rect_filled(resp.rect, 5.0, p.hover);
         }
         if resp.clicked() && !a.ids.is_empty() {
             let ids: Vec<_> = a.ids.iter().filter(|id| app.editor.doc.get(id).is_some()).cloned().collect();
@@ -1090,46 +616,22 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
 }
 
 // ----------------------------------------------------------------------
-// Dialogs: unsaved changes, ⌘K palette, shortcuts, about
+// Dialogs: ⌘K palette (optional), keyboard shortcuts, about
 
 fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
-    if let Some(action) = app.confirm.clone() {
-        let m = egui::Modal::new(egui::Id::unique("confirm")).show(ctx, |ui| {
-            ui.set_width(360.0);
-            ui.heading("Save changes?");
-            ui.label(format!("“{}” has changes that aren't saved.", app.editor.doc.title));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(RichText::new("Save").color(Color32::WHITE)).fill(ACCENT)).clicked() {
-                    if app.save(false) {
-                        app.force_quit = true;
-                        app.queued.push(action.clone());
-                    }
-                    app.confirm = None;
-                }
-                if ui.button("Don't Save").clicked() {
-                    app.force_quit = true;
-                    app.queued.push(action.clone());
-                    app.confirm = None;
-                }
-                if ui.button("Cancel").clicked() {
-                    app.confirm = None;
-                }
-            });
+    if app.show_icon_sheet {
+        egui::Area::new(egui::Id::unique("icon-sheet")).order(egui::Order::Foreground).fixed_pos(Pos2::new(240.0, 120.0)).show(ctx, |ui| {
+            style::float_frame(p).inner_margin(12).show(ui, |ui| crate::icons::debug_sheet(ui));
         });
-        if m.should_close() {
-            app.confirm = None;
-        }
     }
-
     if let Some((mut q, mut sel)) = app.palette.take() {
         let mut keep = true;
         let all = Action::palette();
         let ql = q.to_lowercase();
         let matches: Vec<Action> = all.into_iter().filter(|a| ql.split_whitespace().all(|w| a.label().to_lowercase().contains(w))).collect();
-        let m = egui::Modal::new(egui::Id::unique("palette")).show(ctx, |ui| {
+        let m = egui::Modal::new(egui::Id::unique("palette")).backdrop_color(Color32::TRANSPARENT).show(ctx, |ui| {
             ui.set_width(440.0);
-            let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text("Type a command…").desired_width(f32::INFINITY).font(FontId::proportional(16.0)));
+            let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text("Type a command").desired_width(f32::INFINITY).font(FontId::proportional(15.0)));
             r.request_focus();
             if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
                 sel = (sel + 1).min(matches.len().saturating_sub(1));
@@ -1137,17 +639,21 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
             if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
                 sel = sel.saturating_sub(1);
             }
-            ui.separator();
+            w::separator(ui);
             egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 for (i, a) in matches.iter().enumerate() {
-                    let resp = ui.horizontal(|ui| {
-                        let r = ui.selectable_label(i == sel, a.label());
-                        if let Some(s) = a.shortcut_text() {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(s).color(p.weak)));
-                        }
-                        r
-                    });
-                    if resp.inner.clicked() {
+                    let (rect, resp) = ui.allocate_exact_size(EVec2::new(ui.available_width(), 22.0), Sense::click());
+                    let hot = i == sel || resp.hovered();
+                    if hot {
+                        ui.painter().rect_filled(rect, 4.0, accent());
+                    }
+                    let c = if hot { w::on_accent() } else { p.text };
+                    ui.painter().text(rect.left_center() + EVec2::new(8.0, 0.0), Align2::LEFT_CENTER, a.label(), style::ui_font(13.0), c);
+                    if let Some(s) = a.shortcut_text() {
+                        ui.painter().text(rect.right_center() - EVec2::new(8.0, 0.0), Align2::RIGHT_CENTER, s, style::ui_font(13.0), if hot { c } else { p.weak });
+                    }
+                    if resp.clicked() {
                         app.queued.push(a.clone());
                         keep = false;
                     }
@@ -1170,26 +676,28 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
 
     if app.show_shortcuts {
         let m = egui::Modal::new(egui::Id::unique("shortcuts")).show(ctx, |ui| {
-            ui.set_width(520.0);
-            ui.heading("Keyboard shortcuts");
-            ui.label(RichText::new("You never need these — every one is also a button or menu item.").color(p.weak));
+            ui.set_width(540.0);
+            ui.label(RichText::new("Keyboard Shortcuts").font(style::semibold(15.0)));
+            w::caption(ui, "Every shortcut is also a menu item or a button.");
             ui.add_space(6.0);
             let rows: &[(&str, &str)] = &[
                 ("Write text", "Double-click anywhere"),
-                ("Tools", "V select · H hand · T text · F frame (again = style) · R O L A D I"),
-                ("Pan / zoom", "Space-drag or two-finger scroll · pinch or wheel"),
-                ("Fit all / selection / 100%", "⇧1 / ⇧2 / ⌘0"),
-                ("Undo / redo", "⌘Z / ⇧⌘Z"),
-                ("Duplicate / delete", "⌘D / ⌫"),
-                ("Copy / paste", "⌘C / ⌘V"),
-                ("Forward / backward", "] / ["),
+                ("Select tool · Hand tool", "V · H (or hold Space)"),
+                ("Text · Frame (again to change style)", "T · F"),
+                ("Rectangle · Ellipse · Line · Arrow · Draw", "R · O · L · A · D"),
+                ("Insert image", "I"),
+                ("Pan · Zoom", "Two-finger scroll · Pinch, or ⌘-scroll"),
+                ("Zoom to Fit · Zoom to Selection · Actual Size", "⇧1 · ⇧2 · ⌘0"),
+                ("Undo · Redo", "⌘Z · ⇧⌘Z"),
+                ("Duplicate · Delete", "⌘D · ⌫"),
+                ("Bring Forward · Send Backward", "] · ["),
                 ("Rotate in 15° steps", "Hold ⇧ while rotating"),
-                ("Edit path", "P"),
-                ("Add selection to path", "⇧⌘A"),
-                ("Present (start / current)", "F5 · ⌘↵ / ⇧F5 · ⌥⌘↵"),
-                ("While presenting", "→ Space next · ← back · Home overview · B/W blank · Esc exit"),
-                ("Command palette", "⌘K"),
-                ("Agent activity / stop agent", "⌘J / ⌘."),
+                ("Edit Path · Add to Path", "P · ⇧⌘A"),
+                ("Play · Play from Current Step", "⌥⌘P · ⇧⌥⌘P"),
+                ("While playing", "→ or Space next · ← back · Home overview · B or W blank · Esc stop"),
+                ("Show Inspector · Show Sidebar", "⌥⌘I · ⌃⌘S"),
+                ("Agent Activity · Stop Agent", "⌘J · ⌘."),
+                ("Settings", "⌘,"),
             ];
             egui::Grid::new("sc").num_columns(2).spacing([24.0, 6.0]).striped(true).show(ui, |ui| {
                 for (a, k) in rows {
@@ -1198,13 +706,10 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
                     ui.end_row();
                 }
             });
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label("Scrolling:");
-                for (m, l) in [(ScrollMode::Auto, "Auto (trackpad pans)"), (ScrollMode::Zoom, "Always zoom"), (ScrollMode::Pan, "Always pan")] {
-                    if ui.radio(app.scroll_mode == m, l).clicked() {
-                        app.scroll_mode = m;
-                    }
+            ui.add_space(10.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if w::default_button(ui, "Done").clicked() {
+                    app.show_shortcuts = false;
                 }
             });
         });
@@ -1215,20 +720,21 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
 
     if app.show_about {
         let m = egui::Modal::new(egui::Id::unique("about")).show(ctx, |ui| {
-            ui.set_width(340.0);
+            ui.set_width(300.0);
             ui.vertical_centered(|ui| {
-                let (r, _) = ui.allocate_exact_size(EVec2::splat(56.0), Sense::hover());
-                crate::canvas::draw_zebra_disc(ui.painter(), r.center(), 24.0);
-                ui.heading("Zebra");
-                ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                ui.label(RichText::new("A zooming canvas for presentations, in the spirit of 2012 Prezi.\nDrivable by AI agents through an opt-in local API.").color(p.weak));
+                ui.add_space(6.0);
+                let (r, _) = ui.allocate_exact_size(EVec2::splat(64.0), Sense::hover());
+                crate::canvas::draw_zebra_disc(ui.painter(), r.center(), 30.0);
+                ui.add_space(4.0);
+                ui.label(RichText::new("Zebra").font(style::semibold(15.0)));
+                w::caption(ui, format!("Version {}", env!("CARGO_PKG_VERSION")));
+                ui.add_space(6.0);
+                w::caption(ui, "A zooming canvas for presentations, in the spirit of classic Prezi. Drivable by AI agents through an opt-in local API.");
+                ui.add_space(4.0);
             });
         });
         if m.should_close() {
             app.show_about = false;
         }
     }
-
-    // macOS-style tool name feedback isn't needed; keep `tool_name` linked.
-    let _ = tool_name;
 }

@@ -129,6 +129,9 @@ pub struct CanvasState {
     pub rect_presenting: bool,
     /// Window content size when `rect` was last synced.
     pub window_size: egui::Vec2,
+    /// Bold / Italic / Underline chosen from the menu bar while editing text
+    /// (on macOS the menu owns ⌘B/⌘I/⌘U): applied to the text selection.
+    pub text_menu: Option<crate::actions::Action>,
 }
 
 impl Default for CanvasState {
@@ -145,6 +148,7 @@ impl Default for CanvasState {
             rect_valid: false,
             rect_presenting: false,
             window_size: egui::Vec2::ZERO,
+            text_menu: None,
         }
     }
 }
@@ -676,7 +680,7 @@ fn update_gesture(app: &mut ZebraApp, p: Pos2, delta: egui::Vec2, shift: bool, a
         }
         Gesture::Move { ids, origin, applied, start_bounds, moving } => {
             let raw = world - *origin;
-            let (d, guides) = if alt { (raw, vec![]) } else { snap_move(app, moving, start_bounds, raw, 6.0 / zoom) };
+            let (d, guides) = if alt || !app.snapping { (raw, vec![]) } else { snap_move(app, moving, start_bounds, raw, 6.0 / zoom) };
             app.canvas.guides = guides;
             let inc = d - *applied;
             if inc.x != 0.0 || inc.y != 0.0 {
@@ -1214,6 +1218,12 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                 fx.push(Fx::Indent(1));
             }
         });
+    }
+    match app.canvas.text_menu.take() {
+        Some(crate::actions::Action::Bold) => fx.push(Fx::Bold),
+        Some(crate::actions::Action::Italic) => fx.push(Fx::Italic),
+        Some(crate::actions::Action::Underline) => fx.push(Fx::Underline),
+        _ => {}
     }
 
     let area = egui::Area::new(egui::Id::unique("zebra-text-edit")).fixed_pos(pos).order(egui::Order::Foreground).constrain(false);

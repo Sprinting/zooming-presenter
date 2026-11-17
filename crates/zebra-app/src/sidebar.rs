@@ -1,159 +1,219 @@
-//! Left path sidebar: numbered thumbnails, drag to reorder, delete, add.
-use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2 as EVec2};
+//! Path sidebar: an opaque source list of numbered step thumbnails (Keynote's
+//! navigator), with the classic + / − list footer.
+//!
+//! Two highlight states (critique item 12):
+//! - **selected** (accent plate): the steps that show what is selected on
+//!   the canvas, or the step clicked last when nothing is selected;
+//! - **current** (grey plate): the step last visited or presented.
+use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2 as EVec2};
 use zebra_core::{Command, Mode, Origin, StepTarget, ViewCommand};
 
 use crate::actions::Action;
 use crate::app::ZebraApp;
-use crate::style::{self, Palette, ACCENT, PATH};
+use crate::icons::{paint_icon, Icon};
+use crate::style::{self, accent, Palette};
 use crate::thumbs::{THUMB_H, THUMB_W};
+use crate::widgets as w;
 
 const H: Origin = Origin::Human;
 
 pub fn step_label(app: &ZebraApp, i: usize) -> String {
     let doc = &app.editor.doc;
     match &doc.path[i].target {
-        StepTarget::Element { id } => doc.get(id).map(|e| {
-            let l = e.label(doc);
-            if l == "frame" { "Untitled frame".into() } else { l }
-        }).unwrap_or_else(|| "(missing)".into()),
+        StepTarget::Element { id } => doc
+            .get(id)
+            .map(|e| {
+                let l = e.label(doc);
+                if l == "frame" { "Untitled Frame".into() } else { l }
+            })
+            .unwrap_or_else(|| "(missing)".into()),
         StepTarget::View { .. } => "View".into(),
         StepTarget::Overview => "Overview".into(),
     }
 }
 
+/// Steps highlighted with the accent: those zooming to the canvas
+/// selection, else the step clicked last.
+pub fn selected_steps(app: &ZebraApp) -> Vec<usize> {
+    let sel = &app.editor.view.selection;
+    if !sel.is_empty() {
+        let mut v: Vec<usize> = sel.iter().flat_map(|id| app.editor.doc.steps_using(id)).collect();
+        v.sort();
+        v.dedup();
+        return v;
+    }
+    app.selected_step.filter(|s| *s < app.editor.doc.path.len()).into_iter().collect()
+}
+
 pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let n = app.editor.doc.path.len();
+    let editing = app.editor.view.mode == Mode::PathEdit;
+
+    // Header: source-list section title, step count, Edit Path / Done.
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Path").font(style::bold(14.0)));
-        ui.label(RichText::new(format!("{n} step{}", if n == 1 { "" } else { "s" })).size(12.0).color(p.weak));
+        ui.label(RichText::new("Path").font(style::semibold(11.0)).color(p.weak));
+        if n > 0 {
+            ui.label(RichText::new(format!("{n} step{}", if n == 1 { "" } else { "s" })).font(style::ui_font(11.0)).color(p.weak));
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let editing = app.editor.view.mode == Mode::PathEdit;
-            let b = egui::Button::new(RichText::new(if editing { "Done" } else { "Edit path" }).size(12.0).color(if editing { Color32::WHITE } else { p.text }))
-                .fill(if editing { PATH } else { p.hover })
-                .corner_radius(6);
-            if ui.add(b).on_hover_text("Click objects on the canvas to add them as steps  (P)").clicked() {
+            let r = if editing {
+                let (rect, resp) = ui.allocate_exact_size(EVec2::new(52.0, w::H_SMALL), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Done"));
+                ui.painter().rect_filled(rect, w::RADIUS, accent());
+                ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Done", style::ui_font(11.0), w::on_accent());
+                resp
+            } else {
+                w::push_button_ext(ui, "Edit Path", w::Size::Small, true, None)
+            };
+            if r.on_hover_text(if editing { "Finish editing the path  Esc" } else { "Click objects on the canvas to add them as steps, in order  P" }).clicked() {
                 app.queued.push(Action::TogglePathEdit);
             }
         });
     });
-    ui.add_space(6.0);
+    ui.add_space(4.0);
 
-    let footer_h = 74.0;
-    let avail = ui.available_height() - footer_h;
+    // Footer first, so the list takes exactly the space that is left.
+    egui::Panel::bottom("path-footer").exact_size(34.0).frame(egui::Frame::new().fill(p.sidebar)).show(ui, |ui| footer(app, ui, p));
+
+    let selected = selected_steps(app);
+    let current = if app.editor.view.mode == Mode::Present { app.editor.view.present.step } else { app.selected_step };
     let drag_id = egui::Id::unique("path-drag");
     let mut dragging: Option<usize> = ui.ctx().data(|d| d.get_temp(drag_id));
     let mut rows: Vec<Rect> = vec![];
-    let mut drop_to: Option<usize> = None;
     let pointer = ui.ctx().pointer_hover_pos();
+    // Scroll to the selected step when it changes.
+    let last_sel_id = egui::Id::unique("path-last-selected");
+    let last_sel: Vec<usize> = ui.ctx().data(|d| d.get_temp(last_sel_id)).unwrap_or_default();
+    let scroll_to = if selected != last_sel { selected.first().copied() } else { None };
+    ui.ctx().data_mut(|d| d.insert_temp(last_sel_id, selected.clone()));
+    let flash = app.flash_step.and_then(|(i, t)| {
+        let age = app.now() - t;
+        (age < 1.2).then_some((i, 1.0 - (age / 1.2) as f32))
+    });
+    if flash.is_some() {
+        ui.ctx().request_repaint();
+    } else {
+        app.flash_step = None;
+    }
 
-    egui::ScrollArea::vertical().max_height(avail.max(60.0)).auto_shrink([false, false]).show(ui, |ui| {
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         if n == 0 {
-            ui.add_space(20.0);
+            ui.add_space(28.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("◇").size(22.0).color(p.weak));
+                let (r, _) = ui.allocate_exact_size(EVec2::splat(30.0), Sense::hover());
+                paint_icon(ui.painter(), r, Icon::Path, p.weak);
+                ui.add_space(6.0);
+                ui.label(RichText::new("No Steps").font(style::semibold(13.0)).color(p.text));
                 ui.add_space(2.0);
-                ui.label(RichText::new("No steps yet").font(style::bold(13.0)).color(p.text));
-                ui.add_space(4.0);
-                ui.label(RichText::new("Select a frame and press “+ Add”, or click “Edit path” and click frames in order.").size(12.0).color(p.weak));
+                w::caption(ui, "Select a frame and click Add Step in the toolbar, or click Edit Path and then click frames in order.");
             });
         }
         let tw = ui.available_width();
-        let th = tw * THUMB_H as f32 / THUMB_W as f32;
+        let num_w = 22.0;
+        let th = (tw - num_w - 6.0) * THUMB_H as f32 / THUMB_W as f32;
         for i in 0..n {
-            let (r, resp) = ui.allocate_exact_size(EVec2::new(tw, th + 22.0), Sense::click_and_drag());
+            let (r, resp) = ui.allocate_exact_size(EVec2::new(tw, th + 26.0), Sense::click_and_drag());
             rows.push(r);
-            let selected = app.selected_step == Some(i) || (app.editor.view.mode == Mode::Present && app.editor.view.present.step == Some(i));
+            if scroll_to == Some(i) {
+                ui.scroll_to_rect(r, None);
+            }
+            let is_sel = selected.contains(&i);
+            let is_cur = current == Some(i);
             let painter = ui.painter();
-            let img_r = Rect::from_min_size(r.min + EVec2::new(22.0, 0.0), EVec2::new(tw - 22.0, th));
-            // row highlight: tint for the current step, subtle fill on hover
-            let row_bg = r.expand2(EVec2::new(2.0, 3.0));
-            if selected {
-                painter.rect_filled(row_bg, 8.0, ACCENT.gamma_multiply(0.12));
+            let plate = r.shrink2(EVec2::new(0.0, 1.0));
+            if is_sel {
+                painter.rect_filled(plate, 6.0, accent());
+            } else if is_cur {
+                painter.rect_filled(plate, 6.0, p.pressed);
             } else if resp.hovered() && dragging.is_none() {
-                painter.rect_filled(row_bg, 8.0, p.hover);
+                painter.rect_filled(plate, 6.0, p.hover);
             }
-            // number badge
-            let num_c = Pos2::new(r.min.x + 10.0, r.min.y + 11.0);
-            if selected {
-                painter.circle_filled(num_c, 9.0, ACCENT);
-            }
-            painter.text(num_c, Align2::CENTER_CENTER, (i + 1).to_string(), style::bold(if i + 1 >= 10 { 11.0 } else { 12.5 }), if selected { Color32::WHITE } else { p.text });
-            // thumbnail
-            let bg = style::c32(app.editor.theme().color(&"theme:background".into()));
-            painter.rect_filled(img_r, 6.0, bg);
-            if let Some(tex) = app.thumbs.get(i) {
-                painter.image(tex.id(), img_r.shrink(1.0), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), if app.thumbs.stale(app.editor.revision) { Color32::from_white_alpha(200) } else { Color32::WHITE });
-            } else {
-                painter.text(img_r.center(), Align2::CENTER_CENTER, "…", FontId::proportional(14.0), p.weak);
-            }
-            let stroke = if selected { Stroke::new(2.0, ACCENT) } else if resp.hovered() { Stroke::new(1.0, ACCENT.gamma_multiply(0.6)) } else { Stroke::new(1.0, p.border) };
-            painter.rect_stroke(img_r, 6.0, stroke, egui::StrokeKind::Inside);
-            // label
-            let label = crate::files::short(&step_label(app, i), 26);
-            painter.text(Pos2::new(img_r.min.x + 2.0, img_r.max.y + 11.0), Align2::LEFT_CENTER, label, FontId::proportional(12.0), p.text);
-            let step = &app.editor.doc.path[i];
-            let mut badge_x = img_r.max.x - 4.0;
-            if !step.builds.is_empty() {
-                let t = format!("+{} fade", step.builds.len());
-                painter.text(Pos2::new(badge_x, img_r.max.y + 11.0), Align2::RIGHT_CENTER, &t, FontId::proportional(10.5), p.weak);
-                badge_x -= 52.0;
-            }
-            if !step.notes.is_empty() {
-                painter.text(Pos2::new(badge_x, img_r.max.y + 11.0), Align2::RIGHT_CENTER, "notes", FontId::proportional(10.5), p.weak);
-            }
-            // delete × on hover
-            if resp.hovered() && dragging.is_none() {
-                let xr = Rect::from_center_size(img_r.right_top() + EVec2::new(-12.0, 12.0), EVec2::splat(18.0));
-                painter.circle_filled(xr.center(), 9.0, Color32::from_black_alpha(140));
-                painter.text(xr.center(), Align2::CENTER_CENTER, "✕", FontId::proportional(10.0), Color32::WHITE);
-                if resp.clicked() && pointer.is_some_and(|pp| xr.contains(pp)) {
-                    app.apply(Command::RemoveStep { index: i });
-                    app.selected_step = None;
-                    return;
+            if let Some((fi, a)) = flash {
+                if fi <= i {
+                    painter.rect_stroke(plate, 6.0, Stroke::new(2.0, accent().gamma_multiply(a)), egui::StrokeKind::Inside);
                 }
             }
+            let tc = if is_sel { w::on_accent() } else { p.text };
+            let wc = if is_sel { w::on_accent() } else { p.weak };
+            // Step number, top-left like Keynote's slide numbers.
+            painter.text(Pos2::new(r.min.x + num_w / 2.0 + 1.0, r.min.y + 12.0), Align2::CENTER_CENTER, (i + 1).to_string(), style::semibold(11.0), tc);
+            // Thumbnail.
+            let img_r = Rect::from_min_size(r.min + EVec2::new(num_w, 5.0), EVec2::new(tw - num_w - 6.0, th));
+            let bg = style::c32(app.editor.theme().color(&"theme:background".into()));
+            painter.rect_filled(img_r, 3.0, bg);
+            if let Some(tex) = app.thumbs.get(i) {
+                let tint = if app.thumbs.stale(app.editor.revision) { Color32::from_white_alpha(200) } else { Color32::WHITE };
+                painter.image(tex.id(), img_r.shrink(0.5), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
+            }
+            painter.rect_stroke(img_r, 3.0, Stroke::new(1.0, if is_sel { Color32::from_white_alpha(160) } else { p.border }), egui::StrokeKind::Outside);
+            // Label and badges.
+            let step = &app.editor.doc.path[i];
+            let mut right = img_r.max.x;
+            let ly = img_r.max.y + 10.0;
+            if !step.builds.is_empty() {
+                let t = format!("{} build{}", step.builds.len(), if step.builds.len() == 1 { "" } else { "s" });
+                let g = painter.layout_no_wrap(t, style::ui_font(11.0), wc);
+                right -= g.size().x;
+                painter.galley(Pos2::new(right, ly - g.size().y / 2.0), g, wc);
+                right -= 6.0;
+            }
+            if !step.notes.is_empty() {
+                right -= 13.0;
+                paint_icon(painter, Rect::from_min_size(Pos2::new(right, ly - 6.5), EVec2::splat(13.0)), Icon::Note, wc);
+                right -= 4.0;
+            }
+            let label = step_label(app, i);
+            let clip = Rect::from_min_max(Pos2::new(img_r.min.x, ly - 8.0), Pos2::new(right, ly + 8.0));
+            painter.with_clip_rect(clip).text(Pos2::new(img_r.min.x, ly), Align2::LEFT_CENTER, &label, style::ui_font(11.0), tc);
+
             if resp.clicked() {
                 app.selected_step = Some(i);
+                if !app.editor.view.selection.is_empty() {
+                    let _ = app.editor.view(ViewCommand::ClearSelection, H);
+                }
                 let _ = app.editor.view(ViewCommand::GotoStep { step: i }, H);
             }
             if resp.drag_started() {
                 dragging = Some(i);
             }
-            let tip = format!("Step {} · {}\nClick to fly there · drag to reorder · right-click for more", i + 1, step_label(app, i));
-            let resp = resp.on_hover_text(tip);
-            egui::Popup::context_menu(&resp).show(|ui| {
-                if ui.button("Go to step").clicked() {
+            let resp = resp.on_hover_text(format!("Step {}: {}\nClick to go there. Drag to reorder. Right-click for more.", i + 1, label));
+            egui::Popup::context_menu(&resp).width(200.0).show(|ui| {
+                if w::menu_item(ui, "Go to Step", None).clicked() {
                     let _ = app.editor.view(ViewCommand::GotoStep { step: i }, H);
                 }
-                if ui.button("Present from here").clicked() {
+                if w::menu_item(ui, "Play from Here", None).clicked() {
                     let _ = app.editor.view(ViewCommand::Present { step: Some(i) }, H);
                 }
-                if ui.button("Select target").clicked() {
+                let has_target = matches!(&app.editor.doc.path[i].target, StepTarget::Element { .. });
+                if w::menu_row(ui, None, "Select on Canvas", None, has_target).clicked() {
                     if let StepTarget::Element { id } = &app.editor.doc.path[i].target {
                         app.select(vec![id.clone()]);
                     }
                 }
-                if ui.button("Duplicate step").clicked() {
+                w::menu_separator(ui);
+                if w::menu_item(ui, "Duplicate Step", None).clicked() {
                     let s = app.editor.doc.path[i].clone();
                     app.apply(Command::AddStep { target: s.target, index: Some(i + 1), builds: vec![], notes: s.notes });
                 }
-                if ui.button("Move to start").clicked() && i > 0 {
+                if w::menu_row(ui, None, "Move to Start", None, i > 0).clicked() {
                     app.apply(Command::MoveStep { from: i, to: 0 });
                 }
-                if ui.button("Move to end").clicked() && i + 1 < n {
+                if w::menu_row(ui, None, "Move to End", None, i + 1 < n).clicked() {
                     app.apply(Command::MoveStep { from: i, to: n - 1 });
                 }
-                ui.separator();
-                if ui.button("Remove from path").clicked() {
+                w::menu_separator(ui);
+                if w::menu_item(ui, "Remove from Path", None).clicked() {
                     app.apply(Command::RemoveStep { index: i });
+                    app.selected_step = None;
                 }
             });
-            ui.add_space(10.0);
+            ui.add_space(2.0);
         }
     });
 
-    // Drag-to-reorder
+    // Drag to reorder: an accent insertion line between rows.
     if let Some(from) = dragging {
+        let mut drop_to: Option<usize> = None;
         if let Some(pp) = pointer {
             let mut to = rows.len().saturating_sub(1);
             for (k, r) in rows.iter().enumerate() {
@@ -163,10 +223,11 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 }
             }
             drop_to = Some(to);
-            // insertion marker
             if let Some(r) = rows.get(if to >= from { (to + 1).min(rows.len()) } else { to }).or(rows.last()) {
-                let y = if to >= from && to + 1 >= rows.len() { r.max.y + 3.0 } else { r.min.y - 3.0 };
-                ui.painter().line_segment([Pos2::new(r.min.x + 16.0, y), Pos2::new(r.max.x, y)], Stroke::new(2.5, ACCENT));
+                let y = if to >= from && to + 1 >= rows.len() { r.max.y + 1.0 } else { r.min.y - 1.0 };
+                let painter = ui.painter();
+                painter.line_segment([Pos2::new(r.min.x + 8.0, y), Pos2::new(r.max.x, y)], Stroke::new(2.0, accent()));
+                painter.circle_stroke(Pos2::new(r.min.x + 5.0, y), 3.0, Stroke::new(2.0, accent()));
             }
         }
         if ui.input(|i| i.pointer.any_released()) {
@@ -187,22 +248,54 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             d.remove::<usize>(drag_id);
         }
     });
+}
 
-    // Footer
-    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-        ui.horizontal(|ui| {
-            if ui.small_button("Path from frames").on_hover_text("Replace the path with every frame, top-left to bottom-right").clicked() {
+/// The classic list footer: + / − gradient buttons and an action pop-up.
+fn footer(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
+    let r = ui.max_rect();
+    ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, p.border));
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let has_doc = !app.editor.doc.elements.is_empty();
+        let add_tip = if app.editor.view.selection.is_empty() { "Add the current view as a step  ⇧⌘A" } else { "Add the selection as a step  ⇧⌘A" };
+        if footer_button(ui, Icon::Plus, has_doc, p).on_hover_text(add_tip).clicked() {
+            app.queued.push(Action::AddToPath);
+        }
+        let sel = selected_steps(app);
+        let rm = footer_button(ui, Icon::Minus, !sel.is_empty(), p).on_hover_text("Remove the selected step");
+        if rm.clicked() {
+            let cmds: Vec<Command> = sel.iter().rev().map(|i| Command::RemoveStep { index: *i }).collect();
+            let r = app.editor.apply_batch(cmds, Some("Remove Step".into()), H);
+            app.report(r);
+            app.selected_step = None;
+        }
+        ui.add_space(6.0);
+        let more = footer_button(ui, Icon::ChevronDown, true, p).on_hover_text("More path actions");
+        egui::Popup::menu(&more).width(200.0).show(|ui| {
+            if w::menu_item(ui, "Path from Frames", None).clicked() {
                 app.queued.push(Action::AutoPath);
             }
-            if n > 0 && ui.small_button("Clear").on_hover_text("Remove every step from the path").clicked() {
+            if w::menu_item(ui, "Add Current View", None).clicked() {
+                app.queued.push(Action::AddCurrentView);
+            }
+            w::menu_separator(ui);
+            let n = app.editor.doc.path.len();
+            if w::menu_row(ui, None, "Clear Path…", None, n > 0).clicked() {
                 app.queued.push(Action::ClearPath);
             }
         });
-        let has_sel = !app.editor.view.selection.is_empty();
-        let label = if has_sel { "+ Add selection" } else { "+ Add current view" };
-        let b = egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(ACCENT).corner_radius(8).min_size(EVec2::new(ui.available_width(), 32.0));
-        if ui.add(b).on_hover_text("⇧⌘A").clicked() {
-            app.queued.push(Action::AddToPath);
-        }
     });
+}
+
+fn footer_button(ui: &mut Ui, icon: Icon, enabled: bool, p: &Palette) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(EVec2::new(24.0, 21.0), if enabled { Sense::click() } else { Sense::hover() });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("{icon:?}")));
+    if enabled && resp.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect, 3.0, p.pressed);
+    } else if enabled && resp.hovered() {
+        ui.painter().rect_filled(rect, 3.0, p.hover);
+    }
+    paint_icon(ui.painter(), Rect::from_center_size(rect.center(), EVec2::splat(11.0)), icon, if enabled { p.text } else { p.disabled });
+    resp
 }

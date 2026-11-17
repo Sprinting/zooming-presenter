@@ -192,24 +192,24 @@ fn typing_a_new_text_stays_on_one_line() {
 }
 
 #[test]
-fn selecting_near_the_edge_keeps_selection_visible() {
+fn the_inspector_stays_put_when_the_selection_changes() {
+    // Critique item 5: the inspector is a persistent pane (⌥⌘I), so
+    // selecting or deselecting never reflows the canvas.
     let mut h = harness(Some("sample"));
     h.run_steps(10);
-    // Put the rotated frame half off the right edge, then select it as a
-    // click would: the properties panel opens over it.
-    let id = h.state().editor.doc.ordered().find(|e| e.transform.rotation.abs() > 1.0 && e.is_frame()).unwrap().id.clone();
-    {
-        let app = h.state_mut();
-        let _ = app.editor.view(zebra_core::ViewCommand::ZoomTo { id: id.clone(), animate: false }, Origin::Human);
-        let _ = app.editor.view(zebra_core::ViewCommand::Pan { dx: -500.0, dy: 0.0 }, Origin::Human);
-    }
+    let before = h.state().canvas.rect;
+    let id = h.state().editor.doc.ordered().find(|e| e.is_frame()).unwrap().id.clone();
+    h.state_mut().editor.view(zebra_core::ViewCommand::Select { ids: vec![id] }, Origin::Human).unwrap();
     h.run_steps(5);
-    h.state_mut().editor.view(zebra_core::ViewCommand::Select { ids: vec![id.clone()] }, Origin::Human).unwrap();
-    h.run_steps(80);
-    let app = h.state();
-    let b = app.editor.doc.get(&id).unwrap().bounds();
-    let c = app.canvas.w2s(&app.editor, b.center());
-    assert!(app.canvas.rect.contains(c), "selected frame centre {c:?} hidden outside canvas {:?}", app.canvas.rect);
+    assert_eq!(h.state().canvas.rect, before, "selecting moved the canvas");
+    h.state_mut().editor.view(zebra_core::ViewCommand::ClearSelection, Origin::Human).unwrap();
+    h.run_steps(5);
+    assert_eq!(h.state().canvas.rect, before, "deselecting moved the canvas");
+    // ⌥⌘I hides it; the canvas grows by the inspector's width.
+    h.key_press_modifiers(Modifiers { alt: true, ..Modifiers::COMMAND }, Key::I);
+    h.run_steps(5);
+    assert!(!h.state().show_props);
+    assert!(h.state().canvas.rect.width() > before.width() + 200.0);
 }
 
 #[test]
@@ -253,8 +253,8 @@ fn ai_control_is_switched_on_by_the_human_and_off_by_an_agent() {
     assert!(h.state().api.is_none(), "AI control must be off by default");
     assert!(zebra_api::discovery::list().is_empty());
 
-    // Human: click the AI pill, then the switch.
-    h.get_by_label_contains("AI: Off").click();
+    // Human: click the AI toolbar item, then the switch.
+    h.get_by_label("AI").click();
     h.run_steps(3);
     h.get_by_role_and_label(egui::accesskit::Role::Switch, "Let AI agents control Zebra").click();
     h.run_steps(3);
@@ -322,7 +322,7 @@ fn rich_text_bold_selection_and_list_from_keyboard() {
 #[test]
 fn library_inserts_shapes_and_icons_and_replaces_an_icon() {
     let mut h = harness(Some("empty"));
-    h.state_mut().queued.push(zebra_app::actions::Action::ShowLibrary);
+    h.state_mut().queued.push(zebra_app::actions::Action::ShapeLibrary);
     h.run_steps(3);
     assert!(h.state().library.open);
     h.get_by_label("Burst").click();
@@ -392,4 +392,94 @@ fn arrow_drawn_between_two_shapes_sticks_to_both() {
     let app = h.state();
     let e = app.editor.doc.ordered().find(|e| matches!(e.kind, ElementKind::Connector(_))).unwrap();
     assert!(e.bounds().y1 > 200.0, "the connector followed b down: {:?}", e.bounds());
+}
+
+#[test]
+fn unsaved_changes_ask_with_a_sheet() {
+    let mut h = harness(Some("sample"));
+    h.run_steps(5);
+    // Make the document dirty, then File › New.
+    let id = h.state().editor.doc.ordered().next().unwrap().id.clone();
+    h.state_mut().editor.apply(Command::Move { ids: vec![id], dx: 5.0, dy: 0.0, with_contents: true }, Origin::Human).unwrap();
+    h.state_mut().queued.push(zebra_app::actions::Action::New);
+    h.run_steps(3);
+    assert!(matches!(h.state().sheet, Some(zebra_app::sheets::SheetKind::SaveChanges(_))));
+    // Cancel keeps the document.
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().sheet.is_none());
+    assert!(!h.state().editor.doc.elements.is_empty());
+    // Again, and Don't Save discards it.
+    h.state_mut().queued.push(zebra_app::actions::Action::New);
+    h.run_steps(3);
+    h.get_by_label("Don't Save").click();
+    h.run_steps(3);
+    assert!(h.state().sheet.is_none());
+    assert!(h.state().editor.doc.elements.is_empty(), "Don't Save should go ahead with New");
+}
+
+#[test]
+fn clear_path_confirms_first() {
+    let mut h = harness(Some("sample"));
+    h.run_steps(5);
+    let n = h.state().editor.doc.path.len();
+    assert!(n > 0);
+    h.state_mut().queued.push(zebra_app::actions::Action::ClearPath);
+    h.run_steps(3);
+    assert_eq!(h.state().editor.doc.path.len(), n, "nothing cleared before the answer");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().editor.doc.path.len(), n, "Esc cancels");
+    h.state_mut().queued.push(zebra_app::actions::Action::ClearPath);
+    h.run_steps(3);
+    h.get_by_label("Clear Path").click();
+    h.run_steps(3);
+    assert!(h.state().editor.doc.path.is_empty());
+    assert!(h.state().editor.can_undo(), "clearing the path can be undone");
+}
+
+#[test]
+fn inspector_tabs_follow_the_selection() {
+    use zebra_app::inspector::Tab;
+    let mut h = harness(Some("sample"));
+    h.run_steps(5);
+    let text = h.state().editor.doc.ordered().find(|e| matches!(e.kind, ElementKind::Text(_))).unwrap().id.clone();
+    let frame = h.state().editor.doc.ordered().find(|e| e.is_frame()).unwrap().id.clone();
+    h.state_mut().select(vec![text]);
+    h.run_steps(3);
+    // Text opens on its Text tab; pick Arrange (the tab bar's button comes
+    // after the menu bar's "Arrange" menu).
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Style").is_none(), "text has no Style tab");
+    h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Arrange").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().inspector_tab, Tab::Arrange);
+    // The tab is kept for a frame (which has Arrange too)...
+    h.state_mut().select(vec![frame.clone()]);
+    h.run_steps(3);
+    assert!(h.query_by_label("Layer").is_some(), "Arrange tab content shown");
+    // ...and its Style tab's segmented control changes the frame style
+    // through the command bus.
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Style").click();
+    h.run_steps(3);
+    h.get_by_label("Circle").click();
+    h.run_steps(3);
+    let e = h.state().editor.doc.get(&frame).unwrap().clone();
+    assert!(matches!(&e.kind, ElementKind::Frame(f) if f.style == zebra_core::FrameStyle::Circle));
+    assert!(h.state().editor.can_undo());
+}
+
+#[test]
+fn menu_titles_follow_state() {
+    use zebra_app::actions::Action;
+    use zebra_app::menus::state;
+    let mut h = harness(Some("sample"));
+    h.run_steps(5);
+    assert_eq!(state(h.state(), &Action::ToggleProperties).title, "Hide Inspector");
+    assert_eq!(state(h.state(), &Action::ToggleSidebar).title, "Hide Sidebar");
+    assert!(!state(h.state(), &Action::Undo).enabled);
+    let id = h.state().editor.doc.ordered().next().unwrap().id.clone();
+    h.state_mut().editor.apply(Command::Update { id, patch: zebra_core::ElementPatch { rotation: Some(12.0), ..Default::default() } }, Origin::Human).unwrap();
+    let undo = state(h.state(), &Action::Undo);
+    assert!(undo.enabled && undo.title.starts_with("Undo ") && undo.title.len() > 5, "{undo:?}");
+    assert!(!state(h.state(), &Action::PauseAgents).enabled, "agent items are greyed out with no agent connected");
 }

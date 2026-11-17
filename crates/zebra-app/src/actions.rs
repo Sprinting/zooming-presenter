@@ -16,6 +16,7 @@ pub enum Action {
     SaveAs,
     ExportPdf,
     ExportPng,
+    Close,
     Quit,
     // Edit
     Undo,
@@ -32,14 +33,27 @@ pub enum Action {
     FrameTool,
     SetFrameStyle(FrameStyle),
     InsertImage,
-    ShowLibrary,
     WrapInFrame,
+    /// Opens the shapes and icons library (stream 3 fills it in).
+    ShapeLibrary,
+    /// Insert › Video… (stream 2 fills it in).
+    InsertVideo,
+    /// Insert › Audio… (stream 2 fills it in).
+    InsertAudio,
+    // Format (whole text box until rich text runs land; stream 3 routes
+    // these to the text selection while editing)
+    Bold,
+    Italic,
+    Underline,
     // Arrange
     BringForward,
     SendBackward,
     BringToFront,
     SendToBack,
     ToggleLock,
+    /// Group / Ungroup (stream 3 fills these in).
+    Group,
+    Ungroup,
     // View
     ZoomIn,
     ZoomOut,
@@ -51,6 +65,7 @@ pub enum Action {
     ToggleReduceMotion,
     CommandPalette,
     ShowShortcuts,
+    Settings,
     // Path
     TogglePathEdit,
     AddToPath,
@@ -67,6 +82,8 @@ pub enum Action {
     StopAgents,
     FollowAgent,
     RevertAgent,
+    /// Change what agents may do; raising to Full asks first.
+    SetAgentPermission(zebra_core::view::Permission),
     // Theme
     SetTheme(String),
     About,
@@ -84,6 +101,7 @@ impl Action {
             SaveAs => "Save As…".into(),
             ExportPdf => "Export PDF…".into(),
             ExportPng => "Export View as PNG…".into(),
+            Close => "Close".into(),
             Quit => "Quit Zebra".into(),
             Undo => "Undo".into(),
             Redo => "Redo".into(),
@@ -98,36 +116,49 @@ impl Action {
             FrameTool => "Frame Tool (cycle style)".into(),
             SetFrameStyle(s) => format!("{} Frame", frame_name(*s)),
             InsertImage => "Image…".into(),
-            ShowLibrary => "Shapes & Icons…".into(),
             WrapInFrame => "Frame Selection".into(),
+            ShapeLibrary => "Shapes and Icons…".into(),
+            InsertVideo => "Video…".into(),
+            InsertAudio => "Audio…".into(),
+            Bold => "Bold".into(),
+            Italic => "Italic".into(),
+            Underline => "Underline".into(),
             BringForward => "Bring Forward".into(),
             SendBackward => "Send Backward".into(),
             BringToFront => "Bring to Front".into(),
             SendToBack => "Send to Back".into(),
-            ToggleLock => "Lock / Unlock".into(),
+            ToggleLock => "Lock".into(),
+            Group => "Group".into(),
+            Ungroup => "Ungroup".into(),
             ZoomIn => "Zoom In".into(),
             ZoomOut => "Zoom Out".into(),
             FitAll => "Zoom to Fit All".into(),
             ZoomToSelection => "Zoom to Selection".into(),
             ZoomReset => "Actual Size (100%)".into(),
-            ToggleSidebar => "Show/Hide Path Sidebar".into(),
-            ToggleProperties => "Show/Hide Properties".into(),
+            ToggleSidebar => "Show Sidebar".into(),
+            ToggleProperties => "Show Inspector".into(),
             ToggleReduceMotion => "Reduce Motion".into(),
             CommandPalette => "Command Palette…".into(),
             ShowShortcuts => "Keyboard Shortcuts".into(),
+            Settings => "Settings…".into(),
             TogglePathEdit => "Edit Path".into(),
             AddToPath => "Add Selection to Path".into(),
             AddCurrentView => "Add Current View to Path".into(),
             AutoPath => "Path from Frames".into(),
-            ClearPath => "Clear Path".into(),
-            PresentStart => "Present from Start".into(),
-            PresentCurrent => "Present from Current Step".into(),
+            ClearPath => "Clear Path…".into(),
+            PresentStart => "Play Presentation".into(),
+            PresentCurrent => "Play from Current Step".into(),
             ToggleAiControl => "Let AI Agents Control Zebra".into(),
             ToggleActivity => "Agent Activity".into(),
             PauseAgents => "Pause / Resume Agent".into(),
             StopAgents => "Stop Agent".into(),
             FollowAgent => "Follow Agent".into(),
-            RevertAgent => "Revert Agent's Changes".into(),
+            RevertAgent => "Revert Agent's Changes…".into(),
+            SetAgentPermission(p) => match p {
+                zebra_core::view::Permission::Observe => "Agents May Look Only".into(),
+                zebra_core::view::Permission::Edit => "Agents May Edit".into(),
+                zebra_core::view::Permission::Full => "Agents Have Full Control…".into(),
+            },
             SetTheme(t) => format!("Theme: {}", zebra_core::Theme::resolve(t).name),
             About => "About Zebra".into(),
         }
@@ -149,8 +180,9 @@ impl Action {
             v.push(SetTool(t.0));
         }
         v.extend([
-            InsertImage, ShowLibrary, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
-            FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ToggleReduceMotion, ShowShortcuts,
+            InsertImage, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
+            FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ShowShortcuts, Settings, ShapeLibrary,
+            InsertVideo, InsertAudio, Group, Ungroup,
             TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, ToggleAiControl, ToggleActivity,
             PauseAgents, StopAgents, FollowAgent, RevertAgent,
         ]);
@@ -204,10 +236,19 @@ const CMD: Modifiers = Modifiers::COMMAND;
 const SHIFT: Modifiers = Modifiers::SHIFT;
 const CMD_SHIFT: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND };
 const CMD_ALT: Modifiers = Modifiers { alt: true, ..Modifiers::COMMAND };
+const CMD_ALT_SHIFT: Modifiers = Modifiers { alt: true, shift: true, ..Modifiers::COMMAND };
+const CMD_CTRL: Modifiers = Modifiers { ctrl: true, ..Modifiers::COMMAND };
 
 /// Editor shortcuts (present mode has its own keys). Most specific first.
 /// Matched exactly (Shift/Alt must match), with ⌘ = Ctrl off-Mac.
 pub static SHORTCUTS: &[(Modifiers, Key, Action)] = &[
+    // Keynote: Play ⌥⌘P; from the current step adds ⇧.
+    (CMD_ALT_SHIFT, Key::P, Action::PresentCurrent),
+    (CMD_ALT, Key::P, Action::PresentStart),
+    (CMD_ALT, Key::I, Action::ToggleProperties),
+    (CMD_ALT, Key::G, Action::Group),
+    (CMD_ALT_SHIFT, Key::G, Action::Ungroup),
+    (CMD_CTRL, Key::S, Action::ToggleSidebar),
     (CMD_SHIFT, Key::S, Action::SaveAs),
     (CMD_SHIFT, Key::Z, Action::Redo),
     (CMD_SHIFT, Key::A, Action::AddToPath),
@@ -215,6 +256,11 @@ pub static SHORTCUTS: &[(Modifiers, Key, Action)] = &[
     (CMD_ALT, Key::Enter, Action::PresentCurrent),
     (CMD, Key::Enter, Action::PresentStart),
     (CMD, Key::S, Action::Save),
+    (CMD, Key::W, Action::Close),
+    (CMD, Key::Comma, Action::Settings),
+    (CMD, Key::B, Action::Bold),
+    (CMD, Key::I, Action::Italic),
+    (CMD, Key::U, Action::Underline),
     (CMD, Key::O, Action::Open),
     (CMD, Key::N, Action::New),
     (CMD, Key::E, Action::ExportPdf),
@@ -264,7 +310,7 @@ pub static SHORTCUTS: &[(Modifiers, Key, Action)] = &[
 pub fn fmt_shortcut(m: Modifiers, k: Key) -> String {
     let mac = cfg!(target_os = "macos");
     let mut s = String::new();
-    if m.ctrl && !m.command {
+    if m.ctrl && (!m.command || mac) {
         s.push_str(if mac { "⌃" } else { "Ctrl+" });
     }
     if m.alt {
@@ -291,6 +337,7 @@ pub fn fmt_shortcut(m: Modifiers, k: Key) -> String {
         Key::OpenBracket => "[".into(),
         Key::CloseBracket => "]".into(),
         Key::Backslash => "\\".into(),
+        Key::Comma => ",".into(),
         Key::Questionmark => "?".into(),
         Key::Exclamationmark => "!".into(),
         k => k.name().to_string(),
@@ -303,6 +350,11 @@ pub fn fmt_shortcut(m: Modifiers, k: Key) -> String {
 /// (with ⌘ on macOS == Ctrl elsewhere)?
 pub fn mods_match(ev: Modifiers, pat: Modifiers) -> bool {
     // egui sets `command` = ⌘ on macOS and = Ctrl elsewhere.
-    let mac_ctrl_ok = !cfg!(target_os = "macos") || ev.ctrl == pat.ctrl;
+    let mac = cfg!(target_os = "macos");
+    // ⌃⌘ shortcuts exist only on the Mac (elsewhere ⌘ already is Ctrl).
+    if !mac && pat.ctrl && pat.command {
+        return false;
+    }
+    let mac_ctrl_ok = !mac || ev.ctrl == pat.ctrl;
     ev.shift == pat.shift && ev.alt == pat.alt && ev.command == pat.command && mac_ctrl_ok
 }

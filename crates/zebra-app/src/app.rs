@@ -75,6 +75,8 @@ pub struct ZebraApp {
     pub thumbs: Thumbs,
     pub show_sidebar: bool,
     pub show_props: bool,
+    /// The inspector tab last chosen (kept across selections when it fits).
+    pub inspector_tab: crate::inspector::Tab,
     pub show_activity: bool,
     pub palette: Option<(String, usize)>,
     pub show_shortcuts: bool,
@@ -85,10 +87,27 @@ pub struct ZebraApp {
     pub paste_count: u32,
     pub recent: Vec<PathBuf>,
     pub toast: Option<Toast>,
-    /// Action waiting for "Save changes?" confirmation.
-    pub confirm: Option<Action>,
+    /// The sheet waiting for an answer (save changes, errors, confirmations).
+    pub sheet: Option<crate::sheets::SheetKind>,
+    /// Use native NSAlert sheets and system dialogs (macOS with a window);
+    /// off in UI tests, where sheets are drawn in egui.
+    pub native_dialogs: bool,
+    pub show_settings: bool,
+    /// Debug: draw the icon sheet (`--demo icons`).
+    pub show_icon_sheet: bool,
+    pub settings_pane: crate::settings::Pane,
+    /// Theme for File › New (Settings › General).
+    pub default_theme: String,
+    /// Snap to other objects while moving (Settings › Canvas).
+    pub snapping: bool,
+    /// macOS window state last pushed to AppKit.
+    pub mac_sync: crate::mac::WindowSync,
+    /// Step that was just added: its sidebar row highlights briefly.
+    pub flash_step: Option<(usize, f64)>,
     pub queued: Vec<Action>,
     pub scroll_mode: ScrollMode,
+    /// Reduce Motion chosen in Settings; `None` follows the system.
+    pub motion_override: Option<bool>,
     pub last_autosave: f64,
     pub autosaved_rev: u64,
     pub recovered: Option<PathBuf>,
@@ -117,15 +136,19 @@ impl ZebraApp {
     /// Build the app. `wgpu` is `None` in UI tests.
     pub fn new(ctx: &Context, wgpu: Option<egui_wgpu::RenderState>, storage: Option<&dyn eframe::Storage>, opts: AppOptions) -> Self {
         crate::style::install_fonts(ctx);
+        crate::mac::refresh_accent();
         crate::style::apply_visuals(ctx);
         let renderer = Arc::new(Renderer::new());
         let mut editor = Editor::default();
         editor.measure = renderer.measure();
         let recent: Vec<PathBuf> = storage.and_then(|s| eframe::get_value(s, "recent")).unwrap_or_default();
         let scroll_mode = storage.and_then(|s| eframe::get_value(s, "scroll_mode")).unwrap_or_default();
-        let reduce_motion: bool = storage.and_then(|s| eframe::get_value(s, "reduce_motion")).unwrap_or(false);
-        editor.view.reduce_motion = reduce_motion;
+        // Reduce Motion follows System Settings › Accessibility unless the
+        // person chose otherwise in Zebra's Settings.
+        let motion_override: Option<bool> = storage.and_then(|s| eframe::get_value(s, "motion_override")).unwrap_or(None);
+        editor.view.reduce_motion = motion_override.unwrap_or_else(crate::mac::system_reduce_motion);
 
+        let has_window = wgpu.is_some();
         let mut app = ZebraApp {
             editor,
             renderer: renderer.clone(),
@@ -145,6 +168,7 @@ impl ZebraApp {
             thumbs: Thumbs::new(ctx.clone(), renderer.clone()),
             show_sidebar: true,
             show_props: true,
+            inspector_tab: crate::inspector::Tab::default(),
             show_activity: false,
             palette: None,
             show_shortcuts: false,
@@ -155,9 +179,18 @@ impl ZebraApp {
             paste_count: 0,
             recent,
             toast: None,
-            confirm: None,
+            sheet: None,
+            native_dialogs: cfg!(target_os = "macos") && has_window,
+            show_settings: false,
+            show_icon_sheet: false,
+            settings_pane: storage.and_then(|s| eframe::get_value(s, "settings_pane")).unwrap_or_default(),
+            default_theme: storage.and_then(|s| eframe::get_value(s, "default_theme")).unwrap_or_else(|| zebra_core::Document::default().theme),
+            snapping: storage.and_then(|s| eframe::get_value(s, "snapping")).unwrap_or(true),
+            mac_sync: Default::default(),
+            flash_step: None,
             queued: vec![],
             scroll_mode,
+            motion_override,
             last_autosave: 0.0,
             autosaved_rev: 0,
             recovered: None,
@@ -317,18 +350,23 @@ impl ZebraApp {
     fn perform_inner(&mut self, ctx: &Context, a: Action) {
         use Action::*;
         match a {
-            New | NewFromSample | Open | OpenPath(_) | Quit if self.editor.dirty() && self.confirm.is_none() && !self.force_quit => {
-                self.confirm = Some(a);
+            New | NewFromSample | Open | OpenPath(_) | Quit | Close if self.editor.dirty() && self.sheet.is_none() && !self.force_quit => {
+                crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(a));
+            }
+            // One document per window for now: closing the window quits.
+            Close => {
+                self.force_quit = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             New => {
-                self.editor.load(zebra_core::Document::default(), None);
+                let doc = zebra_core::Document { theme: self.default_theme.clone(), ..Default::default() };
+                self.editor.load(doc, None);
                 self.after_load();
             }
             NewFromSample => {
                 let doc = crate::sample::build(&*self.renderer);
                 self.editor.load(doc, None);
                 self.after_load();
-                self.toast("Sample loaded — press F5 to present it");
             }
             Open => {
                 if let Some(p) = rfd::FileDialog::new().add_filter("Zebra presentation", &["zebra"]).pick_file() {
@@ -350,16 +388,13 @@ impl ZebraApp {
             }
             Undo => {
                 crate::canvas::cancel_text_edit(self);
+                // The Edit menu names the action ("Undo Rotate"); no toast.
                 let r = self.editor.undo(H);
-                if let Some(Some(l)) = self.report(r) {
-                    self.toast(format!("Undo {l}"));
-                }
+                self.report(r);
             }
             Redo => {
                 let r = self.editor.redo(H);
-                if let Some(Some(l)) = self.report(r) {
-                    self.toast(format!("Redo {l}"));
-                }
+                self.report(r);
             }
             Copy | Cut => {
                 let ids = self.editor.expand(&self.selection(), true);
@@ -404,7 +439,6 @@ impl ZebraApp {
                 if self.editor.view.tool == Tool::Frame {
                     let s = self.editor.view.frame_style.next();
                     self.view_cmd(ViewCommand::SetFrameStyle { style: s });
-                    self.toast(format!("{} frame", crate::actions::frame_name(s)));
                 } else {
                     self.view_cmd(ViewCommand::SetTool { tool: Tool::Frame });
                 }
@@ -462,12 +496,11 @@ impl ZebraApp {
             ToggleProperties => self.show_props = !self.show_props,
             ToggleReduceMotion => {
                 let on = !self.editor.view.reduce_motion;
+                self.motion_override = Some(on);
                 self.view_cmd(ViewCommand::SetReduceMotion { on });
-                self.toast(if on { "Reduce motion on: gentle cross-fades, no rotation" } else { "Reduce motion off" });
             }
             CommandPalette => self.palette = Some((String::new(), 0)),
             ShowShortcuts => self.show_shortcuts = !self.show_shortcuts,
-            ShowLibrary => self.library.toggle(),
             TogglePathEdit => {
                 let m = if self.editor.view.mode == Mode::PathEdit { Mode::Edit } else { Mode::PathEdit };
                 self.view_cmd(ViewCommand::SetMode { mode: m });
@@ -479,11 +512,12 @@ impl ZebraApp {
             }
             ClearPath => {
                 if !self.editor.doc.path.is_empty() {
-                    self.apply(Command::ClearPath);
+                    crate::sheets::request(self, crate::sheets::SheetKind::ClearPath);
                 }
             }
             PresentStart | PresentCurrent if self.editor.doc.elements.is_empty() => {
-                self.toast("Nothing to present yet. Double-click the canvas to write something first.".to_string());
+                // The Play button is disabled; this covers the shortcut.
+                self.toast("Nothing to play yet. Double-click the canvas to write something first.".to_string());
             }
             PresentStart => self.view_cmd(ViewCommand::Present { step: None }),
             PresentCurrent => {
@@ -493,17 +527,15 @@ impl ZebraApp {
             ToggleAiControl => {
                 let on = !self.ai_enabled;
                 self.set_ai_control(on);
-                self.toast(if on { "AI control is on. Agents on this Mac can now work in Zebra." } else { "AI control is off. Agents can't reach Zebra." });
             }
             ToggleActivity => self.show_activity = !self.show_activity,
             PauseAgents => {
                 let p = !self.editor.view.agent_paused;
                 self.view_cmd(ViewCommand::PauseAgents { paused: p });
-                self.toast(if p { "Agent paused — its changes are refused until you resume" } else { "Agent resumed" });
             }
             StopAgents => {
                 self.view_cmd(ViewCommand::PauseAgents { paused: true });
-                self.toast("Agent stopped (paused). Resume from the agent pill.");
+                self.toast("Agent stopped. Resume it from the AI button in the toolbar.");
             }
             FollowAgent => {
                 let on = !self.editor.view.follow_agent;
@@ -511,8 +543,50 @@ impl ZebraApp {
             }
             RevertAgent => {
                 let name = self.agent_name();
-                let n = self.editor.revert_agent_session(&name);
-                self.toast(if n == 0 { format!("Nothing from {name} to revert") } else { format!("Reverted {n} change group(s) by {name}") });
+                crate::sheets::request(self, crate::sheets::SheetKind::RevertAgent { name });
+            }
+            SetAgentPermission(perm) => {
+                let cur = self.editor.view.agent_permission;
+                if perm == zebra_core::view::Permission::Full && cur != perm {
+                    crate::sheets::request(self, crate::sheets::SheetKind::RaisePermission);
+                } else {
+                    let _ = self.editor.view(ViewCommand::SetAgentPermission { permission: perm }, H);
+                }
+            }
+            Settings => self.show_settings = true,
+            ShapeLibrary => self.library.toggle(),
+            Bold | Italic | Underline if self.canvas.text.is_some() => self.canvas.text_menu = Some(a.clone()),
+            Group | Ungroup | InsertVideo | InsertAudio | Underline => {
+                // Placeholders: the shapes, media and rich-text streams fill
+                // these in.
+                self.toast(format!("{} isn't available in this build yet.", a.label().trim_end_matches('…')));
+            }
+            Bold | Italic => {
+                let ids: Vec<ElementId> = self
+                    .editable_selection()
+                    .into_iter()
+                    .filter(|id| matches!(self.editor.doc.get(id).map(|e| &e.kind), Some(ElementKind::Text(_))))
+                    .collect();
+                if !ids.is_empty() {
+                    let all_on = ids.iter().all(|id| match self.editor.doc.get(id).map(|e| &e.kind) {
+                        Some(ElementKind::Text(t)) => if a == Bold { t.bold } else { t.italic },
+                        _ => false,
+                    });
+                    let cmds = ids
+                        .into_iter()
+                        .map(|id| {
+                            let mut patch = zebra_core::ElementPatch::default();
+                            if a == Bold {
+                                patch.bold = Some(!all_on);
+                            } else {
+                                patch.italic = Some(!all_on);
+                            }
+                            Command::Update { id, patch }
+                        })
+                        .collect();
+                    let r = self.editor.apply_batch(cmds, Some(a.label()), H);
+                    self.report(r);
+                }
             }
             SetTheme(t) => {
                 if t != self.editor.doc.theme {
@@ -593,8 +667,10 @@ impl ZebraApp {
         let n = cmds.len();
         let r = self.editor.apply_batch(cmds, Some("Add to path".into()), H);
         if self.report(r).is_some() {
-            self.selected_step = Some(self.editor.doc.path.len() - 1);
-            self.toast(if n == 1 { format!("Added step {}", self.editor.doc.path.len()) } else { format!("Added {n} steps") });
+            // Show the change itself: the new step's row highlights.
+            let last = self.editor.doc.path.len() - 1;
+            self.selected_step = Some(last);
+            self.flash_step = Some((last + 1 - n.min(last + 1), self.now()));
         }
     }
 
@@ -620,7 +696,7 @@ impl ZebraApp {
             if let Some(id) = out.created.first().cloned() {
                 self.apply(Command::AddStep { target: StepTarget::Element { id }, index: None, builds: vec![], notes: String::new() });
                 self.selected_step = Some(self.editor.doc.path.len() - 1);
-                self.toast(format!("Added view as step {}", self.editor.doc.path.len()));
+                self.flash_step = Some((self.editor.doc.path.len() - 1, self.now()));
             }
         }
     }
@@ -688,7 +764,10 @@ impl ZebraApp {
                     _ if e.message.contains("ermission") => "you don't have permission to read it",
                     _ => "the file couldn't be read",
                 };
-                self.toast(format!("Couldn't open \u{201c}{name}\u{201d}: {why}."));
+                let title = format!("The document \u{201c}{name}\u{201d} could not be opened.");
+                let mut why = why.to_string();
+                why[..1].make_ascii_uppercase();
+                crate::sheets::request(self, crate::sheets::SheetKind::Alert { title, message: format!("{why}.") });
             }
         }
     }
@@ -728,11 +807,14 @@ impl ZebraApp {
                 crate::files::remove_autosave(path);
                 crate::files::remove_autosave_untitled();
                 self.push_recent(path.to_path_buf());
-                self.toast(format!("Saved {}", path.file_name().unwrap_or_default().to_string_lossy()));
                 true
             }
             Err(e) => {
-                self.toast(format!("Save failed: {}", e.message));
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                crate::sheets::request(
+                    self,
+                    crate::sheets::SheetKind::Alert { title: format!("The document \u{201c}{name}\u{201d} could not be saved."), message: e.message.clone() },
+                );
                 false
             }
         }
@@ -743,7 +825,13 @@ impl ZebraApp {
             Some(p) => p.file_stem().unwrap_or_default().to_string_lossy().to_string(),
             None => self.editor.doc.title.clone(),
         };
-        format!("{name}{} — Zebra", if self.editor.dirty() { " (edited)" } else { "" })
+        // On the Mac the title bar shows "— Edited" and the dot in the close
+        // button itself (setDocumentEdited); elsewhere say it in the title.
+        if cfg!(target_os = "macos") {
+            name
+        } else {
+            format!("{name}{}", if self.editor.dirty() { " — Edited" } else { "" })
+        }
     }
 
     // ------------------------------------------------------------------
@@ -806,6 +894,8 @@ impl ZebraApp {
             self.handle_shortcuts(&ctx);
             crate::panels::layout(self, ui);
         }
+
+        crate::settings::show(self, &ctx);
 
         let queued = std::mem::take(&mut self.queued);
         for a in queued {
@@ -931,7 +1021,7 @@ impl ZebraApp {
     fn handle_close(&mut self, ctx: &Context) {
         if ctx.input(|i| i.viewport().close_requested()) && !self.force_quit && self.editor.dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.confirm = Some(Action::Quit);
+            crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(Action::Quit));
         }
     }
 
@@ -1000,14 +1090,25 @@ pub fn sanitize(s: &str) -> String {
 }
 
 impl eframe::App for ZebraApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.frame(ui);
+        #[cfg(target_os = "macos")]
+        {
+            crate::mac::sync_window(self, frame);
+            if crate::sheets::run_native(self, frame) {
+                ui.ctx().request_repaint();
+            }
+        }
+        let _ = frame;
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, "recent", &self.recent);
         eframe::set_value(storage, "scroll_mode", &self.scroll_mode);
-        eframe::set_value(storage, "reduce_motion", &self.editor.view.reduce_motion);
+        eframe::set_value(storage, "motion_override", &self.motion_override);
+        eframe::set_value(storage, "snapping", &self.snapping);
+        eframe::set_value(storage, "default_theme", &self.default_theme);
+        eframe::set_value(storage, "settings_pane", &self.settings_pane);
         eframe::set_value(storage, "ai_enabled", &self.ai_enabled);
         eframe::set_value(storage, "agent_permission", &permission_name(self.editor.view.agent_permission).to_string());
     }
