@@ -103,6 +103,49 @@ fn main() {
     let t = Instant::now();
     while ed.redo(h.clone()).unwrap().is_some() {}
     println!("redid them in {:.1} ms; round trip exact", t.elapsed().as_secs_f64() * 1000.0);
+    media();
+}
+
+/// Heap held by media after opening a saved deck: copied into RAM (the old
+/// loader) versus memory-mapped from the file (now).
+fn media() {
+    let dir = std::env::temp_dir().join(format!("zebra-media-bench-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("media.zebra");
+    let mut ed = Editor::default();
+    let mut cmds = vec![];
+    for i in 0..12u32 {
+        // Noise doesn't compress, so each PNG is ~6 MB, like a photo.
+        let mut img = image::RgbImage::new(1600, 1200);
+        let mut x: u32 = 0x9e3779b9 ^ i;
+        for p in img.pixels_mut() {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            *p = image::Rgb([x as u8, (x >> 8) as u8, (x >> 16) as u8]);
+        }
+        let mut out = std::io::Cursor::new(vec![]);
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, out.into_inner());
+        cmds.push(c(json!({"op":"add_image","data_base64":b64,"x":i as f64 * 2000.0})));
+    }
+    ed.apply_batch(cmds, None, Origin::Human).unwrap();
+    zebra_core::io::save(&mut ed.doc, &path).unwrap();
+    let size = std::fs::metadata(&path).unwrap().len() as f64 / 1_048_576.0;
+    drop(ed);
+
+    let base = live();
+    let copied = zebra_core::io::load_bytes(&std::fs::read(&path).unwrap()).unwrap();
+    let copied_mb = live() - base;
+    drop(copied);
+    let base = live();
+    let mapped = zebra_core::io::load(&path).unwrap();
+    let mapped_mb = live() - base;
+    println!(
+        "media deck ({size:.0} MB file, {} images): heap after open {copied_mb:.1} MB copied vs {mapped_mb:.1} MB mapped",
+        mapped.assets.len()
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[allow(dead_code)]

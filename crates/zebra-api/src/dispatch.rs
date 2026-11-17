@@ -346,11 +346,11 @@ fn write_file(p: &Path, bytes: &[u8]) -> Result<(), RpcError> {
     std::fs::write(p, bytes).map_err(|e| RpcError::app("io", format!("{}: {e}", p.display())))
 }
 
-fn write_document(editor: &Editor, path: &Path) -> Result<(), RpcError> {
+fn write_document(editor: &mut Editor, path: &Path) -> Result<(), RpcError> {
     if path.extension().is_some_and(|e| e == "json") {
         write_file(path, zebra_core::io::to_json(&editor.doc).as_bytes())
     } else {
-        zebra_core::io::save(&editor.doc, path).map_err(Into::into)
+        zebra_core::io::save(&mut editor.doc, path).map_err(Into::into)
     }
 }
 

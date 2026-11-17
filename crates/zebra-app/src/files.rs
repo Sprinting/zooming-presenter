@@ -81,9 +81,7 @@ pub fn autosave_tick(app: &mut ZebraApp) {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        if let Ok(bytes) = zebra_core::io::save_bytes(&app.editor.doc) {
-            let _ = std::fs::write(&p, bytes);
-        }
+        let _ = zebra_core::io::write_file(&app.editor.doc, &p);
     }
 }
 

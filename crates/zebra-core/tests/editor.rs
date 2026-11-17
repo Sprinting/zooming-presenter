@@ -214,3 +214,41 @@ fn revert_agent_and_history_cap_still_work_with_deltas() {
     // The oldest 20 moves fell off the cap; the rest unwound exactly.
     assert_eq!(ed.doc.elements["f1"].transform.x, before.elements["f1"].transform.x + 20.0);
 }
+
+fn tiny_png(seed: u8) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(8, 8, |x, y| image::Rgb([x as u8 * 30, y as u8 * 30, seed]));
+    let mut out = std::io::Cursor::new(vec![]);
+    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+#[test]
+fn saved_media_is_memory_mapped_and_survives_resave() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("zebra-assets-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("deck.zebra");
+    let mut ed = Editor::default();
+    let b64 = |b: Vec<u8>| base64::engine::general_purpose::STANDARD.encode(b);
+    ed.apply(cmd(serde_json::json!({"op":"add_image","id":"a","data_base64":b64(tiny_png(1))})), Origin::Human).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"add_image","id":"b","data_base64":b64(tiny_png(2)),"x":100})), Origin::Human).unwrap();
+    assert!(ed.doc.assets.values().all(|a| !a.bytes.is_mapped()), "new media starts in memory");
+    let original: Vec<Vec<u8>> = ed.doc.assets.values().map(|a| a.bytes.to_vec()).collect();
+
+    io::save(&mut ed.doc, &path).unwrap();
+    assert!(ed.doc.assets.values().all(|a| a.bytes.is_mapped()), "after saving, media is read from the file");
+
+    let mut back = io::load(&path).unwrap();
+    assert!(back.assets.values().all(|a| a.bytes.is_mapped()));
+    assert_eq!(back.assets.values().map(|a| a.bytes.to_vec()).collect::<Vec<_>>(), original);
+
+    // Delete one image and save over the file we're mapped from: the
+    // mapping stays valid, and the unused asset isn't written.
+    back.elements.remove("b");
+    back.z_order.retain(|z| z != "b");
+    io::save(&mut back, &path).unwrap();
+    assert_eq!(back.assets.values().map(|a| a.bytes.to_vec()).collect::<Vec<_>>(), original, "old mappings still readable");
+    let again = io::load(&path).unwrap();
+    assert_eq!(again.assets.len(), 1, "only used media is saved");
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -184,7 +184,7 @@ fn draw_list(s: &mut Surface<'_>, list: &DisplayList, editor: &Editor, res: &mut
                     .entry(image.asset.clone())
                     .or_insert_with(|| {
                         let a = editor.doc.assets.get(&image.asset)?;
-                        let data = Data::from(a.bytes.clone());
+                        let data = Data::from(std::sync::Arc::new(a.bytes.clone()) as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>);
                         match a.ext.as_str() {
                             "png" => krilla::image::Image::from_png(data, true).ok(),
                             "jpg" | "jpeg" => krilla::image::Image::from_jpeg(data, true).ok(),

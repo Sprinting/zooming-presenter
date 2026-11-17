@@ -5669,6 +5669,7 @@ dependencies = [
  "image",
  "json-patch",
  "jsonptr",
+ "memmap2",
  "schemars",
  "serde",
  "serde_json",

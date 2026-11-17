@@ -719,7 +719,7 @@ impl ZebraApp {
     }
 
     pub fn save_to(&mut self, path: &std::path::Path) -> bool {
-        match zebra_core::io::save(&self.editor.doc, path) {
+        match zebra_core::io::save(&mut self.editor.doc, path) {
             Ok(()) => {
                 self.editor.mark_saved(Some(path.to_path_buf()));
                 crate::files::remove_autosave(path);

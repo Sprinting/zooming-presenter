@@ -1028,7 +1028,7 @@ impl Editor {
     pub fn add_asset(&mut self, bytes: Vec<u8>) -> ZResult<String> {
         let (ext, w, h) = image_info(&bytes)?;
         let key = content_key(&bytes);
-        self.doc.assets.entry(key.clone()).or_insert(Asset { ext, bytes: std::sync::Arc::new(bytes), width: w, height: h });
+        self.doc.assets.entry(key.clone()).or_insert(Asset { ext, bytes: bytes.into(), width: w, height: h });
         Ok(key)
     }
 

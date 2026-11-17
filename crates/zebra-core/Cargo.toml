@@ -11,6 +11,7 @@ serde_json.workspace = true
 json-patch = "5"
 similar = "3"
 jsonptr = "0.8.2"
+memmap2 = "0.9"
 schemars.workspace = true
 thiserror.workspace = true
 zip.workspace = true

@@ -38,9 +38,67 @@ pub struct Document {
 pub struct Asset {
     /// Lower-case extension: png, jpg, webp, gif, svg.
     pub ext: String,
-    pub bytes: Arc<Vec<u8>>,
+    /// The encoded file (PNG, JPEG...). Assets from a saved `.zebra` are
+    /// memory-mapped from it, not copied into RAM.
+    pub bytes: AssetBytes,
     pub width: u32,
     pub height: u32,
+}
+
+/// Bytes of an asset: either owned (just inserted, not saved yet) or a
+/// slice of a memory-mapped `.zebra` file. Mapped bytes cost no heap; the
+/// OS pages them in when read and can drop them again under pressure.
+///
+/// Saving writes to a temporary file and renames it over the old one, so a
+/// mapping of the old file stays valid (the old inode lives until unmapped).
+/// Another program truncating the file in place would make reads fault;
+/// that's the usual trade-off of memory-mapping documents.
+#[derive(Clone)]
+pub enum AssetBytes {
+    Memory(Arc<Vec<u8>>),
+    Mapped { map: Arc<memmap2::Mmap>, start: usize, len: usize },
+}
+
+impl AssetBytes {
+    pub fn is_mapped(&self) -> bool {
+        matches!(self, AssetBytes::Mapped { .. })
+    }
+}
+
+impl std::ops::Deref for AssetBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            AssetBytes::Memory(v) => v,
+            AssetBytes::Mapped { map, start, len } => &map[*start..*start + *len],
+        }
+    }
+}
+
+impl AsRef<[u8]> for AssetBytes {
+    fn as_ref(&self) -> &[u8] {
+        self
+    }
+}
+
+impl From<Vec<u8>> for AssetBytes {
+    fn from(v: Vec<u8>) -> Self {
+        AssetBytes::Memory(Arc::new(v))
+    }
+}
+
+impl PartialEq for AssetBytes {
+    fn eq(&self, other: &Self) -> bool {
+        let (a, b): (&[u8], &[u8]) = (self, other);
+        std::ptr::eq(a, b) || a == b
+    }
+}
+
+impl std::fmt::Debug for AssetBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = if self.is_mapped() { "mapped" } else { "memory" };
+        write!(f, "AssetBytes({kind}, {} bytes)", self.len())
+    }
 }
 
 impl Default for Document {

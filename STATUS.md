@@ -9,6 +9,8 @@ Zebra is a placeholder name. Built in a Linux cloud container; the target is mac
 - Headless: `zebra --headless`, built a 3-step deck with `zebractl apply`, captured steps, exported PDF (`out/integration/`).
 - vello GPU path rendered headless on lavapipe and matched the CPU renderer (mean diff < 0.05/channel).
 - AI control is a switch in the app (AI button in the toolbar), off by default and remembered. Only the person can switch it on; an agent can switch it off with `zebractl disconnect`. Tested by a UI test that clicks the switch, connects an agent, and checks the socket and discovery file disappear after `disconnect`. `--api` is now a developer flag only.
+- Undo history stores RFC 6902 JSON Patch deltas (json-patch crate, Myers diff from `similar` for layer and path order), not document copies. On a 2,000-element deck, 500 edits held 1,044 MB of history before and 0.8 MB after, at about 2 ms per edit either way (`cargo run --release -p zebra-core --example history_mem`).
+- Media in a saved `.zebra` is memory-mapped from the file instead of copied into RAM: opening a 66 MB deck of photos went from 96 MB of heap to 0 MB. New media lives in RAM until the first save. Saving streams to a temp file and renames it, and only writes media that is still used. Decoded pixels are still cached in RAM by the renderer. Video can use the same mapped storage later; that will need a streaming decoder, which isn't built yet.
 - `cargo check --target aarch64-apple-darwin` passes for the app (muda menu code compiles for macOS).
 
 ## Not verified (needs a Mac)
