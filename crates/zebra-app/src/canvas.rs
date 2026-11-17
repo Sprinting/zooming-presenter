@@ -573,6 +573,13 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
         let p = resp.interact_pointer_pos().or(pointer).unwrap_or_default();
         end_gesture(app, p, mods.shift);
     }
+    // A drag that ended where the canvas didn't see it (a sheet or menu
+    // took the pointer, or the button came up outside the window): end it
+    // now so no snapping guides or previews stay behind.
+    if !matches!(app.canvas.gesture, Gesture::None) && !resp.dragged() && !ctx.input(|i| i.pointer.any_down()) {
+        let p = pointer.unwrap_or_default();
+        end_gesture(app, p, mods.shift);
+    }
 
     // ---- clicks
     if resp.clicked() {
@@ -2023,8 +2030,9 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
         }
     }
 
-    // Snapping guides.
-    for g in &app.canvas.guides {
+    // Snapping guides, only while something is being moved.
+    let moving = matches!(app.canvas.gesture, Gesture::Move { .. });
+    for g in app.canvas.guides.iter().filter(|_| moving) {
         let a = app.canvas.w2s(ed, g[0]);
         let b = app.canvas.w2s(ed, g[1]);
         painter.line_segment([a, b], Stroke::new(1.0, GUIDE));
