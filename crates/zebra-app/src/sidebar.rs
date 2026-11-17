@@ -24,11 +24,11 @@ pub fn step_label(app: &ZebraApp, i: usize) -> String {
             .get(id)
             .map(|e| {
                 let l = e.label(doc);
-                if l == "frame" { "Untitled Frame".into() } else { l }
+                if l == "frame" { crate::t!("sidebar-untitled-frame") } else { l }
             })
-            .unwrap_or_else(|| "(missing)".into()),
-        StepTarget::View { .. } => "View".into(),
-        StepTarget::Overview => "Overview".into(),
+            .unwrap_or_else(|| crate::t!("sidebar-missing-step")),
+        StepTarget::View { .. } => crate::t!("sidebar-step-view"),
+        StepTarget::Overview => crate::t!("sidebar-step-overview"),
     }
 }
 
@@ -51,21 +51,27 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
 
     // Header: source-list section title, step count, Edit Path / Done.
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Path").font(style::semibold(11.0)).color(p.weak));
+        ui.label(RichText::new(crate::t!("sidebar-path")).font(style::semibold(11.0)).color(p.weak));
         if n > 0 {
-            ui.label(RichText::new(format!("{n} step{}", if n == 1 { "" } else { "s" })).font(style::ui_font(11.0)).color(p.weak));
+            ui.label(RichText::new(crate::t!("sidebar-step-count", count = n)).font(style::ui_font(11.0)).color(p.weak));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let r = if editing {
+                let done = crate::t!("sidebar-done");
                 let (rect, resp) = ui.allocate_exact_size(EVec2::new(52.0, w::H_SMALL), Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Done"));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &done));
                 ui.painter().rect_filled(rect, w::RADIUS, accent());
-                ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Done", style::ui_font(11.0), w::on_accent());
+                ui.painter().text(rect.center(), Align2::CENTER_CENTER, &done, style::ui_font(11.0), w::on_accent());
                 resp
             } else {
-                w::push_button_ext(ui, "Edit Path", w::Size::Small, true, None)
+                w::push_button_ext(ui, &crate::t!("sidebar-edit-path"), w::Size::Small, true, None)
             };
-            if r.on_hover_text(if editing { "Finish editing the path  Esc" } else { "Click objects on the canvas to add them as steps, in order  P" }).clicked() {
+            let tip = if editing {
+                crate::i18n::with_key(crate::t!("sidebar-done-tip"), egui::Modifiers::NONE, egui::Key::Escape)
+            } else {
+                crate::i18n::with_shortcut(crate::t!("sidebar-edit-path-tip"), &Action::TogglePathEdit)
+            };
+            if r.on_hover_text(tip).clicked() {
                 app.queued.push(Action::TogglePathEdit);
             }
         });
@@ -110,9 +116,9 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 let (r, _) = ui.allocate_exact_size(EVec2::splat(30.0), Sense::hover());
                 paint_icon(ui.painter(), r, Icon::Path, p.weak);
                 ui.add_space(6.0);
-                ui.label(RichText::new("No Steps").font(style::semibold(13.0)).color(p.text));
+                ui.label(RichText::new(crate::t!("sidebar-no-steps")).font(style::semibold(13.0)).color(p.text));
                 ui.add_space(2.0);
-                w::caption(ui, "Select a frame and click Add Step in the toolbar, or click Edit Path and then click frames in order.");
+                w::caption(ui, crate::t!("sidebar-no-steps-caption"));
             });
         }
         let tw = ui.available_width();
@@ -160,7 +166,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 let mut right = img_r.max.x;
                 let ly = img_r.max.y + 10.0;
                 if !step.builds.is_empty() {
-                    let t = format!("{} build{}", step.builds.len(), if step.builds.len() == 1 { "" } else { "s" });
+                    let t = crate::t!("sidebar-build-count", count = step.builds.len());
                     let g = painter.layout_no_wrap(t, style::ui_font(11.0), wc);
                     right -= g.size().x;
                     painter.galley(Pos2::new(right, ly - g.size().y / 2.0), g, wc);
@@ -186,39 +192,39 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             if resp.drag_started() {
                 dragging = Some(i);
             }
-            let resp = if resp.hovered() { resp.on_hover_text(format!("Step {}: {}\nClick to go there. Drag to reorder. Right-click for more.", i + 1, step_label(app, i))) } else { resp };
+            let resp = if resp.hovered() { resp.on_hover_text(crate::t!("sidebar-step-tip", number = ((i + 1) as u64), label = step_label(app, i))) } else { resp };
             egui::Popup::context_menu(&resp).width(200.0).show(|ui| {
-                if w::menu_item(ui, "Go to Step", None).clicked() {
+                if w::menu_item(ui, &crate::t!("sidebar-go-to-step"), None).clicked() {
                     let _ = app.editor.view(ViewCommand::GotoStep { step: i }, H);
                 }
-                if w::menu_item(ui, "Play from Here", None).clicked() {
+                if w::menu_item(ui, &crate::t!("sidebar-play-from-here"), None).clicked() {
                     let _ = app.editor.view(ViewCommand::Present { step: Some(i) }, H);
                 }
                 let has_target = matches!(&app.editor.doc.path[i].target, StepTarget::Element { .. });
-                if w::menu_row(ui, None, "Select on Canvas", None, has_target).clicked() {
+                if w::menu_row(ui, None, &crate::t!("sidebar-select-on-canvas"), None, has_target).clicked() {
                     if let StepTarget::Element { id } = &app.editor.doc.path[i].target {
                         app.select(vec![id.clone()]);
                     }
                 }
                 if matches!(&app.editor.doc.path[i].target, StepTarget::Overview) {
                     let hide = app.editor.doc.path[i].hide_builds;
-                    if w::menu_check(ui, !hide, "Show Later Fade-ins Dimmed", None).clicked() {
+                    if w::menu_check(ui, !hide, &crate::t!("sidebar-show-fade-ins-dimmed"), None).clicked() {
                         app.apply(Command::UpdateStep { index: i, target: None, builds: None, notes: None, duration: None, dwell: None, hide_builds: Some(!hide) });
                     }
                 }
                 w::menu_separator(ui);
-                if w::menu_item(ui, "Duplicate Step", None).clicked() {
+                if w::menu_item(ui, &crate::t!("sidebar-duplicate-step"), None).clicked() {
                     let s = app.editor.doc.path[i].clone();
                     app.apply(Command::AddStep { target: s.target, index: Some(i + 1), builds: vec![], notes: s.notes });
                 }
-                if w::menu_row(ui, None, "Move to Start", None, i > 0).clicked() {
+                if w::menu_row(ui, None, &crate::t!("sidebar-move-to-start"), None, i > 0).clicked() {
                     app.apply(Command::MoveStep { from: i, to: 0 });
                 }
-                if w::menu_row(ui, None, "Move to End", None, i + 1 < n).clicked() {
+                if w::menu_row(ui, None, &crate::t!("sidebar-move-to-end"), None, i + 1 < n).clicked() {
                     app.apply(Command::MoveStep { from: i, to: n - 1 });
                 }
                 w::menu_separator(ui);
-                if w::menu_item(ui, "Remove from Path", None).clicked() {
+                if w::menu_item(ui, &crate::t!("sidebar-remove-from-path"), None).clicked() {
                     app.apply(Command::RemoveStep { index: i });
                     app.selected_step = None;
                 }
@@ -274,30 +280,33 @@ fn footer(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let has_doc = !app.editor.doc.elements.is_empty();
-        let add_tip = if app.editor.view.selection.is_empty() { "Add the current view as a step  ⇧⌘A" } else { "Add the selection as a step  ⇧⌘A" };
+        let add_tip = crate::i18n::with_shortcut(
+            if app.editor.view.selection.is_empty() { crate::t!("sidebar-add-tip-view") } else { crate::t!("sidebar-add-tip-selection") },
+            &Action::AddToPath,
+        );
         if footer_button(ui, Icon::Plus, has_doc, p).on_hover_text(add_tip).clicked() {
             app.queued.push(Action::AddToPath);
         }
         let sel = selected_steps(app);
-        let rm = footer_button(ui, Icon::Minus, !sel.is_empty(), p).on_hover_text("Remove the selected step");
+        let rm = footer_button(ui, Icon::Minus, !sel.is_empty(), p).on_hover_text(crate::t!("sidebar-remove-tip"));
         if rm.clicked() {
             let cmds: Vec<Command> = sel.iter().rev().map(|i| Command::RemoveStep { index: *i }).collect();
-            let r = app.editor.apply_batch(cmds, Some("Remove Step".into()), H);
+            let r = app.editor.apply_batch(cmds, Some(crate::t!("sidebar-undo-remove-step")), H);
             app.report(r);
             app.selected_step = None;
         }
         ui.add_space(6.0);
-        let more = footer_button(ui, Icon::ChevronDown, true, p).on_hover_text("More path actions");
+        let more = footer_button(ui, Icon::ChevronDown, true, p).on_hover_text(crate::t!("sidebar-more-tip"));
         egui::Popup::menu(&more).width(200.0).show(|ui| {
-            if w::menu_item(ui, "Path from Frames", None).clicked() {
+            if w::menu_item(ui, &crate::t!("sidebar-path-from-frames"), None).clicked() {
                 app.queued.push(Action::AutoPath);
             }
-            if w::menu_item(ui, "Add Current View", None).clicked() {
+            if w::menu_item(ui, &crate::t!("sidebar-add-current-view"), None).clicked() {
                 app.queued.push(Action::AddCurrentView);
             }
             w::menu_separator(ui);
             let n = app.editor.doc.path.len();
-            if w::menu_row(ui, None, "Clear Path…", None, n > 0).clicked() {
+            if w::menu_row(ui, None, &crate::t!("sidebar-clear-path"), None, n > 0).clicked() {
                 app.queued.push(Action::ClearPath);
             }
         });

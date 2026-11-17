@@ -51,34 +51,31 @@ fn spec(app: &ZebraApp, k: &SheetKind) -> Spec {
     };
     match k {
         SheetKind::SaveChanges(_) => Spec {
-            title: format!("Do you want to save the changes made to the document \u{201c}{}\u{201d}?", doc_name()),
-            message: "Your changes will be lost if you don't save them.".into(),
-            buttons: vec![("Save".into(), Role::Default), ("Don't Save".into(), Role::Normal), ("Cancel".into(), Role::Cancel)],
+            title: crate::t!("sheet-save-changes-title", name = doc_name()),
+            message: crate::t!("sheet-save-changes-message"),
+            buttons: vec![(crate::t!("sheet-save"), Role::Default), (crate::t!("sheet-dont-save"), Role::Normal), (crate::t!("sheet-cancel"), Role::Cancel)],
             warning: false,
         },
-        SheetKind::Alert { title, message } => Spec { title: title.clone(), message: message.clone(), buttons: vec![("OK".into(), Role::Default)], warning: true },
+        SheetKind::Alert { title, message } => Spec { title: title.clone(), message: message.clone(), buttons: vec![(crate::t!("sheet-ok"), Role::Default)], warning: true },
         SheetKind::ClearPath => {
             let n = app.editor.doc.path.len();
             Spec {
-                title: "Clear the path?".into(),
-                message: format!(
-                    "This removes {} from the path. Frames and objects stay on the canvas. You can undo this.",
-                    if n == 1 { "the only step".to_string() } else { format!("all {n} steps") }
-                ),
-                buttons: vec![("Clear Path".into(), Role::Default), ("Cancel".into(), Role::Cancel)],
+                title: crate::t!("sheet-clear-path-title"),
+                message: crate::t!("sheet-clear-path-message", count = n),
+                buttons: vec![(crate::t!("sheet-clear-path"), Role::Default), (crate::t!("sheet-cancel"), Role::Cancel)],
                 warning: true,
             }
         }
         SheetKind::RevertAgent { name } => Spec {
-            title: format!("Revert the changes {name} made?"),
-            message: format!("This undoes everything {name} did since your last change. Redo (⇧⌘Z) brings it back."),
-            buttons: vec![("Revert".into(), Role::Default), ("Cancel".into(), Role::Cancel)],
+            title: crate::t!("sheet-revert-agent-title", name = name.as_str()),
+            message: crate::t!("sheet-revert-agent-message", name = name.as_str(), shortcut = Action::Redo.shortcut_text().unwrap_or_default()),
+            buttons: vec![(crate::t!("sheet-revert"), Role::Default), (crate::t!("sheet-cancel"), Role::Cancel)],
             warning: true,
         },
         SheetKind::RaisePermission => Spec {
-            title: "Give agents full control?".into(),
-            message: "Agents will also be able to move your view, open and save files, and start presenting.".into(),
-            buttons: vec![("Allow Full Control".into(), Role::Default), ("Cancel".into(), Role::Cancel)],
+            title: crate::t!("sheet-full-control-title"),
+            message: crate::t!("sheet-full-control-message"),
+            buttons: vec![(crate::t!("sheet-allow-full-control"), Role::Default), (crate::t!("sheet-cancel"), Role::Cancel)],
             warning: true,
         },
     }
@@ -92,36 +89,34 @@ pub fn request(app: &mut ZebraApp, k: SheetKind) {
 /// Act on the button the user chose (`label` as shown).
 pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
     match k {
-        SheetKind::SaveChanges(action) => match label {
-            "Save" => {
+        SheetKind::SaveChanges(action) => {
+            if label == crate::t!("sheet-save") {
                 if app.save(false) {
                     app.force_quit = true;
                     app.queued.push(action);
                 }
-            }
-            "Don't Save" => {
+            } else if label == crate::t!("sheet-dont-save") {
                 app.force_quit = true;
                 app.queued.push(action);
             }
-            _ => {}
-        },
+        }
         SheetKind::Alert { .. } => {}
         SheetKind::ClearPath => {
-            if label == "Clear Path" && !app.editor.doc.path.is_empty() {
+            if label == crate::t!("sheet-clear-path") && !app.editor.doc.path.is_empty() {
                 app.apply(zebra_core::Command::ClearPath);
                 app.selected_step = None;
             }
         }
         SheetKind::RevertAgent { name } => {
-            if label == "Revert" {
+            if label == crate::t!("sheet-revert") {
                 let n = app.editor.revert_agent_session(&name);
                 if n == 0 {
-                    app.toast(format!("{name} has no changes to revert."));
+                    app.toast(crate::t!("sheet-toast-nothing-to-revert", name = name.as_str()));
                 }
             }
         }
         SheetKind::RaisePermission => {
-            if label == "Allow Full Control" {
+            if label == crate::t!("sheet-allow-full-control") {
                 let _ = app.editor.view(zebra_core::ViewCommand::SetAgentPermission { permission: Permission::Full }, H);
             }
         }
@@ -171,8 +166,8 @@ pub fn run_native(app: &mut ZebraApp, frame: &eframe::Frame) -> bool {
     let k = app.open_sheet.take().expect("sheet").kind;
     let label = match r {
         rfd::MessageDialogResult::Custom(l) => l,
-        rfd::MessageDialogResult::Ok => "OK".into(),
-        _ => "Cancel".into(),
+        rfd::MessageDialogResult::Ok => crate::t!("sheet-ok"),
+        _ => crate::t!("sheet-cancel"),
     };
     resolve(app, k, &label);
     true
@@ -257,10 +252,11 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
             chosen = s.buttons.iter().find(|b| b.1 == Role::Default).map(|b| b.0.clone());
         }
         if i.key_pressed(egui::Key::Escape) {
-            chosen = Some(s.buttons.iter().find(|b| b.1 == Role::Cancel).map(|b| b.0.clone()).unwrap_or_else(|| "OK".into()));
+            chosen = Some(s.buttons.iter().find(|b| b.1 == Role::Cancel).map(|b| b.0.clone()).unwrap_or_else(|| crate::t!("sheet-ok")));
         }
-        if i.modifiers.command && i.key_pressed(egui::Key::D) && s.buttons.iter().any(|b| b.0 == "Don't Save") {
-            chosen = Some("Don't Save".into());
+        let dont_save = crate::t!("sheet-dont-save");
+        if i.modifiers.command && i.key_pressed(egui::Key::D) && s.buttons.iter().any(|b| b.0 == dont_save) {
+            chosen = Some(dont_save);
         }
     });
     if let Some(label) = chosen {

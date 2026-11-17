@@ -43,3 +43,30 @@ pub fn with_shortcut(text: impl Into<String>, action: &crate::actions::Action) -
         None => text,
     }
 }
+
+/// Look up a key known only at run time (a table of keys, say). Prefer
+/// [`t!`](crate::t) wherever the key is a literal: it is checked at compile
+/// time, this is not.
+pub fn tr(key: &str) -> String {
+    LOADER.get(key)
+}
+
+/// A single key combination as shown to people ("⇧1", "Esc", "Space"),
+/// for keys that are not bound to an [`Action`](crate::actions::Action).
+pub fn key_text(m: egui::Modifiers, k: egui::Key) -> String {
+    crate::actions::fmt_shortcut(m, k)
+}
+
+/// A modifier on its own, as shown to people: "⌘", "⌥", "⇧" on the Mac,
+/// "Ctrl", "Alt", "Shift" elsewhere. For text such as "⌘-scroll zooms".
+pub fn modifier_text(m: egui::Modifiers) -> String {
+    let s = crate::actions::fmt_shortcut(m, egui::Key::A);
+    let s = s.strip_suffix('A').unwrap_or(&s);
+    s.strip_suffix('+').unwrap_or(s).to_string()
+}
+
+/// `text` followed by a key that is not an action's binding: "Finish
+/// editing the path  Esc".
+pub fn with_key(text: impl Into<String>, m: egui::Modifiers, k: egui::Key) -> String {
+    format!("{}  {}", text.into(), key_text(m, k))
+}

@@ -135,7 +135,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
     egui::Modal::new(egui::Id::unique("welcome")).show(ctx, |ui| {
         ui.set_width(860.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Choose a Template").font(style::bold(18.0)));
+            ui.label(RichText::new(crate::t!("welcome-title")).font(style::bold(18.0)));
         });
         ui.add_space(8.0);
         ui.horizontal_top(|ui| {
@@ -161,7 +161,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
                 });
                 if !welcome.mine.is_empty() {
                     ui.add_space(8.0);
-                    ui.label(RichText::new("My Templates").font(style::bold(13.0)));
+                    ui.label(RichText::new(crate::t!("welcome-my-templates")).font(style::bold(13.0)));
                     ui.horizontal_wrapped(|ui| {
                         for (path, name) in welcome.mine.clone() {
                             let sel = Selection::Mine(path);
@@ -180,10 +180,10 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
             // Recent files.
             ui.vertical(|ui| {
                 ui.set_width(180.0);
-                ui.label(RichText::new("Recent").font(style::bold(13.0)));
+                ui.label(RichText::new(crate::t!("welcome-recent")).font(style::bold(13.0)));
                 ui.add_space(4.0);
                 if app.recent.is_empty() {
-                    ui.label(RichText::new("Nothing opened yet.").size(12.0).color(p.weak));
+                    ui.label(RichText::new(crate::t!("welcome-recent-empty")).size(12.0).color(p.weak));
                 }
                 for path in app.recent.clone().into_iter().take(10) {
                     let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
@@ -196,16 +196,16 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
         });
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            if ui.button("Open…").clicked() {
+            if ui.button(crate::t!("welcome-open")).clicked() {
                 app.queued.push(Action::Open);
                 cancel = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                let create = egui::Button::new(RichText::new("Create").color(Color32::WHITE)).fill(ACCENT).min_size(EVec2::new(84.0, 24.0));
+                let create = egui::Button::new(RichText::new(crate::t!("welcome-create")).color(Color32::WHITE)).fill(ACCENT).min_size(EVec2::new(84.0, 24.0));
                 if ui.add(create).clicked() {
                     choose = app.welcome.as_ref().map(|w| w.selected.clone());
                 }
-                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if ui.button(crate::t!("welcome-cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     cancel = true;
                 }
             });
@@ -232,7 +232,7 @@ pub fn new_from_template(app: &mut ZebraApp, id: &str) {
         return;
     }
     let mut doc = ed.doc;
-    doc.title = TEMPLATES.iter().find(|t| t.id == id).filter(|t| t.id != "blank").map(|t| t.name.to_string()).unwrap_or_else(|| "Untitled".into());
+    doc.title = TEMPLATES.iter().find(|t| t.id == id).filter(|t| t.id != "blank").map(|t| t.name.to_string()).unwrap_or_else(|| crate::t!("app-untitled"));
     app.editor.load(doc, None);
     app.after_load();
 }
@@ -244,20 +244,20 @@ pub fn new_from_template_file(app: &mut ZebraApp, path: &std::path::Path) {
             app.editor.load(doc, None);
             app.after_load();
         }
-        Err(e) => app.toast(format!("Couldn't open the template: {}", e.message)),
+        Err(e) => app.toast(crate::t!("welcome-toast-template-open-failed", error = e.message.as_str())),
     }
 }
 
 /// File ▸ Save as Template…
 pub fn save_as_template(app: &mut ZebraApp) {
     let Some(dir) = crate::library::templates_dir() else {
-        app.toast("Couldn't find the templates folder.");
+        app.toast(crate::t!("welcome-toast-templates-folder-missing"));
         return;
     };
     let name = app.editor.doc.title.clone();
     match crate::library::save_template(&app.editor.doc, &name, &dir) {
-        Ok(_) => app.toast(format!("Saved “{name}” to My Templates. Find it in File ▸ New from Template…")),
-        Err(e) => app.toast(format!("Couldn't save the template: {}", e.message)),
+        Ok(_) => app.toast(crate::t!("welcome-toast-template-saved", name = name.as_str())),
+        Err(e) => app.toast(crate::t!("welcome-toast-template-save-failed", error = e.message.as_str())),
     }
 }
 
@@ -270,8 +270,8 @@ pub fn layout_gallery(app: &mut ZebraApp, ctx: &egui::Context) {
     let p = Palette::of(ctx);
     let mut open = true;
     let mut pick: Option<&'static str> = None;
-    egui::Window::new("Layouts").open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, EVec2::ZERO).show(ctx, |ui| {
-        ui.label(RichText::new("Click a layout to add it to the middle of the view. Its frames join the path.").size(12.0).color(p.weak));
+    egui::Window::new(crate::t!("layouts-title")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, EVec2::ZERO).show(ctx, |ui| {
+        ui.label(RichText::new(crate::t!("layouts-caption")).size(12.0).color(p.weak));
         ui.add_space(6.0);
         let tex = app.previews.as_ref().map(|p| &p.textures);
         egui::Grid::new("layouts").spacing([10.0, 10.0]).show(ui, |ui| {

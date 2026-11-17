@@ -39,10 +39,10 @@ pub fn export_in_background(
     let spawned = std::thread::Builder::new().name("zebra-export".into()).spawn(move || {
         let msg = match render(&renderer, &snap) {
             Ok(bytes) => match std::fs::write(&path, bytes) {
-                Ok(()) => format!("Exported {}", path.display()),
-                Err(e) => format!("Export failed: {e}"),
+                Ok(()) => crate::t!("export-toast-exported", path = path.display().to_string()),
+                Err(e) => crate::t!("export-toast-failed", error = e.to_string()),
             },
-            Err(e) => format!("Export failed: {}", e.message),
+            Err(e) => crate::t!("export-toast-failed", error = e.message.as_str()),
         };
         let _ = tx.send(msg);
         ctx.request_repaint();
@@ -50,9 +50,9 @@ pub fn export_in_background(
     match spawned {
         Ok(_) => {
             app.media.background.push(rx);
-            app.toast("Exporting…");
+            app.toast(crate::t!("export-toast-exporting"));
         }
-        Err(e) => app.toast(format!("Export failed: {e}")),
+        Err(e) => app.toast(crate::t!("export-toast-failed", error = e.to_string())),
     }
 }
 
