@@ -349,7 +349,11 @@ pub static DEFAULTS: &[(Modifiers, Key, Action)] = &[
 ];
 
 pub fn fmt_shortcut(m: Modifiers, k: Key) -> String {
-    let mac = cfg!(target_os = "macos");
+    fmt_shortcut_for(cfg!(target_os = "macos"), m, k)
+}
+
+/// [`fmt_shortcut`] as one platform shows it (the README shows the Mac's).
+pub fn fmt_shortcut_for(mac: bool, m: Modifiers, k: Key) -> String {
     let mut s = String::new();
     if m.ctrl && (!m.command || mac) {
         s.push_str(if mac { "⌃" } else { "Ctrl+" });

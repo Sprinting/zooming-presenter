@@ -65,24 +65,69 @@ produces one page per step.
 
 ## Keyboard shortcuts
 
+Change any of these in Settings › Keyboard. Arrow keys nudge the selection
+(⇧ for 10×). The table below is generated from the keymap's defaults; a test
+fails when it drifts (`ZEBRA_BLESS=1 cargo test -p zebra-app --test readme_shortcuts`
+rewrites it).
+
+<!-- BEGIN SHORTCUTS -->
 | Action | Keys |
 |---|---|
-| Tools | V select · H hand · T text · F frame · R rectangle · O ellipse · L line · A arrow · D pen · I image |
-| Undo / Redo | ⌘Z / ⇧⌘Z |
-| Copy / Cut / Paste / Duplicate | ⌘C / ⌘X / ⌘V / ⌘D |
-| Delete | ⌫ |
-| Select all / Deselect | ⌘A / Esc |
-| Nudge | Arrow keys (⇧ = 10×), relative to the screen |
-| Forward / Backward / Front / Back | ] / [ / ⌘] / ⌘[ |
-| Frame selection / Lock | ⌘G / ⌘L |
-| Fit all / Zoom to selection / 100% | ⇧1 / ⇧2 / ⌘0 |
-| Zoom in / out | ⌘= / ⌘− |
-| Edit path / Add to path | P / ⇧⌘A |
-| Present from start / current step | F5, ⌘↵ / ⇧F5, ⌥⌘↵ |
-| Command palette (optional) | ⌘K |
-| Shortcut sheet | ? |
-| New / Open / Save / Save As / Export PDF | ⌘N / ⌘O / ⌘S / ⇧⌘S / ⌘E |
-| Agent activity / Stop agent | ⌘J / ⌘. |
+| New | ⌘N |
+| New from Template… | ⇧⌘N |
+| Open… | ⌘O |
+| Save | ⌘S |
+| Save As… | ⇧⌘S |
+| Export PDF… | ⌘E |
+| Duplicate | ⌘D |
+| Delete | ⌫ or Del |
+| Deselect | Esc |
+| Select Tool | V |
+| Hand Tool | H |
+| Text Tool | T |
+| Rectangle Tool | R |
+| Ellipse Tool | O |
+| Line Tool | L |
+| Arrow Tool | A |
+| Pen Tool | D |
+| Image… | I |
+| Frame Selection | ⌘G |
+| Bring Forward | ] |
+| Send Backward | [ |
+| Bring to Front | ⌘] |
+| Send to Back | ⌘[ |
+| Lock | ⌘L |
+| Zoom In | ⌘= or ⌘+ |
+| Zoom Out | ⌘− |
+| Zoom to Fit All | ⇧1 or ! |
+| Zoom to Selection | ⇧2 |
+| Actual Size (100%) | ⌘0 |
+| Show Sidebar | ⌃⌘S or ⌘\ |
+| Show Inspector | ⌥⌘I |
+| Keyboard Shortcuts | ? |
+| Settings… | ⌘, |
+| Group | ⌥⌘G |
+| Ungroup | ⌥⇧⌘G |
+| Edit Path | P |
+| Add Selection to Path | ⇧⌘A |
+| Play Presentation | ⌥⌘P or ⌘↵ or F5 |
+| Play from Current Step | ⌥⇧⌘P or ⌥⌘↵ or ⇧F5 |
+| Agent Activity | ⌘J |
+| Stop Agent | ⌘. |
+| Command Palette… | ⇧⌘P or ⌘K |
+| Close | ⌘W |
+| Frame Tool (cycle style) | F |
+| Redo | ⇧⌘Z or ⌘Y |
+| Bold | ⌘B |
+| Italic | ⌘I |
+| Underline | ⌘U |
+| Undo | ⌘Z |
+| Select All | ⌘A |
+| Quit Zebra | ⌘Q |
+| Cut | ⌘X |
+| Copy | ⌘C |
+| Paste | ⌘V |
+<!-- END SHORTCUTS -->
 
 ## Working with an AI agent
 
