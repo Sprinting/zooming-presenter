@@ -203,6 +203,15 @@ fn draw_list(s: &mut Surface<'_>, list: &DisplayList, editor: &Editor, res: &mut
             }
             Item::PushOpacity(a) => s.push_opacity(NormalizedF32::new(a.clamp(0.0, 1.0)).unwrap_or(NormalizedF32::ONE)),
             Item::PopOpacity => s.pop(),
+            Item::PushClip(path) => {
+                // Always push, so the matching PopClip pops this layer.
+                let p = to_path(path);
+                match p {
+                    Some(p) => s.push_clip_path(&p, &FillRule::NonZero),
+                    None => s.push_opacity(NormalizedF32::ONE),
+                }
+            }
+            Item::PopClip => s.pop(),
         }
     }
 }

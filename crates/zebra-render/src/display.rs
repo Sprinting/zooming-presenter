@@ -6,13 +6,14 @@
 //! zoom. Paths are in device pixels; text and images carry a similarity
 //! transform from their own local space to device pixels.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use kurbo::{Affine, BezPath, Cap, Ellipse, Join, Point, Rect, RoundedRect, Shape, Stroke};
 use zebra_core::{
-    Camera, Editor, Element, ElementKind, FrameStyle, ShapeKind, Theme, Vec2,
+    Camera, Crop, Editor, Element, ElementKind, FrameStyle, ImageMask, ShapeKind, Theme, Vec2,
 };
+
+use crate::images::{level_for, Decoded};
 
 use crate::text::{wrap_for, TextLayout};
 use crate::{Renderer, SceneOptions};
@@ -27,6 +28,12 @@ pub struct DisplayList {
     pub height_px: u32,
     pub background: [u8; 4],
     pub items: Vec<Item>,
+    /// Seconds until a visible animation (GIF) shows its next frame. The
+    /// host repaints then; None when nothing on screen animates.
+    pub next_frame_in: Option<f64>,
+    /// Some pictures are still decoding (a lower-resolution stand-in or a
+    /// placeholder was drawn); the image cache's waker fires when they land.
+    pub images_pending: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -43,100 +50,18 @@ pub enum Item {
     /// Group opacity for the items up to the matching [`Item::PopOpacity`].
     PushOpacity(f32),
     PopOpacity,
+    /// Clip the items up to the matching [`Item::PopClip`] to a device-space
+    /// path (image crops and masks).
+    PushClip(BezPath),
+    PopClip,
 }
 
-/// One decoded mip level of an image asset (premultiplied RGBA8).
-pub struct ImageLevel {
-    pub asset: String,
-    pub width: u32,
-    pub height: u32,
-    /// For vello_cpu.
-    pub pixmap: Arc<vello_cpu::Pixmap>,
-    /// For vello (GPU). The blob id is stable, so vello's atlas caches it.
-    pub data: vello_cpu::peniko::ImageData,
-}
-
-impl std::fmt::Debug for ImageLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ImageLevel({} {}x{})", self.asset, self.width, self.height)
-    }
-}
+pub use crate::images::ImageLevel;
 
 impl DisplayList {
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
-}
-
-/// Decoded images, keyed by asset key. `None` = undecodable (placeholder).
-/// Mip levels of one asset, largest first.
-pub type ImageLevels = Arc<Vec<Arc<ImageLevel>>>;
-
-#[derive(Default)]
-pub(crate) struct ImageCache {
-    map: Mutex<HashMap<String, Option<ImageLevels>>>,
-}
-
-/// Largest dimension kept for level 0.
-const MAX_IMAGE_DIM: u32 = 8192;
-
-impl ImageCache {
-    pub(crate) fn levels(&self, editor: &Editor, key: &str) -> Option<ImageLevels> {
-        if let Some(v) = self.map.lock().unwrap_or_else(|e| e.into_inner()).get(key) {
-            return v.clone();
-        }
-        let decoded = editor.doc.assets.get(key).and_then(|a| decode_levels(key, &a.bytes)).map(Arc::new);
-        self.map.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), decoded.clone());
-        decoded
-    }
-}
-
-fn decode_levels(key: &str, bytes: &[u8]) -> Option<Vec<Arc<ImageLevel>>> {
-    let img = image::load_from_memory(bytes).ok()?;
-    let mut rgba = img.to_rgba8();
-    if rgba.width().max(rgba.height()) > MAX_IMAGE_DIM {
-        let k = MAX_IMAGE_DIM as f64 / rgba.width().max(rgba.height()) as f64;
-        let (w, h) = (((rgba.width() as f64 * k) as u32).max(1), ((rgba.height() as f64 * k) as u32).max(1));
-        rgba = image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Triangle);
-    }
-    let mut levels = vec![];
-    loop {
-        levels.push(Arc::new(make_level(key, &rgba)));
-        let (w, h) = (rgba.width(), rgba.height());
-        if w.max(h) <= 32 {
-            break;
-        }
-        rgba = image::imageops::resize(&rgba, (w / 2).max(1), (h / 2).max(1), image::imageops::FilterType::Triangle);
-    }
-    Some(levels)
-}
-
-fn make_level(key: &str, rgba: &image::RgbaImage) -> ImageLevel {
-    use vello_cpu::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
-    let (w, h) = (rgba.width(), rgba.height());
-    let mut px = rgba.as_raw().clone();
-    for p in px.chunks_exact_mut(4) {
-        let a = p[3] as u16;
-        if a != 255 {
-            for c in &mut p[..3] {
-                *c = ((*c as u16 * a + 127) / 255) as u8;
-            }
-        }
-    }
-    let pixmap = vello_cpu::Pixmap::from_parts(
-        px.clone(),
-        w as u16,
-        h as u16,
-        vello_cpu::PixelMetadata { alpha_type: vello_cpu::peniko::ImageAlphaType::AlphaPremultiplied, may_have_transparency: true },
-    );
-    let data = ImageData {
-        data: Blob::from(px),
-        format: ImageFormat::Rgba8,
-        alpha_type: ImageAlphaType::AlphaPremultiplied,
-        width: w,
-        height: h,
-    };
-    ImageLevel { asset: key.to_string(), width: w, height: h, pixmap: Arc::new(pixmap), data }
 }
 
 /// Elements whose on-screen size is below this (device px) are skipped.
@@ -187,14 +112,17 @@ pub(crate) fn build_with(
     let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
     let width_px = (vp[0] * ppp).round().max(0.0) as u32;
     let height_px = (vp[1] * ppp).round().max(0.0) as u32;
-    let mut list = DisplayList { width_px, height_px, background: theme.color(&theme.background), items: vec![] };
+    let mut list = DisplayList { width_px, height_px, background: theme.color(&theme.background), ..Default::default() };
     if width_px == 0 || height_px == 0 || !(cam.zoom.is_finite() && cam.zoom > 0.0) {
         return list;
     }
     r.fonts.next_generation();
+    r.images.next_generation();
+    let anim = std::cell::Cell::new(None::<f64>);
+    let pending = std::cell::Cell::new(false);
     let view = cam.visible_bounds(Vec2::new(vp[0], vp[1]));
     let px_per_world = cam.zoom * ppp;
-    let ctx = Ctx { r, editor, theme: &theme, presenting: o.presenting, full_res_images, ppp };
+    let ctx = Ctx { r, editor, theme: &theme, presenting: o.presenting, full_res_images, ppp, o, anim: &anim, pending: &pending };
 
     for e in editor.doc.ordered() {
         if o.skip.as_deref() == Some(e.id.as_str()) || (o.presenting && o.hidden.contains(&e.id)) {
@@ -231,6 +159,8 @@ pub(crate) fn build_with(
         }
     }
     crate::clip::clip_items(&mut list.items, width_px as f64, height_px as f64);
+    list.next_frame_in = anim.get();
+    list.images_pending = pending.get();
     list
 }
 
@@ -241,6 +171,9 @@ struct Ctx<'a> {
     presenting: bool,
     full_res_images: bool,
     ppp: f64,
+    o: &'a SceneOptions,
+    anim: &'a std::cell::Cell<Option<f64>>,
+    pending: &'a std::cell::Cell<bool>,
 }
 
 fn local_rect(e: &Element) -> Rect {
@@ -281,6 +214,56 @@ fn with_alpha(mut c: Rgba, k: f32) -> Rgba {
 }
 
 impl Ctx<'_> {
+    /// Draw a picture asset filling `e`'s box (through `crop`, clipped to
+    /// `mask`). False when it can't be drawn yet.
+    fn picture(&self, asset: &str, crop: Option<Crop>, mask: ImageMask, e: &Element, a: &Affine, items: &mut Vec<Item>) -> bool {
+        let Some(src) = self.editor.doc.assets.get(asset) else { return false };
+        let (w, h) = (e.size.w, e.size.h);
+        let c = crop.unwrap_or(Crop::FULL);
+        // The whole picture's box in local units.
+        let (fw, fh) = (w / c.w, h / c.h);
+        let on_screen = fw * affine_scale(a);
+        let level = if self.full_res_images { 0 } else { level_for(src.width, src.height, on_screen) };
+        let sync = !self.o.async_images || self.full_res_images;
+        let Some(decoded) = self.r.images.get(asset, &src.ext, &src.bytes, (src.width, src.height), level, sync) else {
+            self.pending.set(true);
+            return false;
+        };
+        if decoded.width() < crate::images::level_size(src.width, src.height, level).0 {
+            self.pending.set(true);
+        }
+        let image = match decoded {
+            Decoded::Still(l) => l,
+            Decoded::Animated(anim) => match self.o.time {
+                Some(t) => {
+                    let (f, next) = anim.frame_at(t);
+                    self.anim.set(Some(self.anim.get().map_or(next, |n: f64| n.min(next))));
+                    f.clone()
+                }
+                None => anim.frames[0].clone(),
+            },
+        };
+        let lr = local_rect(e);
+        let clip = crop.is_some() || mask != ImageMask::Rectangle;
+        if clip {
+            let mut p = match mask {
+                ImageMask::Rectangle => lr.to_path(0.01),
+                ImageMask::Rounded => RoundedRect::from_rect(lr, w.min(h) * 0.12).to_path(0.01),
+                ImageMask::Circle => Ellipse::from_rect(lr).to_path(0.01),
+            };
+            p.apply_affine(*a);
+            items.push(Item::PushClip(p));
+        }
+        let transform = *a
+            * Affine::translate((-w / 2.0 - c.x * fw, -h / 2.0 - c.y * fh))
+            * Affine::scale_non_uniform(fw / image.width as f64, fh / image.height as f64);
+        items.push(Item::Image { image, transform });
+        if clip {
+            items.push(Item::PopClip);
+        }
+        true
+    }
+
     fn element(&self, e: &Element, a: &Affine, items: &mut Vec<Item>) {
         let th = self.theme;
         let lr = local_rect(e);
@@ -386,28 +369,23 @@ impl Ctx<'_> {
                 }
             }
             ElementKind::Image(img) => {
-                let levels = self.r.images.levels(self.editor, &img.asset);
-                let Some(levels) = levels else {
-                    // Placeholder: soft box with a cross.
-                    fill(items, &lr, a, [200, 200, 200, 255]);
-                    let mut p = BezPath::new();
-                    p.move_to((lr.x0, lr.y0));
-                    p.line_to((lr.x1, lr.y1));
-                    p.move_to((lr.x1, lr.y0));
-                    p.line_to((lr.x0, lr.y1));
-                    stroke(items, &p, a, [150, 150, 150, 255], Stroke::new(w.min(h) * 0.01));
-                    return;
-                };
-                let on_screen = w * affine_scale(a);
-                let level = if self.full_res_images {
-                    levels[0].clone()
-                } else {
-                    levels.iter().rev().find(|l| l.width as f64 >= on_screen).unwrap_or(&levels[0]).clone()
-                };
-                let transform = *a
-                    * Affine::translate((-w / 2.0, -h / 2.0))
-                    * Affine::scale_non_uniform(w / level.width as f64, h / level.height as f64);
-                items.push(Item::Image { image: level, transform });
+                if !self.picture(&img.asset, img.crop, img.mask, e, a, items) {
+                    placeholder(items, &lr, a, w.min(h), !self.r.images.is_failed(&img.asset));
+                }
+            }
+            ElementKind::Video(v) => {
+                let playing = self.o.playing.contains(&e.id);
+                if let Some(frame) = self.o.video_frames.get(&e.id) {
+                    let transform = *a
+                        * Affine::translate((-w / 2.0, -h / 2.0))
+                        * Affine::scale_non_uniform(w / frame.width as f64, h / frame.height as f64);
+                    items.push(Item::Image { image: frame.clone(), transform });
+                } else if !v.poster.as_ref().is_some_and(|p| self.picture(p, None, ImageMask::Rectangle, e, a, items)) {
+                    fill(items, &RoundedRect::from_rect(lr, w.min(h) * 0.02), a, [29, 29, 31, 255]);
+                }
+                if !playing {
+                    play_badge(items, &lr, a);
+                }
             }
             ElementKind::Ink(ink) => {
                 if ink.points.is_empty() {
@@ -431,4 +409,33 @@ impl Ctx<'_> {
             }
         }
     }
+}
+
+/// Stand-in for a picture: a soft box while it decodes, plus a cross if it
+/// can't be decoded at all.
+fn placeholder(items: &mut Vec<Item>, lr: &Rect, a: &Affine, min_side: f64, loading: bool) {
+    fill(items, lr, a, [220, 220, 220, 255]);
+    if !loading {
+        let mut p = BezPath::new();
+        p.move_to((lr.x0, lr.y0));
+        p.line_to((lr.x1, lr.y1));
+        p.move_to((lr.x1, lr.y0));
+        p.line_to((lr.x0, lr.y1));
+        stroke(items, &p, a, [150, 150, 150, 255], Stroke::new(min_side * 0.01));
+    }
+}
+
+/// The round ▶ badge drawn on a video that isn't playing.
+fn play_badge(items: &mut Vec<Item>, lr: &Rect, a: &Affine) {
+    let d = (lr.width().min(lr.height()) * 0.22).max(1e-9);
+    let c = lr.center();
+    fill(items, &kurbo::Circle::new(c, d / 2.0), a, [0, 0, 0, 140]);
+    stroke(items, &kurbo::Circle::new(c, d / 2.0), a, [255, 255, 255, 230], Stroke::new(d * 0.04));
+    let t = d * 0.2;
+    let mut p = BezPath::new();
+    p.move_to((c.x - t * 0.8, c.y - t));
+    p.line_to((c.x + t * 1.2, c.y));
+    p.line_to((c.x - t * 0.8, c.y + t));
+    p.close_path();
+    fill(items, &p, a, [255, 255, 255, 240]);
 }

@@ -47,9 +47,20 @@ pub struct SceneOptions {
     pub opacity: Vec<(ElementId, f32)>,
     /// Element being edited in a text box: drawn by the UI instead.
     pub skip: Option<ElementId>,
+    /// Seconds on the animation clock: animated GIFs show the frame for this
+    /// time. None shows their first frame (captures, PDF).
+    pub time: Option<f64>,
+    /// Decode pictures on worker threads, drawing a stand-in meanwhile
+    /// (windowed app). False decodes before returning (captures, tests).
+    pub async_images: bool,
+    /// The current frame of each video that has one (playing or paused).
+    pub video_frames: std::collections::HashMap<ElementId, std::sync::Arc<display::ImageLevel>>,
+    /// Videos playing now (no ▶ badge).
+    pub playing: HashSet<ElementId>,
 }
 
 pub mod display;
+pub mod images;
 mod clip;
 pub use display::DisplayList;
 
@@ -61,12 +72,17 @@ pub mod gpu;
 
 pub struct Renderer {
     pub(crate) fonts: text::Fonts,
-    pub(crate) images: display::ImageCache,
+    pub(crate) images: images::ImageCache,
 }
 
 impl Renderer {
     pub fn new() -> Self {
-        Renderer { fonts: text::Fonts::new(), images: display::ImageCache::default() }
+        Renderer { fonts: text::Fonts::new(), images: images::ImageCache::default() }
+    }
+
+    /// The decoded-image cache (budget, waker for async decodes, stats).
+    pub fn images(&self) -> &images::ImageCache {
+        &self.images
     }
 
     /// Text measurer to install in `Editor::measure`.
