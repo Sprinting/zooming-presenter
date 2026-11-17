@@ -147,6 +147,8 @@ pub struct CanvasState {
     /// window settles (leaving full screen resizes over several frames),
     /// until this time (`view.now`) or the first pointer press.
     pub refit_until: Option<(f64, Option<usize>)>,
+    /// Where the canvas context menu was opened (screen point).
+    pub menu_at: Option<Pos2>,
 }
 
 impl Default for CanvasState {
@@ -157,6 +159,7 @@ impl Default for CanvasState {
             hover: None,
             text: None,
             text_toolbar: None,
+            menu_at: None,
             guides: vec![],
             frame_chip: None,
             chip_chevron: None,
@@ -516,6 +519,9 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     let zoom = app.editor.view.camera.zoom;
 
     handle_scroll(app, ui, resp.contains_pointer());
+    if !path_mode && app.editor.view.mode != Mode::Present {
+        context_menu(app, &resp);
+    }
 
     // Hover
     app.canvas.hover = match (&app.canvas.gesture, pointer) {
@@ -2213,4 +2219,100 @@ fn draw_path_overlay(app: &ZebraApp, painter: &Painter) {
             painter.galley(r.min + egui::vec2(4.0, 1.0), g, Color32::WHITE);
         }
     }
+}
+
+/// Right-click on the canvas: like a Mac app, right-clicking an unselected
+/// object selects it first; the menu then acts on the selection.
+fn context_menu(app: &mut ZebraApp, resp: &egui::Response) {
+    use crate::actions::Action;
+    use crate::widgets as w;
+    if resp.secondary_clicked() {
+        if let Some(p) = resp.interact_pointer_pos() {
+            commit_text_edit(app);
+            app.canvas.menu_at = Some(p);
+            match hit(app, p, false) {
+                Some(id) if !app.editor.view.selection.contains(&id) => app.select(vec![id]),
+                Some(_) => {}
+                None => {
+                    let _ = app.editor.view(ViewCommand::ClearSelection, H);
+                }
+            }
+        }
+    }
+    let item = |ui: &mut Ui, app: &mut ZebraApp, a: Action| {
+        let st = crate::menus::state(app, &a);
+        if w::menu_row(ui, st.checked, &st.title, a.shortcut_text().as_deref(), st.enabled).clicked() {
+            app.queued.push(a);
+        }
+    };
+    egui::Popup::context_menu(resp).width(220.0).show(|ui| {
+        let sel = app.selection();
+        let one = (sel.len() == 1).then(|| app.editor.doc.get(&sel[0]).cloned()).flatten();
+        if sel.is_empty() {
+            if w::menu_item(ui, "Add Text Here", None).clicked() {
+                if let Some(p) = app.canvas.menu_at {
+                    begin_new_text(app, p);
+                }
+            }
+            item(ui, app, Action::ShapeLibrary);
+            item(ui, app, Action::InsertImage);
+            w::menu_separator(ui);
+            item(ui, app, Action::Paste);
+            item(ui, app, Action::SelectAll);
+            w::menu_separator(ui);
+            item(ui, app, Action::AddCurrentView);
+            item(ui, app, Action::FitAll);
+            return;
+        }
+        // Object-specific actions first.
+        match one.as_ref().map(|e| &e.kind) {
+            Some(ElementKind::Shape(s)) if !s.shape.is_line() => {
+                let label = if one.as_ref().and_then(|e| shape_label(app, e)).is_some() { "Edit Text" } else { "Add Text" };
+                if w::menu_item(ui, label, None).clicked() {
+                    begin_text_on_shape(app, sel[0].clone());
+                }
+                w::menu_separator(ui);
+            }
+            Some(ElementKind::Text(_)) => {
+                if w::menu_item(ui, "Edit Text", None).clicked() {
+                    begin_edit_existing(app, sel[0].clone());
+                }
+                w::menu_separator(ui);
+            }
+            Some(ElementKind::Icon(_)) => {
+                if w::menu_item(ui, "Replace Icon…", None).clicked() {
+                    app.library.open_replace(sel[0].clone());
+                }
+                w::menu_separator(ui);
+            }
+            Some(ElementKind::Image(_)) => {
+                item(ui, app, Action::CropImage);
+                item(ui, app, Action::ReplaceImage);
+                w::menu_separator(ui);
+            }
+            Some(ElementKind::Video(_)) => {
+                item(ui, app, Action::PlayPauseVideo);
+                w::menu_separator(ui);
+            }
+            _ => {}
+        }
+        for a in [Action::Cut, Action::Copy, Action::Paste, Action::Duplicate, Action::Delete] {
+            item(ui, app, a);
+        }
+        w::menu_separator(ui);
+        let grouped = sel.iter().any(|id| app.editor.doc.get(id).is_some_and(|e| e.group.is_some()));
+        if sel.len() > 1 {
+            item(ui, app, Action::Group);
+        }
+        if grouped {
+            item(ui, app, Action::Ungroup);
+        }
+        item(ui, app, Action::BringToFront);
+        item(ui, app, Action::SendToBack);
+        item(ui, app, Action::ToggleLock);
+        w::menu_separator(ui);
+        item(ui, app, Action::WrapInFrame);
+        item(ui, app, Action::AddToPath);
+        item(ui, app, Action::ZoomToSelection);
+    });
 }

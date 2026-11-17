@@ -596,3 +596,41 @@ fn double_click_a_shape_to_type_on_it() {
     h.run_steps(2);
     assert_eq!(h.state().editor.doc.ordered().filter(|e| matches!(e.kind, ElementKind::Text(_))).count(), 1);
 }
+
+#[test]
+fn right_click_menu_selects_and_acts() {
+    let mut h = harness(Some("empty"));
+    for (id, x) in [("a", -300.0), ("b", 300.0)] {
+        h.state_mut()
+            .editor
+            .apply(Command::AddShape { shape: ShapeKind::Rectangle, x, y: 0.0, w: 160.0, h: 120.0, rotation: 0.0, fill: None, stroke: None, id: Some(id.into()) }, Origin::Human)
+            .unwrap();
+    }
+    h.run_steps(2);
+    let right_click = |h: &mut Harness<'static, ZebraApp>, p: Pos2| {
+        h.event(Event::PointerMoved(p));
+        h.step();
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    };
+    let pb = { let app = h.state(); app.canvas.w2s(&app.editor, zebra_core::Vec2::new(300.0, 0.0)) };
+    right_click(&mut h, pb);
+    assert_eq!(h.state().editor.view.selection, vec!["b".to_string()], "right-click selects what's under the pointer");
+    h.get_by_label("Add Text").click();
+    h.run_steps(3);
+    assert!(h.state().canvas.text.as_ref().is_some_and(|t| t.host.as_deref() == Some("b")));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    // With both selected, the menu groups them.
+    h.state_mut().select(vec!["a".into(), "b".into()]);
+    h.run_steps(2);
+    right_click(&mut h, pb);
+    assert_eq!(h.state().editor.view.selection.len(), 2, "right-clicking inside the selection keeps it");
+    // The inspector has a Group button too: click the one in the menu,
+    // which opens at the pointer.
+    h.get_all_by_label("Group").min_by(|a, b| (a.rect().center() - pb).length().total_cmp(&(b.rect().center() - pb).length())).unwrap().click();
+    h.run_steps(3);
+    assert!(h.state().editor.doc.get("a").unwrap().group.is_some());
+}
