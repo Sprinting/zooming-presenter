@@ -98,7 +98,7 @@ mod imp {
         }
         match (presenting, s.activity.is_some()) {
             (true, false) => {
-                let reason = NSString::from_str("Presenting");
+                let reason = NSString::from_str(&crate::t!("mac-activity-presenting"));
                 s.activity = Some(NSProcessInfo::processInfo().beginActivityWithOptions_reason(NSActivityOptions::UserInitiated, &reason));
             }
             (false, true) => {

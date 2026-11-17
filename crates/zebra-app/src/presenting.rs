@@ -87,7 +87,7 @@ pub fn notes_editor(app: &mut ZebraApp, ui: &mut Ui, step: usize, rows: usize, i
     let r = ui.add(
         egui::TextEdit::multiline(&mut text)
             .id_salt(("notes", id))
-            .hint_text("Speaker notes: what to say at this step")
+            .hint_text(crate::t!("present-notes-hint"))
             .desired_rows(rows)
             .desired_width(f32::INFINITY),
     );
@@ -121,7 +121,7 @@ pub fn sidebar_notes(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     ui.add_space(4.0);
     notes_editor(app, ui, step, 3, "sidebar");
     ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("Notes · step {}", step + 1)).size(11.0).color(p.weak));
+        ui.label(RichText::new(crate::t!("present-notes-step", step = ((step + 1) as u64))).size(11.0).color(p.weak));
     });
     ui.add_space(2.0);
 }
@@ -134,21 +134,21 @@ pub fn sidebar_notes(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
 pub fn step_section(app: &mut ZebraApp, ui: &mut Ui, p: &Palette, step: usize) {
     let Some(s) = app.editor.doc.path.get(step).cloned() else { return };
     ui.add_space(8.0);
-    ui.label(RichText::new(format!("Path step {}", step + 1)).font(style::bold(12.0)).color(p.weak));
+    ui.label(RichText::new(crate::t!("present-path-step", step = ((step + 1) as u64))).font(style::bold(12.0)).color(p.weak));
     ui.add_space(2.0);
     notes_editor(app, ui, step, 4, "inspector");
     ui.add_space(4.0);
 
     // Transition: Auto, or seconds.
     ui.horizontal(|ui| {
-        ui.label("Transition");
+        ui.label(crate::t!("present-transition"));
         let mut auto = s.duration.is_none();
         let mut secs = s.duration.unwrap_or(1.5);
-        if ui.checkbox(&mut auto, "Auto").on_hover_text("Zebra picks a time from the distance flown").changed() {
+        if ui.checkbox(&mut auto, crate::t!("present-transition-auto")).on_hover_text(crate::t!("present-transition-auto-tip")).changed() {
             set_step_timing(app, step, Some(if auto { -1.0 } else { secs }), None);
         }
         if !auto {
-            let r = ui.add(egui::DragValue::new(&mut secs).range(0.0..=10.0).speed(0.05).suffix(" s").fixed_decimals(1));
+            let r = ui.add(egui::DragValue::new(&mut secs).range(0.0..=10.0).speed(0.05).suffix(secs_suffix()).fixed_decimals(1));
             if r.changed() {
                 set_step_timing(app, step, Some(secs), None);
             }
@@ -156,25 +156,25 @@ pub fn step_section(app: &mut ZebraApp, ui: &mut Ui, p: &Palette, step: usize) {
     });
     // Autoplay on this step: presentation default, or seconds.
     ui.horizontal(|ui| {
-        ui.label("Autoplay");
+        ui.label(crate::t!("present-autoplay"));
         let mut own = s.dwell.is_some();
         let mut secs = s.dwell.or(app.editor.doc.play.autoplay).unwrap_or(10.0);
         let def = match app.editor.doc.play.autoplay {
-            Some(d) => format!("Default ({})", fmt_secs(d)),
-            None => "Default (off)".into(),
+            Some(d) => crate::t!("present-dwell-default-time", time = fmt_secs(d)),
+            None => crate::t!("present-dwell-default-off"),
         };
-        let lbl = if own { "Own time".to_string() } else { def };
+        let lbl = if own { crate::t!("present-dwell-own") } else { def };
         egui::ComboBox::from_id_salt(("dwell", step)).selected_text(lbl).width(118.0).show_ui(ui, |ui| {
-            if ui.selectable_label(!own, "Presentation default").clicked() {
+            if ui.selectable_label(!own, crate::t!("present-dwell-presentation-default")).clicked() {
                 own = false;
                 set_step_timing(app, step, None, Some(-1.0));
             }
-            if ui.selectable_label(own, "Own time for this step").clicked() && !own {
+            if ui.selectable_label(own, crate::t!("present-dwell-own-for-step")).clicked() && !own {
                 set_step_timing(app, step, None, Some(secs));
             }
         });
         if own {
-            let r = ui.add(egui::DragValue::new(&mut secs).range(1.0..=600.0).speed(0.2).suffix(" s").fixed_decimals(0));
+            let r = ui.add(egui::DragValue::new(&mut secs).range(1.0..=600.0).speed(0.2).suffix(secs_suffix()).fixed_decimals(0));
             if r.changed() {
                 set_step_timing(app, step, None, Some(secs));
             }
@@ -185,27 +185,33 @@ pub fn step_section(app: &mut ZebraApp, ui: &mut Ui, p: &Palette, step: usize) {
 fn set_step_timing(app: &mut ZebraApp, step: usize, duration: Option<f64>, dwell: Option<f64>) {
     let r = app.editor.apply_batch(
         vec![Command::UpdateStep { index: step, target: None, builds: None, notes: None, duration, dwell, hide_builds: None }],
-        Some("Change step timing".into()),
+        Some(crate::t!("present-undo-change-step-timing")),
         H,
     );
     app.report(r);
 }
 
+/// " s" after a seconds field.
+fn secs_suffix() -> String {
+    format!(" {}", crate::t!("present-seconds-unit"))
+}
+
 pub fn fmt_secs(s: f64) -> String {
-    if s.fract().abs() < 1e-9 { format!("{s:.0} s") } else { format!("{s:.1} s") }
+    let secs = if s.fract().abs() < 1e-9 { format!("{s:.0}") } else { format!("{s:.1}") };
+    crate::t!("present-seconds", secs = secs)
 }
 
 /// Autoplay, loop, presenter view and display: the Playback options.
 pub fn playback_ui(app: &mut ZebraApp, ui: &mut Ui) {
     let play = app.editor.doc.play;
-    ui.label(RichText::new("Autoplay").font(style::bold(12.0)));
+    ui.label(RichText::new(crate::t!("present-autoplay")).font(style::bold(12.0)));
     ui.horizontal(|ui| {
         let mut choice = |ui: &mut Ui, label: &str, v: Option<f64>| {
             if ui.selectable_label(play.autoplay == v, label).clicked() && play.autoplay != v {
                 app.apply(Command::SetPlayback { autoplay: Some(v.unwrap_or(0.0)), looping: None });
             }
         };
-        choice(ui, "Off", None);
+        choice(ui, &crate::t!("present-autoplay-off"), None);
         for s in AUTOPLAY_CHOICES {
             choice(ui, &fmt_secs(s), Some(s));
         }
@@ -213,22 +219,22 @@ pub fn playback_ui(app: &mut ZebraApp, ui: &mut Ui) {
             let _ = ui.selectable_label(true, fmt_secs(a));
         }
     });
-    ui.label(RichText::new("Steps with their own time keep it. Press P while presenting to pause.").size(11.0).weak());
+    ui.label(RichText::new(crate::t!("present-autoplay-help", key = "P")).size(11.0).weak());
     ui.add_space(4.0);
     let mut lp = play.looping;
-    if ui.checkbox(&mut lp, "Loop: start again after the last step").changed() {
+    if ui.checkbox(&mut lp, crate::t!("present-loop")).changed() {
         app.apply(Command::SetPlayback { autoplay: None, looping: Some(lp) });
     }
     ui.separator();
-    ui.label(RichText::new("Presenting").font(style::bold(12.0)));
-    ui.checkbox(&mut app.stage.presenter_view, "Show presenter view")
-        .on_hover_text("Notes, the next step and a timer in a second window, on another display");
+    ui.label(RichText::new(crate::t!("present-presenting")).font(style::bold(12.0)));
+    ui.checkbox(&mut app.stage.presenter_view, crate::t!("present-show-presenter-view"))
+        .on_hover_text(crate::t!("present-show-presenter-view-tip"));
     let displays = displays(ui.ctx());
-    let current = app.stage.display.clone().unwrap_or_else(|| "This window's display".into());
+    let current = app.stage.display.clone().unwrap_or_else(|| crate::t!("present-this-display"));
     ui.horizontal(|ui| {
-        ui.label("Play on");
+        ui.label(crate::t!("present-play-on"));
         egui::ComboBox::from_id_salt("play-display").selected_text(current).width(170.0).show_ui(ui, |ui| {
-            if ui.selectable_label(app.stage.display.is_none(), "This window's display").clicked() {
+            if ui.selectable_label(app.stage.display.is_none(), crate::t!("present-this-display")).clicked() {
                 app.stage.display = None;
             }
             for d in &displays {
@@ -239,7 +245,7 @@ pub fn playback_ui(app: &mut ZebraApp, ui: &mut Ui) {
         });
     });
     if displays.len() < 2 {
-        ui.label(RichText::new("Connect a second display to present on one and see the presenter view on the other.").size(11.0).weak());
+        ui.label(RichText::new(crate::t!("present-connect-second-display")).size(11.0).weak());
     }
 }
 
@@ -249,7 +255,7 @@ pub fn playback_window(app: &mut ZebraApp, ctx: &egui::Context) {
         return;
     }
     let mut open = true;
-    egui::Window::new("Playback")
+    egui::Window::new(crate::t!("present-playback-window"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -281,7 +287,7 @@ pub fn displays(ctx: &egui::Context) -> Vec<Display> {
         }
     }
     let size = ctx.input(|i| i.viewport().monitor_size).unwrap_or(EVec2::new(1440.0, 900.0));
-    vec![Display { name: "Built-in display".into(), frame: Rect::from_min_size(egui::Pos2::ZERO, size), main: true }]
+    vec![Display { name: crate::t!("present-built-in-display"), frame: Rect::from_min_size(egui::Pos2::ZERO, size), main: true }]
 }
 
 /// The display to play on, if the person chose one that is connected.
@@ -352,7 +358,7 @@ pub fn present_extras(app: &mut ZebraApp, ui: &mut Ui, rect: Rect) {
     if ctx.input(|i| i.key_pressed(Key::P)) {
         let paused = !app.editor.view.present.autoplay_paused;
         let _ = app.editor.view(ViewCommand::PauseAutoplay { paused }, H);
-        app.toast(if paused { "Autoplay paused (P to resume)" } else { "Autoplay resumed" });
+        app.toast(if paused { crate::t!("present-toast-autoplay-paused", key = "P") } else { crate::t!("present-toast-autoplay-resumed") });
     }
     let Some(interval) = app.editor.autoplay_interval() else { return };
     if app.editor.view.present.autoplay_paused || app.editor.view.flight.is_some() || app.editor.at_end() && !app.editor.doc.play.looping {
@@ -376,7 +382,7 @@ pub fn presenter_window(app: &mut ZebraApp, ctx: &egui::Context) {
         return;
     }
     let pos = presenter_display(app, ctx);
-    let mut builder = egui::ViewportBuilder::default().with_title("Presenter View").with_min_inner_size([640.0, 400.0]);
+    let mut builder = egui::ViewportBuilder::default().with_title(crate::t!("present-presenter-window-title")).with_min_inner_size([640.0, 400.0]);
     match &pos {
         Some(d) => builder = builder.with_position(d.frame.min).with_inner_size(d.frame.size()),
         None => builder = builder.with_inner_size([1100.0, 700.0]),
@@ -412,25 +418,25 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
         // Top bar: position, timer, clock.
         ui.horizontal(|ui| {
             let pos = match step {
-                Some(s) => format!("Step {} of {n}", s + 1),
-                None => format!("Overview · {n} steps"),
+                Some(s) => crate::t!("present-presenter-step-of", step = ((s + 1) as u64), count = n),
+                None => crate::t!("present-presenter-overview", count = n),
             };
             ui.label(RichText::new(pos).size(16.0).color(fg));
             if let Some(a) = app.editor.autoplay_interval() {
-                let s = if app.editor.view.present.autoplay_paused { "Autoplay paused".to_string() } else { format!("Autoplay {}", fmt_secs(a)) };
+                let s = if app.editor.view.present.autoplay_paused { crate::t!("present-presenter-autoplay-paused") } else { crate::t!("present-presenter-autoplay", time = fmt_secs(a)) };
                 ui.label(RichText::new(s).size(13.0).color(weak));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(RichText::new(clock_text()).size(26.0).color(fg).monospace());
                 ui.add_space(24.0);
-                if ui.button("Reset").on_hover_text("Restart the timer").clicked() {
+                if ui.button(crate::t!("present-timer-reset")).on_hover_text(crate::t!("present-timer-reset-tip")).clicked() {
                     app.stage.timer_start = now;
                     if app.stage.timer_paused.is_some() {
                         app.stage.timer_paused = Some(0.0);
                     }
                 }
                 let paused = app.stage.timer_paused.is_some();
-                if ui.button(if paused { "Resume" } else { "Pause" }).on_hover_text(if paused { "Resume the timer" } else { "Pause the timer" }).clicked() {
+                if ui.button(if paused { crate::t!("present-timer-resume") } else { crate::t!("present-timer-pause") }).on_hover_text(if paused { crate::t!("present-timer-resume-tip") } else { crate::t!("present-timer-pause-tip") }).clicked() {
                     match app.stage.timer_paused.take() {
                         Some(e) => app.stage.timer_start = now - e,
                         None => app.stage.timer_paused = Some(now - app.stage.timer_start),
@@ -452,16 +458,16 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
         let blank = app.editor.view.present.blank;
         draw_slide(&painter, cur, app.stage.slides.get(step, build), blank, "");
         let next_label = match next {
-            Some((s, b)) if b > 0 && Some(s) == step => format!("Next: fade-in {b} of {}", app.editor.doc.path[s].builds.len()),
-            Some((s, _)) => format!("Next: step {}", s + 1),
-            None => "Next".into(),
+            Some((s, b)) if b > 0 && Some(s) == step => crate::t!("present-next-build", build = b, count = app.editor.doc.path[s].builds.len()),
+            Some((s, _)) => crate::t!("present-next-step", step = ((s + 1) as u64)),
+            None => crate::t!("present-next"),
         };
         painter.text(egui::pos2(nxt.left(), avail.top()), Align2::LEFT_TOP, next_label, FontId::proportional(14.0), weak);
         match next {
             Some((s, b)) => draw_slide(&painter, nxt, app.stage.slides.get(Some(s), b), None, ""),
             None => {
                 painter.rect_filled(nxt, 6.0, Color32::from_gray(30));
-                let msg = if app.editor.doc.play.looping { "Back to step 1" } else { "End of presentation" };
+                let msg = if app.editor.doc.play.looping { crate::t!("present-back-to-start") } else { crate::t!("present-end-of-presentation") };
                 painter.text(nxt.center(), Align2::CENTER_CENTER, msg, FontId::proportional(16.0), weak);
             }
         }
@@ -473,7 +479,7 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(notes_rect));
         egui::ScrollArea::vertical().id_salt("presenter-notes").auto_shrink([false, false]).show(&mut child, |ui| {
             if notes.trim().is_empty() {
-                ui.label(RichText::new("No notes for this step.").size(app.stage.notes_size * 0.8).color(weak).italics());
+                ui.label(RichText::new(crate::t!("present-no-notes")).size(app.stage.notes_size * 0.8).color(weak).italics());
             } else {
                 ui.label(RichText::new(notes).size(app.stage.notes_size).color(fg));
             }
@@ -483,21 +489,21 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
         let bar = Rect::from_min_max(egui::pos2(avail.left(), avail.bottom() - 34.0), avail.max);
         let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar));
         bar_ui.horizontal(|ui| {
-            if ui.add(egui::Button::new("◀  Previous").min_size(EVec2::new(110.0, 30.0))).clicked() {
+            if ui.add(egui::Button::new(format!("◀  {}", crate::t!("present-previous"))).min_size(EVec2::new(110.0, 30.0))).clicked() {
                 let _ = app.editor.view(ViewCommand::Prev, H);
             }
-            if ui.add(egui::Button::new("Next  ▶").min_size(EVec2::new(110.0, 30.0))).clicked() {
+            if ui.add(egui::Button::new(format!("{}  ▶", crate::t!("present-next"))).min_size(EVec2::new(110.0, 30.0))).clicked() {
                 let _ = app.editor.view(ViewCommand::Next, H);
             }
             ui.add_space(16.0);
-            if ui.button("A−").on_hover_text("Smaller notes").clicked() {
+            if ui.button("A−").on_hover_text(crate::t!("present-notes-smaller")).clicked() {
                 app.stage.notes_size = (app.stage.notes_size - 2.0).max(12.0);
             }
-            if ui.button("A+").on_hover_text("Larger notes").clicked() {
+            if ui.button("A+").on_hover_text(crate::t!("present-notes-larger")).clicked() {
                 app.stage.notes_size = (app.stage.notes_size + 2.0).min(48.0);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new("End Show").min_size(EVec2::new(90.0, 30.0))).on_hover_text("Esc").clicked() {
+                if ui.add(egui::Button::new(crate::t!("present-end-show")).min_size(EVec2::new(90.0, 30.0))).on_hover_text("Esc").clicked() {
                     let _ = app.editor.view(ViewCommand::ExitPresent, H);
                 }
             });
@@ -520,7 +526,7 @@ fn draw_slide(painter: &egui::Painter, r: Rect, tex: Option<&TextureHandle>, bla
         }
         (None, None) => {
             painter.rect_filled(r, 6.0, Color32::from_gray(30));
-            painter.text(r.center(), Align2::CENTER_CENTER, "Rendering…", FontId::proportional(13.0), Color32::from_gray(120));
+            painter.text(r.center(), Align2::CENTER_CENTER, crate::t!("present-rendering"), FontId::proportional(13.0), Color32::from_gray(120));
         }
     }
     painter.rect_stroke(r, 6.0, egui::Stroke::new(1.0, Color32::from_gray(60)), egui::StrokeKind::Outside);
@@ -708,7 +714,7 @@ mod mac {
                 let top = main_h - (f.origin.y + f.size.height);
                 let name = s.localizedName().to_string();
                 Display {
-                    name: if name.is_empty() { format!("Display {}", i + 1) } else { name },
+                    name: if name.is_empty() { crate::t!("present-display-n", n = i + 1) } else { name },
                     frame: egui::Rect::from_min_size(egui::pos2(f.origin.x as f32, top as f32), egui::vec2(f.size.width as f32, f.size.height as f32)),
                     main: i == 0,
                 }

@@ -11,17 +11,17 @@ use crate::app::ZebraApp;
 pub enum Item {
     A(Action),
     Sep,
-    Sub(&'static str, Vec<Item>),
+    Sub(String, Vec<Item>),
     /// Filled at runtime (Open Recent).
     Recent,
 }
 
-pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
+pub fn spec() -> Vec<(String, Vec<Item>)> {
     use Action::*;
     use Item::*;
     vec![
         (
-            "File",
+            crate::t!("menu-file"),
             vec![
                 A(New),
                 A(ShowTemplates),
@@ -34,19 +34,19 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
                 A(SaveAs),
                 A(SaveAsTemplate),
                 Sep,
-                Sub("Export To", vec![A(ExportPdf), A(ExportPng)]),
+                Sub(crate::t!("menu-export-to"), vec![A(ExportPdf), A(ExportPng)]),
             ],
         ),
         (
-            "Edit",
+            crate::t!("menu-edit"),
             vec![A(Undo), A(Redo), Sep, A(Cut), A(Copy), A(Paste), A(Delete), A(Duplicate), Sep, A(SelectAll), A(Deselect)],
         ),
         (
-            "Insert",
+            crate::t!("menu-insert"),
             vec![
                 A(SetTool(Tool::Text)),
-                Sub("Frame", FrameStyle::ALL.iter().map(|s| A(SetFrameStyle(*s))).collect()),
-                Sub("Shape", vec![A(SetTool(Tool::Rectangle)), A(SetTool(Tool::Ellipse)), Sep, A(ShapeLibrary)]),
+                Sub(crate::t!("menu-frame"), FrameStyle::ALL.iter().map(|s| A(SetFrameStyle(*s))).collect()),
+                Sub(crate::t!("menu-shape"), vec![A(SetTool(Tool::Rectangle)), A(SetTool(Tool::Ellipse)), Sep, A(ShapeLibrary)]),
                 A(SetTool(Tool::Line)),
                 A(SetTool(Tool::Arrow)),
                 A(SetTool(Tool::Pen)),
@@ -60,19 +60,19 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
             ],
         ),
         (
-            "Format",
+            crate::t!("menu-format"),
             vec![
-                Sub("Font", vec![A(Bold), A(Italic), A(Underline)]),
+                Sub(crate::t!("menu-font"), vec![A(Bold), A(Italic), A(Underline)]),
                 Sep,
-                Sub("Theme", Theme::ids().into_iter().map(|t| A(SetTheme(t))).chain([Sep, A(ThemeEditor)]).collect()),
+                Sub(crate::t!("menu-theme"), Theme::ids().into_iter().map(|t| A(SetTheme(t))).chain([Sep, A(ThemeEditor)]).collect()),
             ],
         ),
         (
-            "Arrange",
+            crate::t!("menu-arrange"),
             vec![A(BringForward), A(BringToFront), A(SendBackward), A(SendToBack), Sep, A(ToggleLock), Sep, A(Group), A(Ungroup)],
         ),
         (
-            "View",
+            crate::t!("menu-view"),
             vec![
                 A(ZoomIn),
                 A(ZoomOut),
@@ -85,13 +85,13 @@ pub fn spec() -> Vec<(&'static str, Vec<Item>)> {
                 A(ToggleActivity),
             ],
         ),
-        ("Path", vec![A(TogglePathEdit), A(AddToPath), A(AddCurrentView), Sep, A(AutoPath), A(ClearPath)]),
-        ("Play", vec![A(PresentStart), A(PresentCurrent), Sep, A(TogglePresenterView), A(PlaybackOptions)]),
+        (crate::t!("menu-path"), vec![A(TogglePathEdit), A(AddToPath), A(AddCurrentView), Sep, A(AutoPath), A(ClearPath)]),
+        (crate::t!("menu-play"), vec![A(PresentStart), A(PresentCurrent), Sep, A(TogglePresenterView), A(PlaybackOptions)]),
         (
-            "Agent",
+            crate::t!("menu-agent"),
             vec![A(ToggleAiControl), Sep, A(PauseAgents), A(StopAgents), A(FollowAgent), Sep, A(RevertAgent)],
         ),
-        ("Help", vec![A(ShowShortcuts), A(CommandPalette)]),
+        (crate::t!("menu-help"), vec![A(ShowShortcuts), A(CommandPalette)]),
     ]
 }
 
@@ -116,13 +116,21 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
     let enabled = match a {
         Undo => {
             if let Some(h) = app.editor.history().last() {
-                title = if h.origin.is_agent() { format!("Undo {} ({})", h.label, h.origin.display()) } else { format!("Undo {}", h.label) };
+                title = if h.origin.is_agent() {
+                    crate::t!("menu-undo-by-agent", label = h.label.as_str(), agent = h.origin.display())
+                } else {
+                    crate::t!("menu-undo-named", label = h.label.as_str())
+                };
             }
             app.editor.can_undo()
         }
         Redo => {
             if let Some(h) = app.editor.redo_entry() {
-                title = if h.origin.is_agent() { format!("Redo {} ({})", h.label, h.origin.display()) } else { format!("Redo {}", h.label) };
+                title = if h.origin.is_agent() {
+                    crate::t!("menu-redo-by-agent", label = h.label.as_str(), agent = h.origin.display())
+                } else {
+                    crate::t!("menu-redo-named", label = h.label.as_str())
+                };
             }
             app.editor.can_redo()
         }
@@ -136,7 +144,7 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
         ToggleLock => {
             let sel = app.selection();
             let locked = !sel.is_empty() && sel.iter().all(|id| app.editor.doc.get(id).is_some_and(|e| e.locked));
-            title = if locked { "Unlock".into() } else { "Lock".into() };
+            title = if locked { crate::t!("menu-unlock") } else { crate::t!("action-toggle-lock") };
             has_sel
         }
         Bold | Italic | Underline => {
@@ -159,15 +167,15 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
             !texts.is_empty()
         }
         ToggleSidebar => {
-            title = if app.show_sidebar { "Hide Sidebar".into() } else { "Show Sidebar".into() };
+            title = if app.show_sidebar { crate::t!("menu-hide-sidebar") } else { crate::t!("action-toggle-sidebar") };
             true
         }
         ToggleProperties => {
-            title = if app.show_props { "Hide Inspector".into() } else { "Show Inspector".into() };
+            title = if app.show_props { crate::t!("menu-hide-inspector") } else { crate::t!("action-toggle-properties") };
             true
         }
         ToggleActivity => {
-            title = if app.show_activity { "Hide Agent Activity".into() } else { "Show Agent Activity".into() };
+            title = if app.show_activity { crate::t!("menu-hide-agent-activity") } else { crate::t!("menu-show-agent-activity") };
             true
         }
         TogglePathEdit => {
@@ -192,7 +200,7 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
             true
         }
         PauseAgents => {
-            title = if app.editor.view.agent_paused { "Resume Agent".into() } else { "Pause Agent".into() };
+            title = if app.editor.view.agent_paused { crate::t!("menu-resume-agent") } else { crate::t!("menu-pause-agent") };
             connected
         }
         StopAgents | RevertAgent => connected,
@@ -216,13 +224,13 @@ pub fn is_checkable(a: &Action) -> bool {
 pub fn egui_menu_bar(app: &mut ZebraApp, ui: &mut egui::Ui) {
     egui::MenuBar::new().ui(ui, |ui| {
         for (title, items) in spec() {
-            ui.menu_button(title, |ui| {
+            ui.menu_button(title.as_str(), |ui| {
                 ui.set_min_width(220.0);
                 ui.spacing_mut().item_spacing.y = 0.0;
                 items_ui(app, ui, &items)
             });
         }
-        if ui.button("Settings…").clicked() {
+        if ui.button(crate::t!("action-settings")).clicked() {
             app.queued.push(Action::Settings);
         }
     });
@@ -240,7 +248,7 @@ fn items_ui(app: &mut ZebraApp, ui: &mut egui::Ui, items: &[Item]) {
             }
             Item::Sep => crate::widgets::menu_separator(ui),
             Item::Sub(t, sub) => {
-                ui.menu_button(*t, |ui| {
+                ui.menu_button(t.as_str(), |ui| {
                     ui.set_min_width(200.0);
                     ui.spacing_mut().item_spacing.y = 0.0;
                     items_ui(app, ui, sub)
@@ -248,10 +256,10 @@ fn items_ui(app: &mut ZebraApp, ui: &mut egui::Ui, items: &[Item]) {
             }
             Item::Recent => {
                 let recent = app.recent.clone();
-                ui.menu_button("Open Recent", |ui| {
+                ui.menu_button(crate::t!("menu-open-recent"), |ui| {
                     ui.set_min_width(260.0);
                     if recent.is_empty() {
-                        crate::widgets::menu_row(ui, None, "No Recent Documents", None, false);
+                        crate::widgets::menu_row(ui, None, &crate::t!("menu-no-recent-documents"), None, false);
                     }
                     for p in recent {
                         let name = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
