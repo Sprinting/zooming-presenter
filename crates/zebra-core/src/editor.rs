@@ -79,6 +79,10 @@ pub struct HistoryEntry {
     pub ids: Vec<ElementId>,
     #[serde(skip)]
     before: Document,
+    /// Unlabelled agent steps auto-group with the next one (within 2 s);
+    /// explicitly labelled batches and transactions never merge.
+    #[serde(skip)]
+    mergeable: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -304,11 +308,18 @@ impl Editor {
 
     pub fn apply(&mut self, cmd: Command, origin: Origin) -> ZResult<Outcome> {
         let label = command_label(&cmd);
-        self.apply_batch(vec![cmd], Some(label), origin)
+        self.apply_batch_inner(vec![cmd], Some(label), origin, true)
     }
 
     /// Atomic: all commands apply or none. One undo step.
+    /// A batch with an explicit `label` is its own undo step (never merged
+    /// with neighbouring agent steps).
     pub fn apply_batch(&mut self, cmds: Vec<Command>, label: Option<String>, origin: Origin) -> ZResult<Outcome> {
+        let mergeable = label.is_none();
+        self.apply_batch_inner(cmds, label, origin, mergeable)
+    }
+
+    fn apply_batch_inner(&mut self, cmds: Vec<Command>, label: Option<String>, origin: Origin, mergeable: bool) -> ZResult<Outcome> {
         self.check_agent(&origin)?;
         if let Some(t) = &self.tx {
             if t.origin != origin {
@@ -345,7 +356,7 @@ impl Editor {
             self.revision += 1;
             self.events.push(Event::DocumentChanged { revision: self.revision, origin: origin.clone(), label, ids });
         } else {
-            self.record(label, origin.clone(), before, ids, true);
+            self.record(label, origin.clone(), before, ids, mergeable);
         }
         if origin.is_agent() {
             let now = self.view.now;
@@ -367,7 +378,7 @@ impl Editor {
         self.redo.clear();
         let merged = allow_merge
             && origin.is_agent()
-            && self.undo.last().is_some_and(|h| h.origin == origin && now - h.time < AGENT_GROUP_SECS);
+            && self.undo.last().is_some_and(|h| h.mergeable && h.origin == origin && now - h.time < AGENT_GROUP_SECS);
         if merged {
             let h = self.undo.last_mut().unwrap();
             let n = h.label.strip_suffix(" changes").and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
@@ -376,7 +387,7 @@ impl Editor {
             h.revision = self.revision;
             h.ids.extend(ids.iter().cloned());
         } else {
-            self.undo.push(HistoryEntry { label: label.clone(), origin: origin.clone(), revision: self.revision, time: now, ids: ids.clone(), before });
+            self.undo.push(HistoryEntry { label: label.clone(), origin: origin.clone(), revision: self.revision, time: now, ids: ids.clone(), before, mergeable: allow_merge });
             if self.undo.len() > 500 {
                 self.undo.remove(0);
             }

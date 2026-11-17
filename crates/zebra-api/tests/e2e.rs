@@ -1,0 +1,362 @@
+//! End-to-end: a headless dispatcher loop on a thread, real Unix socket,
+//! real client.
+use std::path::PathBuf;
+use std::sync::Once;
+use std::time::Duration;
+
+use serde_json::{Value, json};
+use zebra_api::client::{Client, ClientError};
+use zebra_api::{ApiOptions, HeadlessHandle, Permission};
+
+fn scratch() -> PathBuf {
+    static INIT: Once = Once::new();
+    let dir = std::env::temp_dir().join(format!("zebra-api-test-{}", std::process::id()));
+    INIT.call_once(|| {
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: set once before any server starts in this test binary.
+        unsafe { std::env::set_var("ZEBRA_DATA_DIR", dir.join("data")) };
+    });
+    dir
+}
+
+fn start(perm: Permission) -> HeadlessHandle {
+    scratch();
+    HeadlessHandle::spawn(ApiOptions { socket: None, permission: perm }, None).expect("headless starts")
+}
+
+fn connect(h: &HeadlessHandle, name: &str) -> Client {
+    Client::connect_hello(&h.socket, name, &h.token).expect("hello")
+}
+
+fn rpc_err(r: Result<Value, ClientError>) -> zebra_api::RpcError {
+    match r {
+        Err(ClientError::Rpc(e)) => e,
+        other => panic!("expected an RPC error, got {other:?}"),
+    }
+}
+
+#[test]
+fn full_session() {
+    let h = start(Permission::Full);
+    let dir = scratch();
+
+    // Discovery file exists and points at us.
+    let inst = zebra_api::discovery::list().into_iter().find(|i| i.socket == h.socket).expect("discovery file");
+    assert_eq!(inst.pid, std::process::id());
+    assert_eq!(inst.token, h.token);
+    let mode = std::fs::metadata(&inst.file).map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o777).unwrap();
+    assert_eq!(mode, 0o600);
+    let sock_mode = std::fs::metadata(&h.socket).map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o777).unwrap();
+    assert_eq!(sock_mode, 0o600);
+
+    // Unauthenticated calls are rejected; ping is allowed.
+    let mut anon = Client::connect(&h.socket).unwrap();
+    assert_eq!(anon.call("ping", json!({})).unwrap(), json!("pong"));
+    let e = rpc_err(anon.call("describe", json!({})));
+    assert_eq!(e.kind(), "unauthenticated");
+    assert!(e.message.contains("hello"), "{e}");
+    let e = rpc_err(anon.call("hello", json!({"name":"x","token":"nope"})));
+    assert_eq!(e.kind(), "unauthenticated");
+
+    let mut c = connect(&h, "tester");
+    let mut watcher = connect(&h, "watcher");
+    let sub = watcher.call("subscribe", json!({})).unwrap();
+    assert!(sub["subscribed"].as_array().unwrap().len() >= 5);
+
+    // Batch: 3 frames on the path, text inside each.
+    let out = c
+        .call(
+            "batch",
+            json!({"label": "Build deck", "commands": [
+                {"op":"set_title","title":"Demo"},
+                {"op":"add_frame","id":"intro","x":0,"y":0,"name":"Intro","add_to_path":true},
+                {"op":"add_text","text":"Hello Zebra","style":"title","place":{"relative_to":"intro","side":"inside"}},
+                {"op":"add_frame","id":"middle","x":1200,"y":0,"style":"circle","add_to_path":true},
+                {"op":"add_text","text":"Middle","place":{"relative_to":"middle","side":"inside"}},
+                {"op":"add_frame","id":"end","x":2400,"y":0,"add_to_path":true},
+                {"op":"add_shape","shape":"arrow","x":600,"y":0,"w":200,"h":50}
+            ]}),
+        )
+        .unwrap();
+    let rev = out["revision"].as_u64().unwrap();
+    assert!(out["created"].as_array().unwrap().len() >= 6, "{out}");
+
+    // The watcher sees an origin-tagged document_changed event.
+    let ev = loop {
+        let ev = watcher.next_event(Some(Duration::from_secs(5))).unwrap().expect("event");
+        if ev["event"] == "document_changed" {
+            break ev;
+        }
+    };
+    assert_eq!(ev["origin"], json!({"kind":"agent","name":"tester"}));
+    assert_eq!(ev["label"], "Build deck");
+
+    let d = c.call("describe", json!({})).unwrap();
+    let outline = d["outline"].as_str().unwrap();
+    assert!(outline.contains("Hello Zebra") && outline.contains("intro"), "{outline}");
+    let st = c.call("state", json!({})).unwrap();
+    assert_eq!(st["path_length"], 3);
+    assert_eq!(st["agent_permission"], "full");
+    let q = c.call("query", json!({"query":{"q":"elements","kind":"frame"}})).unwrap();
+    assert_eq!(q["elements"].as_array().unwrap().len(), 3);
+    // String shorthand.
+    let p = c.call("query", json!({"query":"path"})).unwrap();
+    assert_eq!(p["steps"].as_array().unwrap().len(), 3);
+
+    // Single apply, then undo it. The batch stays.
+    let a = c.call("apply", json!({"command":{"op":"add_text","text":"oops","x":0,"y":900}})).unwrap();
+    assert!(a["revision"].as_u64().unwrap() > rev);
+    let u = c.call("undo", json!({})).unwrap();
+    assert!(u["undone"].is_string(), "{u}");
+    let q = c.call("query", json!({"query":{"q":"elements","text":"oops"}})).unwrap();
+    assert!(q["elements"].as_array().unwrap().is_empty());
+    let r = c.call("redo", json!({})).unwrap();
+    assert!(r["redone"].is_string());
+    c.call("undo", json!({})).unwrap();
+
+    // if_revision guards stale writes.
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"set_title","title":"x"},"if_revision": 1})));
+    assert_eq!(e.kind(), "stale_revision");
+
+    // Transactions: begin/apply/abort leaves nothing behind.
+    c.call("begin", json!({"label":"tx"})).unwrap();
+    c.call("apply", json!({"command":{"op":"add_text","text":"temp","x":0,"y":1200}})).unwrap();
+    c.call("abort", json!({})).unwrap();
+    let q = c.call("query", json!({"query":{"q":"elements","text":"temp"}})).unwrap();
+    assert!(q["elements"].as_array().unwrap().is_empty());
+    let e = rpc_err(c.call("commit", json!({})));
+    assert_eq!(e.kind(), "no_transaction");
+
+    // Present + wait for arrival at step 1 (full permission drives the window).
+    c.call("view", json!({"command":{"op":"present","step":0}})).unwrap();
+    c.call("view", json!({"command":{"op":"next"}})).unwrap();
+    let w = c.call("wait", json!({"until":{"step":1},"timeout_ms":10000})).unwrap();
+    assert_eq!(w["step"], 1);
+    let w = c.call("wait", json!({"until":"idle","timeout_ms":10000})).unwrap();
+    assert_eq!(w["ok"], true);
+    let e = rpc_err(c.call("wait", json!({"until":{"step":2},"timeout_ms":100})));
+    assert_eq!(e.kind(), "timeout");
+    c.call("view", json!({"command":{"op":"exit_present"}})).unwrap();
+
+    // Capture: base64 PNG or a file. Tolerate an unimplemented renderer.
+    match c.call("capture", json!({"target":{"step":0},"width":320,"height":200})) {
+        Ok(v) => {
+            use base64::Engine;
+            let png = base64::engine::general_purpose::STANDARD.decode(v["data_base64"].as_str().unwrap()).unwrap();
+            assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+            let path = dir.join("shot.png");
+            let v = c.call("capture", json!({"target":"overview","width":200,"height":120,"path":path})).unwrap();
+            assert!(v["bytes"].as_u64().unwrap() > 0);
+            assert!(path.exists());
+        }
+        Err(ClientError::Rpc(e)) if e.kind() == "unimplemented" => eprintln!("capture not implemented yet"),
+        Err(e) => panic!("capture failed: {e}"),
+    }
+    let e = rpc_err(c.call("capture", json!({"target":{"step":99}})));
+    assert_eq!(e.kind(), "invalid_params");
+    let e = rpc_err(c.call("capture", json!({"target":{"element":"nope"}})));
+    assert_eq!(e.kind(), "not_found");
+
+    // Save / open roundtrip.
+    let file = dir.join("deck.zebra");
+    c.call("save", json!({"path": file})).unwrap();
+    assert!(file.exists());
+    c.call("apply", json!({"command":{"op":"set_title","title":"Changed"}})).unwrap();
+    let e = rpc_err(c.call("open", json!({"path": file})));
+    assert_eq!(e.kind(), "unsaved_changes");
+    c.call("open", json!({"path": file, "force": true})).unwrap();
+    let st = c.call("state", json!({})).unwrap();
+    assert_eq!(st["title"], "Demo");
+    assert_eq!(st["path_length"], 3);
+    assert_eq!(st["dirty"], false);
+
+    // Export JSON to a file and inline.
+    let j = c.call("export", json!({"format":"json"})).unwrap();
+    assert_eq!(j["document"]["title"], "Demo");
+    let jp = dir.join("deck.json");
+    c.call("export", json!({"format":"json","path": jp})).unwrap();
+    assert!(std::fs::read_to_string(&jp).unwrap().contains("Hello Zebra"));
+
+    // Images by path.
+    let img = dir.join("dot.png");
+    write_png(&img);
+    let r = c.call("apply", json!({"command":{"op":"add_image","path": img,"x":0,"y":700,"width":100}})).unwrap();
+    assert_eq!(r["created"].as_array().unwrap().len(), 1);
+
+    // Helpful errors.
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"add_txet","text":"x"}})));
+    assert_eq!(e.kind(), "invalid_params");
+    assert!(e.message.contains("unknown variant"), "{e}");
+    assert!(e.data["valid_values"].as_array().unwrap().iter().any(|v| v == "add_text"));
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"add_text"}})));
+    assert!(e.message.contains("text"), "{e}");
+    assert!(e.hint_text().unwrap().contains("add_text"), "{e}");
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"zoom_to","id":"intro"}})));
+    assert!(e.hint_text().unwrap().contains("view"), "{e}");
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"delete","ids":["intr"]}})));
+    assert_eq!(e.kind(), "not_found");
+    assert!(e.data["valid_values"].as_array().unwrap().iter().any(|v| v == "intro"), "{e}");
+    let e = rpc_err(c.call("frobnicate", json!({})));
+    assert_eq!(e.code, -32601);
+    assert!(e.data["valid_values"].as_array().unwrap().iter().any(|v| v == "apply"));
+    let e = rpc_err(c.call("add_text", json!({})));
+    assert!(e.hint_text().unwrap().contains("apply"), "{e}");
+    let e = rpc_err(c.call("open", json!({"path":"relative.zebra"})));
+    assert!(e.message.contains("absolute"));
+    // Raw garbage gets a parse error, connection survives.
+    let resp = c.raw(json!({"id": 99, "method": "ping"})).unwrap();
+    assert_eq!(resp["result"], "pong");
+
+    // Catalogue.
+    let cat = c.call("commands", json!({})).unwrap();
+    assert!(cat["commands"].as_array().unwrap().iter().any(|x| x["name"] == "add_frame" && x["example"].is_object()));
+    let s = c.call("schema", json!({})).unwrap();
+    assert!(s["command"]["oneOf"].is_array() || s["command"]["anyOf"].is_array());
+
+    // Quit ends the headless loop and cleans up.
+    let file_path = inst.file.clone();
+    c.call("quit", json!({})).unwrap();
+    for _ in 0..100 {
+        if h.is_finished() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(h.is_finished());
+    assert!(!file_path.exists(), "discovery file removed");
+    assert!(!h.socket.exists(), "socket removed");
+}
+
+#[test]
+fn observe_permission_cannot_edit() {
+    let h = start(Permission::Observe);
+    let mut c = connect(&h, "observer");
+    c.call("describe", json!({})).unwrap();
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"add_text","text":"x"}})));
+    assert_eq!(e.kind(), "permission");
+    let e = rpc_err(c.call("save", json!({"path":"/tmp/x.zebra"})));
+    assert_eq!(e.kind(), "permission");
+    h.stop().unwrap();
+}
+
+#[test]
+fn edit_permission_uses_private_camera() {
+    let h = start(Permission::Edit);
+    let mut c = connect(&h, "editor");
+    c.call("batch", json!({"commands":[{"op":"add_frame","id":"a","x":5000,"y":5000,"add_to_path":true}]})).unwrap();
+    let before = c.call("state", json!({})).unwrap()["camera"].clone();
+    c.call("view", json!({"command":{"op":"zoom_to","id":"a"}})).unwrap();
+    let st = c.call("state", json!({})).unwrap();
+    assert_eq!(st["camera"], before, "human camera untouched");
+    assert_ne!(st["agent_camera"], before);
+    let e = rpc_err(c.call("view", json!({"command":{"op":"present"}})));
+    assert_eq!(e.kind(), "permission");
+    h.stop().ok();
+}
+
+#[test]
+fn paused_returns_paused() {
+    // Pause is a human-only control; drive it through an in-process editor
+    // with the real dispatcher, then talk over the socket.
+    scratch();
+    use std::sync::Arc;
+    let waker: zebra_api::Waker = Arc::new(|| {});
+    let server = zebra_api::ApiServer::start(ApiOptions::default(), waker).unwrap();
+    let socket = server.socket_path();
+    let token = server.token().to_string();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let host = std::thread::spawn(move || {
+        let mut editor = zebra_core::Editor::default();
+        let mut d = zebra_api::Dispatcher::new(Arc::new(zebra_render::Renderer::new()));
+        editor.view(zebra_core::ViewCommand::PauseAgents { paused: true }, zebra_core::Origin::Human).unwrap();
+        let mut saw_pause_event = false;
+        while !stop2.load(std::sync::atomic::Ordering::SeqCst) {
+            d.pump(&server, &mut editor);
+            for e in d.take_events() {
+                if matches!(e, zebra_api::Event::AgentsPaused { paused: true }) {
+                    saw_pause_event = true;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(saw_pause_event, "host receives events via take_events");
+        server.clients().len()
+    });
+    let mut c = Client::connect_hello(&socket, "pauser", &token).unwrap();
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"add_text","text":"x"}})));
+    assert_eq!(e.kind(), "paused");
+    assert!(e.hint_text().is_some());
+    let e = rpc_err(c.call("quit", json!({})));
+    assert_eq!(e.kind(), "permission", "quit refused in GUI mode");
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(host.join().unwrap(), 1, "clients() lists the connected agent");
+}
+
+#[test]
+fn mcp_bridge() {
+    let h = start(Permission::Edit);
+    let sock = h.socket.clone();
+    let tok = h.token.clone();
+    let mut mcp = zebra_api::mcp::McpServer::new(move || Ok(Client::connect_hello(&sock, "mcp-test", &tok)?));
+    let input = [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"apply_commands","arguments":{"label":"Intro","commands":[
+            {"op":"add_frame","id":"f_intro","x":0,"y":0,"add_to_path":true},
+            {"op":"add_text","text":"From MCP","style":"title","place":{"relative_to":"f_intro","side":"inside"}}]}}}),
+        json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"describe","arguments":{}}}),
+        json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"apply_commands","arguments":{"commands":[{"op":"nope"}]}}}),
+        json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"capture","arguments":{"target":{"step":0},"width":200,"height":120}}}),
+        json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"undo","arguments":{}}}),
+        json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"list_commands","arguments":{}}}),
+        json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"view","arguments":{"command":{"op":"fit_all"}}}}),
+        json!({"jsonrpc":"2.0","id":10,"method":"ping"}),
+    ];
+    let text: String = input.iter().map(|v| v.to_string() + "\n").collect();
+    let mut out = Vec::new();
+    mcp.serve(std::io::Cursor::new(text), &mut out).unwrap();
+    let resps: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(resps.len(), 10, "one response per request, none for the notification");
+    let by_id = |id: i64| resps.iter().find(|r| r["id"] == id).unwrap_or_else(|| panic!("no response {id}")).clone();
+
+    let init = by_id(1);
+    assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+    assert!(init["result"]["instructions"].as_str().unwrap().contains("y grows DOWN"));
+    let tools = by_id(2)["result"]["tools"].as_array().unwrap().clone();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    for n in ["get_state", "describe", "apply_commands", "view", "query", "capture", "undo", "list_commands"] {
+        assert!(names.contains(&n), "missing tool {n}");
+    }
+    let apply = tools.iter().find(|t| t["name"] == "apply_commands").unwrap();
+    assert!(apply["inputSchema"]["$defs"]["Command"].is_object());
+    assert_eq!(by_id(3)["result"]["isError"], false, "{}", by_id(3));
+    assert!(by_id(4)["result"]["content"][0]["text"].as_str().unwrap().contains("From MCP"));
+    let bad = by_id(5);
+    assert_eq!(bad["result"]["isError"], true);
+    assert!(bad["result"]["content"][0]["text"].as_str().unwrap().contains("add_text"), "{bad}");
+    let cap = by_id(6);
+    if cap["result"]["isError"] == false {
+        assert_eq!(cap["result"]["content"][0]["type"], "image");
+        assert_eq!(cap["result"]["content"][0]["mimeType"], "image/png");
+    } else {
+        assert!(cap["result"]["content"][0]["text"].as_str().unwrap().contains("unimplemented"), "{cap}");
+    }
+    assert_eq!(by_id(7)["result"]["isError"], false);
+    assert!(by_id(8)["result"]["content"][0]["text"].as_str().unwrap().contains("add_frame"));
+    assert_eq!(by_id(9)["result"]["isError"], false, "{}", by_id(9));
+    assert_eq!(by_id(10)["result"], json!({}));
+    h.stop().unwrap();
+}
+
+fn write_png(p: &std::path::Path) {
+    // 1x1 red PNG.
+    const PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
+        0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D, 0xB0, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    std::fs::write(p, PNG).unwrap();
+}
