@@ -152,6 +152,15 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                     app.select(vec![id]);
                 }
             }
+            "edittext" => {
+                let found = app.editor.doc.ordered().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text == "Why zoom?")).map(|e| e.id.clone());
+                if let Some(id) = found {
+                    crate::canvas::begin_edit_existing(app, id);
+                }
+            }
+            t if t.starts_with("theme=") => {
+                let _ = app.editor.apply(Command::SetTheme { theme: t[6..].into() }, H);
+            }
             "dark" => ctx.set_theme(egui::ThemePreference::Dark),
             "empty" => {
                 app.editor.load(Document::default(), None);

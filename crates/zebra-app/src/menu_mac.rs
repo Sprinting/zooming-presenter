@@ -4,6 +4,9 @@
 //! Only ⌘-shortcuts that text fields don't need get menu key equivalents;
 //! ⌘C/⌘V/⌘X/⌘A/⌘Z stay with egui so they work inside text boxes too (the menu
 //! shows them in the item title instead).
+//!
+//! TODO(macOS): hold an `NSProcessInfo` activity (App Nap prevention) while
+//! an API client is connected or while presenting; needs objc2-foundation.
 #![cfg(target_os = "macos")]
 
 use std::collections::HashMap;

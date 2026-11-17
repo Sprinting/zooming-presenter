@@ -287,6 +287,11 @@ pub fn sync_viewport(app: &mut ZebraApp, rect: ERect) {
             let _ = app.editor.view(ViewCommand::Pan { dx: d.x as f64, dy: d.y as f64 }, H);
         }
     }
+    if !app.canvas.rect_valid && app.editor.view.mode != Mode::Present && app.editor.view.flight.is_none() {
+        // First real canvas size (startup / after opening a file): fit everything.
+        let cam = app.editor.fit_all_camera();
+        app.editor.view.fly_to(cam, false);
+    }
     app.canvas.rect = rect;
     app.canvas.rect_valid = true;
     app.canvas.rect_presenting = app.editor.view.mode == Mode::Present;
@@ -1199,7 +1204,7 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
     draw_agent_presence(app, painter);
 
     // Selection + zebra transform tool.
-    if !path_mode {
+    if !path_mode && app.canvas.text.is_none() {
         if let Some(sb) = selection_box(app, &ed.view.selection.clone()) {
             draw_transform_tool(app, painter, &sb);
         }

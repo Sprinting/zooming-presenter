@@ -123,7 +123,7 @@ impl ZebraApp {
             api_error: None,
             t0: Instant::now(),
             canvas: CanvasState::default(),
-            thumbs: Thumbs::new(ctx.clone()),
+            thumbs: Thumbs::new(ctx.clone(), renderer.clone()),
             show_sidebar: true,
             show_props: true,
             show_activity: false,
@@ -780,6 +780,11 @@ impl ZebraApp {
             if self.palette.is_some() && *action != Action::CommandPalette {
                 continue;
             }
+            // On macOS the native menu owns these key equivalents.
+            #[cfg(target_os = "macos")]
+            if crate::menu_mac::menu_owns(action) {
+                continue;
+            }
             self.queued.push(action.clone());
         }
         // Clipboard (egui turns ⌘C/⌘X/⌘V into these events)
@@ -884,6 +889,10 @@ impl eframe::App for ZebraApp {
 
     fn raw_input_hook(&mut self, _ctx: &Context, raw: &mut egui::RawInput) {
         raw.events.append(&mut self.inject);
+    }
+
+    fn persist_egui_memory(&self) -> bool {
+        false
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

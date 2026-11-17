@@ -41,7 +41,8 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
             .resizable(false)
             .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin::symmetric(12, 10)).stroke(Stroke::new(1.0, p.border)))
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.set_max_width(228.0);
                     if app.show_activity {
                         activity_panel(app, ui, &p);
                     } else {
@@ -189,19 +190,13 @@ fn agent_pill(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         (AGENT, format!("{} connected · {}", app.agent_name(), if busy { "editing" } else { "idle" }))
     };
     let fill = if connected && !paused { AGENT.gamma_multiply(0.12) } else { p.hover };
-    let r = egui::Frame::new()
-        .fill(fill)
-        .corner_radius(CornerRadius::same(14))
-        .inner_margin(egui::Margin::symmetric(10, 5))
-        .show(ui, |ui| {
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                let (r, _) = ui.allocate_exact_size(EVec2::splat(8.0), Sense::hover());
-                ui.painter().circle_filled(r.center(), 4.0, dot);
-                ui.label(RichText::new(text).size(12.5).color(if connected { AGENT } else { p.weak }));
-            });
-        })
-        .response
-        .interact(Sense::click());
+    let tc = if connected { AGENT } else { p.weak };
+    let galley = ui.painter().layout_no_wrap(text, FontId::proportional(12.5), tc);
+    let size = EVec2::new(galley.size().x + 34.0, 28.0);
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+    ui.painter().rect_filled(rect, 14.0, if r.hovered() { fill.gamma_multiply(1.6) } else { fill });
+    ui.painter().circle_filled(Pos2::new(rect.min.x + 14.0, rect.center().y), 4.0, dot);
+    ui.painter().galley(Pos2::new(rect.min.x + 24.0, rect.center().y - galley.size().y / 2.0), galley, tc);
     let r = r.on_hover_text(match &app.api {
         Some(s) => format!("Automation API socket:\n{}\nClick for agent controls", s.socket_path().display()),
         None => "Agent controls".into(),
@@ -638,7 +633,9 @@ fn properties(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 if ui.selectable_label(t.bullets, "• List").on_hover_text("Bullets").clicked() {
                     patch_all = Some(ElementPatch { bullets: Some(!t.bullets), ..Default::default() });
                 }
-                ui.separator();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Align");
                 for (a, l) in [(zebra_core::Align::Left, "⇤"), (zebra_core::Align::Center, "↔"), (zebra_core::Align::Right, "⇥")] {
                     if ui.selectable_label(t.align == a, l).on_hover_text(format!("Align {a:?}")).clicked() {
                         patch_all = Some(ElementPatch { align: Some(a), ..Default::default() });

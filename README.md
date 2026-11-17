@@ -1,0 +1,116 @@
+# Zebra
+
+A native zooming-canvas presentation app for macOS, in the spirit of classic
+(2012–2014) Prezi. You get one infinite canvas, frames, a path, and a camera
+that flies between steps. It's written in Rust (egui for the chrome, vello on
+Metal for the canvas) and uses no web views.
+
+You use it like Prezi: you click, drag and type, and you never need to know a
+command. It can also be driven by AI agents, if you choose. Start it with
+`--api` and an agent can read and edit the same presentation through a local
+socket while you watch (see [docs/API.md](docs/API.md)). Everything an agent
+changes is shown on the canvas and can be undone.
+
+## Build and run (macOS)
+
+```sh
+# Rust 1.95+ (rustup.rs)
+cargo run --release -p zebra-app                 # opens an empty presentation
+cargo run --release -p zebra-app -- talk.zebra   # opens a file
+```
+
+To try it right away, choose **File › New from Sample** for a short tour
+presentation, then press **F5**.
+
+Options:
+
+| Flag | What it does |
+|---|---|
+| `--api` | Let AI agents drive this window over a local Unix socket (off by default). A pill in the top bar shows when an agent is connected. |
+| `--api-socket <path>` | Use this socket path instead of the default. |
+| `--agent-permission observe\|edit\|full` | Set what a connected agent may do (default `edit`). You can change it later from the agent pill. |
+| `--headless` | Run with no window, API only (for batch generation). `zebractl` starts this mode for you. |
+
+The binary is `target/release/zebra`. It builds and runs on Linux too, which
+is how CI and the UI tests run, but macOS is the primary platform.
+
+## Using it
+
+**Editing**
+- **Double-click anywhere** to write. A small toolbar lets you pick Title, Subtitle or Body, plus bold, italic and bullets. Press Esc or click outside when you're done.
+- **Click** to select. Drag the object to move it, drag a corner to scale it, and drag the zebra-striped handle to rotate it (hold ⇧ to snap to 15°). Guides appear when edges or centres line up; hold ⌥ to turn snapping off.
+- **Frames** (F, and press F again to cycle bracket, circle, rectangle, invisible): draw a frame around content to group it, and moving the frame moves what's inside. Double-click a frame, or click its name tag, to zoom into it.
+- The **tool bar** at the bottom has Select, Hand, Text, Frame, Rectangle, Ellipse, Line, Arrow, Pen and Image. You can also drop image files onto the canvas.
+- The **properties panel** on the right shows position, scale, rotation, text style, theme colours, shape fill and stroke, frame style, lock, order, "fade in on step N" and "add to path".
+- **Themes**: Classic, Chalkboard, Blueprint, Paper and Night (top bar).
+- **Navigating**: on a trackpad, two-finger scroll pans and pinch zooms. A mouse wheel zooms around the cursor. Space-drag or middle-drag pans. The + − ⌂ buttons on the right edge zoom in, zoom out and fit everything. You can change the scroll behaviour in the shortcuts sheet (`?`).
+
+**Path**
+- The left sidebar lists the steps as numbered thumbnails. Click a step to fly there, drag steps to reorder them, hover a step to delete it, and right-click for more options.
+- **+ Add selection** / **+ Add current view** (⇧⌘A) adds a step. **Edit path** (P) shows numbered badges on the canvas: click objects to append steps, and drag a badge onto another object to retarget it.
+
+**Presenting**
+- **Present** (F5 or ⌘↵) starts from the beginning. ⇧F5 or ⌥⌘↵ starts from the current step.
+- → ↓ Space PageDown Enter or a click goes to the next step or fade-in. ← ↑ PageUp Backspace goes back. Home or O shows the overview. B and W blank the screen black or white. Esc returns to the editor at the current step.
+- You can scroll, drag or click any object to explore off the path. The next key brings you back to the path.
+- View › Reduce Motion replaces the swooping flights with short, gentle ones.
+
+**Files**: `.zebra` documents (a zip holding readable JSON plus image files).
+Open Recent is in the File menu. While there are unsaved changes, Zebra
+autosaves a sidecar file every 30 s and offers to restore it. Export PDF
+produces one page per step.
+
+## Keyboard shortcuts
+
+| Action | Keys |
+|---|---|
+| Tools | V select · H hand · T text · F frame · R rectangle · O ellipse · L line · A arrow · D pen · I image |
+| Undo / Redo | ⌘Z / ⇧⌘Z |
+| Copy / Cut / Paste / Duplicate | ⌘C / ⌘X / ⌘V / ⌘D |
+| Delete | ⌫ |
+| Select all / Deselect | ⌘A / Esc |
+| Nudge | Arrow keys (⇧ = 10×), relative to the screen |
+| Forward / Backward / Front / Back | ] / [ / ⌘] / ⌘[ |
+| Frame selection / Lock | ⌘G / ⌘L |
+| Fit all / Zoom to selection / 100% | ⇧1 / ⇧2 / ⌘0 |
+| Zoom in / out | ⌘= / ⌘− |
+| Edit path / Add to path | P / ⇧⌘A |
+| Present from start / current step | F5, ⌘↵ / ⇧F5, ⌥⌘↵ |
+| Command palette (optional) | ⌘K |
+| Shortcut sheet | ? |
+| New / Open / Save / Save As / Export PDF | ⌘N / ⌘O / ⌘S / ⇧⌘S / ⌘E |
+| Agent activity / Stop agent | ⌘J / ⌘. |
+
+## Working with an AI agent
+
+When Zebra runs with `--api`, an agent (for example Claude, through
+`zebractl mcp`) uses the same commands that the buttons and gestures use:
+
+- You see the agent's **violet cursor** with its name, a **dashed violet
+  selection** that is separate from yours, and a brief **violet flash** on
+  everything it changes.
+- The **agent pill** in the top bar lets you pause or stop the agent (⌘. stops
+  it), follow its camera, change its permission, or **revert everything it
+  did**. The **activity panel** (⌘J) lists each change it made. Click an entry
+  to zoom to the objects involved.
+- The agent can't move your camera, change your selection, take keyboard focus
+  or present unless you give it `full` permission. While you are dragging or
+  typing, the agent's edits wait. Each of the agent's changes is a normal,
+  labelled undo step.
+
+See [docs/API.md](docs/API.md) for the protocol, `zebractl` and the MCP setup.
+
+## Repository layout
+
+| Crate | Role |
+|---|---|
+| `crates/zebra-core` | Document model, the command bus (the only way to change state), undo, camera flights, themes, file format |
+| `crates/zebra-render` | Display list, text layout, vello GPU canvas, CPU captures, PDF export |
+| `crates/zebra-api` | JSON-RPC automation server, headless mode |
+| `crates/zebra-ctl` | `zebractl` CLI and MCP bridge |
+| `crates/zebra-app` | This app (`zebra` binary) |
+
+Tests: `cargo test --workspace`. The UI tests (`crates/zebra-app/tests/ui.rs`)
+drive the real app through `egui_kittest`. They cover double-click to write,
+drag-to-move as a single undo step, present-mode keys, tool shortcuts, drawing
+a frame around content, and path editing.

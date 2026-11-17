@@ -26,14 +26,13 @@ pub struct Thumbs {
 }
 
 impl Thumbs {
-    pub fn new(ctx: egui::Context) -> Self {
+    pub fn new(ctx: egui::Context, renderer: std::sync::Arc<zebra_render::Renderer>) -> Self {
         let (tx, jrx) = channel::<Job>();
         let (rtx, rx) = channel();
         let wake = ctx.clone();
         std::thread::Builder::new()
             .name("zebra-thumbs".into())
             .spawn(move || {
-                let renderer = zebra_render::Renderer::new();
                 while let Ok(mut job) = jrx.recv() {
                     // Coalesce: only render the newest request.
                     while let Ok(j) = jrx.try_recv() {
