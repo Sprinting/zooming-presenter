@@ -13,6 +13,7 @@ pub mod editor;
 pub mod error;
 pub mod geom;
 pub mod io;
+pub mod media;
 pub mod model;
 pub mod theme;
 pub mod view;

@@ -32,17 +32,69 @@ pub struct Document {
     pub assets: BTreeMap<String, Asset>,
     /// Counter for readable ids (`t1`, `f2`, ...).
     pub next_id: u64,
+    /// Background music for the whole presentation (plays while presenting).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soundtrack: Option<Soundtrack>,
+}
+
+/// Background music: an audio asset that plays while presenting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Soundtrack {
+    /// Audio asset key.
+    pub asset: String,
+    /// Start again when it ends.
+    #[serde(default = "yes", rename = "loop")]
+    pub looping: bool,
+    /// 0..1.
+    #[serde(default = "d_volume")]
+    pub volume: f64,
+    /// Human label (usually the file name).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+}
+
+fn yes() -> bool {
+    true
+}
+fn d_volume() -> f64 {
+    0.6
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Asset {
-    /// Lower-case extension: png, jpg, webp, gif, svg.
+    /// Lower-case extension: png, jpg, webp, gif (images), mp4, mov, m4v
+    /// (video), mp3, m4a, aac, wav (audio).
     pub ext: String,
     /// The encoded file (PNG, JPEG...). Assets from a saved `.zebra` are
     /// memory-mapped from it, not copied into RAM.
     pub bytes: AssetBytes,
+    /// Pixels for images and video; 0 for audio.
     pub width: u32,
     pub height: u32,
+}
+
+impl Asset {
+    pub fn media_kind(&self) -> MediaKind {
+        MediaKind::from_ext(&self.ext)
+    }
+}
+
+/// What an asset holds, from its extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaKind {
+    Image,
+    Video,
+    Audio,
+}
+
+impl MediaKind {
+    pub fn from_ext(ext: &str) -> MediaKind {
+        match ext {
+            "mp4" | "mov" | "m4v" => MediaKind::Video,
+            "mp3" | "m4a" | "aac" | "wav" => MediaKind::Audio,
+            _ => MediaKind::Image,
+        }
+    }
 }
 
 /// Bytes of an asset: either owned (just inserted, not saved yet) or a
@@ -112,6 +164,7 @@ impl Default for Document {
             path: vec![],
             assets: BTreeMap::new(),
             next_id: 1,
+            soundtrack: None,
         }
     }
 }
@@ -144,6 +197,8 @@ pub enum ElementKind {
     Text(TextData),
     Shape(ShapeData),
     Image(ImageData),
+    /// A video clip (mp4/mov). Shows its poster until played.
+    Video(VideoData),
     /// Freehand pen / highlighter stroke. Points are local coordinates.
     Ink(InkData),
 }
@@ -155,6 +210,7 @@ impl ElementKind {
             ElementKind::Text(_) => "text",
             ElementKind::Shape(_) => "shape",
             ElementKind::Image(_) => "image",
+            ElementKind::Video(_) => "video",
             ElementKind::Ink(_) => "ink",
         }
     }
@@ -164,6 +220,7 @@ impl ElementKind {
             ElementKind::Text(_) => "t",
             ElementKind::Shape(_) => "s",
             ElementKind::Image(_) => "i",
+            ElementKind::Video(_) => "v",
             ElementKind::Ink(_) => "k",
         }
     }
@@ -273,6 +330,87 @@ pub struct ImageData {
     pub asset: String,
     #[serde(default)]
     pub alt: String,
+    /// The visible part of the picture, as fractions of its full size.
+    /// None shows the whole picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<Crop>,
+    /// Outline the picture is clipped to.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mask: ImageMask,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+/// A crop rectangle in fractions (0..1) of the source picture.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Crop {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl Crop {
+    pub const FULL: Crop = Crop { x: 0.0, y: 0.0, w: 1.0, h: 1.0 };
+    /// Clamped into the picture, at least 1% wide and high.
+    pub fn clamped(self) -> Crop {
+        let w = self.w.clamp(0.01, 1.0);
+        let h = self.h.clamp(0.01, 1.0);
+        let x = self.x.clamp(0.0, 1.0 - w);
+        let y = self.y.clamp(0.0, 1.0 - h);
+        Crop { x, y, w, h }
+    }
+    pub fn is_full(&self) -> bool {
+        (self.x.abs() + self.y.abs() + (1.0 - self.w).abs() + (1.0 - self.h).abs()) < 1e-9
+    }
+    pub fn center(&self) -> (f64, f64) {
+        (self.x + self.w / 2.0, self.y + self.h / 2.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageMask {
+    #[default]
+    Rectangle,
+    Rounded,
+    Circle,
+}
+
+/// A video clip. The bytes live in an asset like images do.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VideoData {
+    /// Video asset key (mp4/mov).
+    pub asset: String,
+    /// Image asset shown while the video isn't playing. None: a frame
+    /// from the video where the platform can make one, else a placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
+    /// Plays by itself when its path step is reached while presenting.
+    #[serde(default = "yes")]
+    pub autoplay: bool,
+    #[serde(default, rename = "loop")]
+    pub looping: bool,
+    #[serde(default)]
+    pub muted: bool,
+    /// Trim: start time, seconds.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub start: f64,
+    /// Trim: end time, seconds. None plays to the end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<f64>,
+    /// Length in seconds, read from the file (0 when unknown).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub duration: f64,
+    /// Description for people who can't see it, and a label.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub alt: String,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -298,6 +436,9 @@ pub struct PathStep {
     /// Transition duration override, seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    /// Voice-over: an audio asset that plays when this step is reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voiceover: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -374,6 +515,7 @@ impl Element {
                 })
                 .unwrap_or_else(|| "frame".into()),
             ElementKind::Image(i) if !i.alt.is_empty() => truncate(&i.alt, 40),
+            ElementKind::Video(v) if !v.alt.is_empty() => truncate(&v.alt, 40),
             k => k.type_name().into(),
         }
     }
@@ -435,6 +577,34 @@ impl Document {
                 return id;
             }
         }
+    }
+    /// Every asset key the document refers to (elements, posters,
+    /// soundtrack, voice-overs).
+    pub fn used_assets(&self) -> std::collections::BTreeSet<&str> {
+        let mut out = std::collections::BTreeSet::new();
+        for e in self.elements.values() {
+            match &e.kind {
+                ElementKind::Image(i) => {
+                    out.insert(i.asset.as_str());
+                }
+                ElementKind::Video(v) => {
+                    out.insert(v.asset.as_str());
+                    if let Some(p) = &v.poster {
+                        out.insert(p.as_str());
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(s) = &self.soundtrack {
+            out.insert(s.asset.as_str());
+        }
+        for s in &self.path {
+            if let Some(v) = &s.voiceover {
+                out.insert(v.as_str());
+            }
+        }
+        out
     }
     /// Steps where an element is used (as target or build).
     pub fn steps_using(&self, id: &str) -> Vec<usize> {

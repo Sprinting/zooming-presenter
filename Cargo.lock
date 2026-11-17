@@ -5666,6 +5666,7 @@ name = "zebra-core"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "dirs",
  "image",
  "json-patch",
  "jsonptr",

@@ -238,7 +238,7 @@ fn italic_rotation_and_deep_text_samples() {
     let bg = Theme::resolve("chalkboard").color(&Theme::resolve("chalkboard").background);
     assert!(img.pixels().filter(|p| !close(p.0, bg, 3)).count() > 2000);
     let pdf = {
-        ed.doc.path = vec![PathStep { target: StepTarget::Element { id: "a".into() }, builds: vec![], notes: String::new(), duration: None }];
+        ed.doc.path = vec![PathStep { target: StepTarget::Element { id: "a".into() }, builds: vec![], notes: String::new(), duration: None, voiceover: None }];
         r.export_pdf(&ed).unwrap()
     };
     std::fs::write(out_dir().join("italic.pdf"), &pdf).unwrap();

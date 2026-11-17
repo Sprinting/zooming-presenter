@@ -87,6 +87,77 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<ElementId>,
     },
+    /// Insert a video (mp4/mov, H.264 or HEVC). Give `path` (a file on
+    /// this computer; it is copied, never read into memory) or `data_base64`.
+    /// It shows `poster_base64` (PNG/JPEG) until played.
+    AddVideo {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        data_base64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
+        /// World width; height follows the aspect ratio.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f64>,
+        #[serde(default)]
+        alt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        poster_base64: Option<String>,
+        /// Play by itself when its step is reached while presenting.
+        #[serde(default = "yes")]
+        autoplay: bool,
+        #[serde(default, rename = "loop")]
+        looping: bool,
+        #[serde(default)]
+        muted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<ElementId>,
+    },
+    /// Swap the picture of an image, keeping its place and width. The
+    /// height follows the new picture; crop is reset, the mask is kept.
+    ReplaceImage {
+        id: ElementId,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        data_base64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    /// Set a video's poster picture. No data and no path clears it.
+    SetPoster {
+        id: ElementId,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        data_base64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    /// Background music for the presentation. With data or a path the track
+    /// is replaced; without, only the given settings change.
+    SetSoundtrack {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        data_base64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default, rename = "loop", skip_serializing_if = "Option::is_none")]
+        looping: Option<bool>,
+        /// 0..1.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        volume: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    RemoveSoundtrack,
+    /// Voice-over for a path step (plays when the step is reached). No data
+    /// and no path removes it.
+    SetVoiceover {
+        index: usize,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        data_base64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     /// Freehand pen / highlighter stroke in world coordinates.
     AddInk {
         points: Vec<[f64; 2]>,
@@ -343,9 +414,28 @@ pub struct ElementPatch {
     // frame
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_style: Option<FrameStyle>,
-    // image
+    // image / video
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alt: Option<String>,
+    /// Visible part of an image in fractions of the picture; the visible
+    /// content stays where it is. `{"x":0,"y":0,"w":1,"h":1}` uncrops.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<Crop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask: Option<ImageMask>,
+    // video
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autoplay: Option<bool>,
+    #[serde(default, rename = "loop", skip_serializing_if = "Option::is_none")]
+    pub looping: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muted: Option<bool>,
+    /// Trim start, seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<f64>,
+    /// Trim end, seconds; negative clears it (play to the end).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<f64>,
 }
 
 /// Session commands: camera, selection, tools, presenting. Not undoable.

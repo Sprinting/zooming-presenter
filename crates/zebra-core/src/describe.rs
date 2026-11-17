@@ -44,8 +44,33 @@ fn one_line(ed: &Editor, e: &Element) -> String {
         ElementKind::Shape(d) => {
             let _ = write!(s, " {}", serde_json::to_value(d.shape).unwrap().as_str().unwrap());
         }
-        ElementKind::Image(i) if !i.alt.is_empty() => {
-            let _ = write!(s, " alt={:?}", truncate(&i.alt, 40));
+        ElementKind::Image(i) => {
+            if !i.alt.is_empty() {
+                let _ = write!(s, " alt={:?}", truncate(&i.alt, 40));
+            }
+            if i.crop.is_some() {
+                s.push_str(" cropped");
+            }
+            if i.mask != ImageMask::Rectangle {
+                let _ = write!(s, " mask {}", serde_json::to_value(i.mask).unwrap().as_str().unwrap());
+            }
+        }
+        ElementKind::Video(v) => {
+            if !v.alt.is_empty() {
+                let _ = write!(s, " alt={:?}", truncate(&v.alt, 40));
+            }
+            if v.duration > 0.0 {
+                let _ = write!(s, " {}s", r(v.duration));
+            }
+            if v.start > 0.0 || v.end.is_some() {
+                let end = v.end.map(|e| r(e).to_string()).unwrap_or_else(|| "end".into());
+                let _ = write!(s, " trim {}–{end}", r(v.start));
+            }
+            for (on, w) in [(v.autoplay, "autoplay"), (v.looping, "loop"), (v.muted, "muted")] {
+                if on {
+                    let _ = write!(s, " {w}");
+                }
+            }
         }
         _ => {}
     }
@@ -87,6 +112,10 @@ pub fn describe(ed: &Editor) -> String {
         d.path.len(),
         serde_json::to_value(ed.view.mode).unwrap().as_str().unwrap()
     );
+    if let Some(t) = &d.soundtrack {
+        let name = if t.name.is_empty() { "audio" } else { t.name.as_str() };
+        let _ = writeln!(out, "Soundtrack: {name:?} volume {}{}", r(t.volume), if t.looping { " loop" } else { "" });
+    }
     if !d.path.is_empty() {
         out.push_str("Path:\n");
         for (i, s) in d.path.iter().enumerate() {
@@ -101,6 +130,9 @@ pub fn describe(ed: &Editor) -> String {
             }
             if !s.notes.is_empty() {
                 let _ = write!(out, " notes: {:?}", truncate(&s.notes, 50));
+            }
+            if s.voiceover.is_some() {
+                out.push_str(" voice-over");
             }
             out.push('\n');
         }
@@ -204,6 +236,7 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                         let hay = match &e.kind {
                             ElementKind::Text(t) => t.text.to_lowercase(),
                             ElementKind::Image(i) => i.alt.to_lowercase(),
+                            ElementKind::Video(v) => v.alt.to_lowercase(),
                             _ => String::new(),
                         };
                         hay.contains(n.as_str()) || e.name.to_lowercase().contains(n.as_str())
@@ -234,7 +267,7 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                         StepTarget::Overview => "overview".into(),
                     };
                     json!({ "index": i, "label": label, "target": s.target, "builds": s.builds, "notes": s.notes,
-                            "duration": s.duration, "camera": ed.camera_for_step(i) })
+                            "duration": s.duration, "voiceover": s.voiceover, "camera": ed.camera_for_step(i) })
                 })
                 .collect();
             json!({ "steps": steps })
