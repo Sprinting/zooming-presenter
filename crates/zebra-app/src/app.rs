@@ -63,8 +63,12 @@ pub struct ZebraApp {
     /// Socket override from `--api-socket` (dev); used whenever AI control
     /// is switched on.
     pub api_socket: Option<PathBuf>,
-    /// The human's saved choice for "Let AI agents control Zebra".
+    /// AI control is on right now ("Let AI agents control Zebra").
     pub ai_enabled: bool,
+    /// The person's saved choice, restored at the next launch. Only the
+    /// person's own toggle (and an agent's `disconnect`) changes it; a
+    /// developer `--api` launch never does.
+    pub ai_saved: bool,
     /// An agent called `disconnect`: switch off at this time (after its reply
     /// has been written).
     pub ai_off_at: Option<f64>,
@@ -177,6 +181,7 @@ impl ZebraApp {
             api_error: None,
             api_socket: None,
             ai_enabled: false,
+            ai_saved: false,
             ai_off_at: None,
             open_ai_panel: false,
             ctx: ctx.clone(),
@@ -237,11 +242,16 @@ impl ZebraApp {
             media: Default::default(),
         };
         let saved_ai: bool = storage.and_then(|s| eframe::get_value(s, "ai_enabled")).unwrap_or(false);
-        if let Some(api_opts) = opts.api {
+        app.ai_saved = saved_ai;
+        // The first time is always a person: until someone has switched AI
+        // control on in this window, neither a launch flag nor a saved
+        // setting turns it on.
+        let granted = zebra_api::discovery::human_has_granted();
+        if let Some(api_opts) = opts.api.filter(|_| granted) {
             app.api_socket = api_opts.socket.clone();
             app.editor.view.agent_permission = api_opts.permission;
             app.set_ai_control(true);
-        } else if saved_ai {
+        } else if saved_ai && granted {
             if let Some(p) = storage.and_then(|s| eframe::get_value::<String>(s, "agent_permission")) {
                 app.editor.view.agent_permission = parse_permission(&p);
             }
@@ -586,7 +596,14 @@ impl ZebraApp {
             }
             PlaybackOptions => self.stage.show_playback = true,
             ToggleAiControl => {
+                // Only the person reaches this (toolbar, menu, Settings).
                 let on = !self.ai_enabled;
+                if on {
+                    if let Err(e) = zebra_api::discovery::record_human_grant() {
+                        eprintln!("zebra: couldn't record the AI control grant: {e}");
+                    }
+                }
+                self.ai_saved = on;
                 self.set_ai_control(on);
             }
             ToggleActivity => self.show_activity = !self.show_activity,
@@ -965,17 +982,16 @@ impl ZebraApp {
                 self.ai_off_at = Some(self.now() + 0.3);
                 ctx.request_repaint_after(std::time::Duration::from_millis(350));
             }
-            // While agents are connected keep a slow heartbeat so presence
-            // (flashes, cursor) animates even when the waker is quiet.
-            if !server.clients().is_empty() {
-                ctx.request_repaint_after(std::time::Duration::from_millis(250));
-            }
+            // No heartbeat while an agent is connected: the server wakes us on
+            // connect, request and disconnect, and each presence animation
+            // (flash, cursor, busy dot, status bar) asks for its own frames.
         } else {
             self.editor.drain_events();
         }
         if let Some(t) = self.ai_off_at {
             if self.now() >= t {
                 let name = self.agent_name();
+                self.ai_saved = false;
                 self.set_ai_control(false);
                 self.toast(format!("{name} switched AI control off. Turn it back on from the AI button."));
             } else {
@@ -1274,7 +1290,7 @@ impl eframe::App for ZebraApp {
         eframe::set_value(storage, "snapping", &self.snapping);
         eframe::set_value(storage, "default_theme", &self.default_theme);
         eframe::set_value(storage, "settings_pane", &self.settings_pane);
-        eframe::set_value(storage, "ai_enabled", &self.ai_enabled);
+        eframe::set_value(storage, "ai_enabled", &self.ai_saved);
         eframe::set_value(storage, "agent_permission", &permission_name(self.editor.view.agent_permission).to_string());
         self.stage.save(storage);
     }

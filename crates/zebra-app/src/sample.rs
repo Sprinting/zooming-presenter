@@ -122,7 +122,11 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             // Debug: AI popover open (off), or with AI control switched on.
             "aipanel" => app.open_ai_panel = true,
             "aion" => {
-                app.set_ai_control(true);
+                // Debug demo, but still only after a person has switched AI
+                // control on once (see discovery::human_has_granted).
+                if zebra_api::discovery::human_has_granted() {
+                    app.set_ai_control(true);
+                }
                 app.open_ai_panel = true;
             }
             "select" => {

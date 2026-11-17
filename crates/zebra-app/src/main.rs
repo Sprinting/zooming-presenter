@@ -53,7 +53,14 @@ fn main() -> anyhow::Result<()> {
         other => anyhow::bail!("--agent-permission must be observe, edit or full (got '{other}')"),
     };
     let api_opts = ApiOptions { socket: cli.api_socket.clone(), permission };
+    // The first time is always a person: no flag turns AI control on until
+    // someone has switched it on in Zebra's window once.
+    let granted = zebra_api::discovery::human_has_granted();
+    const NOT_GRANTED: &str = "AI control stays off until a person switches it on in Zebra once (the AI button in the toolbar). After that, --api and --headless work.";
     if cli.headless {
+        if !granted {
+            anyhow::bail!("{NOT_GRANTED}");
+        }
         return zebra_api::run_headless(api_opts, cli.file);
     }
     let screenshot = match &cli.screenshot_after {
@@ -61,7 +68,10 @@ fn main() -> anyhow::Result<()> {
         _ => None,
     };
     let (w, h) = cli.size.split_once('x').and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))).unwrap_or((1440.0, 900.0));
-    let opts = AppOptions { open: cli.file, api: cli.api.then_some(api_opts), screenshot, demo: cli.demo };
+    if cli.api && !granted {
+        eprintln!("zebra: {NOT_GRANTED}");
+    }
+    let opts = AppOptions { open: cli.file, api: (cli.api && granted).then_some(api_opts), screenshot, demo: cli.demo };
 
     let background = cli.background || std::env::var_os("ZEBRA_BACKGROUND").is_some_and(|v| v != "0");
     let native = eframe::NativeOptions {

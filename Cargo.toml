@@ -33,7 +33,7 @@ krilla = "0.8"
 pollster = "1"
 
 # ui
-eframe = { version = "0.37", default-features = false, features = ["wgpu", "accesskit", "default_fonts", "persistence"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "accesskit", "clipboard", "default_fonts", "persistence"] }
 egui = "0.37"
 egui-wgpu = "0.37"
 muda = "0.21"

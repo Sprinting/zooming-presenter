@@ -63,6 +63,25 @@ pub fn app_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("Zebra")
 }
 
+/// Written the first time a person switches on AI control in Zebra's own
+/// window. Until it exists, launch flags (`--api`, `--headless`, debug
+/// demos) can't switch AI control on: the first time is always a person.
+pub fn human_grant_file() -> PathBuf {
+    app_dir().join("ai-control-granted")
+}
+
+/// Has a person ever switched on AI control in Zebra's window?
+pub fn human_has_granted() -> bool {
+    human_grant_file().exists()
+}
+
+/// Record that a person switched on AI control. Only Zebra's own UI calls
+/// this; no API method or launch flag reaches it.
+pub fn record_human_grant() -> std::io::Result<()> {
+    fs::create_dir_all(app_dir())?;
+    fs::write(human_grant_file(), b"")
+}
+
 pub fn instances_dir() -> PathBuf {
     app_dir().join("instances")
 }

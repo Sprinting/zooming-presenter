@@ -16,6 +16,12 @@ BIN=target/release
 WORK=$(mktemp -d)
 trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$WORK"' EXIT
 FAIL=0
+# A private data dir: the measured instances never touch your real Zebra
+# settings or discovery files. Its "a person switched AI control on" marker
+# is set here because --api is refused until one exists (this is a
+# throwaway instance with no window of yours in it).
+export ZEBRA_DATA_DIR="$WORK/data"
+mkdir -p "$ZEBRA_DATA_DIR" && : > "$ZEBRA_DATA_DIR/ai-control-granted"
 MAC=0; [[ "$(uname)" == "Darwin" ]] && MAC=1
 
 run_app() { # $1 = file or "", sets SOCK
@@ -47,6 +53,12 @@ sleep 14   # past launch, so the last 10 s are pure idle
 P=$(perf)
 check "heap MB" "$(echo "$P" | field '["heap_mb"]')" "<=" 40
 check "repaints in 10 s idle" "$(echo "$P" | field '["repaints_last_10s"]')" "<=" 2
+echo "       repaint causes: $(echo "$P" | field '.get("repaint_causes_last_10s", {})')"
+# The perf call above left an agent connected (zebractl keeps one
+# connection per agent). Idle must stay idle with it open.
+sleep 11
+P=$(perf)
+check "repaints in 10 s idle, agent connected" "$(echo "$P" | field '["repaints_last_10s"]')" "<=" 2
 echo "       repaint causes: $(echo "$P" | field '.get("repaint_causes_last_10s", {})')"
 stop
 

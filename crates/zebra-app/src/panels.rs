@@ -417,7 +417,13 @@ fn ai_item(app: &mut ZebraApp, ui: &mut Ui, _p: &Palette) {
     let r = w::toolbar_item(ui, Icon::Sparkles, &label, ToolbarState { tint, active: on && !connected, ..st() });
     if connected && !paused {
         // a small live dot on the glyph, like a status item
-        let busy = app.editor.activity.back().is_some_and(|a| a.origin.is_agent() && app.editor.view.now - a.time < 2.0);
+        const BUSY: f64 = 2.0;
+        let since = app.editor.activity.back().filter(|a| a.origin.is_agent()).map(|a| app.editor.view.now - a.time);
+        let busy = since.is_some_and(|s| s < BUSY);
+        if let Some(s) = since.filter(|_| busy) {
+            // Turn the dot back to green when the agent goes quiet.
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(BUSY - s + 0.05));
+        }
         let c = Pos2::new(r.rect.center().x + 10.0, r.rect.top() + 6.0);
         ui.painter().circle(c, 3.5, if busy { AGENT } else { Color32::from_rgb(0x34, 0xc7, 0x59) }, Stroke::new(1.0, Palette::of(ui.ctx()).toolbar));
     }

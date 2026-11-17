@@ -1855,6 +1855,7 @@ pub fn draw_agent_presence(app: &ZebraApp, painter: &Painter) -> Option<ERect> {
             continue;
         }
         if let Some(e) = ed.doc.get(id) {
+            painter.ctx().request_repaint();
             let a = (1.0 - age / 1.2) as f32;
             let mut q = quad_screen(app, e.corners());
             q.push(q[0]);
