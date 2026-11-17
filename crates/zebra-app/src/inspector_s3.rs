@@ -59,7 +59,7 @@ pub fn sections(insp: &mut Insp, ui: &mut Ui, tab: Tab) {
             });
         }
         ElementKind::Connector(c) => {
-            w::section(ui, "Connector", |ui| {
+            w::section(ui, "Route", |ui| {
                 let mut r = c.route;
                 let wdt = ui.available_width();
                 let routes = [(Route::Straight, Seg::Text("Straight")), (Route::Elbow, Seg::Text("Elbow")), (Route::Curved, Seg::Text("Curved"))];
