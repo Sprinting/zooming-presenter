@@ -230,6 +230,7 @@ pub(crate) fn build_with(
             }
         }
     }
+    crate::clip::clip_items(&mut list.items, width_px as f64, height_px as f64);
     list
 }
 

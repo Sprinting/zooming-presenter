@@ -50,6 +50,7 @@ pub struct SceneOptions {
 }
 
 pub mod display;
+mod clip;
 pub use display::DisplayList;
 
 pub mod text;

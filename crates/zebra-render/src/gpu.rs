@@ -55,12 +55,13 @@ pub struct GpuRenderer {
     scene: Scene,
 }
 
+fn renderer_options() -> RendererOptions {
+    RendererOptions { antialiasing_support: AaSupport::area_only(), ..Default::default() }
+}
+
 impl GpuRenderer {
     pub fn new(device: &wgpu::Device) -> Result<Self, String> {
-        let renderer = vello::Renderer::new(
-            device,
-            RendererOptions { antialiasing_support: AaSupport::area_only(), ..Default::default() },
-        )
+        let renderer = vello::Renderer::new(device, renderer_options())
         .map_err(|e| format!("vello init failed: {e}"))?;
         Ok(GpuRenderer { renderer, scene: Scene::new() })
     }
@@ -82,9 +83,21 @@ impl GpuRenderer {
             height: list.height_px,
             antialiasing_method: AaConfig::Area,
         };
-        self.renderer
-            .render_to_texture(device, queue, &self.scene, view, &params)
-            .map_err(|e| format!("vello render failed: {e}"))
+        // Catch validation errors (e.g. a buffer over the device's binding
+        // limit) instead of letting wgpu's default handler panic, and rebuild
+        // vello afterwards: a failed render can leave its resources (image
+        // atlas included) in a bad state, which showed as a black canvas and
+        // missing images until restart.
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let res = self.renderer.render_to_texture(device, queue, &self.scene, view, &params);
+        let gpu_err = pollster::block_on(scope.pop());
+        if let Some(e) = gpu_err {
+            if let Ok(r) = vello::Renderer::new(device, renderer_options()) {
+                self.renderer = r;
+            }
+            return Err(format!("vello render failed, renderer reset: {e}"));
+        }
+        res.map_err(|e| format!("vello render failed: {e}"))
     }
 
     /// Render off-screen and read back straight RGBA8 rows (for tests and
@@ -217,10 +230,10 @@ impl VelloCanvas {
             l.height_px = h;
         }
         if let Err(e) = gpu.render(&rs.device, &rs.queue, &list_ref, &target.view) {
-            if !self.reported {
-                eprintln!("zebra-render: {e}");
-                self.reported = true;
-            }
+            eprintln!("zebra-render: {e}");
+            // Show the background rather than a stale or black frame.
+            let bg = list.background;
+            ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]));
             return;
         }
         if let Some(id) = self.texture_id {
