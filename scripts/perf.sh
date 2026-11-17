@@ -64,6 +64,8 @@ sleep 13
 P=$(perf)
 check "repaints in 10 s idle, agent connected" "$(echo "$P" | field '["repaints_last_10s"]')" "<=" 2
 echo "       repaint causes: $(echo "$P" | field '.get("repaint_causes_last_10s", {})')"
+echo "       frames, seconds ago: $(echo "$P" | field '.get("frames_last_10s_ago", [])')"
+echo "       causes, seconds ago: $(echo "$P" | field '.get("repaint_causes_last_10s_ago", [])')"
 stop
 
 echo "== Dense deck (2,000 elements, 50 photos)"

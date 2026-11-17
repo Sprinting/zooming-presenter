@@ -158,6 +158,10 @@ impl PerfStats {
             "repaints_last_10s": self.repaints_in(now, 10.0),
             "caches": self.caches,
             "repaint_causes_last_10s": causes,
+            // When each recent frame was drawn and why, seconds before now,
+            // oldest first: tells a 2 s timer from a burst of requests.
+            "frames_last_10s_ago": self.frames.iter().filter(|(t, _)| now - t <= 10.0).map(|(t, _)| ((now - t) * 100.0).round() / 100.0).collect::<Vec<_>>(),
+            "repaint_causes_last_10s_ago": self.repaint_causes.iter().filter(|(t, _)| now - t <= 10.0).map(|(t, c)| json!([((now - t) * 100.0).round() / 100.0, c])).collect::<Vec<_>>(),
         })
     }
 }
