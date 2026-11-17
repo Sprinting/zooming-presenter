@@ -122,6 +122,8 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             "present" => {
                 let _ = app.editor.view(ViewCommand::Present { step: Some(1) }, H);
                 let _ = app.editor.view(ViewCommand::Next, H);
+                // Keep the step counter visible for screenshots.
+                app.last_pointer_move = 1e9;
             }
             "detail" => {
                 let _ = app.editor.view(ViewCommand::Present { step: Some(3) }, H);
