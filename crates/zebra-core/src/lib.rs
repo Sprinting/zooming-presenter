@@ -7,6 +7,7 @@
 
 pub mod camera;
 pub mod command;
+pub mod delta;
 pub mod describe;
 pub mod editor;
 pub mod error;

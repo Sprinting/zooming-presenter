@@ -139,3 +139,78 @@ fn style_change_keeps_text_inside_its_frame() {
     let fb = ed.doc.get("f").unwrap().bounds();
     assert!(fb.contains_rect(&ed.doc.get("t").unwrap().bounds()), "title overflowed its frame");
 }
+
+/// Every kind of edit, then undo one step at a time: each undo must land
+/// exactly on the document as it was before that step; redo must replay it.
+#[test]
+fn delta_undo_redo_matches_snapshots_step_by_step() {
+    let mut ed = sample();
+    let h = Origin::Human;
+    let agent = Origin::agent("bot");
+    let mut snaps = vec![ed.doc.clone()];
+    let steps: Vec<(Origin, serde_json::Value)> = vec![
+        (h.clone(), serde_json::json!({"op":"move","ids":["f1"],"dx":120,"dy":-40})),
+        (h.clone(), serde_json::json!({"op":"update","id":"t1","patch":{"text":"Hello again","bold":true}})),
+        (h.clone(), serde_json::json!({"op":"z_order","ids":["t1"],"order":"back"})),
+        (h.clone(), serde_json::json!({"op":"add_ink","points":[[0,0],[10,5],[20,0]]})),
+        (h.clone(), serde_json::json!({"op":"duplicate","ids":["f2"]})),
+        (h.clone(), serde_json::json!({"op":"move_step","from":0,"to":1})),
+        (h.clone(), serde_json::json!({"op":"set_theme","theme":"night"})),
+        (h.clone(), serde_json::json!({"op":"rotate","ids":["f2"],"degrees":15})),
+        (h.clone(), serde_json::json!({"op":"delete","ids":["f1"]})),
+        (h.clone(), serde_json::json!({"op":"auto_path"})),
+    ];
+    for (o, j) in steps {
+        ed.apply(cmd(j), o).unwrap();
+        ed.view.now += 5.0;
+        snaps.push(ed.doc.clone());
+    }
+    // Two quick agent edits group into one undo step.
+    ed.apply(cmd(serde_json::json!({"op":"set_title","title":"Agent 1"})), agent.clone()).unwrap();
+    ed.view.now += 0.5;
+    ed.apply(cmd(serde_json::json!({"op":"add_text","text":"from agent","x":5,"y":5})), agent.clone()).unwrap();
+    snaps.push(ed.doc.clone());
+    // A human drag as a transaction is one step.
+    ed.view.now += 5.0;
+    ed.begin("Drag", h.clone()).unwrap();
+    for _ in 0..10 {
+        ed.apply(cmd(serde_json::json!({"op":"move","ids":["f2"],"dx":3,"dy":1})), h.clone()).unwrap();
+    }
+    ed.commit();
+    snaps.push(ed.doc.clone());
+
+    let fin = ed.doc.clone();
+    for want in snaps.iter().rev().skip(1) {
+        ed.undo(h.clone()).unwrap().expect("an undo step");
+        assert!(ed.doc == *want, "undo did not restore the earlier document");
+    }
+    assert!(ed.undo(h.clone()).unwrap().is_some(), "the sample build itself is undoable");
+    assert!(ed.doc.elements.is_empty());
+    while ed.redo(h.clone()).unwrap().is_some() {}
+    assert!(ed.doc == fin, "redo all must replay to the final document");
+    assert!(ed.history_bytes() < 64 * 1024, "deltas, not snapshots: {} bytes", ed.history_bytes());
+}
+
+#[test]
+fn revert_agent_and_history_cap_still_work_with_deltas() {
+    let mut ed = sample();
+    let before = ed.doc.clone();
+    let bot = Origin::agent("bot");
+    for i in 0..3 {
+        ed.apply(cmd(serde_json::json!({"op":"move","ids":["f2"],"dx":10,"dy":0})), bot.clone()).unwrap();
+        ed.view.now += 5.0 + i as f64; // separate steps
+    }
+    assert_eq!(ed.revert_agent_session("bot"), 3);
+    assert!(ed.doc == before, "reverting the agent restores the document exactly");
+    for _ in 0..520 {
+        ed.apply(cmd(serde_json::json!({"op":"move","ids":["f1"],"dx":1,"dy":0})), Origin::Human).unwrap();
+    }
+    assert_eq!(ed.history().len(), 500);
+    let mut n = 0;
+    while ed.undo(Origin::Human).unwrap().is_some() {
+        n += 1;
+    }
+    assert_eq!(n, 500);
+    // The oldest 20 moves fell off the cap; the rest unwound exactly.
+    assert_eq!(ed.doc.elements["f1"].transform.x, before.elements["f1"].transform.x + 20.0);
+}

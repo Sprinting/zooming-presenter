@@ -77,8 +77,10 @@ pub struct HistoryEntry {
     pub revision: u64,
     pub time: f64,
     pub ids: Vec<ElementId>,
+    /// What changed, oldest first (several when agent steps were grouped).
+    /// Undo applies the backward patches newest first.
     #[serde(skip)]
-    before: Document,
+    deltas: Vec<crate::delta::Delta>,
     /// Unlabelled agent steps auto-group with the next one (within 2 s);
     /// explicitly labelled batches and transactions never merge.
     #[serde(skip)]
@@ -376,6 +378,8 @@ impl Editor {
         self.revision += 1;
         let now = self.view.now;
         self.redo.clear();
+        let delta = crate::delta::Delta::between(&before, &self.doc);
+        drop(before);
         let merged = allow_merge
             && origin.is_agent()
             && self.undo.last().is_some_and(|h| h.mergeable && h.origin == origin && now - h.time < AGENT_GROUP_SECS);
@@ -386,8 +390,9 @@ impl Editor {
             h.time = now;
             h.revision = self.revision;
             h.ids.extend(ids.iter().cloned());
+            h.deltas.push(delta);
         } else {
-            self.undo.push(HistoryEntry { label: label.clone(), origin: origin.clone(), revision: self.revision, time: now, ids: ids.clone(), before, mergeable: allow_merge });
+            self.undo.push(HistoryEntry { label: label.clone(), origin: origin.clone(), revision: self.revision, time: now, ids: ids.clone(), deltas: vec![delta], mergeable: allow_merge });
             if self.undo.len() > 500 {
                 self.undo.remove(0);
             }
@@ -403,9 +408,12 @@ impl Editor {
         self.check_agent(&origin)?;
         self.commit();
         let Some(h) = self.undo.pop() else { return Ok(None) };
-        let after = std::mem::replace(&mut self.doc, h.before.clone());
+        if let Err(e) = replay(&mut self.doc, h.deltas.iter().rev().map(|d| (&d.backward, &d.forward))) {
+            self.undo.push(h);
+            return Err(ZError::new("internal", format!("undo failed: {e}")));
+        }
         let label = h.label.clone();
-        self.redo.push(HistoryEntry { before: after, ..h });
+        self.redo.push(h);
         self.after_history_jump(&format!("Undo {label}"), origin);
         Ok(Some(label))
     }
@@ -414,11 +422,19 @@ impl Editor {
         self.check_agent(&origin)?;
         self.commit();
         let Some(h) = self.redo.pop() else { return Ok(None) };
-        let before = std::mem::replace(&mut self.doc, h.before.clone());
+        if let Err(e) = replay(&mut self.doc, h.deltas.iter().map(|d| (&d.forward, &d.backward))) {
+            self.redo.push(h);
+            return Err(ZError::new("internal", format!("redo failed: {e}")));
+        }
         let label = h.label.clone();
-        self.undo.push(HistoryEntry { before, ..h });
+        self.undo.push(h);
         self.after_history_jump(&format!("Redo {label}"), origin);
         Ok(Some(label))
+    }
+
+    /// Bytes held by undo and redo deltas (approximate, for diagnostics).
+    pub fn history_bytes(&self) -> usize {
+        self.undo.iter().chain(&self.redo).flat_map(|h| &h.deltas).map(|d| d.approx_bytes()).sum()
     }
 
     fn after_history_jump(&mut self, label: &str, origin: Origin) {
@@ -1610,4 +1626,20 @@ pub fn image_info(bytes: &[u8]) -> ZResult<(String, u32, u32)> {
         .into_dimensions()
         .map_err(|e| ZError::invalid(format!("cannot read image: {e}")))?;
     Ok((ext.into(), w, h))
+}
+
+/// Apply `(patch, inverse)` pairs in order. If one fails, roll back the ones
+/// already applied so `doc` is unchanged.
+fn replay<'a>(doc: &mut Document, steps: impl Iterator<Item = (&'a json_patch::Patch, &'a json_patch::Patch)>) -> Result<(), String> {
+    let mut done: Vec<&json_patch::Patch> = vec![];
+    for (p, inv) in steps {
+        if let Err(e) = crate::delta::apply(doc, p) {
+            for inv in done.into_iter().rev() {
+                let _ = crate::delta::apply(doc, inv);
+            }
+            return Err(e);
+        }
+        done.push(inv);
+    }
+    Ok(())
 }
