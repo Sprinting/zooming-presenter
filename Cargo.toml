@@ -29,6 +29,7 @@ vello = "0.12"
 vello_cpu = { version = "0.4", features = ["multithreading"] }
 parley = "0.13"
 krilla = "0.8"
+pollster = "1"
 
 # ui
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "accesskit", "default_fonts", "persistence"] }
