@@ -279,7 +279,7 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
                 issues.push(json!({"kind": "text_too_small", "id": e.id, "step": i,
                     "message": format!("text is {px:.0}px tall at step {} (viewport {}x{}); aim for 18px+", i + 1, ed.view.viewport.x, ed.view.viewport.y)}));
             }
-        } else if !d.path.is_empty() {
+        } else if !d.path.is_empty() && !d.path.iter().any(|s| matches!(s.target, StepTarget::Overview)) {
             issues.push(json!({"kind": "not_on_path", "id": e.id, "message": "text is not inside any path step; the audience only sees it in the overview"}));
         }
         if let Some(pf) = d.parent_frame(&e.id) {
