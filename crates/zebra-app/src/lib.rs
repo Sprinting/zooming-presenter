@@ -20,6 +20,7 @@ pub mod present;
 pub mod presenting;
 pub mod sample;
 pub mod settings;
+pub mod shell;
 pub mod sheets;
 pub mod sidebar;
 pub mod spell;
@@ -33,3 +34,16 @@ pub mod welcome;
 pub mod menu_mac;
 
 pub use app::{AppOptions, ZebraApp};
+
+/// How a document window looks: unified title bar on the Mac (the content
+/// runs under a transparent title bar, so the traffic lights and title sit
+/// in our 28 pt title row above the toolbar, panels::TITLE_ROW).
+pub fn window_builder(title: &str) -> egui::ViewportBuilder {
+    egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_app_id("dev.zebra.Zebra")
+        .with_min_inner_size([760.0, 480.0])
+        .with_drag_and_drop(true)
+        .with_fullsize_content_view(cfg!(target_os = "macos"))
+        .with_titlebar_shown(!cfg!(target_os = "macos"))
+}

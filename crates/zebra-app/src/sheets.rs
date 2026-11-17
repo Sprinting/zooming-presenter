@@ -136,7 +136,7 @@ pub struct OpenSheet {
 /// each frame, and AppKit wakes us when a button is pressed.
 /// Returns true while a sheet is open.
 #[cfg(target_os = "macos")]
-pub fn run_native(app: &mut ZebraApp, frame: &eframe::Frame) -> bool {
+pub fn run_native(app: &mut ZebraApp, frame: Option<&eframe::Frame>) -> bool {
     if !app.native_dialogs {
         return false;
     }
@@ -149,13 +149,18 @@ pub fn run_native(app: &mut ZebraApp, frame: &eframe::Frame) -> bool {
             [(a, _), (b, _), (c, _)] => rfd::MessageButtons::YesNoCancelCustom(a.clone(), b.clone(), c.clone()),
             _ => rfd::MessageButtons::Ok,
         };
-        let answer = rfd::AsyncMessageDialog::new()
+        let dialog = rfd::AsyncMessageDialog::new()
             .set_level(if s.warning { rfd::MessageLevel::Warning } else { rfd::MessageLevel::Info })
             .set_title(&s.title)
             .set_description(&s.message)
-            .set_buttons(buttons)
-            .set_parent(frame)
-            .show();
+            .set_buttons(buttons);
+        // Attached to its own window, whichever document window that is.
+        let dialog = match (frame, app.mac_sync.window.clone()) {
+            (Some(f), _) => dialog.set_parent(f),
+            (None, Some(w)) => dialog.set_parent(&crate::mac::NsParent(w)),
+            (None, None) => dialog,
+        };
+        let answer = dialog.show();
         app.open_sheet = Some(OpenSheet { kind: k, answer: Box::pin(answer) });
     }
     let ctx = app.ctx.clone();
@@ -198,11 +203,11 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
 
     // Block the window behind the sheet (sheets are document-modal), with
     // no grey scrim: AppKit only dims slightly.
-    egui::Area::new(egui::Id::unique("sheet-block")).order(egui::Order::Foreground).fixed_pos(content.min).show(ctx, |ui| {
+    egui::Area::new(app.uid("sheet-block")).order(egui::Order::Foreground).fixed_pos(content.min).show(ctx, |ui| {
         let r = ui.allocate_rect(content, egui::Sense::click_and_drag());
         ui.painter().rect_filled(r.rect, 0.0, Color32::from_black_alpha(if p.dark { 40 } else { 14 }));
     });
-    egui::Area::new(egui::Id::unique("sheet"))
+    egui::Area::new(app.uid("sheet"))
         .order(egui::Order::Foreground)
         .fixed_pos(Pos2::new(content.center().x - 130.0, top + 2.0))
         .show(ctx, |ui| {

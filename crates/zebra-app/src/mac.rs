@@ -39,7 +39,7 @@ pub fn refresh_accent() -> bool {
 }
 
 #[cfg(target_os = "macos")]
-pub use imp::sync_window;
+pub use imp::{NsParent, adopt_window, sync_window};
 
 #[cfg(target_os = "macos")]
 mod imp {
@@ -70,6 +70,39 @@ mod imp {
         url: Option<std::path::PathBuf>,
         focused: Option<bool>,
         activity: Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
+        /// The NSWindow of a window that has no eframe `Frame` (every
+        /// document window but the first).
+        pub window: Option<Retained<NSWindow>>,
+    }
+
+    /// A window as a parent for rfd sheets.
+    pub struct NsParent(pub Retained<NSWindow>);
+
+    impl raw_window_handle::HasWindowHandle for NsParent {
+        fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+            let view = self.0.contentView().ok_or(raw_window_handle::HandleError::Unavailable)?;
+            let ptr = std::ptr::NonNull::from(&*view).cast::<std::ffi::c_void>();
+            let raw = raw_window_handle::RawWindowHandle::AppKit(raw_window_handle::AppKitWindowHandle::new(ptr));
+            // SAFETY: the view lives as long as the window we hold.
+            Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
+        }
+    }
+
+    impl raw_window_handle::HasDisplayHandle for NsParent {
+        fn display_handle(&self) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+            Ok(raw_window_handle::DisplayHandle::appkit())
+        }
+    }
+
+    /// Find a new window by the placeholder title it was created with, and
+    /// keep it (call before anything retitles it).
+    pub fn adopt_window(app: &mut ZebraApp, title: &str) {
+        if app.mac_sync.window.is_some() {
+            return;
+        }
+        let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+        let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        app.mac_sync.window = ns_app.windows().iter().find(|w| w.title().to_string() == title);
     }
 
     fn ns_window(frame: &eframe::Frame) -> Option<Retained<NSWindow>> {
@@ -83,7 +116,7 @@ mod imp {
 
     /// Push document state to the window; refresh the accent when the app
     /// becomes active; hold an App Nap activity while presenting.
-    pub fn sync_window(app: &mut ZebraApp, frame: &eframe::Frame) {
+    pub fn sync_window(app: &mut ZebraApp, frame: Option<&eframe::Frame>) {
         let focused = app.ctx.input(|i| i.viewport().focused);
         let presenting = app.editor.view.mode == zebra_core::Mode::Present;
         let title = app.window_title();
@@ -112,7 +145,7 @@ mod imp {
         if s.title == title && s.edited == edited && s.url == url {
             return;
         }
-        let Some(win) = ns_window(frame) else { return };
+        let Some(win) = frame.and_then(ns_window).or_else(|| s.window.clone()) else { return };
         if s.title != title {
             win.setTitle(&NSString::from_str(&title));
             s.title = title;

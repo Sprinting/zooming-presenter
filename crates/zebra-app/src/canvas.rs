@@ -516,7 +516,7 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     if ui.input(|i| i.pointer.any_pressed() || i.smooth_scroll_delta != egui::Vec2::ZERO || i.zoom_delta() != 1.0) {
         app.canvas.refit_until = None;
     }
-    let resp = ui.interact(rect, egui::Id::unique("zebra-canvas"), Sense::click_and_drag());
+    let resp = ui.interact(rect, app.uid("zebra-canvas"), Sense::click_and_drag());
     paint_content(app, ui, rect, false);
     if crate::media_ui::crop_active(app) {
         crate::media_ui::crop_interact(app, ui, &resp);
@@ -1500,7 +1500,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     };
     let mut committed = false;
     let mut refocus = false;
-    let edit_id = egui::Id::unique("zebra-text-edit-field");
+    let edit_id = app.uid("zebra-text-edit-field");
     let focused = ctx.memory(|m| m.has_focus(edit_id));
 
     // Formatting actions, from the keyboard or the toolbar.
@@ -1546,7 +1546,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         _ => {}
     }
 
-    let area = egui::Area::new(egui::Id::unique("zebra-text-edit")).fixed_pos(pos).order(egui::Order::Foreground).constrain(false);
+    let area = egui::Area::new(app.uid("zebra-text-edit")).fixed_pos(pos).order(egui::Order::Foreground).constrain(false);
     let rich_now = t.rich.clone();
     let font_name = ts.font.clone();
     let theme2 = theme.clone();
@@ -1704,7 +1704,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     let pa = rich::paragraph_of(&t.rich, sa);
     let pb = rich::paragraph_of(&t.rich, sb);
     let cur_list = rich::para(&t.rich, pa).0;
-    let tb = egui::Area::new(egui::Id::unique("zebra-text-toolbar")).fixed_pos(tb_pos).order(egui::Order::Foreground).show(ctx, |ui| {
+    let tb = egui::Area::new(app.uid("zebra-text-toolbar")).fixed_pos(tb_pos).order(egui::Order::Foreground).show(ctx, |ui| {
         style::float_frame(&p).inner_margin(egui::Margin::same(3)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;

@@ -72,7 +72,7 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
     let mut open = true;
     let canvas = app.canvas.rect;
     egui::Window::new(if lib.replace.is_some() { crate::t!("library-window-replace-icon") } else { crate::t!("library-window-title") })
-        .id(egui::Id::unique("library"))
+        .id(app.uid("library"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)

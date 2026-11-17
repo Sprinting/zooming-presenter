@@ -132,7 +132,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
     let p = Palette::of(ctx);
     let mut choose: Option<Selection> = None;
     let mut cancel = false;
-    egui::Modal::new(egui::Id::unique("welcome")).show(ctx, |ui| {
+    egui::Modal::new(app.uid("welcome")).show(ctx, |ui| {
         ui.set_width(860.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new(crate::t!("welcome-title")).font(style::bold(18.0)));

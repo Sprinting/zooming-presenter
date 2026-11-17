@@ -91,12 +91,12 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
 
     let selected = selected_steps(app);
     let current = if app.editor.view.mode == Mode::Present { app.editor.view.present.step } else { app.selected_step };
-    let drag_id = egui::Id::unique("path-drag");
+    let drag_id = app.uid("path-drag");
     let mut dragging: Option<usize> = ui.ctx().data(|d| d.get_temp(drag_id));
     let mut rows: Vec<Rect> = vec![];
     let pointer = ui.ctx().pointer_hover_pos();
     // Scroll to the selected step when it changes.
-    let last_sel_id = egui::Id::unique("path-last-selected");
+    let last_sel_id = app.uid("path-last-selected");
     let last_sel: Vec<usize> = ui.ctx().data(|d| d.get_temp(last_sel_id)).unwrap_or_default();
     let scroll_to = if selected != last_sel { selected.first().copied() } else { None };
     ui.ctx().data_mut(|d| d.insert_temp(last_sel_id, selected.clone()));

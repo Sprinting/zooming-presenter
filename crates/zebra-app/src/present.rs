@@ -49,7 +49,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
     egui::CentralPanel::no_frame().show(ui, |ui| {
         let rect = ui.max_rect();
         crate::canvas::sync_viewport(app, rect, ui.ctx().content_rect().size());
-        let resp = ui.interact(rect, egui::Id::unique("zebra-canvas"), Sense::click_and_drag());
+        let resp = ui.interact(rect, app.uid("zebra-canvas"), Sense::click_and_drag());
         crate::canvas::paint_content(app, ui, rect, true);
         crate::presenting::present_extras(app, ui, rect);
 
@@ -124,9 +124,10 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
             let hud = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.bottom() - 44.0), egui::vec2(w, 38.0));
             painter.rect_filled(hud, 10.0, Color32::from_black_alpha((170.0 * a) as u8));
             let mut x = hud.left() + 4.0;
+            let hud_id = app.uid("present-hud");
             let step_btn = |painter: &egui::Painter, ui: &mut egui::Ui, x: f32, icon: Icon, id: &str, enabled: bool| -> bool {
                 let r = egui::Rect::from_min_size(egui::pos2(x, hud.center().y - btn.y / 2.0), btn);
-                let resp = ui.interact(r, egui::Id::unique(("present-hud", id)), Sense::click());
+                let resp = ui.interact(r, hud_id.with(id), Sense::click());
                 let label = if id == "prev" { crate::t!("present-hud-previous-step") } else { crate::t!("present-hud-next-step") };
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, enabled, label.clone()));
                 if resp.hovered() && enabled {

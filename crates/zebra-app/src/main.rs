@@ -80,18 +80,7 @@ fn main() -> anyhow::Result<()> {
     let background = cli.background || std::env::var_os("ZEBRA_BACKGROUND").is_some_and(|v| v != "0");
     let native = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Zebra")
-            .with_app_id("dev.zebra.Zebra")
-            .with_inner_size([w, h])
-            .with_min_inner_size([760.0, 480.0])
-            .with_drag_and_drop(true)
-            .with_active(!background)
-            // Unified title bar: the content runs under a transparent title
-            // bar, so the traffic lights and title sit in our 28 pt title
-            // row above the toolbar (panels::TITLE_ROW).
-            .with_fullsize_content_view(cfg!(target_os = "macos"))
-            .with_titlebar_shown(!cfg!(target_os = "macos")),
+        viewport: zebra_app::window_builder("Zebra").with_inner_size([w, h]).with_active(!background),
         // Each run starts at the requested size (debug screenshots need it).
         persist_window: false,
         // winit activates the app at launch unless told not to.
@@ -107,7 +96,7 @@ fn main() -> anyhow::Result<()> {
         native,
         Box::new(move |cc| {
             let app = ZebraApp::new(&cc.egui_ctx, cc.wgpu_render_state.clone(), cc.storage, opts);
-            Ok(Box::new(app))
+            Ok(Box::new(zebra_app::shell::Shell::new(app)))
         }),
     )
     .map_err(|e| anyhow::anyhow!("{e}"))

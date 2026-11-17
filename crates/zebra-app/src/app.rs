@@ -52,12 +52,30 @@ pub struct Toast {
 
 pub struct ZebraApp {
     pub editor: Editor,
+    /// This document's id for agents ("d1", "d2", ...).
+    pub doc_id: String,
+    /// One window among several, run by [`crate::shell::Shell`]: New and
+    /// Open go to a new window, closing closes only this one, and the shell
+    /// answers the agent API for every window.
+    pub hosted: bool,
+    /// The document window the person is working in (owns the menu bar
+    /// and Settings).
+    pub front: bool,
+    /// For the shell: actions that need a new window (New, Open...).
+    pub spawn: Vec<Action>,
+    /// For the shell: close this window (its document is saved or discarded).
+    pub close_me: bool,
+    /// For the shell: the person chose Quit.
+    pub quit_all: bool,
+    /// For the shell: this window was asked to close as part of Quit.
+    pub quit_pending: bool,
     pub renderer: Arc<Renderer>,
     pub wgpu: Option<egui_wgpu::RenderState>,
     pub gpu_canvas: Option<zebra_render::gpu::VelloCanvas>,
     /// False when the renderer can't draw (falls back to the egui painter).
     pub render_ok: bool,
-    pub api: Option<zebra_api::ApiServer>,
+    /// Shared by every window (one socket for the whole app).
+    pub api: Option<Arc<zebra_api::ApiServer>>,
     pub dispatcher: Option<zebra_api::Dispatcher>,
     pub api_error: Option<String>,
     /// Socket override from `--api-socket` (dev); used whenever AI control
@@ -157,13 +175,36 @@ pub struct ZebraApp {
 impl ZebraApp {
     /// Build the app. `wgpu` is `None` in UI tests.
     pub fn new(ctx: &Context, wgpu: Option<egui_wgpu::RenderState>, storage: Option<&dyn eframe::Storage>, opts: AppOptions) -> Self {
-        crate::style::install_fonts(ctx);
-        crate::mac::refresh_accent();
-        crate::style::apply_visuals(ctx);
-        let renderer = Arc::new(Renderer::new());
-        // Pictures decode on worker threads; repaint when one lands.
-        let waker_ctx = ctx.clone();
-        renderer.images().set_waker(Some(Arc::new(move || waker_ctx.request_repaint())));
+        Self::build(ctx, wgpu, storage, opts, None)
+    }
+
+    /// Another document window next to this one: same renderer and
+    /// picture cache, an empty document, no template chooser. The shell
+    /// copies the shared settings in.
+    pub fn new_window(&self, doc_id: String) -> Self {
+        let mut w = Self::build(&self.ctx, self.wgpu.clone(), None, AppOptions::default(), Some(self.renderer.clone()));
+        w.welcome = None;
+        w.doc_id = doc_id;
+        w.hosted = true;
+        w.front = false;
+        w.native_dialogs = self.native_dialogs;
+        w
+    }
+
+    fn build(ctx: &Context, wgpu: Option<egui_wgpu::RenderState>, storage: Option<&dyn eframe::Storage>, opts: AppOptions, shared: Option<Arc<Renderer>>) -> Self {
+        let renderer = match shared {
+            Some(r) => r,
+            None => {
+                crate::style::install_fonts(ctx);
+                crate::mac::refresh_accent();
+                crate::style::apply_visuals(ctx);
+                let renderer = Arc::new(Renderer::new());
+                // Pictures decode on worker threads; repaint when one lands.
+                let waker_ctx = ctx.clone();
+                renderer.images().set_waker(Some(Arc::new(move || waker_ctx.request_repaint())));
+                renderer
+            }
+        };
         let mut editor = Editor::default();
         editor.labeler = Some(crate::words::phrase);
         editor.measure = renderer.measure();
@@ -177,6 +218,13 @@ impl ZebraApp {
         let has_window = wgpu.is_some();
         let mut app = ZebraApp {
             editor,
+            doc_id: "d1".into(),
+            hosted: false,
+            front: true,
+            spawn: vec![],
+            close_me: false,
+            quit_all: false,
+            quit_pending: false,
             renderer: renderer.clone(),
             gpu_canvas: wgpu.as_ref().map(zebra_render::gpu::VelloCanvas::new),
             wgpu,
@@ -310,8 +358,11 @@ impl ZebraApp {
         let opts = zebra_api::ApiOptions { socket: self.api_socket.clone(), permission: self.editor.view.agent_permission };
         match zebra_api::ApiServer::start(opts, waker) {
             Ok(s) => {
-                self.dispatcher = Some(zebra_api::Dispatcher::new(self.renderer.clone()));
-                self.api = Some(s);
+                // Hosted windows are answered by the shell's dispatcher.
+                if !self.hosted {
+                    self.dispatcher = Some(zebra_api::Dispatcher::new(self.renderer.clone()));
+                }
+                self.api = Some(Arc::new(s));
                 self.api_error = None;
             }
             Err(e) => {
@@ -410,10 +461,20 @@ impl ZebraApp {
     fn perform_inner(&mut self, ctx: &Context, a: Action) {
         use Action::*;
         match a {
+            // Like Keynote: a new or opened document gets its own window,
+            // unless this one is still an untouched new document.
+            New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | OpenPath(_) if self.hosted && !self.is_pristine() => {
+                self.spawn.push(a);
+            }
+            Quit if self.hosted => self.quit_all = true,
             New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close if self.editor.dirty() && self.sheet.is_none() && !self.force_quit => {
                 crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(a));
             }
-            // One document per window for now: closing the window quits.
+            Close if self.hosted => {
+                self.close_me = true;
+                self.media.stop_all();
+            }
+            // A single window (tests): closing it quits.
             Close => {
                 self.force_quit = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -436,7 +497,7 @@ impl ZebraApp {
             }
             Open => {
                 if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-zebra"), &["zebra"]).pick_file() {
-                    self.open_path(&p);
+                    self.perform_inner(ctx, OpenPath(p));
                 }
             }
             OpenPath(p) => self.open_path(&p),
@@ -923,6 +984,26 @@ impl ZebraApp {
         }
     }
 
+    /// An id for this window's own widget or area: two document windows
+    /// never share scroll positions, popups or drag state.
+    pub fn uid(&self, name: &str) -> egui::Id {
+        egui::Id::unique((name, &self.doc_id))
+    }
+
+    /// A Save Changes or other sheet is up (or waiting to go up).
+    pub fn sheet_showing(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        if self.open_sheet.is_some() {
+            return true;
+        }
+        self.sheet.is_some()
+    }
+
+    /// A new document nobody has touched: New and Open reuse its window.
+    pub fn is_pristine(&self) -> bool {
+        self.editor.file_path.is_none() && !self.editor.dirty() && self.editor.doc.elements.is_empty() && self.editor.revision == 0
+    }
+
     pub fn after_load(&mut self) {
         self.media.stop_all();
         self.selected_step = None;
@@ -999,8 +1080,9 @@ impl ZebraApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
-        // Automation API
-        if let (Some(server), Some(d)) = (&self.api, &mut self.dispatcher) {
+        // Automation API (hosted windows: the shell pumps for all of them)
+        if self.hosted {
+        } else if let (Some(server), Some(d)) = (&self.api, &mut self.dispatcher) {
             if d.pump(server, &mut self.editor) {
                 ctx.request_repaint();
             }
@@ -1032,6 +1114,11 @@ impl ZebraApp {
 
     pub fn frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // Menu → text field copy/paste, delivered to this window's input.
+        if !self.inject.is_empty() {
+            let mut ev = std::mem::take(&mut self.inject);
+            ctx.input_mut(|i| i.events.append(&mut ev));
+        }
         let now = self.now();
         self.stage.frame_start = Some(std::time::Instant::now());
         if self.editor.view.tick(now) {
@@ -1041,7 +1128,9 @@ impl ZebraApp {
         crate::presenting::tick_notes(self);
 
         #[cfg(target_os = "macos")]
-        crate::menu_mac::poll(self, &ctx);
+        if self.front {
+            crate::menu_mac::poll(self, &ctx);
+        }
 
         if !self.demo_done {
             self.demo_done = true;
@@ -1067,7 +1156,9 @@ impl ZebraApp {
         }
         crate::presenting::presenter_window(self, &ctx);
 
-        crate::settings::show(self, &ctx);
+        if self.front {
+            crate::settings::show(self, &ctx);
+        }
 
         let queued = std::mem::take(&mut self.queued);
         for a in queued {
@@ -1231,6 +1322,16 @@ impl ZebraApp {
     }
 
     fn handle_close(&mut self, ctx: &Context) {
+        if self.hosted {
+            // The close button: this window only, after Save Changes.
+            if ctx.input(|i| i.viewport().close_requested()) && !self.force_quit {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                if !self.close_me && self.sheet.is_none() {
+                    self.queued.push(Action::Close);
+                }
+            }
+            return;
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !self.force_quit && self.editor.dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(Action::Quit));
@@ -1310,9 +1411,9 @@ impl eframe::App for ZebraApp {
         self.frame(ui);
         #[cfg(target_os = "macos")]
         {
-            crate::mac::sync_window(self, frame);
+            crate::mac::sync_window(self, Some(frame));
             // An open sheet is polled when AppKit wakes us, not every frame.
-            let _ = crate::sheets::run_native(self, frame);
+            let _ = crate::sheets::run_native(self, Some(frame));
         }
         let _ = frame;
     }
@@ -1327,10 +1428,6 @@ impl eframe::App for ZebraApp {
         eframe::set_value(storage, "ai_enabled", &self.ai_saved);
         eframe::set_value(storage, "agent_permission", &permission_name(self.editor.view.agent_permission).to_string());
         self.stage.save(storage);
-    }
-
-    fn raw_input_hook(&mut self, _ctx: &Context, raw: &mut egui::RawInput) {
-        raw.events.append(&mut self.inject);
     }
 
     fn persist_egui_memory(&self) -> bool {

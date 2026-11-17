@@ -74,7 +74,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
     let mut changed = false;
     let mut close = false;
     egui::Window::new(crate::t!("theme-editor-window-title"))
-        .id(egui::Id::unique("theme-editor"))
+        .id(app.uid("theme-editor"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)

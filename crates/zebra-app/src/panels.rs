@@ -112,7 +112,7 @@ fn toolbar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     // Bottom hairline (the toolbar's separator from content).
     ui.painter().line_segment([full.left_bottom() - EVec2::new(0.0, 0.5), full.right_bottom() - EVec2::new(0.0, 0.5)], Stroke::new(1.0, p.border));
     // Empty toolbar space drags the window, as in AppKit.
-    let bg = ui.interact(full, egui::Id::unique("toolbar-bg"), Sense::click_and_drag());
+    let bg = ui.interact(full, app.uid("toolbar-bg"), Sense::click_and_drag());
     if bg.drag_started() {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }
@@ -156,7 +156,7 @@ fn toolbar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let right_start = right.min_rect().left();
 
     // Centre group, centred in the window when it fits between the others.
-    let cw_id = egui::Id::unique("toolbar-centre-w");
+    let cw_id = app.uid("toolbar-centre-w");
     let cw: f32 = ui.data(|d| d.get_temp(cw_id)).unwrap_or(380.0);
     let mut cx = full.center().x - cw / 2.0;
     cx = cx.max(left_end + 16.0).min(right_start - 16.0 - cw);
@@ -587,7 +587,7 @@ fn status_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         }
         rect.max.x -= 22.0;
     }
-    let resp = ui.interact(rect, egui::Id::unique("agent-status"), Sense::click());
+    let resp = ui.interact(rect, app.uid("agent-status"), Sense::click());
     let color = if live { p.text } else { p.weak };
     let icon = Rect::from_center_size(Pos2::new(rect.left() + 7.0, rect.center().y), EVec2::splat(13.0));
     paint_icon(ui.painter(), icon, Icon::Sparkles, if connected { AGENT } else { p.weak });
@@ -605,14 +605,14 @@ fn status_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
 fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
     // Empty-document hint (full-strength secondary text, 13 pt minimum).
     if app.editor.doc.elements.is_empty() && app.canvas.text.is_none() {
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::unique("hint"))).with_clip_rect(rect);
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, app.uid("hint"))).with_clip_rect(rect);
         let bg = style::c32(app.editor.theme().color(&"theme:background".into()));
         let dark_bg = (bg.r() as u32 + bg.g() as u32 + bg.b() as u32) < 380;
         let (c1, c2) = if dark_bg { (Color32::from_gray(0xd0), Color32::from_gray(0xa8)) } else { (Color32::from_gray(0x55), Color32::from_gray(0x6b)) };
         painter.text(rect.center() - EVec2::new(0.0, 14.0), Align2::CENTER_CENTER, &crate::t!("canvas-hint-title"), style::semibold(20.0), c1);
         painter.text(rect.center() + EVec2::new(0.0, 16.0), Align2::CENTER_CENTER, crate::t!("canvas-hint-detail", key = Action::FrameTool.shortcut_text().unwrap_or_default()), FontId::proportional(13.0), c2);
     } else if app.editor.doc.bounds().is_some_and(|b| !b.intersects(&app.editor.view.camera.visible_bounds(app.editor.view.viewport))) {
-        egui::Area::new(egui::Id::unique("backtocontent"))
+        egui::Area::new(app.uid("backtocontent"))
             .anchor(Align2::CENTER_TOP, EVec2::new(rect.center().x - ctx.content_rect().center().x, rect.top() + 14.0))
             .show(ctx, |ui| {
                 if w::push_button(ui, &crate::t!("canvas-back-to-content")).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-back-to-content-tip"), &Action::FitAll)).clicked() {
@@ -630,7 +630,7 @@ fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
 
     // Autosave recovery: an opaque info bar under the toolbar.
     if let Some(rp) = app.recovered.clone() {
-        egui::Area::new(egui::Id::unique("recover"))
+        egui::Area::new(app.uid("recover"))
             .anchor(Align2::CENTER_TOP, EVec2::new(rect.center().x - ctx.content_rect().center().x, rect.top() + 12.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
@@ -741,7 +741,7 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
 
 fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
     if app.show_icon_sheet {
-        egui::Area::new(egui::Id::unique("icon-sheet")).order(egui::Order::Foreground).fixed_pos(Pos2::new(240.0, 120.0)).show(ctx, |ui| {
+        egui::Area::new(app.uid("icon-sheet")).order(egui::Order::Foreground).fixed_pos(Pos2::new(240.0, 120.0)).show(ctx, |ui| {
             style::float_frame(p).inner_margin(12).show(ui, |ui| crate::icons::debug_sheet(ui));
         });
     }
@@ -750,7 +750,7 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
         let all = Action::palette();
         let ql = q.to_lowercase();
         let matches: Vec<Action> = all.into_iter().filter(|a| ql.split_whitespace().all(|w| a.label().to_lowercase().contains(w))).collect();
-        let m = egui::Modal::new(egui::Id::unique("palette")).backdrop_color(Color32::TRANSPARENT).show(ctx, |ui| {
+        let m = egui::Modal::new(app.uid("palette")).backdrop_color(Color32::TRANSPARENT).show(ctx, |ui| {
             ui.set_width(440.0);
             let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(&crate::t!("palette-hint")).desired_width(f32::INFINITY).font(FontId::proportional(15.0)));
             r.request_focus();
@@ -796,7 +796,7 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
     }
 
     if app.show_shortcuts {
-        let m = egui::Modal::new(egui::Id::unique("shortcuts")).show(ctx, |ui| {
+        let m = egui::Modal::new(app.uid("shortcuts")).show(ctx, |ui| {
             ui.set_width(540.0);
             ui.label(RichText::new(&crate::t!("shortcuts-title")).font(style::semibold(15.0)));
             w::caption(ui, &crate::t!("shortcuts-caption"));
@@ -872,7 +872,7 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
     }
 
     if app.show_about {
-        let m = egui::Modal::new(egui::Id::unique("about")).show(ctx, |ui| {
+        let m = egui::Modal::new(app.uid("about")).show(ctx, |ui| {
             ui.set_width(300.0);
             ui.vertical_centered(|ui| {
                 ui.add_space(6.0);
