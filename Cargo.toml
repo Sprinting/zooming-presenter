@@ -42,6 +42,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync"
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
 rand = "0.9"
+libc = "0.2"
 
 [profile.dev.package."*"]
 opt-level = 2
