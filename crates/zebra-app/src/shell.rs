@@ -282,6 +282,12 @@ impl Shell {
     }
 }
 
+/// The current window is out of sight: a background tab, minimised, or
+/// fully covered.
+fn hidden(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.viewport().occluded == Some(true) || i.viewport().minimized == Some(true))
+}
+
 /// Where a document window is on screen (egui's last report).
 fn viewport_rect(ctx: &egui::Context, id: &str) -> Option<egui::Rect> {
     let vid = egui::ViewportId::from_hash_of(("document", id));
@@ -318,11 +324,18 @@ impl eframe::App for Shell {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // The other windows are drawn during the root window's pass, so it
+        // must run even when the root window is a tab in the background.
+        if self.windows.len() > 1 {
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::RequestPaintWhileHidden);
+        }
         // The root window.
         if ctx.input(|i| i.viewport().focused == Some(true)) {
             self.set_front(0);
         }
-        self.windows[0].frame(ui);
+        if !hidden(&ctx) || self.windows.len() == 1 {
+            self.windows[0].frame(ui);
+        }
         #[cfg(target_os = "macos")]
         {
             crate::mac::sync_window(&mut self.windows[0], Some(frame));
@@ -342,7 +355,11 @@ impl eframe::App for Shell {
                 #[cfg(target_os = "macos")]
                 crate::mac::adopt_window(w, &placeholder_title(&w.doc_id));
                 let f = ui.ctx().input(|i| i.viewport().focused == Some(true));
-                w.frame(ui);
+                // A tab in the background or a minimised window draws nothing
+                // until it shows again (macOS tells us, and we repaint then).
+                if !hidden(ui.ctx()) {
+                    w.frame(ui);
+                }
                 #[cfg(target_os = "macos")]
                 {
                     crate::mac::sync_window(w, None);
