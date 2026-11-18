@@ -54,6 +54,9 @@ pub struct ZebraApp {
     pub editor: Editor,
     /// This document's id for agents ("d1", "d2", ...).
     pub doc_id: String,
+    /// Which new document of this run this is (1, 2, ...), given by the
+    /// shell while it has no file; 0 until then.
+    pub untitled_no: u32,
     /// One window among several, run by [`crate::shell::Shell`]: New and
     /// Open go to a new window, closing closes only this one, and the shell
     /// answers the agent API for every window.
@@ -208,6 +211,13 @@ pub struct ZebraApp {
     pub media: crate::media_ui::Media,
 }
 
+/// A window's name for a document never saved: the second new document
+/// of a run is "Untitled 2", as in Keynote (two were both "Untitled").
+/// A title the person typed is left alone.
+pub fn untitled_name(title: &str, untitled: &str, no: u32) -> String {
+    if no > 1 && title == untitled { format!("{title} {no}") } else { title.to_string() }
+}
+
 /// The size a window made from this one opens at: the same, unless this one
 /// is full screen (there macOS decides: a tab, or its own default).
 pub fn open_size_from(from: &egui::ViewportInfo) -> Option<egui::Vec2> {
@@ -275,6 +285,7 @@ impl ZebraApp {
         let mut app = ZebraApp {
             editor,
             doc_id: "d1".into(),
+            untitled_no: 0,
             hosted: false,
             front: true,
             spawn: vec![],
@@ -1186,7 +1197,7 @@ impl ZebraApp {
     pub fn window_title(&self) -> String {
         let name = match &self.editor.file_path {
             Some(p) => p.file_stem().unwrap_or_default().to_string_lossy().to_string(),
-            None => self.editor.doc.title.clone(),
+            None => untitled_name(&self.editor.doc.title, &crate::t!("app-untitled"), self.untitled_no),
         };
         // On the Mac the title bar shows "— Edited" and the dot in the close
         // button itself (setDocumentEdited); elsewhere say it in the title.

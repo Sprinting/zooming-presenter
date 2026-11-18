@@ -137,6 +137,8 @@ pub struct Shell {
     /// A window made by the tab bar's + button: (new window, the window
     /// whose tab group it joins) until AppKit has both.
     tab_into: Option<(String, String)>,
+    /// New documents numbered so far (for "Untitled 2").
+    untitled_seq: u32,
 }
 
 /// The placeholder title a new window is created with, so its NSWindow
@@ -155,7 +157,7 @@ impl Shell {
         let reopen = std::mem::take(&mut first.reopen_untitled);
         // Lets zebractl say "AI control is off" rather than "isn't open".
         let running = if first.wgpu.is_some() { zebra_api::discovery::RunningNote::write().ok() } else { None };
-        let mut shell = Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None, _running: running };
+        let mut shell = Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None, untitled_seq: 0, _running: running };
         // More untitled documents from the last run: a window each.
         for p in reopen {
             let id = format!("d{}", shell.next_id);
@@ -274,6 +276,14 @@ impl Shell {
     /// Requests windows left for the shell this frame.
     fn handle_requests(&mut self, ctx: &egui::Context) {
         // New and Open that need a window of their own.
+        // Number the documents that have no file yet (not one about to load
+        // a file, nor the hidden window waiting with no document shown).
+        for (i, w) in self.windows.iter_mut().enumerate() {
+            if w.untitled_no == 0 && w.editor.file_path.is_none() && w.queued.is_empty() && !(i == 0 && self.empty) {
+                self.untitled_seq += 1;
+                w.untitled_no = self.untitled_seq;
+            }
+        }
         let mut spawn = vec![];
         for w in &mut self.windows {
             spawn.append(&mut w.spawn);

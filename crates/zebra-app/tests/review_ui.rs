@@ -679,6 +679,59 @@ fn mac_a_click_in_the_spelling_menu_keeps_the_text_open() {
     assert!(h.state().canvas.text.is_none(), "without the menu, a click elsewhere ends the edit");
 }
 
+/// Mac round, 18 Nov (Kartik asked): Edit › Redo is on while a text box is
+/// open even with nothing to redo. Choosing it then does nothing: no crash,
+/// the typed text stays and the edit goes on.
+#[test]
+fn mac_redo_with_nothing_to_redo_in_a_text_box_is_harmless() {
+    let mut h = harness();
+    h.run_steps(5);
+    let c = h.state().canvas.rect.center();
+    click_at(&mut h, c, 2);
+    h.run_steps(3);
+    h.event(Event::Text("typed".into()));
+    h.run_steps(3);
+    assert!(zebra_app::menus::state(h.state(), &Action::Redo).enabled);
+    for _ in 0..3 {
+        h.state_mut().queued.push(Action::Redo);
+        h.run_steps(2);
+        h.event(Event::Key { key: Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND | Modifiers::SHIFT });
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().canvas.text.as_ref().map(|t| t.buf.as_str()), Some("typed"));
+}
+
+/// Mac round, 18 Nov: text typed past the canvas edge is clipped there, and
+/// the caret went out of view with it. The canvas follows the caret.
+#[test]
+fn mac_the_canvas_follows_the_caret_past_its_edge() {
+    let mut h = harness();
+    h.run_steps(5);
+    let c = h.state().canvas.rect.center();
+    click_at(&mut h, c, 2);
+    h.run_steps(3);
+    h.event(Event::Text("hi".into()));
+    h.run_steps(3);
+    let cx0 = h.state().editor.view.camera.cx;
+    for _ in 0..12 {
+        h.event(Event::Text("a long run of words ".into()));
+        h.run_steps(2);
+    }
+    let cam = h.state().editor.view.camera;
+    assert!(cam.cx > cx0, "the view moved right with the caret: {} -> {}", cx0, cam.cx);
+    // The end of the text (where the caret is) is inside the canvas.
+    let t = h.state().canvas.text.as_ref().unwrap();
+    let end = h.state().canvas.w2s(&h.state().editor, t.anchor).x + t.size_px.x;
+    let rect = h.state().canvas.rect;
+    assert!(end <= rect.right() && end >= rect.left(), "caret at {end}, canvas {rect:?}");
+
+    let r = egui::Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(400.0, 300.0));
+    let caret = |x: f32, y: f32| egui::Rect::from_min_size(Pos2::new(x, y), egui::vec2(1.0, 20.0));
+    assert_eq!(zebra_app::canvas::follow_caret(caret(300.0, 200.0), r), egui::Vec2::ZERO);
+    assert_eq!(zebra_app::canvas::follow_caret(caret(520.0, 200.0), r).x, 476.0 - 521.0);
+    assert_eq!(zebra_app::canvas::follow_caret(caret(300.0, 90.0), r).y, 124.0 - 90.0);
+}
+
 /// Mac round, 18 Nov: Help › Acknowledgements opened on top of an open
 /// Diagrams panel, two panels stacked in the middle of the window.
 #[test]

@@ -126,6 +126,13 @@ pub struct TextEditState {
     pub spell: crate::spell::Cache,
     /// The misspelled word the spelling menu is open for (chars).
     pub spell_word: Option<std::ops::Range<usize>>,
+    /// (caret, text length) last frame: the canvas follows the caret only
+    /// when one of them changed, never against a pan made by hand.
+    pub caret_seen: Option<(usize, usize)>,
+    /// The caret or text changed last frame: bring the caret into view now.
+    /// (Not in the frame of the change itself: there the text is still laid
+    /// out at its old width and wraps, so the caret is in the wrong place.)
+    pub caret_follow: bool,
 }
 
 pub struct CanvasState {
@@ -1177,6 +1184,8 @@ pub fn begin_new_text(app: &mut ZebraApp, p: Pos2) {
         host: None,
         spell: Default::default(),
         spell_word: None,
+        caret_seen: None,
+        caret_follow: false,
     });
     let _ = app.editor.view(ViewCommand::ClearSelection, H);
 }
@@ -1228,6 +1237,8 @@ pub fn begin_text_on_shape(app: &mut ZebraApp, shape: ElementId) {
         host: Some(shape.clone()),
         spell: Default::default(),
         spell_word: None,
+        caret_seen: None,
+        caret_follow: false,
     });
     app.select(vec![shape]);
 }
@@ -1272,6 +1283,8 @@ pub fn begin_edit_existing(app: &mut ZebraApp, id: ElementId) {
         host: None,
         spell: Default::default(),
         spell_word: None,
+        caret_seen: None,
+        caret_follow: false,
     });
     app.select(vec![id]);
 }
@@ -1742,13 +1755,31 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         }
         let r = resp.rect.expand(4.0);
         ui.painter().add(Shape::dashed_line(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], Stroke::new(1.0, style::accent()), 4.0, 3.0));
-        resp
+        let caret = out.cursor_range.map(|c| out.galley.pos_from_cursor(c.primary).translate(out.galley_pos.to_vec2()));
+        (resp, caret)
     });
-    let resp = r.inner;
+    let (resp, caret) = r.inner;
     t.size_px = resp.rect.size();
     if let Some(cr) = egui::TextEdit::load_state(ctx, edit_id).and_then(|s| s.cursor.char_range()) {
         let (a, b) = (cr.primary.index, cr.secondary.index);
         t.sel = (usize::from(a.min(b)), usize::from(a.max(b)));
+        // Typing past the canvas edge: the canvas follows the caret (the
+        // text is clipped there, so the caret went out of view).
+        let now = (usize::from(cr.primary.index), t.buf.len());
+        let changed = t.caret_seen.is_some_and(|was| was != now);
+        if changed {
+            ctx.request_repaint();
+        } else if std::mem::take(&mut t.caret_follow) && app.canvas.rect_valid {
+            if let Some(c) = caret {
+                let d = follow_caret(c, app.canvas.rect);
+                if d != egui::Vec2::ZERO {
+                    app.editor.view.camera.pan_screen(Vec2::new(d.x as f64, d.y as f64));
+                    ctx.request_repaint();
+                }
+            }
+        }
+        t.caret_follow |= changed;
+        t.caret_seen = Some(now);
     }
 
     // Mini text toolbar, like Prezi's: box style, then character and
@@ -1927,6 +1958,23 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         commit_text_edit(app);
         app.canvas.text_toolbar = None;
     }
+}
+
+/// How far to slide the canvas (screen points) so the caret is inside it,
+/// with a little room; zero when it already is.
+pub fn follow_caret(caret: ERect, canvas: ERect) -> egui::Vec2 {
+    let room = 24.0_f32.min(canvas.width() / 4.0).min(canvas.height() / 4.0);
+    let inner = canvas.shrink(room);
+    let axis = |lo: f32, hi: f32, min: f32, max: f32| {
+        if hi > max {
+            max - hi
+        } else if lo < min {
+            min - lo
+        } else {
+            0.0
+        }
+    };
+    egui::vec2(axis(caret.left(), caret.right(), inner.left(), inner.right()), axis(caret.top(), caret.bottom(), inner.top(), inner.bottom()))
 }
 
 // ----------------------------------------------------------------------

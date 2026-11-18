@@ -215,3 +215,23 @@ fn a_new_window_opens_at_the_size_of_the_one_it_came_from() {
     assert_eq!(zebra_app::app::open_size_from(&from), None, "full screen: macOS decides");
     assert_eq!(zebra_app::app::open_size_from(&egui::ViewportInfo::default()), None);
 }
+
+/// Mac round, 18 Nov: two new documents were both named "Untitled". The
+/// second is "Untitled 2", as in Keynote; a typed title is left alone.
+#[test]
+fn new_documents_are_numbered() {
+    let mut h = harness();
+    h.state_mut().windows[0].welcome = None;
+    h.state_mut().windows[0].editor.doc.title = "Untitled".into();
+    add_frame(&mut h.state_mut().windows[0]);
+    h.state_mut().windows[0].queued.push(Action::New);
+    h.run_steps(4);
+    add_frame(&mut h.state_mut().windows[1]);
+    h.state_mut().windows[1].queued.push(Action::New);
+    h.run_steps(4);
+    let titles: Vec<String> = h.state().windows.iter().map(|w| w.window_title().replace(" — Edited", "")).collect();
+    assert_eq!(titles, ["Untitled", "Untitled 2", "Untitled 3"]);
+    h.state_mut().windows[1].editor.doc.title = "Plan".into();
+    assert_eq!(h.state().windows[1].window_title().replace(" — Edited", ""), "Plan");
+    assert_eq!(zebra_app::app::untitled_name("Untitled", "Untitled", 0), "Untitled");
+}
