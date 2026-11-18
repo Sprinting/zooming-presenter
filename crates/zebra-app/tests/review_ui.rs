@@ -644,6 +644,41 @@ fn mac_undo_is_on_while_a_text_box_is_open() {
     assert_eq!(st.title, Action::Undo.label());
 }
 
+/// Mac round, 18 Nov: picking a suggestion from the spelling menu ended the
+/// edit (the click in the menu took the text's focus). While that menu is
+/// up, a click outside the text keeps the edit open.
+#[test]
+fn mac_a_click_in_the_spelling_menu_keeps_the_text_open() {
+    let mut h = harness();
+    h.run_steps(5);
+    let c = h.state().canvas.rect.center();
+    click_at(&mut h, c, 2);
+    h.run_steps(3);
+    h.event(Event::Text("wrold ok".into()));
+    h.run_steps(3);
+    // Somewhere off the canvas, where the menu's rows would be.
+    let p = Pos2::new(h.state().canvas.rect.right() + 60.0, c.y);
+    let press = |h: &mut Harness<'static, ZebraApp>, menu: bool| {
+        h.event(Event::PointerMoved(p));
+        h.step();
+        if menu {
+            h.state_mut().canvas.text.as_mut().unwrap().spell_word = Some(0..5);
+        }
+        h.event(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        if menu {
+            // The menu is still up when the button comes up in it.
+            h.state_mut().canvas.text.as_mut().expect("still editing").spell_word = Some(0..5);
+        }
+        h.event(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    };
+    press(&mut h, true);
+    assert!(h.state().canvas.text.is_some(), "the edit goes on after a click in the spelling menu");
+    press(&mut h, false);
+    assert!(h.state().canvas.text.is_none(), "without the menu, a click elsewhere ends the edit");
+}
+
 /// Mac round, 18 Nov: Help › Acknowledgements opened on top of an open
 /// Diagrams panel, two panels stacked in the middle of the window.
 #[test]

@@ -201,12 +201,19 @@ impl Shell {
     fn open_window(&mut self, action: Action) {
         let id = format!("d{}", self.next_id);
         self.next_id += 1;
-        let mut w = self.windows[self.front].new_window(id);
+        let from = &self.windows[self.front];
+        let from_full = from.ctx.input(|i| i.raw.viewports.get(&from.viewport).and_then(|v| v.fullscreen) == Some(true));
+        let tab = !self.empty && crate::mac::new_window_is_tab(crate::mac::tab_pref(), from_full);
+        let parent = from.doc_id.clone();
+        let mut w = from.new_window(id.clone());
         self.shared.write(&mut w);
         w.queued.push(action);
         self.windows.push(w);
         let i = self.windows.len() - 1;
         self.set_front(i);
+        if tab {
+            self.tab_into = Some((id, parent));
+        }
     }
 
     /// Remove window `i`. The root window can't go while others are open:

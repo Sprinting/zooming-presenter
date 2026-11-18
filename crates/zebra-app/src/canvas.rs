@@ -1594,11 +1594,20 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     }
 
     let area = egui::Area::new(app.uid("zebra-text-edit")).fixed_pos(pos).order(egui::Order::Foreground).constrain(false);
+    let app_rect_valid = app.canvas.rect_valid;
     let rich_now = t.rich.clone();
     let font_name = ts.font.clone();
     let theme2 = theme.clone();
     let font2 = font.clone();
+    // The spelling menu belongs to this edit: a click in it must not end it.
+    let spell_open = t.spell_word.is_some();
+    let canvas_rect = app.canvas.rect;
     let r = area.show(ctx, |ui| {
+        // The text stays inside the canvas: typed past its edge, it ran
+        // over the inspector.
+        if app_rect_valid {
+            ui.set_clip_rect(canvas_rect);
+        }
         // Areas otherwise remember last frame's (narrow) width, which made the
         // text wrap a few letters per line while typing.
         ui.set_min_width(width);
@@ -1906,7 +1915,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     app.canvas.text_toolbar = Some(tb.response.rect);
     let over_toolbar = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| tb.response.rect.contains(p));
     let link_open = t.link_draft.is_some();
-    if (refocus && !link_open) || (resp.lost_focus() && (over_toolbar || link_open) && !committed) {
+    if (refocus && !link_open) || (resp.lost_focus() && (over_toolbar || link_open || spell_open) && !committed) {
         if !link_open {
             resp.request_focus();
         }

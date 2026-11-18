@@ -244,6 +244,47 @@ pub fn install_reopen_hook(ctx: &egui::Context) {
     let _ = ctx;
 }
 
+/// The person's "Prefer tabs when opening documents" setting (System
+/// Settings › Desktop & Dock).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TabPref {
+    Never,
+    Always,
+    FullScreen,
+}
+
+pub fn tab_pref() -> TabPref {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWindowUserTabbingPreference as P;
+        let Some(mtm) = objc2::MainThreadMarker::new() else { return TabPref::Never };
+        let p = objc2_app_kit::NSWindow::userTabbingPreference(mtm);
+        if p == P::Always {
+            TabPref::Always
+        } else if p == P::InFullScreen {
+            TabPref::FullScreen
+        } else {
+            TabPref::Never
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        TabPref::Never
+    }
+}
+
+/// Whether a new document window joins the window it was made from as a
+/// tab. AppKit does this by itself only for windows whose tab group is
+/// named when they first show; ours are named a moment later, so a new
+/// document made from a full-screen window floated over it instead.
+pub fn new_window_is_tab(pref: TabPref, from_full_screen: bool) -> bool {
+    match pref {
+        TabPref::Always => true,
+        TabPref::FullScreen => from_full_screen,
+        TabPref::Never => false,
+    }
+}
+
 /// True once after the + button in a window's tab bar was clicked.
 pub fn take_new_tab() -> bool {
     #[cfg(target_os = "macos")]
@@ -361,5 +402,17 @@ mod title_row_tests {
             assert_eq!(title_row_from(Some(0.0), 1.0), 28.0, "full screen keeps the row");
         }
         assert_eq!(title_row_from(Some(f64::NAN), 1.0), row);
+    }
+
+    /// Mac round, 18 Nov: File › New from a full-screen window opened a
+    /// small window floating over it. With the Mac's default setting
+    /// ("Prefer tabs: in full screen") it is a tab.
+    #[test]
+    fn a_new_document_from_full_screen_is_a_tab() {
+        use super::{TabPref, new_window_is_tab};
+        assert!(new_window_is_tab(TabPref::FullScreen, true));
+        assert!(!new_window_is_tab(TabPref::FullScreen, false));
+        assert!(new_window_is_tab(TabPref::Always, false));
+        assert!(!new_window_is_tab(TabPref::Never, true));
     }
 }
