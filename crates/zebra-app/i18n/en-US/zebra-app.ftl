@@ -347,6 +347,9 @@ sheet-clear-path-message = This removes { $count ->
    *[other] all { $count } steps
 } from the path. Frames and objects stay on the canvas. You can undo this.
 sheet-clear-path = Clear Path
+sheet-auto-path-title = Replace the path?
+sheet-auto-path-message = Steps that are not frames have speaker notes. The notes go with them. You can undo this.
+sheet-auto-path = Replace Path
 sheet-revert-agent-title = Revert the changes { $name } made?
 sheet-revert-agent-message = This undoes everything { $name } did since your last change. Redo ({ $shortcut }) brings it back.
 sheet-revert = Revert

@@ -26,6 +26,8 @@ pub enum SheetKind {
     /// A plain alert with one OK button (open and save errors).
     Alert { title: String, message: String },
     ClearPath,
+    /// Path from Frames would drop steps that have speaker notes.
+    AutoPath,
     RevertAgent { name: String },
     RaisePermission,
 }
@@ -66,6 +68,12 @@ fn spec(app: &ZebraApp, k: &SheetKind) -> Spec {
                 warning: true,
             }
         }
+        SheetKind::AutoPath => Spec {
+            title: crate::t!("sheet-auto-path-title"),
+            message: crate::t!("sheet-auto-path-message"),
+            buttons: vec![(crate::t!("sheet-auto-path"), Role::Default), (crate::t!("sheet-cancel"), Role::Cancel)],
+            warning: true,
+        },
         SheetKind::RevertAgent { name } => Spec {
             title: crate::t!("sheet-revert-agent-title", name = name.as_str()),
             message: crate::t!("sheet-revert-agent-message", name = name.as_str(), shortcut = Action::Redo.shortcut_text().unwrap_or_default()),
@@ -105,6 +113,12 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
         SheetKind::ClearPath => {
             if label == crate::t!("sheet-clear-path") && !app.editor.doc.path.is_empty() {
                 app.apply(zebra_core::Command::ClearPath { discard_notes: true });
+                app.selected_step = None;
+            }
+        }
+        SheetKind::AutoPath => {
+            if label == crate::t!("sheet-auto-path") {
+                app.apply(zebra_core::Command::AutoPath { discard_notes: true });
                 app.selected_step = None;
             }
         }

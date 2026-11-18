@@ -695,7 +695,13 @@ impl ZebraApp {
             AddToPath => self.add_to_path(),
             AddCurrentView => self.add_current_view(),
             AutoPath => {
-                self.apply(Command::AutoPath);
+                // Notes on steps the new path drops: ask first (like Clear Path).
+                match self.editor.apply(Command::AutoPath { discard_notes: false }, H) {
+                    Err(e) if e.code == "notes_lost" => crate::sheets::request(self, crate::sheets::SheetKind::AutoPath),
+                    r => {
+                        self.report(r);
+                    }
+                }
             }
             ClearPath => {
                 if !self.editor.doc.path.is_empty() {

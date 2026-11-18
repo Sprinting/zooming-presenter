@@ -182,8 +182,11 @@ pub struct Dispatcher {
     /// control off (drop the [`ApiServer`]) once replies are flushed.
     pub disconnect_requested: bool,
     events: Vec<Event>,
-    /// Documents whose agent permission has been set from the server's.
-    initialized: std::collections::HashSet<String>,
+    /// The server's starting permission has been given to the documents.
+    /// Once only: after that the level is the person's to change, and a
+    /// document opened later takes the level the others have (the host
+    /// copies it), not the one the server started with.
+    initialized: bool,
     /// Who has a transaction open, per document id.
     tx_owner: std::collections::HashMap<String, u64>,
     /// The revision each agent last read or wrote, per (document, agent):
@@ -219,7 +222,7 @@ impl Dispatcher {
             quit_requested: false,
             disconnect_requested: false,
             events: vec![],
-            initialized: Default::default(),
+            initialized: false,
             tx_owner: Default::default(),
             seen: Default::default(),
             waits: vec![],

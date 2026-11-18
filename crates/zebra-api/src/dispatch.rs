@@ -61,13 +61,13 @@ fn gesture(docs: &mut dyn Documents, want: Option<&str>) -> bool {
 impl Dispatcher {
     pub(crate) fn pump_impl(&mut self, server: &ApiServer, docs: &mut dyn Documents) -> bool {
         let inner = &server.inner;
-        for d in docs.list() {
-            if !self.initialized.contains(&d.id) {
+        if !self.initialized {
+            for d in docs.list() {
                 if let Some(e) = docs.editor(&d.id) {
                     e.view.agent_permission = inner.permission;
                 }
-                self.initialized.insert(d.id);
             }
+            self.initialized = true;
         }
         let mut handled = false;
 

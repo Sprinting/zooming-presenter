@@ -458,7 +458,7 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
         let blank = app.editor.view.present.blank;
         draw_slide(&painter, cur, app.stage.slides.get(step, build), blank, "");
         let next_label = match next {
-            Some((s, b)) if b > 0 && Some(s) == step => crate::t!("present-next-build", build = b, count = app.editor.doc.path[s].builds.len()),
+            Some((s, b)) if b > 0 && Some(s) == step => crate::t!("present-next-build", build = b, count = app.editor.doc.path.get(s).map_or(0, |st| st.builds.len())),
             Some((s, _)) => crate::t!("present-next-step", step = ((s + 1) as u64)),
             None => crate::t!("present-next"),
         };

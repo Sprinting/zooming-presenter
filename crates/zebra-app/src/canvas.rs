@@ -2386,7 +2386,7 @@ fn draw_path_overlay(app: &ZebraApp, painter: &Painter) {
     let selected = app.selected_step;
     for (i, p) in pos.iter().enumerate() {
         draw_badge(painter, *p, i + 1, selected == Some(i) || app.canvas.step_hover == Some(i));
-        let builds = ed.doc.path[i].builds.len();
+        let builds = ed.doc.path.get(i).map_or(0, |s| s.builds.len());
         if builds > 0 {
             let g = painter.layout_no_wrap(format!("+{builds}"), style::ui_font(11.0), Color32::WHITE);
             let r = ERect::from_min_size(*p + egui::vec2(10.0, -22.0), g.size() + egui::vec2(8.0, 2.0));

@@ -121,7 +121,7 @@ fn command(c: &Command) -> String {
         Command::MoveStep { .. } => t!("history-reorder-path"),
         Command::UpdateStep { .. } => t!("history-edit-step"),
         Command::ClearPath { .. } => t!("history-clear-path"),
-        Command::AutoPath => t!("history-path-from-frames"),
+        Command::AutoPath { .. } => t!("history-path-from-frames"),
         Command::SetTheme { theme } => t!("history-theme", theme = theme.as_str()),
         Command::SetTitle { .. } => t!("history-rename"),
         Command::SetPlayback { .. } => t!("history-change-autoplay"),

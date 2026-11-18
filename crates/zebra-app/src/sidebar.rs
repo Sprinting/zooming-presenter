@@ -89,6 +89,8 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             .show(ui, |ui| crate::presenting::sidebar_notes(app, ui, p));
     }
 
+    // The footer's − button may just have shortened the path: count again.
+    let n = app.editor.doc.path.len();
     let selected = selected_steps(app);
     let current = if app.editor.view.mode == Mode::Present { app.editor.view.present.step } else { app.selected_step };
     let drag_id = app.uid("path-drag");
@@ -127,6 +129,12 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         let th = (tw - num_w - 6.0) * THUMB_H as f32 / THUMB_W as f32;
         let bg = style::c32(app.editor.theme().color(&"theme:background".into()));
         for i in 0..n {
+            // A row's menu can remove or add steps: the rows after it wait
+            // for the next frame instead of reading steps that moved.
+            if app.editor.doc.path.len() != n {
+                ui.ctx().request_repaint();
+                break;
+            }
             let (r, resp) = ui.allocate_exact_size(EVec2::new(tw, th + 26.0), Sense::click_and_drag());
             rows.push(r);
             if scroll_to == Some(i) {
@@ -255,7 +263,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         }
         if ui.input(|i| i.pointer.any_released()) {
             if let Some(to) = drop_to {
-                if to != from && to < n {
+                if to != from && to < app.editor.doc.path.len() && from < app.editor.doc.path.len() {
                     app.apply(Command::MoveStep { from, to });
                     app.selected_step = Some(to);
                 }

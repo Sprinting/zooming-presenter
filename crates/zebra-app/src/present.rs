@@ -19,10 +19,11 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
         let cmd = match key {
             Key::ArrowRight | Key::ArrowDown | Key::Space | Key::PageDown | Key::Enter if !modifiers.command => Some(ViewCommand::Next),
             Key::ArrowLeft | Key::ArrowUp | Key::PageUp | Key::Backspace => Some(ViewCommand::Prev),
-            Key::Home | Key::O => Some(ViewCommand::Overview),
+            Key::Home => Some(ViewCommand::Overview),
+            Key::O if !modifiers.command => Some(ViewCommand::Overview),
             Key::End => app.editor.doc.path.len().checked_sub(1).map(|s| ViewCommand::GotoStep { step: s }),
             Key::B | Key::Period if !modifiers.command => Some(ViewCommand::Blank { blank: toggle(app.blank(), Blank::Black) }),
-            Key::W => Some(ViewCommand::Blank { blank: toggle(app.blank(), Blank::White) }),
+            Key::W if !modifiers.command => Some(ViewCommand::Blank { blank: toggle(app.blank(), Blank::White) }),
             Key::Escape => Some(ViewCommand::ExitPresent),
             Key::Period if modifiers.command => None,
             _ => None,
@@ -137,7 +138,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
                 crate::icons::paint_icon(painter, r.shrink(8.0), icon, col);
                 enabled && resp.clicked()
             };
-            let at_end = app.editor.view.present.step.is_some_and(|s| s + 1 >= n && app.editor.view.present.build >= app.editor.doc.path[s].builds.len());
+            let at_end = app.editor.view.present.step.is_some_and(|s| s + 1 >= n && app.editor.view.present.build >= app.editor.doc.path.get(s).map_or(0, |st| st.builds.len()));
             if step_btn(&painter, ui, x, Icon::ChevronLeft, "prev", app.editor.view.present.step.is_some()) {
                 let _ = app.editor.view(ViewCommand::Prev, H);
             }
