@@ -925,6 +925,27 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
     about(app, ctx);
 }
 
+/// May a window of our own (Settings, About) be drawn this pass with
+/// `show_viewport_immediate`? Not the first time: eframe would have to create
+/// its native window during the pass, which it can do only inside a winit
+/// event, and a window that is hidden (no document open) or minimised is
+/// painted from eframe's own timer instead, where that panics ("the user
+/// callback was never called"; Zebra quit on Settings… with no window open).
+/// So the first time the viewport is only announced, empty; eframe creates
+/// its window at the start of the next pass, which it does on every path,
+/// and from then on it is drawn as before. One pass later, whatever the
+/// timing.
+pub fn own_window_ready(ctx: &egui::Context, vid: egui::ViewportId, vb: &egui::ViewportBuilder) -> bool {
+    if ctx.embed_viewports() || ctx.input(|i| i.raw.viewports.contains_key(&vid)) {
+        return true;
+    }
+    ctx.show_viewport_deferred(vid, vb.clone(), |ui, _| {
+        egui::CentralPanel::default().show(ui, |_| {});
+    });
+    ctx.request_repaint();
+    false
+}
+
 /// About Zebra: its own small window, like every Mac app's, so it also
 /// opens when no document is (it used to be drawn inside a document window,
 /// which brought a blank one back for it).
@@ -948,6 +969,9 @@ pub fn about(app: &mut ZebraApp, ctx: &egui::Context) {
     let size = EVec2::new(320.0, 190.0);
     let vb = egui::ViewportBuilder::default().with_title("").with_inner_size(size).with_resizable(false).with_minimize_button(false).with_maximize_button(false);
     let vid = egui::ViewportId::from_hash_of("zebra-about");
+    if !own_window_ready(ctx, vid, &vb) {
+        return;
+    }
     ctx.show_viewport_immediate(vid, vb, |ui, class| {
         let ctx = ui.ctx().clone();
         // As in Settings: a new native window can come up after our first

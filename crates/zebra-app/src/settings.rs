@@ -55,6 +55,9 @@ pub fn show(app: &mut ZebraApp, ctx: &egui::Context) {
         .with_minimize_button(false)
         .with_maximize_button(false);
     let vid = egui::ViewportId::from_hash_of("zebra-settings");
+    if !crate::panels::own_window_ready(ctx, vid, &vb) {
+        return;
+    }
     ctx.show_viewport_immediate(vid, vb, |ui, class| {
         let ctx = ui.ctx().clone();
         // A new native window can come up after our first paint (another
