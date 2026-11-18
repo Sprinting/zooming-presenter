@@ -39,7 +39,7 @@ pub fn refresh_accent() -> bool {
 }
 
 #[cfg(target_os = "macos")]
-pub use imp::{NsParent, adopt_window, sync_window};
+pub use imp::{NsParent, adopt_root, adopt_window, sync_window};
 
 #[cfg(target_os = "macos")]
 mod imp {
@@ -126,6 +126,20 @@ mod imp {
         // the window; we only use it on the main thread during `ui`.
         let view: &NSView = unsafe { a.ns_view.cast::<NSView>().as_ref() };
         view.window()
+    }
+
+    /// Get hold of the root window and name its tab group before anything
+    /// else happens in its first frame. The menu bar is registered during
+    /// that frame, and AppKit decides right then, once, whether the Window
+    /// menu gets tab commands: a window must already qualify.
+    pub fn adopt_root(app: &mut ZebraApp, frame: &eframe::Frame) {
+        if app.mac_sync.window.is_some() {
+            return;
+        }
+        app.mac_sync.window = ns_window(frame);
+        if let Some(w) = &app.mac_sync.window {
+            name_tab_group(w);
+        }
     }
 
     /// Push document state to the window; refresh the accent when the app

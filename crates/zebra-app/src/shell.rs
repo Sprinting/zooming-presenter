@@ -522,6 +522,8 @@ impl eframe::App for Shell {
         if ctx.input(|i| i.viewport().focused == Some(true)) {
             self.set_front(0);
         }
+        #[cfg(target_os = "macos")]
+        crate::mac::adopt_root(&mut self.windows[0], frame);
         if !hidden(&ctx) || self.windows.len() == 1 || self.windows[0].wake_hidden {
             self.windows[0].frame(ui);
         }
