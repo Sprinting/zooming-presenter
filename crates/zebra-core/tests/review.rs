@@ -459,3 +459,24 @@ fn r13_deleting_a_custom_theme_returns_to_its_base() {
     ed.apply(Command::DeleteTheme { id: "custom-1".into() }, H).unwrap();
     assert_eq!(ed.doc.theme, "classic");
 }
+
+/// R20: lint on a big deck is quick (it compared every pair of elements,
+/// measuring text for each), and still finds the overlaps.
+#[test]
+fn r20_lint_is_fast_on_a_big_deck_and_still_finds_overlaps() {
+    let mut ed = Editor::default();
+    let mut cmds = vec![];
+    for i in 0..3000 {
+        let (x, y) = ((i % 60) as f64 * 400.0, (i / 60) as f64 * 300.0);
+        cmds.push(Command::AddShape { shape: ShapeKind::Rectangle, x, y, w: 200.0, h: 100.0, rotation: 0.0, fill: None, stroke: None, id: Some(format!("s{i}").as_str().into()) });
+    }
+    // Two that overlap half and half.
+    cmds.push(Command::AddShape { shape: ShapeKind::Rectangle, x: 100.0, y: 0.0, w: 200.0, h: 100.0, rotation: 0.0, fill: None, stroke: None, id: Some("over".into()) });
+    ed.apply_batch(cmds, None, H).unwrap();
+    let t = std::time::Instant::now();
+    let issues = zebra_core::describe::lint(&ed);
+    assert!(t.elapsed().as_secs_f64() < 2.0, "lint took {:?}", t.elapsed());
+    let overlaps: Vec<&serde_json::Value> = issues.iter().filter(|i| i["kind"] == "overlap").collect();
+    assert_eq!(overlaps.len(), 1, "{overlaps:?}");
+    assert_eq!(overlaps[0]["ids"], serde_json::json!(["s0", "over"]));
+}

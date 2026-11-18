@@ -451,9 +451,29 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
     }
     // Overlapping elements.
     let items: Vec<&Element> = d.ordered().filter(|e| placed(e)).collect();
-    for (i, a) in items.iter().enumerate() {
-        for b in &items[i + 1..] {
-            let (ba, bb) = (ink_bounds(ed, &theme, a), ink_bounds(ed, &theme, b));
+    // Each element is measured once, and only pairs whose boxes can touch
+    // are looked at (sorted by left edge): comparing every pair, with a
+    // text measurement for each, took minutes on a deck of thousands.
+    let boxes: Vec<crate::geom::Rect> = items.iter().map(|e| ink_bounds(ed, &theme, e)).collect();
+    let mut by_left: Vec<usize> = (0..items.len()).collect();
+    by_left.sort_by(|a, b| boxes[*a].x0.total_cmp(&boxes[*b].x0));
+    let mut pairs: Vec<(usize, usize)> = vec![];
+    for (p, &i) in by_left.iter().enumerate() {
+        for &j in &by_left[p + 1..] {
+            if boxes[j].x0 >= boxes[i].x1 {
+                break;
+            }
+            if overlap(&boxes[i], &boxes[j]) > 0.0 {
+                pairs.push((i.min(j), i.max(j)));
+            }
+        }
+    }
+    // Reported in drawing order, as before.
+    pairs.sort_unstable();
+    {
+        for (i, j) in pairs {
+            let (a, b) = (&items[i], &items[j]);
+            let (ba, bb) = (boxes[i], boxes[j]);
             let ix = overlap(&ba, &bb);
             if ix <= 0.0 {
                 continue;

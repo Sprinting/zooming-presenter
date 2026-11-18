@@ -39,9 +39,34 @@ pub fn save_theme(from: &Document, theme: &Theme, dir: &Path) -> ZResult<PathBuf
 }
 
 /// Themes saved in the library: (file, document holding it, theme).
+///
+/// The theme menu asks on every frame it is open, so the files are read
+/// again only when the folder's listing (names, sizes, dates) changed.
 pub fn list_themes() -> Vec<(PathBuf, Document, Theme)> {
+    type Stamp = Vec<(PathBuf, u64, Option<std::time::SystemTime>)>;
+    static CACHE: std::sync::Mutex<Option<(Stamp, Vec<(PathBuf, Document, Theme)>)>> = std::sync::Mutex::new(None);
     let Some(d) = themes_dir() else { return vec![] };
-    let mut v: Vec<_> = zebra_files(&d)
+    let files = zebra_files(&d);
+    let stamp: Stamp = files
+        .iter()
+        .map(|p| {
+            let m = std::fs::metadata(p).ok();
+            (p.clone(), m.as_ref().map_or(0, |m| m.len()), m.and_then(|m| m.modified().ok()))
+        })
+        .collect();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((s, v)) = &*cache {
+        if *s == stamp {
+            return v.clone();
+        }
+    }
+    let v = read_themes(files);
+    *cache = Some((stamp, v.clone()));
+    v
+}
+
+fn read_themes(files: Vec<PathBuf>) -> Vec<(PathBuf, Document, Theme)> {
+    let mut v: Vec<_> = files
         .into_iter()
         .filter_map(|p| {
             let doc = io::load(&p).ok()?;

@@ -371,7 +371,8 @@ fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
             app.queued.push(Action::SetTheme(t.id.clone()));
             ui.close();
         }
-    }    let mine = crate::library::list_themes();
+    }
+    let mine = crate::library::list_themes();
     if !mine.is_empty() {
         ui.separator();
         ui.label(RichText::new(&crate::t!("toolbar-theme-my-themes")).size(11.0).weak());

@@ -279,6 +279,14 @@ impl<C: Connector> McpServer<C> {
                 Err(ClientError::Rpc(e)) => return Err(format_rpc_error(&e)),
                 Err(ClientError::Io(e)) => {
                     self.client = None;
+                    // A call that changes something is never sent twice:
+                    // the first one may have arrived (a slow batch that
+                    // ran into the timeout would be applied again).
+                    if !retry_is_safe(method) {
+                        return Err(format!(
+                            "lost connection to Zebra during `{method}`: {e}. It may or may not have been applied: read the document again (describe) before retrying."
+                        ));
+                    }
                     if attempt == 1 {
                         return Err(format!("lost connection to Zebra: {e}"));
                     }
@@ -381,7 +389,10 @@ impl<C: Connector> McpServer<C> {
                 }
                 match err {
                     Some(e) if results.is_empty() => Err(e),
-                    _ => Ok(text(json!(results))),
+                    // Some steps done, then a failure: an error, with
+                    // what was done, so it isn't read as success.
+                    Some(e) => Err(format!("{} of {steps} steps done ({}), then: {e}", results.len(), Value::Array(results))),
+                    None => Ok(text(json!(results))),
                 }
             }
             _ => {
@@ -410,4 +421,23 @@ fn format_rpc_error(e: &crate::protocol::RpcError) -> String {
         s.push_str(&format!("\nValid values: {}", v.join(", ")));
     }
     s
+}
+
+/// Calls that only read: sending one a second time after a lost
+/// connection changes nothing.
+fn retry_is_safe(method: &str) -> bool {
+    matches!(method, "describe" | "state" | "query" | "documents" | "commands" | "schema" | "ping" | "capture" | "export" | "wait")
+}
+
+#[cfg(test)]
+mod retry_tests {
+    #[test]
+    fn only_reads_are_sent_again() {
+        for m in ["describe", "state", "query", "documents", "capture"] {
+            assert!(super::retry_is_safe(m), "{m}");
+        }
+        for m in ["apply", "batch", "view", "undo", "redo", "begin", "commit", "abort", "new_document", "close_document", "copy_to", "open", "save"] {
+            assert!(!super::retry_is_safe(m), "{m}");
+        }
+    }
 }
