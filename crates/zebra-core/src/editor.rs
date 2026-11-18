@@ -3046,8 +3046,8 @@ pub fn image_info(bytes: &[u8]) -> ZResult<(String, u32, u32)> {
 
 /// Apply `(patch, inverse)` pairs in order. If one fails, roll back the ones
 /// already applied so `doc` is unchanged.
-fn replay<'a>(doc: &mut Document, steps: impl Iterator<Item = (&'a json_patch::Patch, &'a json_patch::Patch)>) -> Result<(), String> {
-    let mut done: Vec<&json_patch::Patch> = vec![];
+fn replay<'a>(doc: &mut Document, steps: impl Iterator<Item = (&'a crate::delta::Change, &'a crate::delta::Change)>) -> Result<(), String> {
+    let mut done: Vec<&crate::delta::Change> = vec![];
     for (p, inv) in steps {
         if let Err(e) = crate::delta::apply(doc, p) {
             for inv in done.into_iter().rev() {

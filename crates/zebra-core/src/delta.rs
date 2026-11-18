@@ -18,6 +18,11 @@
 //! Patches are applied with `json_patch::patch` to a pruned JSON view that
 //! holds only the fields and elements the patch touches, then written back.
 //!
+//! The two ordered lists are not patched as JSON at all: their edit script
+//! is kept as [`Splice`]s (remove this run, insert these items) and applied
+//! to the `Vec` in one pass. Undo of a change in a 100,000-element deck
+//! used to serialise and re-parse the whole draw order and path.
+//!
 //! Image/media assets are not part of the patch: they are content
 //! addressed and only ever added during a session, so every history step
 //! can refer to them by key.
@@ -35,8 +40,46 @@ use crate::model::{Document, Element, ElementId, PathStep};
 /// One undoable change.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Delta {
-    pub forward: Patch,
-    pub backward: Patch,
+    pub forward: Change,
+    pub backward: Change,
+}
+
+/// One direction of a [`Delta`].
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Change {
+    /// Everything but the two ordered lists.
+    pub patch: Patch,
+    pub z_order: Vec<Splice<ElementId>>,
+    pub path: Vec<Splice<PathStep>>,
+}
+
+/// Replace `remove` items at `at` (an index in the list *before* the
+/// change) with `insert`. A change's splices are in rising order of `at`
+/// and never overlap.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Splice<T> {
+    pub at: usize,
+    pub remove: usize,
+    pub insert: Vec<T>,
+}
+
+impl Change {
+    pub fn is_empty(&self) -> bool {
+        self.patch.0.is_empty() && self.z_order.is_empty() && self.path.is_empty()
+    }
+    /// Operations in all (a list edit counts one per item moved).
+    pub fn op_count(&self) -> usize {
+        fn n<T>(v: &[Splice<T>]) -> usize {
+            v.iter().map(|s| s.remove + s.insert.len()).sum()
+        }
+        self.patch.0.len() + n(&self.z_order) + n(&self.path)
+    }
+    fn approx_bytes(&self) -> usize {
+        let ops: usize = self.patch.0.iter().map(|op| serde_json::to_string(op).map(|s| s.len()).unwrap_or(0)).sum();
+        let z: usize = self.z_order.iter().map(|s| 24 + s.insert.iter().map(|i| i.len() + 24).sum::<usize>()).sum();
+        let p: usize = self.path.iter().map(|s| 24 + s.insert.iter().map(|i| serde_json::to_string(i).map(|s| s.len()).unwrap_or(0)).sum::<usize>()).sum();
+        ops + z + p
+    }
 }
 
 impl Delta {
@@ -45,14 +88,11 @@ impl Delta {
         Delta { forward: diff_with(before, after, &ids), backward: diff_with(after, before, &ids) }
     }
     pub fn is_empty(&self) -> bool {
-        self.forward.0.is_empty()
+        self.forward.is_empty()
     }
     /// Rough heap size, for diagnostics.
     pub fn approx_bytes(&self) -> usize {
-        fn ops(p: &Patch) -> usize {
-            p.0.iter().map(|op| serde_json::to_string(op).map(|s| s.len()).unwrap_or(0)).sum()
-        }
-        ops(&self.forward) + ops(&self.backward)
+        self.forward.approx_bytes() + self.backward.approx_bytes()
     }
 }
 
@@ -89,12 +129,12 @@ fn changed_ids<'a>(a: &'a Document, b: &'a Document) -> Vec<&'a ElementId> {
     }
 }
 
-/// A patch that turns `a` into `b`.
-pub fn diff(a: &Document, b: &Document) -> Patch {
+/// A change that turns `a` into `b`.
+pub fn diff(a: &Document, b: &Document) -> Change {
     diff_with(a, b, &changed_ids(a, b))
 }
 
-fn diff_with(a: &Document, b: &Document, ids: &[&ElementId]) -> Patch {
+fn diff_with(a: &Document, b: &Document, ids: &[&ElementId]) -> Change {
     let mut ops = vec![];
     let mut scalar = |name: &str, x: Value, y: Value| {
         if x != y {
@@ -136,47 +176,72 @@ fn diff_with(a: &Document, b: &Document, ids: &[&ElementId]) -> Patch {
             None => ops.push(PatchOperation::Remove(RemoveOperation { path: ptr(&["soundtrack"]) })),
         }
     }
-    if a.z_order != b.z_order {
-        list_ops(&mut ops, "z_order", &a.z_order, &b.z_order, |s| s.clone(), |s| Value::String(s.clone()));
-    }
-    if a.path != b.path {
-        list_ops(&mut ops, "path", &a.path, &b.path, |s: &PathStep| serde_json::to_string(s).unwrap_or_default(), to_value);
-    }
-    Patch(ops)
+    let z_order = if a.z_order != b.z_order { splices(&a.z_order, &b.z_order, |s| s.as_str()) } else { vec![] };
+    let path = if a.path != b.path { splices(&a.path, &b.path, |s: &PathStep| serde_json::to_string(s).unwrap_or_default()) } else { vec![] };
+    Change { patch: Patch(ops), z_order, path }
 }
 
-/// RFC 6902 add/remove operations for an ordered list, from Myers' diff.
-fn list_ops<T, K: Eq + std::hash::Hash>(
-    ops: &mut Vec<PatchOperation>,
-    field: &str,
-    a: &[T],
-    b: &[T],
-    key: impl Fn(&T) -> K,
-    value: impl Fn(&T) -> Value,
-) {
-    let (ka, kb): (Vec<K>, Vec<K>) = (a.iter().map(&key).collect(), b.iter().map(&key).collect());
-    // Walking the ops in order, the list so far equals b[..new_index]
-    // followed by a[old_index..], so every edit lands at `new_index`.
+/// The edit script for an ordered list, from Myers' diff (a layer brought
+/// to the front is one removal and one insertion, not a rewrite).
+fn splices<'a, T: Clone, K: Eq + std::hash::Hash + Ord>(a: &'a [T], b: &'a [T], key: impl Fn(&'a T) -> K) -> Vec<Splice<T>> {
+    // The usual edit touches one end or one run: trim what both lists
+    // share at the ends before diffing, so the diff sees only the middle.
+    let pre = a.iter().zip(b).take_while(|(x, y)| key(x) == key(y)).count();
+    let (a2, b2) = (&a[pre..], &b[pre..]);
+    let suf = a2.iter().rev().zip(b2.iter().rev()).take_while(|(x, y)| key(x) == key(y)).count();
+    let (a2, b2) = (&a2[..a2.len() - suf], &b2[..b2.len() - suf]);
+    if a2.is_empty() || b2.is_empty() {
+        return vec![Splice { at: pre, remove: a2.len(), insert: b2.to_vec() }];
+    }
+    let (ka, kb): (Vec<K>, Vec<K>) = (a2.iter().map(&key).collect(), b2.iter().map(&key).collect());
+    let mut out = vec![];
     for op in capture_diff_slices(Algorithm::Myers, &ka, &kb) {
-        let (new_index, old_len, new_len) = match op {
+        let (old_index, old_len, new_index, new_len) = match op {
             DiffOp::Equal { .. } => continue,
-            DiffOp::Delete { new_index, old_len, .. } => (new_index, old_len, 0),
-            DiffOp::Insert { new_index, new_len, .. } => (new_index, 0, new_len),
-            DiffOp::Replace { new_index, old_len, new_len, .. } => (new_index, old_len, new_len),
+            DiffOp::Delete { old_index, old_len, new_index } => (old_index, old_len, new_index, 0),
+            DiffOp::Insert { old_index, new_index, new_len } => (old_index, 0, new_index, new_len),
+            DiffOp::Replace { old_index, old_len, new_index, new_len } => (old_index, old_len, new_index, new_len),
         };
-        let at = new_index.to_string();
-        for _ in 0..old_len {
-            ops.push(PatchOperation::Remove(RemoveOperation { path: ptr(&[field, &at]) }));
-        }
-        for k in 0..new_len {
-            let i = (new_index + k).to_string();
-            ops.push(PatchOperation::Add(AddOperation { path: ptr(&[field, &i]), value: value(&b[new_index + k]) }));
-        }
+        out.push(Splice { at: pre + old_index, remove: old_len, insert: b2[new_index..new_index + new_len].to_vec() });
     }
+    out
 }
 
-/// Apply a patch made by [`diff`] to `doc`. On error `doc` is unchanged.
-pub fn apply(doc: &mut Document, patch: &Patch) -> Result<(), String> {
+/// `list` with `splices` applied, in one pass. `None` when they don't fit
+/// the list (it isn't the one they were made from).
+fn spliced<T: Clone>(list: &[T], splices: &[Splice<T>]) -> Option<Vec<T>> {
+    let grow: usize = splices.iter().map(|s| s.insert.len()).sum();
+    let mut out = Vec::with_capacity(list.len() + grow);
+    let mut cur = 0;
+    for s in splices {
+        let end = s.at.checked_add(s.remove)?;
+        if s.at < cur || end > list.len() {
+            return None;
+        }
+        out.extend_from_slice(&list[cur..s.at]);
+        out.extend(s.insert.iter().cloned());
+        cur = end;
+    }
+    out.extend_from_slice(&list[cur..]);
+    Some(out)
+}
+
+/// Apply a change made by [`diff`] to `doc`. On error `doc` is unchanged.
+pub fn apply(doc: &mut Document, change: &Change) -> Result<(), String> {
+    // The lists first, into new Vecs: nothing is written until all of it fits.
+    let z_order = if change.z_order.is_empty() { None } else { Some(spliced(&doc.z_order, &change.z_order).ok_or("the draw order isn't the one this step was made from")?) };
+    let path = if change.path.is_empty() { None } else { Some(spliced(&doc.path, &change.path).ok_or("the path isn't the one this step was made from")?) };
+    apply_patch(doc, &change.patch)?;
+    if let Some(v) = z_order {
+        doc.z_order = v;
+    }
+    if let Some(v) = path {
+        doc.path = v;
+    }
+    Ok(())
+}
+
+fn apply_patch(doc: &mut Document, patch: &Patch) -> Result<(), String> {
     if patch.0.is_empty() {
         return Ok(());
     }
@@ -293,6 +358,59 @@ pub fn apply(doc: &mut Document, patch: &Patch) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// Any reordering, with additions and removals, goes there and back.
+    #[test]
+    fn list_edits_round_trip() {
+        let a = deck();
+        let mut seed = 7u64;
+        let mut rnd = move |n: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((seed >> 33) as usize) % n.max(1)
+        };
+        for round in 0..200 {
+            let mut b = a.clone();
+            for _ in 0..(1 + round % 7) {
+                match rnd(4) {
+                    0 if !b.z_order.is_empty() => {
+                        let id = b.z_order.remove(rnd(b.z_order.len()));
+                        b.elements.remove(&id);
+                    }
+                    1 if !b.z_order.is_empty() => {
+                        let id = b.z_order.remove(rnd(b.z_order.len()));
+                        let at = rnd(b.z_order.len() + 1);
+                        b.z_order.insert(at, id);
+                    }
+                    2 => b.z_order.reverse(),
+                    _ => {
+                        let i = rnd(b.z_order.len() + 1);
+                        let target = crate::model::StepTarget::Overview;
+                        b.path.insert(i.min(b.path.len()), PathStep { target, builds: vec![], notes: format!("n{round}-{i}"), duration: None, dwell: None, hide_builds: false, voiceover: None });
+                    }
+                }
+            }
+            let d = Delta::between(&a, &b);
+            let mut c = a.clone();
+            apply(&mut c, &d.forward).unwrap();
+            assert_eq!(c, b, "forward, round {round}");
+            apply(&mut c, &d.backward).unwrap();
+            assert_eq!(c, a, "backward, round {round}");
+        }
+    }
+
+    #[test]
+    fn a_change_that_does_not_fit_leaves_the_document_alone() {
+        let a = deck();
+        let mut b = a.clone();
+        b.z_order.truncate(10);
+        b.title = "T".into();
+        let d = Delta::between(&a, &b);
+        // Applied to a document it wasn't made from.
+        let mut other = Document::default();
+        let before = other.clone();
+        assert!(apply(&mut other, &d.forward).is_err());
+        assert_eq!(other, before);
+    }
+
     fn deck() -> Document {
         let mut d = Document::default();
         let v: Value = serde_json::json!({
@@ -318,7 +436,8 @@ mod tests {
         let id = b.z_order.remove(10);
         b.z_order.push(id);
         let p = diff(&a, &b);
-        assert_eq!(p.0.len(), 2, "{p:?}");
+        assert_eq!(p.op_count(), 2, "{p:?}");
+        assert!(p.patch.0.is_empty());
         let mut c = a.clone();
         apply(&mut c, &p).unwrap();
         assert_eq!(c, b);
@@ -330,8 +449,8 @@ mod tests {
         let mut b = a.clone();
         b.elements.get_mut("e7").unwrap().transform.x = 42.0;
         let d = Delta::between(&a, &b);
-        assert_eq!(d.forward.0.len(), 1);
-        assert_eq!(d.forward.0[0].to_string().contains("/elements/e7/transform/x"), true);
+        assert_eq!(d.forward.op_count(), 1);
+        assert_eq!(d.forward.patch.0[0].to_string().contains("/elements/e7/transform/x"), true);
         let mut c = b.clone();
         apply(&mut c, &d.backward).unwrap();
         assert_eq!(c, a);

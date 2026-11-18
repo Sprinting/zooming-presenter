@@ -415,3 +415,29 @@ fn undo_and_redo_say_which_elements_changed() {
     });
     assert_eq!(ids, Some(vec!["b".to_string()]));
 }
+
+/// Speed fix 5: undo used to cost about 35 times an edit, because the
+/// whole draw order and path went through JSON.
+#[test]
+fn undo_in_a_big_deck_costs_about_what_the_edit_did() {
+    let mut ed = Editor::default();
+    let cmds: Vec<Command> = (0..20_000).map(|i| cmd(json!({"op":"add_shape","shape":"rectangle","x":(i % 200) * 150,"y":(i / 200) * 150,"w":100,"h":100}))).collect();
+    ed.apply_batch(cmds, Some("fill".into()), H).unwrap();
+    let first = ed.doc.z_order[0].clone();
+    let time = |f: &mut dyn FnMut()| {
+        let t = std::time::Instant::now();
+        f();
+        t.elapsed().as_secs_f64()
+    };
+    let (mut edit, mut undo) = (f64::MAX, f64::MAX);
+    for _ in 0..5 {
+        edit = edit.min(time(&mut || {
+            ed.apply(cmd(json!({"op":"z_order","ids":[first],"order":"front"})), H).unwrap();
+        }));
+        undo = undo.min(time(&mut || {
+            ed.undo(H).unwrap();
+        }));
+    }
+    assert_eq!(ed.doc.z_order[0], first);
+    assert!(undo < edit * 3.0 + 0.02, "edit {:.1} ms, undo {:.1} ms", edit * 1e3, undo * 1e3);
+}
