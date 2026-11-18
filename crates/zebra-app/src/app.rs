@@ -78,6 +78,8 @@ pub struct ZebraApp {
     pub wake_hidden: bool,
     /// `editor.loads` when `after_load` last ran.
     pub seen_loads: u64,
+    /// When decoded pictures were last trimmed.
+    pub last_image_trim: f64,
     pub renderer: Arc<Renderer>,
     pub wgpu: Option<egui_wgpu::RenderState>,
     pub gpu_canvas: Option<zebra_render::gpu::VelloCanvas>,
@@ -257,6 +259,7 @@ impl ZebraApp {
             viewport: egui::ViewportId::ROOT,
             wake_hidden: false,
             seen_loads: 0,
+            last_image_trim: 0.0,
             open_elsewhere: vec![],
             renderer: renderer.clone(),
             gpu_canvas: wgpu.as_ref().map(zebra_render::gpu::VelloCanvas::new),
@@ -1214,6 +1217,17 @@ impl ZebraApp {
         if let Some(wait) = crate::files::autosave_due_in(self) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
+        // Decoded pictures not drawn for five minutes are given back. A
+        // window in view redraws once a minute while any are held, which
+        // keeps its own; a hidden window's go.
+        let now = self.now();
+        if now - self.last_image_trim >= IMAGE_TRIM_EVERY {
+            self.last_image_trim = now;
+            let (_, more) = self.renderer.images().trim_idle(std::time::Duration::from_secs_f64(IMAGE_IDLE));
+            if more {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(IMAGE_TRIM_EVERY));
+            }
+        }
         if !self.out_of_sight(ctx) {
             return;
         }
@@ -1296,6 +1310,8 @@ impl ZebraApp {
         if self.front {
             crate::settings::show(self, &ctx);
         }
+
+        self.symbols.after_frame(&ctx);
 
         let queued = std::mem::take(&mut self.queued);
         for a in queued {
@@ -1580,3 +1596,8 @@ impl eframe::App for ZebraApp {
 pub fn same_file(p: &std::path::Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
+
+/// Decoded pictures are dropped after this long without being drawn.
+const IMAGE_IDLE: f64 = 300.0;
+/// How often that is checked.
+const IMAGE_TRIM_EVERY: f64 = 60.0;

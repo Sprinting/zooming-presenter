@@ -215,6 +215,12 @@ impl Library {
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, (_, used)| now.duration_since(*used) < IDLE);
     }
 
+    /// Drop every cached SVG (the panel that showed them has closed).
+    /// They are read from disk again when next drawn or inserted.
+    pub fn clear(&self) {
+        self.cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
     /// SVGs held in memory now.
     pub fn cached(&self) -> usize {
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).len()

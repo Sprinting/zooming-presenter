@@ -39,11 +39,13 @@ pub struct Symbols {
     /// Last search: (query, set) and its hits.
     results: Option<((String, Option<u16>), Vec<SymbolRef>)>,
     last_trim: Option<Instant>,
+    /// The grid was drawn since `after_frame` last looked.
+    shown: bool,
 }
 
 impl Default for Symbols {
     fn default() -> Self {
-        Symbols { set: None, tiles: HashMap::new(), tx: None, rx: None, results: None, last_trim: None }
+        Symbols { set: None, tiles: HashMap::new(), tx: None, rx: None, results: None, last_trim: None, shown: false }
     }
 }
 
@@ -85,6 +87,31 @@ impl Symbols {
             if let Some(lib) = library() {
                 lib.trim();
             }
+        }
+    }
+
+    /// Tiles held now (for tests and the `perf` query).
+    pub fn tiles(&self) -> usize {
+        self.tiles.len()
+    }
+
+    /// Call once a frame, after the panels: when the grid was not drawn
+    /// (the panel closed, or another tab is showing), its tiles, search
+    /// results and the library's SVGs are freed. The grid is the only
+    /// place that trims them, so a closed panel used to hold them for good.
+    pub fn after_frame(&mut self, ctx: &egui::Context) {
+        let _ = ctx;
+        if std::mem::take(&mut self.shown) || (self.tiles.is_empty() && self.results.is_none()) {
+            return;
+        }
+        if let Some(rx) = &self.rx {
+            while rx.try_recv().is_ok() {}
+        }
+        self.tiles.clear();
+        self.results = None;
+        self.last_trim = None;
+        if let Some(lib) = library() {
+            lib.clear();
         }
     }
 
@@ -151,6 +178,7 @@ pub fn grid(app: &mut ZebraApp, win: &mut Window, ui: &mut egui::Ui, p: &Palette
     };
     let mut sym = std::mem::take(&mut app.symbols);
     sym.start(ui.ctx());
+    sym.shown = true;
     sym.poll(ui.ctx());
 
     let all = crate::t!("symbols-all-sets");

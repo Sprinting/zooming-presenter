@@ -182,6 +182,8 @@ type Key = (String, u8);
 struct Entry {
     img: Decoded,
     used: u64,
+    /// When it was last drawn, for the idle trim.
+    at: std::time::Instant,
 }
 
 #[derive(Default)]
@@ -270,6 +272,26 @@ impl ImageCache {
         i.failed.clear();
     }
 
+    /// Drop decoded pictures nobody has drawn for `idle`, whatever the
+    /// budget: a deck left open in the background gives its memory back.
+    /// The smallest level of each picture stays, so the picture is on
+    /// screen at once (soft, then sharp) when it is drawn again. Returns
+    /// (bytes freed, whether anything that could go later is still held).
+    pub fn trim_idle(&self, idle: std::time::Duration) -> (usize, bool) {
+        let now = std::time::Instant::now();
+        let mut i = lock(&self.shared.inner);
+        let mut smallest: HashMap<String, u8> = HashMap::new();
+        for (k, _) in i.map.iter() {
+            let l = smallest.entry(k.0.clone()).or_insert(k.1);
+            *l = (*l).max(k.1);
+        }
+        let before: usize = i.map.values().map(|e| e.img.bytes()).sum();
+        i.map.retain(|k, e| smallest.get(&k.0) == Some(&k.1) || now.duration_since(e.at) < idle);
+        i.bytes = i.map.values().map(|e| e.img.bytes()).sum();
+        let more = i.map.iter().any(|(k, _)| smallest.get(&k.0) != Some(&k.1));
+        (before - i.bytes, more)
+    }
+
     /// Start a new frame: entries touched from now on are protected.
     pub fn next_generation(&self) {
         self.shared.generation.fetch_add(1, Ordering::Relaxed);
@@ -303,6 +325,7 @@ impl ImageCache {
             }
             if let Some(e) = i.map.get_mut(&key) {
                 e.used = g;
+                e.at = std::time::Instant::now();
                 return Some(e.img.clone());
             }
             if !sync {
@@ -320,6 +343,7 @@ impl ImageCache {
                     .min_by_key(|((_, l), _)| if *l < level { (0, level - *l) } else { (1, *l - level) });
                 return best.map(|(_, e)| {
                     e.used = g;
+                    e.at = std::time::Instant::now();
                     e.img.clone()
                 });
             }
@@ -375,7 +399,7 @@ fn insert(shared: &Shared, key: Key, out: Vec<(u8, Decoded)>, g: u64) -> Option<
         }
         if !i.map.contains_key(&k) {
             i.bytes += img.bytes();
-            i.map.insert(k, Entry { img, used: g });
+            i.map.insert(k, Entry { img, used: g, at: std::time::Instant::now() });
         }
     }
     evict(&mut i, shared.budget.load(Ordering::Relaxed), shared.generation.load(Ordering::Relaxed));
@@ -530,6 +554,33 @@ mod tests {
         c.next_generation();
         assert!(lock(&c.shared.inner).map.contains_key(&("a5".to_string(), 0)));
         assert!(!lock(&c.shared.inner).map.contains_key(&("a0".to_string(), 0)));
+    }
+
+    /// Speed fix 4: pictures nobody draws are given back after a while,
+    /// except the small stand-in level.
+    #[test]
+    fn idle_pictures_are_dropped_and_drawn_ones_kept() {
+        let c = ImageCache::default();
+        let a = png(1024, 1024);
+        for n in 0..4 {
+            c.get(&format!("a{n}"), "png", &a, (1024, 1024), 0, true).unwrap();
+        }
+        let full = c.stats().bytes;
+        assert!(full >= 4 * 1024 * 1024 * 4);
+        // Nothing is idle yet.
+        assert_eq!(c.trim_idle(std::time::Duration::from_secs(60)).0, 0);
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        // One picture is drawn again; the others have been idle "long".
+        c.next_generation();
+        c.get("a3", "png", &a, (1024, 1024), 0, true).unwrap();
+        let (freed, more) = c.trim_idle(std::time::Duration::from_millis(50));
+        assert!(freed >= 3 * 1024 * 1024 * 4, "{freed}");
+        assert!(more, "a3's full picture is still held");
+        let i = lock(&c.shared.inner);
+        assert!(i.map.contains_key(&("a3".to_string(), 0)));
+        assert!(!i.map.contains_key(&("a0".to_string(), 0)));
+        assert!(i.map.keys().any(|k| k.0 == "a0"), "the small level stays as a stand-in");
+        assert_eq!(i.bytes, i.map.values().map(|e| e.img.bytes()).sum::<usize>());
     }
 
     #[test]
