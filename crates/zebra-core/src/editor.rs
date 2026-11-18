@@ -290,6 +290,7 @@ impl Editor {
     /// Replace the whole document (open file). Clears history.
     pub fn load(&mut self, mut doc: Document, path: Option<std::path::PathBuf>) {
         self.tx = None;
+        crate::check::repair(&mut doc);
         self.remeasure_all(&mut doc);
         self.doc = doc;
         self.undo.clear();
@@ -336,7 +337,8 @@ impl Editor {
         Ok(())
     }
 
-    /// Commit the open transaction. No-op if nothing changed.
+    /// Commit the open transaction, whoever opened it. No-op if nothing
+    /// changed. Callers acting for one party use [`Editor::commit_as`].
     pub fn commit(&mut self) {
         let Some(tx) = self.tx.take() else { return };
         if tx.before == self.doc {
@@ -346,20 +348,86 @@ impl Editor {
         self.record(tx.label, tx.origin, tx.before, ids, false, 1);
     }
 
+    /// Who opened the transaction in progress.
+    pub fn transaction_owner(&self) -> Option<&Origin> {
+        self.tx.as_ref().map(|t| &t.origin)
+    }
+
+    /// Commit the open transaction only if `origin` opened it: the end of
+    /// a person's drag never closes a batch an agent has open, and the
+    /// other way round. Returns whether a transaction was closed.
+    pub fn commit_as(&mut self, origin: &Origin) -> bool {
+        if self.tx.as_ref().is_some_and(|t| t.origin == *origin) {
+            self.commit();
+            return true;
+        }
+        false
+    }
+
+    /// Abort the open transaction only if `origin` opened it.
+    pub fn abort_as(&mut self, origin: &Origin) -> bool {
+        if self.tx.as_ref().is_some_and(|t| t.origin == *origin) {
+            self.abort();
+            return true;
+        }
+        false
+    }
+
     /// Abort: restore the document as it was at `begin`.
     pub fn abort(&mut self) {
         if let Some(tx) = self.tx.take() {
             if tx.before != self.doc {
                 self.doc = tx.before;
                 self.revision += 1;
+                let ids: Vec<ElementId> = tx.ids.into_iter().collect();
+                self.settle_view();
                 self.events.push(Event::DocumentChanged {
                     revision: self.revision,
                     origin: tx.origin,
                     label: format!("Cancel {}", tx.label),
-                    ids: vec![],
+                    ids,
                 });
             }
         }
+    }
+
+    /// After the document changed under the view: drop selected ids that
+    /// are gone, and keep the presenting position on the path (the path
+    /// can get shorter under a running show: undo, an agent, Clear Path).
+    fn settle_view(&mut self) {
+        let doc = &self.doc;
+        self.view.selection.retain(|id| doc.elements.contains_key(id));
+        self.view.agent_selection.retain(|id| doc.elements.contains_key(id));
+        let p = &mut self.view.present;
+        let before = (p.step, p.build);
+        match p.step {
+            Some(_) if doc.path.is_empty() => {
+                p.step = None;
+                p.build = 0;
+            }
+            Some(i) if i >= doc.path.len() => {
+                let last = doc.path.len() - 1;
+                p.step = Some(last);
+                p.build = doc.path[last].builds.len();
+            }
+            Some(i) => p.build = p.build.min(doc.path[i].builds.len()),
+            None => p.build = 0,
+        }
+        if (p.step, p.build) != before && self.view.mode == Mode::Present {
+            let (step, build) = (p.step, p.build);
+            self.events.push(Event::StepChanged { step, build });
+        }
+    }
+
+    /// A transaction someone else has open blocks `origin`'s undo and redo.
+    /// The person outranks agents: their undo ends an agent's open batch
+    /// (as Pause does); an agent never ends the person's drag.
+    fn settle_tx_for_history(&mut self, origin: &Origin) -> ZResult<()> {
+        if origin.is_agent() && self.tx.as_ref().is_some_and(|t| t.origin != *origin) {
+            return Err(busy());
+        }
+        self.commit();
+        Ok(())
     }
 
     fn check_agent(&self, origin: &Origin) -> ZResult<()> {
@@ -424,10 +492,14 @@ impl Editor {
             out.revision = self.revision;
             return Ok(out);
         }
-        // fix selections pointing at deleted elements
-        let doc = &self.doc;
-        self.view.selection.retain(|id| doc.elements.contains_key(id));
-        self.view.agent_selection.retain(|id| doc.elements.contains_key(id));
+        // Nothing unusable gets in: a result with a number that overflowed
+        // (or a text range outside its text) is refused whole. Checked on
+        // the result, so every command and every route is covered.
+        if let Err(e) = self.check_result(&before, &out) {
+            self.doc = before;
+            return Err(e);
+        }
+        self.settle_view();
 
         // Deleted ids stay in the entry so "Delete 2 objects" says 2.
         let ids = out.affected();
@@ -486,31 +558,57 @@ impl Editor {
         self.events.push(Event::DocumentChanged { revision: self.revision, origin, label, ids });
     }
 
+    /// What a batch left behind must hold the invariants in [`crate::check`].
+    fn check_result(&self, before: &Document, out: &Outcome) -> ZResult<()> {
+        let mut seen = HashSet::new();
+        for id in out.created.iter().chain(&out.changed) {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Some(e) = self.doc.elements.get(id) {
+                crate::check::element(e)?;
+            }
+        }
+        // Connectors moved by `refresh`, and anything a command touched
+        // without listing it.
+        for (id, e) in &self.doc.elements {
+            if !seen.contains(id) && before.elements.get(id) != Some(e) {
+                crate::check::element(e)?;
+            }
+        }
+        if self.doc.path != before.path || self.doc.play != before.play || self.doc.soundtrack != before.soundtrack {
+            crate::check::steps(&self.doc)?;
+        }
+        Ok(())
+    }
+
     pub fn undo(&mut self, origin: Origin) -> ZResult<Option<String>> {
         self.check_agent(&origin)?;
-        self.commit();
+        self.settle_tx_for_history(&origin)?;
         let Some(h) = self.undo.pop() else { return Ok(None) };
         if let Err(e) = replay(&mut self.doc, h.deltas.iter().rev().map(|d| (&d.backward, &d.forward))) {
             self.undo.push(h);
             return Err(ZError::new("internal", format!("undo failed: {e}")));
         }
         let label = h.label.clone();
+        let ids = h.ids.clone();
         self.redo.push(h);
-        self.after_history_jump(&format!("Undo {label}"), origin);
+        self.after_history_jump(&format!("Undo {label}"), origin, ids);
         Ok(Some(label))
     }
 
     pub fn redo(&mut self, origin: Origin) -> ZResult<Option<String>> {
         self.check_agent(&origin)?;
-        self.commit();
+        self.settle_tx_for_history(&origin)?;
         let Some(h) = self.redo.pop() else { return Ok(None) };
         if let Err(e) = replay(&mut self.doc, h.deltas.iter().map(|d| (&d.forward, &d.backward))) {
             self.redo.push(h);
             return Err(ZError::new("internal", format!("redo failed: {e}")));
         }
         let label = h.label.clone();
+        let ids = h.ids.clone();
         self.undo.push(h);
-        self.after_history_jump(&format!("Redo {label}"), origin);
+        self.after_history_jump(&format!("Redo {label}"), origin, ids);
         Ok(Some(label))
     }
 
@@ -519,12 +617,12 @@ impl Editor {
         self.undo.iter().chain(&self.redo).flat_map(|h| &h.deltas).map(|d| d.approx_bytes()).sum()
     }
 
-    fn after_history_jump(&mut self, label: &str, origin: Origin) {
+    /// `ids`: the elements the undone or redone entry was about, so
+    /// listeners redraw only what shows them.
+    fn after_history_jump(&mut self, label: &str, origin: Origin, ids: Vec<ElementId>) {
         self.revision += 1;
-        let doc = &self.doc;
-        self.view.selection.retain(|id| doc.elements.contains_key(id));
-        self.view.agent_selection.retain(|id| doc.elements.contains_key(id));
-        self.events.push(Event::DocumentChanged { revision: self.revision, origin, label: label.into(), ids: vec![] });
+        self.settle_view();
+        self.events.push(Event::DocumentChanged { revision: self.revision, origin, label: label.into(), ids });
     }
 
     /// Revert everything a given agent did since the last human change
@@ -533,7 +631,11 @@ impl Editor {
         let agent = Origin::agent(name);
         let mut n = 0;
         while self.undo.last().is_some_and(|h| h.origin == agent) {
-            let _ = self.undo(Origin::Human);
+            // An entry that can't be undone stays on top: stop there
+            // rather than try it for ever.
+            if self.undo(Origin::Human).is_err() {
+                break;
+            }
             n += 1;
         }
         n
@@ -614,6 +716,11 @@ impl Editor {
             }
         };
         e.id = id.clone();
+        if let ElementKind::Text(t) = &mut e.kind {
+            // Spans and paragraph formats as given (add_element, paste) are
+            // clipped to the text; everything after relies on that.
+            crate::rich::normalize(t);
+        }
         validate_element(&e, &self.doc)?;
         measure_text(&*self.measure, &self.theme(), &mut e);
         // Frames go behind the lowest element they enclose, so drawing a frame
@@ -706,6 +813,9 @@ impl Editor {
             }
             Command::AddFrame { style, x, y, w, h, rotation, name, id, add_to_path, find_space } => {
                 let (w, h) = if style == FrameStyle::Circle { (w.max(h), w.max(h)) } else { (w, h) };
+                if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 && x.is_finite() && y.is_finite() && rotation.is_finite()) {
+                    return Err(ZError::invalid("a frame needs finite x, y and rotation, and w and h > 0"));
+                }
                 let (x, y) = if find_space {
                     let (bw, bh) = rotated_extent(w, h, rotation);
                     let c = self.doc.free_spot(Vec2::new(x, y), bw, bh);
@@ -1055,6 +1165,9 @@ impl Editor {
                     return Err(ZError::invalid("ink needs at least 2 points"));
                 }
                 let pts: Vec<Vec2> = points.iter().map(|p| Vec2::new(p[0], p[1])).collect();
+                if pts.iter().any(|p| !(p.x.is_finite() && p.y.is_finite())) || !(width.is_finite() && width > 0.0) {
+                    return Err(ZError::invalid("ink points must be finite and width > 0"));
+                }
                 let b = Rect::from_points(pts.iter().copied()).unwrap();
                 let c = b.center();
                 let e = Element {
@@ -1121,8 +1234,8 @@ impl Editor {
                 }
             }
             Command::FormatText { id, start, end, find, format } => {
+                self.check_ids(std::slice::from_ref(&id))?;
                 self.check_unlocked(std::slice::from_ref(&id))?;
-                self.element_mut(&id)?;
                 let e = self.doc.elements.get_mut(&id).unwrap();
                 let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
                 if let Some(c) = format.color.as_deref().filter(|c| !c.is_empty() && !valid_color(c)) {
@@ -1153,8 +1266,8 @@ impl Editor {
                 out.changed.push(id);
             }
             Command::FormatParagraphs { id, first, last, list, indent, indent_by, align } => {
+                self.check_ids(std::slice::from_ref(&id))?;
                 self.check_unlocked(std::slice::from_ref(&id))?;
-                self.element_mut(&id)?;
                 let e = self.doc.elements.get_mut(&id).unwrap();
                 let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
                 let count = t.text.split('\n').count();
@@ -1169,6 +1282,9 @@ impl Editor {
             Command::Move { ids, dx, dy, with_contents } => {
                 self.check_ids(&ids)?;
                 self.check_unlocked(&ids)?;
+                if !(dx.is_finite() && dy.is_finite()) {
+                    return Err(ZError::invalid("dx and dy must be finite"));
+                }
                 for id in self.expand(&ids, with_contents) {
                     let e = self.doc.elements.get_mut(&id).unwrap();
                     e.transform.x += dx;
@@ -1238,6 +1354,9 @@ impl Editor {
             Command::Rotate { ids, degrees, about, with_contents } => {
                 self.check_ids(&ids)?;
                 self.check_unlocked(&ids)?;
+                if !degrees.is_finite() {
+                    return Err(ZError::invalid("degrees must be finite"));
+                }
                 let about = about.map(|a| Vec2::new(a[0], a[1])).unwrap_or_else(|| self.bounds_of(&ids).center());
                 for id in self.expand(&ids, with_contents) {
                     let e = self.doc.elements.get_mut(&id).unwrap();
@@ -1251,6 +1370,9 @@ impl Editor {
             Command::Delete { ids } => {
                 self.check_ids(&ids)?;
                 self.check_unlocked(&ids)?;
+                // The words typed on a shape go with it.
+                let ids = self.expand(&ids, false);
+                let groups: BTreeSet<String> = ids.iter().filter_map(|id| self.doc.elements[id].group.clone()).collect();
                 let set: HashSet<&ElementId> = ids.iter().collect();
                 self.doc.z_order.retain(|z| !set.contains(z));
                 for id in &ids {
@@ -1259,6 +1381,14 @@ impl Editor {
                 self.doc.path.retain(|s| !matches!(&s.target, StepTarget::Element { id } if set.contains(id)));
                 for s in &mut self.doc.path {
                     s.builds.retain(|b| !set.contains(b));
+                }
+                // A group left with one member is no group.
+                for g in groups {
+                    let left: Vec<ElementId> = self.doc.elements.values().filter(|e| e.group.as_ref() == Some(&g)).map(|e| e.id.clone()).collect();
+                    if let [only] = left.as_slice() {
+                        self.doc.elements.get_mut(only).unwrap().group = None;
+                        out.changed.push(only.clone());
+                    }
                 }
                 self.gc_assets();
                 out.deleted.extend(ids);
@@ -1279,22 +1409,40 @@ impl Editor {
                         }
                     }
                 }
+                if !(dx.is_finite() && dy.is_finite()) {
+                    return Err(ZError::invalid("dx and dy must be finite"));
+                }
+                // Ids first, so a copied connector can point at the copies.
+                let mut new_id: HashMap<ElementId, ElementId> = HashMap::new();
+                for old in &ordered {
+                    let nid = self.doc.alloc_id(self.doc.elements[old].kind.id_prefix());
+                    new_id.insert(old.clone(), nid);
+                }
                 for old in ordered {
                     let mut e = self.doc.elements[&old].clone();
                     e.group = e.group.as_ref().and_then(|g| regroup.get(g).cloned().flatten());
-                    e.id = String::new();
                     e.transform.x += dx;
                     e.transform.y += dy;
                     e.locked = false;
-                    let nid = self.doc.alloc_id(e.kind.id_prefix());
+                    if let ElementKind::Connector(c) = &mut e.kind {
+                        // As in paste: an end stays stuck to an element copied
+                        // with it and comes loose from one that wasn't.
+                        for end in [&mut c.from, &mut c.to] {
+                            end.element = end.element.as_ref().and_then(|t| new_id.get(t).cloned());
+                        }
+                    }
+                    let nid = new_id[&old].clone();
                     e.id = nid.clone();
                     self.doc.z_order.push(nid.clone());
                     self.doc.elements.insert(nid.clone(), e);
                     out.created.push(nid);
                 }
             }
-            Command::ZOrder { ids, order } => {
+            Command::ZOrder { mut ids, order } => {
                 self.check_ids(&ids)?;
+                self.check_unlocked(&ids)?;
+                // The same id twice would be put in the order twice.
+                dedup(&mut ids);
                 let z = &mut self.doc.z_order;
                 match order {
                     ZOrderOp::Front => {
@@ -1343,10 +1491,16 @@ impl Editor {
             }
             Command::Arrange { ids, layout, gap } => {
                 self.check_ids(&ids)?;
+                self.check_unlocked(&ids)?;
+                if gap.is_some_and(|g| g.abs() > crate::check::WORLD_LIMIT) {
+                    return Err(ZError::invalid("gap is out of range"));
+                }
+                let ids = self.outermost(&ids);
                 self.arrange(&ids, layout, gap, out);
             }
             Command::Align { ids, edge } => {
                 self.check_ids(&ids)?;
+                let ids = self.outermost(&ids);
                 let all = self.bounds_of(&ids);
                 for id in &ids {
                     let b = self.doc.elements[id].bounds();
@@ -1364,6 +1518,7 @@ impl Editor {
             Command::Group { ids, id } => {
                 self.check_ids(&ids)?;
                 let members = self.doc.expand_groups(&ids);
+                self.check_unlocked(&members)?;
                 if members.len() < 2 {
                     return Err(ZError::invalid("a group needs at least two elements"));
                 }
@@ -1385,6 +1540,7 @@ impl Editor {
             Command::Ungroup { ids } => {
                 self.check_ids(&ids)?;
                 let members = self.doc.expand_groups(&ids);
+                self.check_unlocked(&members)?;
                 for m in &members {
                     let e = self.doc.elements.get_mut(m).unwrap();
                     if e.group.take().is_some() {
@@ -1451,7 +1607,7 @@ impl Editor {
                 }
                 self.doc.path.clear();
             }
-            Command::AutoPath => {
+            Command::AutoPath { discard_notes } => {
                 let mut frames: Vec<&Element> = self.doc.ordered().filter(|e| e.is_frame()).collect();
                 if frames.is_empty() {
                     return Err(ZError::invalid("there are no frames to build a path from").hint("add frames first (add_frame / wrap_in_frame)"));
@@ -1466,6 +1622,21 @@ impl Editor {
                     ((ca.y / band).floor()).total_cmp(&(cb.y / band).floor()).then(ca.x.total_cmp(&cb.x))
                 });
                 let ids: Vec<ElementId> = frames.iter().map(|f| f.id.clone()).collect();
+                // Steps that aren't frames (views, overviews, other objects)
+                // don't survive; with notes on them that needs a yes, as in
+                // clear_path.
+                let lost: Vec<String> = self
+                    .doc
+                    .path
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| !s.notes.trim().is_empty() && !matches!(&s.target, StepTarget::Element { id } if ids.contains(id)))
+                    .map(|(i, _)| (i + 1).to_string())
+                    .collect();
+                if !lost.is_empty() && !discard_notes {
+                    return Err(ZError::new("notes_lost", format!("steps {} aren't frames and have speaker notes that the new path would lose", lost.join(", ")))
+                        .hint("pass \"discard_notes\": true to go ahead, or move the notes first with update_step"));
+                }
                 let mut old: Vec<PathStep> = std::mem::take(&mut self.doc.path);
                 self.doc.path = ids
                     .into_iter()
@@ -1725,7 +1896,10 @@ impl Editor {
 
     fn check_unlocked(&self, ids: &[ElementId]) -> ZResult<()> {
         for id in ids {
-            if self.doc.elements[id].locked {
+            let Some(e) = self.doc.elements.get(id) else {
+                return Err(ZError::not_found(id, self.doc.elements.keys().cloned()));
+            };
+            if e.locked {
                 return Err(ZError::new("locked", format!("'{id}' is locked")).hint("unlock it first: update {patch:{locked:false}}"));
             }
         }
@@ -1811,6 +1985,17 @@ impl Editor {
         e.transform.x = x;
         e.transform.y = y;
         Ok(())
+    }
+
+    /// `ids` once each, without anything that sits inside a frame also in
+    /// the list: it travels with that frame, and moving it as well would
+    /// move it twice.
+    fn outermost(&self, ids: &[ElementId]) -> Vec<ElementId> {
+        let mut ids = ids.to_vec();
+        dedup(&mut ids);
+        let inside: HashSet<ElementId> = ids.iter().filter(|id| self.doc.get(id).is_some_and(|e| e.is_frame())).flat_map(|id| self.doc.frame_contents(id)).collect();
+        ids.retain(|id| !inside.contains(id));
+        ids
     }
 
     fn arrange(&mut self, ids: &[ElementId], layout: Layout, gap: Option<f64>, out: &mut Outcome) {
@@ -2021,7 +2206,13 @@ impl Editor {
         }
         let base_cam = if agent_limited { self.view.agent_camera } else { self.view.target_camera() };
         match cmd {
-            ViewCommand::SetCamera { camera, animate } => cam_set!(camera, animate),
+            ViewCommand::SetCamera { camera, animate } => {
+                if !(camera.cx.is_finite() && camera.cy.is_finite() && camera.rotation.is_finite() && camera.zoom.is_finite() && camera.zoom > 0.0) {
+                    return Err(ZError::invalid("camera cx, cy and rotation must be finite, and zoom > 0"));
+                }
+                let camera = Camera { zoom: camera.zoom.clamp(crate::camera::MIN_ZOOM, crate::camera::MAX_ZOOM), ..camera };
+                cam_set!(camera, animate)
+            }
             ViewCommand::Zoom { factor, anchor } => {
                 if !(factor.is_finite() && factor > 0.0) {
                     return Err(ZError::invalid("factor must be > 0"));
@@ -2032,6 +2223,9 @@ impl Editor {
                 cam_set!(c, false)
             }
             ViewCommand::Pan { dx, dy } => {
+                if !(dx.is_finite() && dy.is_finite()) {
+                    return Err(ZError::invalid("dx and dy must be finite"));
+                }
                 let mut c = base_cam;
                 c.pan_screen(Vec2::new(dx, dy));
                 cam_set!(c, false)
@@ -2125,7 +2319,7 @@ impl Editor {
                 }
             }
             ViewCommand::SetViewport { width, height } => {
-                if width < 1.0 || height < 1.0 {
+                if !(width.is_finite() && height.is_finite()) || width < 1.0 || height < 1.0 {
                     return Err(ZError::invalid("viewport must be at least 1x1"));
                 }
                 self.view.viewport = Vec2::new(width, height);
@@ -2227,6 +2421,10 @@ impl Editor {
             }
             Some(0) => self.goto_step(None, 0),
             Some(i) => {
+                let i = i.min(self.doc.path.len());
+                if i == 0 {
+                    return self.goto_step(None, 0);
+                }
                 let b = self.doc.path[i - 1].builds.len();
                 self.goto_step(Some(i - 1), b);
             }
@@ -2234,6 +2432,9 @@ impl Editor {
     }
 
     fn goto_step(&mut self, step: Option<usize>, build: usize) {
+        // Never past the end of the path.
+        let step = step.and_then(|i| self.doc.path.len().checked_sub(1).map(|last| i.min(last)));
+        let build = step.map_or(0, |i| build.min(self.doc.path[i].builds.len()));
         let cam = match step {
             Some(i) => self.camera_for_step(i),
             None => self.fit_all_camera(),
@@ -2796,7 +2997,7 @@ pub fn command_label(c: &Command) -> String {
         Command::MoveStep { .. } => "Reorder path".into(),
         Command::UpdateStep { .. } => "Edit path step".into(),
         Command::ClearPath { .. } => "Clear path".into(),
-        Command::AutoPath => "Path from frames".into(),
+        Command::AutoPath { .. } => "Path from frames".into(),
         Command::SetTheme { theme } => format!("Theme: {theme}"),
         Command::SetTitle { .. } => "Rename".into(),
         Command::SetPlayback { .. } => "Change autoplay".into(),

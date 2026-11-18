@@ -266,7 +266,7 @@ pub fn paragraph_of(t: &TextData, at: usize) -> usize {
 pub fn para(t: &TextData, i: usize) -> (ListKind, u8, Align) {
     let p = t.paras.get(i).cloned().unwrap_or_default();
     let list = p.list.unwrap_or(if t.bullets { ListKind::Bullet } else { ListKind::None });
-    (list, p.indent, p.align.unwrap_or(t.align))
+    (list, p.indent.min(8), p.align.unwrap_or(t.align))
 }
 
 /// Character offset → byte offset in `s`.
@@ -358,6 +358,7 @@ pub fn to_markdown(t: &TextData) -> String {
     while i <= chars.len() {
         if line_start {
             let (list, indent, _) = para(t, para_i);
+            let indent = indent.min(8);
             for _ in 0..indent {
                 out.push_str("  ");
             }
@@ -377,7 +378,9 @@ pub fn to_markdown(t: &TextData) -> String {
         if i == chars.len() {
             break;
         }
-        if let Some(s) = t.spans.iter().find(|s| s.start == i) {
+        // A span that is empty or runs past the text (a file from elsewhere)
+        // is skipped, not followed.
+        if let Some(s) = t.spans.iter().find(|s| s.start == i && s.end > i && s.end <= chars.len()) {
             let seg: String = chars[s.start..s.end].iter().collect();
             let f = &s.format;
             let mut w = seg.clone();

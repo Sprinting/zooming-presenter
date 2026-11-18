@@ -15,7 +15,8 @@ zebra-api = { path = "crates/zebra-api" }
 zebra-media = { path = "crates/zebra-media" }
 
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# float_roundtrip: a saved number reads back bit for bit.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 schemars = "1.2"
 thiserror = "2"
 anyhow = "1"

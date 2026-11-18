@@ -277,6 +277,10 @@ impl Theme {
 
 pub fn parse_hex(s: &str) -> Option<[u8; 4]> {
     let h = s.strip_prefix('#')?;
+    // Hex digits only: the slices below index by byte.
+    if !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
     let p = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok();
     match h.len() {
         6 => Some([p(0)?, p(2)?, p(4)?, 255]),

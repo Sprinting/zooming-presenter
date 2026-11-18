@@ -6,6 +6,7 @@
 //! Read-only access goes through [`Editor::query`].
 
 pub mod camera;
+pub mod check;
 pub mod clip;
 pub mod command;
 pub mod connector;

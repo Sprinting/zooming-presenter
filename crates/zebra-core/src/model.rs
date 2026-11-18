@@ -915,7 +915,10 @@ impl Document {
         }
         // Rings of a grid around `at`, nearest first; stop once a ring can't
         // beat the best spot found.
-        let step = w.min(h) / 4.0;
+        // A quarter of the short side, but never finer than 1/16 of the
+        // long one: a very long, thin box would otherwise mean millions
+        // of candidates (100000 x 1 froze the app for seconds).
+        let step = (w.min(h) / 4.0).max(w.max(h) / 16.0);
         let rings = ((4.0 * w.max(h)) / step).ceil() as i64;
         let mut best: Option<(f64, Vec2)> = None;
         for k in 1..=rings {

@@ -203,11 +203,20 @@ pub fn cache_path(key: &str, ext: &str) -> PathBuf {
     cache_dir().join(format!("{key}.{ext}"))
 }
 
+/// Refuse a key or extension that could name a file outside the cache.
+fn check_cache_name(key: &str, ext: &str) -> std::io::Result<()> {
+    if crate::check::safe_asset_key(key) && !ext.is_empty() && ext.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Ok(());
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a media asset name"))
+}
+
 /// Make sure the asset exists as a plain file and return its path. Copies
 /// at most once per asset (streams from the mapped `.zebra`, so this costs
 /// disk, not RAM). Written to a temp name and renamed, so a half-written
 /// file is never played.
 pub fn materialize(key: &str, ext: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    check_cache_name(key, ext)?;
     let path = cache_path(key, ext);
     if std::fs::metadata(&path).is_ok_and(|m| m.len() == bytes.len() as u64) {
         return Ok(path);
@@ -223,6 +232,7 @@ pub fn materialize(key: &str, ext: &str, bytes: &[u8]) -> std::io::Result<PathBu
 /// and memory-map the copy. Mapping the copy, not the original, means the
 /// person can move or edit the original without disturbing the document.
 pub fn import_file(src: &Path, key: &str, ext: &str) -> std::io::Result<memmap2::Mmap> {
+    check_cache_name(key, ext)?;
     let path = cache_path(key, ext);
     let len = std::fs::metadata(src)?.len();
     if !std::fs::metadata(&path).is_ok_and(|m| m.len() == len) {

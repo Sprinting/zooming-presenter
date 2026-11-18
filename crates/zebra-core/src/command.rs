@@ -389,8 +389,13 @@ pub enum Command {
     },
     /// Replace the path with every frame in reading order (top-left to
     /// bottom-right, larger frames first). A frame that was already a step
-    /// keeps its notes, builds and timings.
-    AutoPath,
+    /// keeps its notes, builds and timings. Steps that aren't frames are
+    /// dropped; refused while one of those has speaker notes, unless
+    /// `discard_notes`.
+    AutoPath {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        discard_notes: bool,
+    },
 
     // ---- document ----
     SetTheme { theme: String },

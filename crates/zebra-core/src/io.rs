@@ -63,6 +63,11 @@ fn read_zip(bytes: &[u8], map: Option<&Arc<memmap2::Mmap>>) -> ZResult<Document>
         let name = f.name().map(|n| n.to_string()).unwrap_or_default();
         let Some(file) = name.strip_prefix("assets/") else { continue };
         let Some((key, _ext)) = file.rsplit_once('.') else { continue };
+        // A key becomes a file name in the media cache: one that isn't a
+        // plain name (a crafted "assets/../../x.mp4") is not an asset.
+        if !crate::check::safe_asset_key(key) {
+            continue;
+        }
         let mapped = match (map, f.compression(), f.data_start()) {
             (Some(m), zip::CompressionMethod::Stored, Some(start)) if !f.encrypted() => {
                 let (start, len) = (start as usize, f.size() as usize);
@@ -88,10 +93,12 @@ fn read_zip(bytes: &[u8], map: Option<&Arc<memmap2::Mmap>>) -> ZResult<Document>
                 let (w, h) = crate::symbols::svg_pixels(&data);
                 ("svg".to_string(), w, h)
             }
-            _ => {
-                let m = crate::media::info(&data)?;
-                (m.ext, m.width, m.height)
-            }
+            // One file Zebra can't read doesn't stop the document
+            // opening; what showed it draws as a missing picture.
+            _ => match crate::media::info(&data) {
+                Ok(m) => (m.ext, m.width, m.height),
+                Err(_) => continue,
+            },
         };
         doc.assets.insert(key.to_string(), Asset { ext, bytes: data, width: w, height: h });
     }
@@ -104,13 +111,13 @@ pub fn from_json(json: &str) -> ZResult<Document> {
     if ver > crate::FORMAT_VERSION {
         return Err(ZError::new("bad_file", format!("file format {ver} is newer than this app ({})", crate::FORMAT_VERSION)));
     }
-    let v = migrate(v, ver);
+    let mut v = migrate(v, ver);
+    crate::check::repair_json(&mut v);
     let mut doc: Document = serde_json::from_value(v).map_err(|e| ZError::new("bad_file", e.to_string()))?;
     doc.format_version = crate::FORMAT_VERSION;
-    // repair z_order
-    doc.z_order.retain(|id| doc.elements.contains_key(id));
-    let missing: Vec<_> = doc.elements.keys().filter(|k| !doc.z_order.contains(k)).cloned().collect();
-    doc.z_order.extend(missing);
+    // Numbers, text ranges and the draw order of a file from an older
+    // build or another program are brought back in range here, once.
+    crate::check::repair(&mut doc);
     Ok(doc)
 }
 
