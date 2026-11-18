@@ -182,6 +182,10 @@ struct Tx {
 }
 
 pub struct Editor {
+    /// How many times a whole document was loaded into this editor. A
+    /// host that keeps state about the document (thumbnails, an open text
+    /// box) drops it when this changes, whoever did the loading.
+    pub loads: u64,
     pub doc: Document,
     pub view: ViewState,
     pub revision: u64,
@@ -221,6 +225,7 @@ const TEMPLATE_WIDTH: f64 = 6000.0;
 impl Editor {
     pub fn new(doc: Document) -> Self {
         Editor {
+            loads: 0,
             doc,
             view: ViewState::default(),
             revision: 0,
@@ -290,6 +295,7 @@ impl Editor {
     /// Replace the whole document (open file). Clears history.
     pub fn load(&mut self, mut doc: Document, path: Option<std::path::PathBuf>) {
         self.tx = None;
+        self.loads += 1;
         crate::check::repair(&mut doc);
         self.remeasure_all(&mut doc);
         self.doc = doc;

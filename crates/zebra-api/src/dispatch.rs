@@ -54,6 +54,30 @@ fn resolve(docs: &dyn Documents, want: Option<&str>) -> Result<String, RpcError>
     }
 }
 
+/// A fingerprint of everything a window draws that a call can change:
+/// which documents are open, their revision, and their view (cameras,
+/// selections, mode, step, agent status and marks).
+fn shown(docs: &mut dyn Documents) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for d in docs.list() {
+        (&d.id, &d.name, d.edited, d.front).hash(&mut h);
+        if let Some(e) = docs.editor(&d.id) {
+            let v = &e.view;
+            e.revision.hash(&mut h);
+            e.loads.hash(&mut h);
+            e.flashes.len().hash(&mut h);
+            e.in_transaction().hash(&mut h);
+            format!(
+                "{:?}",
+                ((&v.camera, v.flight.is_some(), &v.selection, &v.agent_selection, &v.agent_camera, &v.mode, &v.tool), (&v.present, v.follow_agent, v.agent_paused, &v.agent_permission, &v.agent_status, &e.agent_cursor, e.agent_cursor_time.to_bits()))
+            )
+            .hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
 fn gesture(docs: &mut dyn Documents, want: Option<&str>) -> bool {
     resolve(docs, want).ok().and_then(|id| docs.editor(&id).map(|e| e.human_gesture_active())).unwrap_or(false)
 }
@@ -69,6 +93,9 @@ impl Dispatcher {
             }
             self.initialized = true;
         }
+        // What the window shows, before: a call that only reads leaves it
+        // as it was, and the window has nothing to redraw.
+        let before = shown(docs);
         let mut handled = false;
 
         // 1. Calls deferred because a human gesture was in progress.
@@ -79,7 +106,6 @@ impl Dispatcher {
                 still.push_back(p);
                 continue;
             }
-            handled = true;
             self.run(server, docs, p);
         }
         self.deferred = still;
@@ -88,9 +114,10 @@ impl Dispatcher {
         loop {
             let msg = inner.rx.lock().unwrap().try_recv();
             let Ok(msg) = msg else { break };
-            handled = true;
             match msg {
                 Inbound::Disconnected { client } => {
+                    // The status bar names who is connected.
+                    handled = true;
                     let owned: Vec<String> = self.tx_owner.iter().filter(|(_, c)| **c == client).map(|(d, _)| d.clone()).collect();
                     for d in owned {
                         self.tx_owner.remove(&d);
@@ -124,7 +151,6 @@ impl Dispatcher {
                 Ok(r) => {
                     let job = self.jobs.remove(j);
                     reply(server, job.client, &job.id, r);
-                    handled = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => j += 1,
                 Err(_) => {
@@ -151,7 +177,6 @@ impl Dispatcher {
                 Some(r) => {
                     let w = self.waits.remove(i);
                     reply(server, w.client, &w.id, r);
-                    handled = true;
                 }
                 None => i += 1,
             }
@@ -161,7 +186,7 @@ impl Dispatcher {
         self.flush_events(server, docs);
 
         inner.shared.poll.store(!self.waits.is_empty() || !self.deferred.is_empty() || !self.jobs.is_empty(), std::sync::atomic::Ordering::SeqCst);
-        handled
+        handled || self.disconnect_requested || self.quit_requested || shown(docs) != before
     }
 
     fn flush_events(&mut self, server: &ApiServer, docs: &mut dyn Documents) {
@@ -228,6 +253,17 @@ impl Dispatcher {
         }
         // Captures and exports render a snapshot on a worker so the window
         // never stalls on a big render; the reply is sent when it's done.
+        // Writing a file is more than looking.
+        let to_file = match &p.call {
+            Call::Capture(req) => req.path.is_some(),
+            Call::Export { path, .. } => path.is_some(),
+            _ => false,
+        };
+        if to_file {
+            if let Err(e) = need_edit(editor.view.agent_permission, "capture or export to a file") {
+                return reply(server, p.client, &p.id, Err(e.hint("leave `path` out to get the data in the reply")));
+            }
+        }
         let heavy = matches!(&p.call, Call::Capture(_))
             || matches!(&p.call, Call::Export { format: ExportFormat::Png | ExportFormat::Pdf, .. });
         if heavy && !self.headless {
@@ -386,14 +422,18 @@ impl Dispatcher {
             }
             Call::Commit | Call::Abort => {
                 let is_commit = matches!(call, Call::Commit);
-                if self.tx_owner.get(doc) != Some(&client) || !editor.in_transaction() {
-                    self.tx_owner.remove(doc);
+                // Only the client that opened it, and only its own: never
+                // another client's, never one the person's drag has open.
+                if self.tx_owner.get(doc) != Some(&client) || editor.transaction_owner() != Some(origin) {
+                    if self.tx_owner.get(doc) == Some(&client) {
+                        self.tx_owner.remove(doc);
+                    }
                     return Err(RpcError::app("no_transaction", "you have no open transaction").hint("call `begin {\"label\": ...}` first"));
                 }
                 if is_commit {
-                    editor.commit();
+                    editor.commit_as(origin);
                 } else {
-                    editor.abort();
+                    editor.abort_as(origin);
                 }
                 self.tx_owner.remove(doc);
                 json!({ "ok": true, "revision": editor.revision })
@@ -421,7 +461,13 @@ impl Dispatcher {
                 let path = path.or_else(|| editor.file_path.clone()).ok_or_else(|| {
                     RpcError::app("no_path", "the document has never been saved").hint("pass {\"path\": \"/abs/name.zebra\"}")
                 })?;
-                write_document(editor, &path)?;
+                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) {
+                    // JSON has no pictures or video in it: writing it is
+                    // an export, and the document is not saved by it.
+                    return Err(RpcError::invalid("`save` writes a .zebra file; a .json file would leave the images and media out")
+                        .hint("use export {\"format\": \"json\", \"path\": ...} for the JSON, and save to a .zebra path"));
+                }
+                zebra_core::io::save(&mut editor.doc, &path)?;
                 editor.mark_saved(Some(path.clone()));
                 json!({ "ok": true, "path": path })
             }
@@ -619,14 +665,6 @@ fn write_file(p: &Path, bytes: &[u8]) -> Result<(), RpcError> {
         }
     }
     std::fs::write(p, bytes).map_err(|e| RpcError::app("io", format!("{}: {e}", p.display())))
-}
-
-fn write_document(editor: &mut Editor, path: &Path) -> Result<(), RpcError> {
-    if path.extension().is_some_and(|e| e == "json") {
-        write_file(path, zebra_core::io::to_json(&editor.doc).as_bytes())
-    } else {
-        zebra_core::io::save(&mut editor.doc, path).map_err(Into::into)
-    }
 }
 
 fn condition_holds(editor: &Editor, until: &WaitUntil) -> bool {

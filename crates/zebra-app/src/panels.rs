@@ -654,11 +654,20 @@ fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
                             app.recovered = None;
                         }
                         if w::default_button(ui, &crate::t!("recover-restore")).clicked() {
-                            if let Ok(doc) = zebra_core::io::load(&rp) {
-                                let path = app.editor.file_path.clone();
-                                app.editor.load(doc, path);
-                                // Restored work is unsaved: mark the document edited.
-                                app.editor.revision += 1;
+                            match zebra_core::io::load(&rp) {
+                                Ok(doc) => {
+                                    let path = app.editor.file_path.clone();
+                                    app.editor.load(doc, path);
+                                    app.after_load();
+                                    // Restored work is unsaved: mark the document edited.
+                                    app.editor.revision += 1;
+                                }
+                                Err(e) => {
+                                    eprintln!("zebra: could not restore {}: {e}", rp.display());
+                                    let name = rp.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                                    let title = crate::t!("app-open-failed-title", name = name.as_str());
+                                    crate::sheets::request(app, crate::sheets::SheetKind::Alert { title, message: crate::t!("app-open-failed-not-zebra") });
+                                }
                             }
                             app.recovered = None;
                         }

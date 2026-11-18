@@ -74,6 +74,8 @@ pub struct ZebraApp {
     /// The window is out of sight but has work that needs a frame: the
     /// next pass runs `frame` once anyway.
     pub wake_hidden: bool,
+    /// `editor.loads` when `after_load` last ran.
+    pub seen_loads: u64,
     pub renderer: Arc<Renderer>,
     pub wgpu: Option<egui_wgpu::RenderState>,
     pub gpu_canvas: Option<zebra_render::gpu::VelloCanvas>,
@@ -250,6 +252,7 @@ impl ZebraApp {
             quit_pending: false,
             viewport: egui::ViewportId::ROOT,
             wake_hidden: false,
+            seen_loads: 0,
             renderer: renderer.clone(),
             gpu_canvas: wgpu.as_ref().map(zebra_render::gpu::VelloCanvas::new),
             wgpu,
@@ -1066,6 +1069,7 @@ impl ZebraApp {
         self.thumbs.clear();
         self.recovered = None;
         self.autosaved_rev = self.editor.revision;
+        self.seen_loads = self.editor.loads;
     }
 
     pub fn push_recent(&mut self, p: PathBuf) {
@@ -1133,6 +1137,11 @@ impl ZebraApp {
         // and agent steps are timed by it, and `frame` (the only other
         // place it is set) doesn't run for a window that is hidden or idle.
         self.editor.view.now = self.now();
+        // A document loaded behind our back (an agent's `open`): drop what
+        // we held about the old one, as our own Open does.
+        if self.editor.loads != self.seen_loads {
+            self.after_load();
+        }
         // Debug screenshots must render even if the window opened behind
         // others or on another Space (eframe otherwise skips the ui pass).
         if self.screenshot.is_some() && !self.screenshot_requested {
@@ -1209,6 +1218,9 @@ impl ZebraApp {
     pub fn frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.wake_hidden = false;
+        if self.editor.loads != self.seen_loads {
+            self.after_load();
+        }
         // Menu → text field copy/paste, delivered to this window's input.
         if !self.inject.is_empty() {
             let mut ev = std::mem::take(&mut self.inject);

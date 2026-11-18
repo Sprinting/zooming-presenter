@@ -425,7 +425,7 @@ Send with `apply {"command": ...}` or inside `batch {"commands": [...]}`. Undoab
 | `move_step` | from: integer, to: integer |  | `{"op":"move_step","from":3,"to":0}` |
 | `update_step` | builds?: array, duration?: number, dwell?: number, hide_builds?: boolean, index: integer, notes?: string, target?: StepTarget |  | `{"op":"update_step","index":0,"notes":"Open with a question","duration":2.5,"dwell":8}` |
 | `clear_path` | discard_notes?: boolean | Remove every step. Refused while a step has speaker notes, unless `discard_notes`. | `{"op":"clear_path"}` |
-| `auto_path` |  | Replace the path with every frame in reading order (top-left to bottom-right, larger frames first). A frame that was already a step keeps its notes, builds and timings. | `{"op":"auto_path"}` |
+| `auto_path` | discard_notes?: boolean | Replace the path with every frame in reading order (top-left to bottom-right, larger frames first). A frame that was already a step keeps its notes, builds and timings. Steps that aren't frames are dropped; refused while one of those has speaker notes, unless `discard_notes`. | `{"op":"auto_path"}` |
 | `set_theme` | theme: string |  | `{"op":"set_theme","theme":"chalkboard"}` |
 | `set_title` | title: string |  | `{"op":"set_title","title":"Quarterly review"}` |
 | `set_playback` | autoplay?: number, loop?: boolean | Autoplay and loop for the whole presentation. Only given fields change. | `{"op":"set_playback","autoplay":10,"loop":true}` |
