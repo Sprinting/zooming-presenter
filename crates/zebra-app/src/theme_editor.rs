@@ -21,12 +21,25 @@ pub struct ThemeEditor {
     /// When the last change was applied; the open transaction commits after a pause.
     last_change: Option<f64>,
     status: Option<String>,
+    /// The document state the draft was last in step with.
+    seen_rev: u64,
+    seen_loads: u64,
 }
 
 impl ThemeEditor {
     /// Start editing the presentation's theme. A built-in theme is copied to
     /// a new custom theme first.
     pub fn open(app: &ZebraApp) -> Self {
+        let draft = Self::draft_for(app);
+        let mut families = app.editor.measure.font_families();
+        for b in ["Sans", "Serif", "Mono", "Hand"].iter().rev() {
+            families.insert(0, b.to_string());
+        }
+        ThemeEditor { draft, families, font_query: Default::default(), last_change: None, status: None, seen_rev: app.editor.revision, seen_loads: app.editor.loads }
+    }
+
+    /// The theme to edit: the presentation's, as it is now.
+    fn draft_for(app: &ZebraApp) -> Theme {
         let mut draft = app.editor.theme();
         if Theme::is_builtin(&draft.id) {
             let base = crate::words::theme_name(&draft);
@@ -38,11 +51,19 @@ impl ThemeEditor {
             draft.id = format!("custom-{n}");
             draft.name = crate::t!("theme-editor-custom-name", name = base.as_str());
         }
-        let mut families = app.editor.measure.font_families();
-        for b in ["Sans", "Serif", "Mono", "Hand"].iter().rev() {
-            families.insert(0, b.to_string());
+        draft
+    }
+
+    /// The document changed under the editor (Undo, an agent's theme edit,
+    /// another theme picked): show what is there now. The old draft used to
+    /// be written back over it on the next change.
+    fn follow(&mut self, app: &ZebraApp) {
+        if app.editor.revision != self.seen_rev {
+            self.draft = Self::draft_for(app);
+            self.font_query = Default::default();
+            self.last_change = None;
+            self.seen_rev = app.editor.revision;
         }
-        ThemeEditor { draft, families, font_query: Default::default(), last_change: None, status: None }
     }
 }
 
@@ -70,6 +91,12 @@ fn c32_to_hex(c: Color32) -> String {
 /// Show the editor window if open.
 pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
     let Some(mut te) = app.theme_ed.take() else { return };
+    // Another file was opened in this window: the draft belonged to the old
+    // one (its fonts and pictures too), so the editor closes.
+    if te.seen_loads != app.editor.loads {
+        return;
+    }
+    te.follow(app);
     let now = app.now();
     let mut open = true;
     let mut changed = false;
@@ -101,6 +128,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
     }
+    te.seen_rev = app.editor.revision;
     if open && !close {
         app.theme_ed = Some(te);
     } else if app.editor.human_gesture_active() {

@@ -1258,9 +1258,30 @@ pub fn cancel_text_edit(app: &mut ZebraApp) {
     app.canvas.text = None;
 }
 
+/// The text box being edited may be gone (an agent deleted it, or undid
+/// adding it). What was typed is not thrown away with it: the edit goes on
+/// as a new text box in the same place. Returns false when there is
+/// nothing to keep (the text was not changed), which ends the edit.
+fn keep_orphan(app: &mut ZebraApp, t: &mut TextEditState) -> bool {
+    let Some(id) = &t.id else { return true };
+    if matches!(app.editor.doc.get(id).map(|e| &e.kind), Some(ElementKind::Text(_))) {
+        return true;
+    }
+    if t.buf.trim().is_empty() || t.buf.trim_end() == t.original.trim_end() {
+        return false;
+    }
+    t.id = None;
+    t.host = None;
+    app.toast(crate::t!("canvas-toast-text-kept"));
+    true
+}
+
 /// Apply the in-place edit as one command (Add text / Edit text).
 pub fn commit_text_edit(app: &mut ZebraApp) {
     let Some(mut t) = app.canvas.text.take() else { return };
+    if !keep_orphan(app, &mut t) {
+        return;
+    }
     let text = t.buf.trim_end().to_string();
     zebra_core::rich::edit_text(&mut t.rich, &text);
     match &t.id {
@@ -1460,14 +1481,12 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     use zebra_core::rich;
     let Some(mut t) = app.canvas.text.take() else { return };
     // The element may have been deleted (e.g. by an agent).
-    if let Some(id) = &t.id {
-        match app.editor.doc.get(id) {
-            Some(e) => {
-                t.anchor = e.corners()[0];
-                t.scale = e.transform.scale;
-            }
-            None => return,
-        }
+    if !keep_orphan(app, &mut t) {
+        return;
+    }
+    if let Some(e) = t.id.as_ref().and_then(|id| app.editor.doc.get(id)) {
+        t.anchor = e.corners()[0];
+        t.scale = e.transform.scale;
     }
     let theme = app.editor.theme();
     let ts = theme.text_style(t.style);

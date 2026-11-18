@@ -504,3 +504,70 @@ fn r12_autosave_does_not_outlive_a_save() {
     assert!(!zebra_app::files::autosave_path(&saved).exists(), "no autosave left beside a saved file");
     assert!(zebra_app::files::autosave_newer(&saved).is_none());
 }
+
+/// R24: the text box being edited is deleted by an agent. What the person
+/// typed used to vanish with it; it is kept as a new text box.
+#[test]
+fn r24_typed_text_outlives_its_deleted_box() {
+    let mut h = harness();
+    let add: Command = serde_json::from_value(serde_json::json!({ "op": "add_text", "text": "old", "x": 0.0, "y": 0.0 })).unwrap();
+    let id = h.state_mut().editor.apply(add, H).unwrap().created[0].clone();
+    zebra_app::canvas::begin_edit_existing(h.state_mut(), id.clone());
+    h.run_steps(2);
+    h.state_mut().canvas.text.as_mut().unwrap().buf = "old and much more".into();
+    h.state_mut().editor.apply(Command::Delete { ids: vec![id.clone()] }, Origin::agent("a")).unwrap();
+    h.run_steps(3);
+    assert!(h.state().canvas.text.as_ref().is_some_and(|t| t.id.is_none()), "the edit goes on as a new text box");
+    zebra_app::canvas::commit_text_edit(h.state_mut());
+    let texts: Vec<String> = h
+        .state()
+        .editor
+        .doc
+        .elements
+        .values()
+        .filter_map(|e| match &e.kind {
+            zebra_core::ElementKind::Text(t) => Some(t.text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, ["old and much more"]);
+
+    // Nothing typed: the edit just ends.
+    let id = h.state().editor.doc.elements.keys().next().unwrap().clone();
+    zebra_app::canvas::begin_edit_existing(h.state_mut(), id.clone());
+    h.run_steps(2);
+    h.state_mut().editor.apply(Command::Delete { ids: vec![id] }, Origin::agent("a")).unwrap();
+    h.run_steps(3);
+    assert!(h.state().canvas.text.is_none());
+    assert!(h.state().editor.doc.elements.is_empty());
+}
+
+/// R24: the theme editor shows the theme as it is now. Its draft used to
+/// be written back over an agent's edit, an Undo, or another document.
+#[test]
+fn r24_the_theme_editor_follows_the_document() {
+    let mut h = harness();
+    frame(h.state_mut(), 0.0, false);
+    h.state_mut().queued.push(Action::ThemeEditor);
+    h.run_steps(3);
+    let mut mine = h.state().theme_ed.as_ref().unwrap().draft.clone();
+    mine.accent = "#112233".into();
+    h.state_mut().editor.apply(Command::SaveTheme { theme: mine.clone(), apply: true }, H).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().theme_ed.as_ref().unwrap().draft.accent, "#112233");
+    let mut theirs = mine.clone();
+    theirs.accent = "#445566".into();
+    h.state_mut().editor.apply(Command::SaveTheme { theme: theirs, apply: true }, Origin::agent("a")).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().theme_ed.as_ref().unwrap().draft.accent, "#445566", "the agent's change shows in the editor");
+    h.state_mut().editor.undo(H).unwrap();
+    h.state_mut().editor.undo(H).unwrap();
+    h.run_steps(2);
+    let te = h.state().theme_ed.as_ref().unwrap();
+    assert_ne!(te.draft.accent, "#445566", "after Undo the editor shows the theme that is back");
+    assert_eq!(te.draft.base.as_deref(), Some(h.state().editor.doc.theme.as_str()), "a copy of the built-in theme again");
+
+    h.state_mut().editor.load(zebra_core::Document::default(), None);
+    h.run_steps(2);
+    assert!(h.state().theme_ed.is_none(), "another document: the editor closes");
+}

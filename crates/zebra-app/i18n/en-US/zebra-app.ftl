@@ -837,6 +837,7 @@ canvas-toast-framed-objects = { $count ->
 canvas-toast-added-step = Added step { $step }
 canvas-toast-shape-locked = This shape is locked — unlock it to type on it
 canvas-toast-text-locked = This text is locked — unlock it to edit
+canvas-toast-text-kept = Text box was removed. Your text is kept as a new one.
 canvas-text-placeholder = Type something
 canvas-text-style-title = Title
 canvas-text-style-subtitle = Subtitle
