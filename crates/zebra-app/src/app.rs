@@ -69,6 +69,11 @@ pub struct ZebraApp {
     pub quit_all: bool,
     /// For the shell: this window was asked to close as part of Quit.
     pub quit_pending: bool,
+    /// The native window this document is in (the shell sets it).
+    pub viewport: egui::ViewportId,
+    /// The window is out of sight but has work that needs a frame: the
+    /// next pass runs `frame` once anyway.
+    pub wake_hidden: bool,
     pub renderer: Arc<Renderer>,
     pub wgpu: Option<egui_wgpu::RenderState>,
     pub gpu_canvas: Option<zebra_render::gpu::VelloCanvas>,
@@ -243,6 +248,8 @@ impl ZebraApp {
             close_me: false,
             quit_all: false,
             quit_pending: false,
+            viewport: egui::ViewportId::ROOT,
+            wake_hidden: false,
             renderer: renderer.clone(),
             gpu_canvas: wgpu.as_ref().map(zebra_render::gpu::VelloCanvas::new),
             wgpu,
@@ -1122,6 +1129,10 @@ impl ZebraApp {
     /// (eframe then runs no ui pass): answering the automation API, so
     /// `zebractl` never hangs on a background window.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // The clock runs whether or not the window is drawn: undo entries
+        // and agent steps are timed by it, and `frame` (the only other
+        // place it is set) doesn't run for a window that is hidden or idle.
+        self.editor.view.now = self.now();
         // Debug screenshots must render even if the window opened behind
         // others or on another Space (eframe otherwise skips the ui pass).
         if self.screenshot.is_some() && !self.screenshot_requested {
@@ -1157,11 +1168,47 @@ impl ZebraApp {
                 ctx.request_repaint_after(std::time::Duration::from_secs_f64((t - self.now()).max(0.016)));
             }
         }
+        self.background_work(ctx);
+    }
 
+    /// The window is minimised, a tab in the background, or fully covered:
+    /// no frame is drawn for it.
+    pub fn out_of_sight(&self, ctx: &egui::Context) -> bool {
+        ctx.input(|i| i.raw.viewports.get(&self.viewport).is_some_and(|v| v.occluded == Some(true) || v.minimized == Some(true)))
+    }
+
+    /// What must not wait for the window to be drawn: autosave (an agent
+    /// may be editing a minimised window), and the menu and queued actions
+    /// of a window that is out of sight (Quit, Close, Save).
+    fn background_work(&mut self, ctx: &egui::Context) {
+        crate::files::autosave_tick(self);
+        if let Some(wait) = crate::files::autosave_due_in(self) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
+        }
+        if !self.out_of_sight(ctx) {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        if self.front {
+            crate::menu_mac::poll(self, ctx);
+        }
+        if !self.queued.is_empty() && !self.wake_hidden {
+            // Actions run in `frame`, where the window is the current
+            // one: ask for one frame although nothing will be seen.
+            self.wake_hidden = true;
+            ctx.send_viewport_cmd_to(self.viewport, egui::ViewportCommand::RequestPaintWhileHidden);
+            if self.viewport != egui::ViewportId::ROOT {
+                // Document windows are drawn during the root window's pass.
+                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::RequestPaintWhileHidden);
+            }
+            ctx.request_repaint_of(self.viewport);
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
+        }
     }
 
     pub fn frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        self.wake_hidden = false;
         // Menu → text field copy/paste, delivered to this window's input.
         if !self.inject.is_empty() {
             let mut ev = std::mem::take(&mut self.inject);

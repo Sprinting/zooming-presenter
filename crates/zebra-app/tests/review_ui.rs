@@ -177,3 +177,50 @@ fn d4_path_from_frames_asks_before_losing_notes() {
     h.run_steps(3);
     assert_eq!(h.state().editor.doc.path[1].notes, "remember this");
 }
+
+/// R1 and R3: a window that isn't being drawn (minimised, or simply idle)
+/// still autosaves and still keeps time. `logic` is all that runs then.
+#[test]
+fn r1_r3_autosave_and_the_clock_run_without_a_frame() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    frame(h.state_mut(), 0.0, false);
+    let app = h.state_mut();
+    let file = zebra_app::files::untitled_dir().join(format!("{}.zebra.autosave", app.autosave_name));
+    let _ = std::fs::remove_file(&file);
+    app.last_autosave = app.now() - 1000.0;
+    app.editor.view.now = 0.0;
+    app.logic(&ctx);
+    assert!(file.exists(), "autosave written from logic(), with no frame drawn");
+    assert!(app.editor.view.now > 0.0 && (app.editor.view.now - app.now()).abs() < 1.0, "the clock moved");
+
+    // Agent steps more than two seconds apart are separate undo entries,
+    // however long ago the last frame was.
+    let agent = Origin::Agent { name: "a".into() };
+    let n = app.editor.history().len();
+    let id: zebra_core::ElementId = app.editor.doc.z_order[0].clone();
+    app.editor.apply(Command::Move { ids: vec![id.clone()], dx: 1.0, dy: 0.0, with_contents: true }, agent.clone()).unwrap();
+    app.t0 -= std::time::Duration::from_secs(5);
+    app.logic(&ctx);
+    app.editor.apply(Command::Move { ids: vec![id], dx: 1.0, dy: 0.0, with_contents: true }, agent).unwrap();
+    assert_eq!(app.editor.history().len(), n + 2);
+}
+
+/// R2: an action queued for a window that is out of sight (Quit from the
+/// menu with the window minimised) gets a frame to run in.
+#[test]
+fn r2_a_minimised_window_still_runs_queued_actions() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().minimized = Some(true);
+    h.step();
+    assert!(h.state().out_of_sight(&ctx), "the test could not minimise the window");
+    h.state_mut().queued.push(Action::ToggleSidebar);
+    let before = h.state().show_sidebar;
+    h.state_mut().logic(&ctx);
+    assert!(h.state().wake_hidden, "a frame is asked for");
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().minimized = Some(true);
+    h.step();
+    assert_ne!(h.state().show_sidebar, before);
+    assert!(!h.state().wake_hidden);
+}

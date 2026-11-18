@@ -466,24 +466,30 @@ impl eframe::App for Shell {
             self.logic_empty(ctx);
         }
         for i in 0..self.windows.len() {
-            self.windows[i].logic(ctx);
+            let w = &mut self.windows[i];
+            w.viewport = if i == 0 { egui::ViewportId::ROOT } else { egui::ViewportId::from_hash_of(("document", w.doc_id.as_str())) };
+            w.logic(ctx);
             self.sync_from(i);
         }
         self.pump(ctx);
+        // Close, New and Quit also move on when no window is being drawn
+        // (all minimised, or an agent closed a document in the background).
+        if !self.empty {
+            self.handle_requests(ctx);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // The other windows are drawn during the root window's pass, so it
-        // must run even when the root window is a tab in the background.
-        if self.windows.len() > 1 {
-            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::RequestPaintWhileHidden);
-        }
+        // The other windows are drawn during the root window's pass.
+        // eframe runs that pass whenever the root window or one of the
+        // others is visible, so nothing has to ask for it here (asking
+        // every frame kept the app repainting for ever).
         // The root window.
         if ctx.input(|i| i.viewport().focused == Some(true)) {
             self.set_front(0);
         }
-        if !hidden(&ctx) || self.windows.len() == 1 {
+        if !hidden(&ctx) || self.windows.len() == 1 || self.windows[0].wake_hidden {
             self.windows[0].frame(ui);
         }
         #[cfg(target_os = "macos")]
@@ -508,7 +514,7 @@ impl eframe::App for Shell {
                 let f = ui.ctx().input(|i| i.viewport().focused == Some(true));
                 // A tab in the background or a minimised window draws nothing
                 // until it shows again (macOS tells us, and we repaint then).
-                if !hidden(ui.ctx()) {
+                if !hidden(ui.ctx()) || w.wake_hidden {
                     w.frame(ui);
                 }
                 #[cfg(target_os = "macos")]
