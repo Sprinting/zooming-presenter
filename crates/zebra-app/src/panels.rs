@@ -921,23 +921,63 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
         }
     }
 
-    if app.show_about {
-        let m = egui::Modal::new(app.uid("about")).show(ctx, |ui| {
-            ui.set_width(300.0);
-            ui.vertical_centered(|ui| {
-                ui.add_space(6.0);
-                let (r, _) = ui.allocate_exact_size(EVec2::splat(64.0), Sense::hover());
-                crate::canvas::draw_zebra_disc(ui.painter(), r.center(), 30.0);
-                ui.add_space(4.0);
-                ui.label(RichText::new(&crate::t!("about-name")).font(style::semibold(15.0)));
-                w::caption(ui, crate::t!("about-version", version = env!("CARGO_PKG_VERSION")));
-                ui.add_space(6.0);
-                w::caption(ui, &crate::t!("about-blurb"));
-                ui.add_space(4.0);
-            });
+    about(app, ctx);
+}
+
+/// About Zebra: its own small window, like every Mac app's, so it also
+/// opens when no document is (it used to be drawn inside a document window,
+/// which brought a blank one back for it).
+pub fn about(app: &mut ZebraApp, ctx: &egui::Context) {
+    if !app.show_about {
+        return;
+    }
+    fn contents(ui: &mut Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(14.0);
+            let (r, _) = ui.allocate_exact_size(EVec2::splat(64.0), Sense::hover());
+            crate::canvas::draw_zebra_disc(ui.painter(), r.center(), 30.0);
+            ui.add_space(4.0);
+            ui.label(RichText::new(&crate::t!("about-name")).font(style::semibold(15.0)));
+            w::caption(ui, crate::t!("about-version", version = env!("CARGO_PKG_VERSION")));
+            ui.add_space(6.0);
+            w::caption(ui, &crate::t!("about-blurb"));
+            ui.add_space(10.0);
         });
-        if m.should_close() {
+    }
+    let size = EVec2::new(320.0, 190.0);
+    let vb = egui::ViewportBuilder::default().with_title("").with_inner_size(size).with_resizable(false).with_minimize_button(false).with_maximize_button(false);
+    let vid = egui::ViewportId::from_hash_of("zebra-about");
+    ctx.show_viewport_immediate(vid, vb, |ui, class| {
+        let ctx = ui.ctx().clone();
+        // As in Settings: a new native window can come up after our first
+        // paint and sit blank, so paint it for a moment.
+        let frames: u32 = ctx.data_mut(|d| {
+            let n = d.get_temp_mut_or(egui::Id::unique("zebra-about-frames"), 0u32);
+            *n += 1;
+            *n
+        });
+        if frames < 30 {
+            ctx.request_repaint_of(vid);
+        }
+        if ctx.input(|i| i.viewport().close_requested() || (i.modifiers.command && i.key_pressed(egui::Key::W)) || i.key_pressed(egui::Key::Escape)) {
             app.show_about = false;
         }
+        if class == egui::ViewportClass::EmbeddedWindow {
+            // No multi-window support (tests): draw as an egui window.
+            let mut open = true;
+            egui::Window::new(crate::t!("action-about")).id(egui::Id::unique("zebra-about-embedded")).title_bar(true).open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, EVec2::ZERO).show(&ctx, |ui| {
+                ui.set_width(300.0);
+                contents(ui);
+            });
+            if !open {
+                app.show_about = false;
+            }
+        } else {
+            let p = Palette::of(&ctx);
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(p.panel)).show(ui, contents);
+        }
+    });
+    if !app.show_about {
+        ctx.data_mut(|d| d.remove::<u32>(egui::Id::unique("zebra-about-frames")));
     }
 }

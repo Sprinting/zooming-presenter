@@ -98,6 +98,14 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
     ]
 }
 
+/// A title as the native menu wants it. The menu library reads a single `&`
+/// as a keyboard-mnemonic mark and drops it ("Symbols & Shapes" came out as
+/// "Symbols  Shapes"); a doubled one is shown as written. Every title goes
+/// through here: ours, undo labels, and file names in Open Recent.
+pub fn native(title: &str) -> String {
+    title.replace('&', "&&")
+}
+
 /// The live state of one menu item.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ItemState {
@@ -117,6 +125,10 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
     let mut title = a.label();
     let mut checked = None;
     let enabled = match a {
+        // A text box open on the canvas takes Undo and Redo itself (they
+        // reach it as key presses), so both stay on and keep their plain
+        // titles: the document's last step is not what they would undo.
+        Undo | Redo if app.canvas.text.is_some() => true,
         Undo => {
             if let Some(h) = app.editor.history().last() {
                 title = if h.origin.is_agent() {
@@ -275,5 +287,34 @@ fn items_ui(app: &mut ZebraApp, ui: &mut egui::Ui, items: &[Item]) {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod native_title_tests {
+    /// What the menu library does to a title on macOS (muda's strip_mnemonic).
+    fn shown(s: &str) -> String {
+        let mut out = String::new();
+        let mut it = s.chars().peekable();
+        while let Some(c) = it.next() {
+            if c == '&' {
+                if it.peek() == Some(&'&') {
+                    it.next();
+                    out.push('&');
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn an_ampersand_in_a_menu_title_is_shown() {
+        for t in ["Symbols & Shapes…", "R&D plan.zebra", "a && b", "plain"] {
+            assert_eq!(shown(&super::native(t)), t);
+        }
+        // The bug: without it the ampersand is swallowed.
+        assert_eq!(shown("Symbols & Shapes…"), "Symbols  Shapes…");
     }
 }

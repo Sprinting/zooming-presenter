@@ -76,6 +76,9 @@ pub struct ZebraApp {
     /// The window is out of sight but has work that needs a frame: the
     /// next pass runs `frame` once anyway.
     pub wake_hidden: bool,
+    /// The size this window opens at: that of the window it was made from,
+    /// as in Keynote (without it every new window came up 800 by 600).
+    pub open_size: Option<egui::Vec2>,
     /// `editor.loads` when `after_load` last ran.
     pub seen_loads: u64,
     /// When decoded pictures were last trimmed.
@@ -205,6 +208,15 @@ pub struct ZebraApp {
     pub media: crate::media_ui::Media,
 }
 
+/// The size a window made from this one opens at: the same, unless this one
+/// is full screen (there macOS decides: a tab, or its own default).
+pub fn open_size_from(from: &egui::ViewportInfo) -> Option<egui::Vec2> {
+    if from.fullscreen == Some(true) {
+        return None;
+    }
+    from.inner_rect.map(|r| r.size())
+}
+
 impl ZebraApp {
     /// Build the app. `wgpu` is `None` in UI tests.
     pub fn new(ctx: &Context, wgpu: Option<egui_wgpu::RenderState>, storage: Option<&dyn eframe::Storage>, opts: AppOptions) -> Self {
@@ -214,6 +226,15 @@ impl ZebraApp {
     /// Another document window next to this one: same renderer and
     /// picture cache, an empty document, no template chooser. The shell
     /// copies the shared settings in.
+    /// The panels that sit in the middle of the window, one at a time:
+    /// opening one over another left two stacked (Acknowledgements on top
+    /// of Diagrams).
+    pub fn close_centre_panels(&mut self) {
+        self.show_layouts = false;
+        self.show_diagrams = false;
+        self.show_credits = false;
+    }
+
     pub fn new_window(&self, doc_id: String) -> Self {
         let mut w = Self::build(&self.ctx, self.wgpu.clone(), None, AppOptions::default(), Some(self.renderer.clone()));
         w.welcome = None;
@@ -221,6 +242,7 @@ impl ZebraApp {
         w.hosted = true;
         w.front = false;
         w.native_dialogs = self.native_dialogs;
+        w.open_size = self.ctx.input(|i| i.raw.viewports.get(&self.viewport).and_then(open_size_from));
         w
     }
 
@@ -261,6 +283,7 @@ impl ZebraApp {
             quit_pending: false,
             viewport: egui::ViewportId::ROOT,
             wake_hidden: false,
+            open_size: None,
             seen_loads: 0,
             last_image_trim: 0.0,
             open_elsewhere: vec![],
@@ -560,8 +583,14 @@ impl ZebraApp {
             NewFromTemplate(t) => crate::welcome::new_from_template(self, &t),
             NewFromTemplateFile(p) => crate::welcome::new_from_template_file(self, &p),
             SaveAsTemplate => crate::welcome::save_as_template(self),
-            InsertLayout => self.show_layouts = true,
-            InsertDiagram => self.show_diagrams = true,
+            InsertLayout => {
+                self.close_centre_panels();
+                self.show_layouts = true
+            }
+            InsertDiagram => {
+                self.close_centre_panels();
+                self.show_diagrams = true
+            }
             InsertSymbols => self.library.open_symbols(),
             ThemeEditor => self.theme_ed = Some(crate::theme_editor::ThemeEditor::open(self)),
             NewFromSample => {
@@ -874,7 +903,10 @@ impl ZebraApp {
                 }
             }
             About => self.show_about = true,
-            Acknowledgements => self.show_credits = true,
+            Acknowledgements => {
+                self.close_centre_panels();
+                self.show_credits = true
+            }
         }
     }
 

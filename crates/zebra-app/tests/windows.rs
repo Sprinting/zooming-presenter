@@ -174,3 +174,44 @@ fn an_agent_opens_a_document_behind_and_closes_it() {
     assert!(!h.state().empty);
     assert_eq!(h.state_mut().agent_documents(&ctx).list()[0].id, again);
 }
+
+/// Mac round, 18 Nov: with no window open, Settings… and About Zebra each
+/// brought the hidden document window back as a blank "Untitled". They are
+/// windows of their own, so no document window comes with them; anything
+/// else asked for from the menu bar still does.
+#[test]
+fn settings_and_about_with_no_window_open_no_document() {
+    let mut h = harness();
+    h.state_mut().windows[0].queued.push(Action::Close);
+    h.run_steps(3);
+    assert!(h.state().empty);
+
+    h.state_mut().windows[0].queued.push(Action::Settings);
+    h.run_steps(4);
+    assert!(h.state().empty, "Settings alone opens no document window");
+    assert!(h.state().windows[0].show_settings);
+    h.state_mut().windows[0].show_settings = false;
+
+    h.state_mut().windows[0].queued.push(Action::About);
+    h.run_steps(4);
+    assert!(h.state().empty, "nor does About");
+    assert!(h.state().windows[0].show_about);
+    h.state_mut().windows[0].show_about = false;
+    h.run_steps(2);
+
+    h.state_mut().windows[0].queued.push(Action::New);
+    h.run_steps(4);
+    assert!(!h.state().empty, "File › New shows a window again");
+}
+
+/// Mac round, 18 Nov: a window made by File › New came up 800 by 600
+/// whatever the size of the window it was made from.
+#[test]
+fn a_new_window_opens_at_the_size_of_the_one_it_came_from() {
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(1440.0, 834.0));
+    let mut from = egui::ViewportInfo { inner_rect: Some(rect), ..Default::default() };
+    assert_eq!(zebra_app::app::open_size_from(&from), Some(egui::vec2(1440.0, 834.0)));
+    from.fullscreen = Some(true);
+    assert_eq!(zebra_app::app::open_size_from(&from), None, "full screen: macOS decides");
+    assert_eq!(zebra_app::app::open_size_from(&egui::ViewportInfo::default()), None);
+}

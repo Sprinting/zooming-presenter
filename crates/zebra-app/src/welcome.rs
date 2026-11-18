@@ -279,6 +279,21 @@ pub fn save_as_template(app: &mut ZebraApp) {
     }
 }
 
+/// How many cards across and how tall a gallery's list may be so the whole
+/// panel stays inside the window and under the toolbar. (At 800 by 600 the
+/// Diagrams panel covered the toolbar and ran past the window's edges.)
+pub fn gallery_fit(window: EVec2) -> (usize, f32) {
+    // A card is 150 wide with 10 between; the panel adds about 40 around.
+    let cols = (((window.x - 60.0) / 160.0).floor() as usize).clamp(2, 5);
+    // Title bar and toolbar above (about 80), the panel's own title and
+    // caption (about 70), and some air below.
+    let body_h = (window.y - 80.0 - 70.0 - 40.0).max(120.0);
+    (cols, body_h)
+}
+
+/// Where a gallery sits: centred in what is left under the toolbar.
+const GALLERY_OFFSET: EVec2 = EVec2::new(0.0, 36.0);
+
 /// The layout gallery: click a layout to insert it in the middle of the view.
 pub fn layout_gallery(app: &mut ZebraApp, ctx: &egui::Context) {
     if !app.show_layouts {
@@ -288,19 +303,22 @@ pub fn layout_gallery(app: &mut ZebraApp, ctx: &egui::Context) {
     let p = Palette::of(ctx);
     let mut open = true;
     let mut pick: Option<&'static str> = None;
-    egui::Window::new(crate::t!("layouts-title")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, EVec2::ZERO).show(ctx, |ui| {
+    egui::Window::new(crate::t!("layouts-title")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, GALLERY_OFFSET).show(ctx, |ui| {
         ui.label(RichText::new(crate::t!("layouts-caption")).size(12.0).color(p.weak));
         ui.add_space(6.0);
         let tex = app.previews.as_ref().map(|p| &p.textures);
-        egui::Grid::new("layouts").spacing([10.0, 10.0]).show(ui, |ui| {
-            for (i, l) in LAYOUTS.iter().enumerate() {
-                if card(ui, tex.and_then(|m| m.get(&format!("l:{}", l.id))), &crate::words::layout_name(l), false, &p).on_hover_text(crate::words::layout_description(l)).clicked() {
-                    pick = Some(l.id.as_str());
+        let (cols, h) = gallery_fit(ctx.content_rect().size());
+        egui::ScrollArea::vertical().max_height(h).show(ui, |ui| {
+            egui::Grid::new("layouts").spacing([10.0, 10.0]).show(ui, |ui| {
+                for (i, l) in LAYOUTS.iter().enumerate() {
+                    if card(ui, tex.and_then(|m| m.get(&format!("l:{}", l.id))), &crate::words::layout_name(l), false, &p).on_hover_text(crate::words::layout_description(l)).clicked() {
+                        pick = Some(l.id.as_str());
+                    }
+                    if i % cols == cols - 1 {
+                        ui.end_row();
+                    }
                 }
-                if i % 5 == 4 {
-                    ui.end_row();
-                }
-            }
+            });
         });
     });
     if let Some(id) = pick {
@@ -320,18 +338,18 @@ pub fn diagram_gallery(app: &mut ZebraApp, ctx: &egui::Context) {
     let p = Palette::of(ctx);
     let mut open = true;
     let mut pick: Option<&'static str> = None;
-    egui::Window::new(crate::t!("diagrams-title")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, EVec2::ZERO).show(ctx, |ui| {
+    egui::Window::new(crate::t!("diagrams-title")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, GALLERY_OFFSET).show(ctx, |ui| {
         ui.label(RichText::new(crate::t!("diagrams-caption")).size(12.0).color(p.weak));
         ui.add_space(6.0);
         let tex = app.previews.as_ref().map(|p| &p.textures);
-        let h = (ctx.content_rect().height() - 160.0).max(240.0);
+        let (cols, h) = gallery_fit(ctx.content_rect().size());
         egui::ScrollArea::vertical().max_height(h).min_scrolled_height(h.min(600.0)).show(ui, |ui| {
             egui::Grid::new("diagrams").spacing([10.0, 10.0]).show(ui, |ui| {
                 for (i, d) in zebra_core::diagrams::ALL.iter().enumerate() {
                     if card(ui, tex.and_then(|m| m.get(&format!("d:{}", d.key))), &crate::words::diagram_name(d), false, &p).on_hover_text(crate::words::diagram_description(d)).clicked() {
                         pick = Some(d.key);
                     }
-                    if i % 5 == 4 {
+                    if i % cols == cols - 1 {
                         ui.end_row();
                     }
                 }
@@ -375,5 +393,28 @@ pub fn insert_layout(app: &mut ZebraApp, id: &str) {
         if let Some(f) = frames.first() {
             app.select(vec![f.clone()]);
         }
+    }
+}
+
+#[cfg(test)]
+mod gallery_tests {
+    use super::*;
+
+    /// Mac round, 18 Nov: in an 800 by 600 window the Diagrams panel was
+    /// wider and taller than the window and covered the toolbar.
+    #[test]
+    fn a_gallery_fits_inside_its_window() {
+        for (w, h) in [(760.0, 480.0), (800.0, 600.0), (1440.0, 834.0), (2560.0, 1400.0)] {
+            let (cols, body) = gallery_fit(EVec2::new(w, h));
+            let panel_w = cols as f32 * 160.0 + 40.0;
+            let panel_h = body + 70.0;
+            assert!(panel_w <= w, "{cols} cards across fit {w}");
+            // Centred 36 below the middle: its top stays under the toolbar
+            // and its bottom inside the window.
+            let top = (h - panel_h) / 2.0 + 36.0;
+            assert!(top >= 80.0, "top {top} at {w}x{h}");
+            assert!(top + panel_h <= h, "bottom at {w}x{h}");
+        }
+        assert_eq!(gallery_fit(EVec2::new(1440.0, 834.0)).0, 5);
     }
 }

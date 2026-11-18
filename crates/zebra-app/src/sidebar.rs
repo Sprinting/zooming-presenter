@@ -33,6 +33,13 @@ pub fn step_label(app: &ZebraApp, i: usize) -> String {
     }
 }
 
+/// The step to highlight once the one at `removed` is gone: the one that
+/// took its place, else the new last one (as Keynote does with slides;
+/// leaving none highlighted, the notes still said "step 1").
+pub fn step_after_removal(removed: usize, left: usize) -> Option<usize> {
+    (left > 0).then(|| removed.min(left - 1))
+}
+
 /// Steps highlighted with the accent: those zooming to the canvas
 /// selection, else the step clicked last.
 pub fn selected_steps(app: &ZebraApp) -> Vec<usize> {
@@ -239,7 +246,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 w::menu_separator(ui);
                 if w::menu_item(ui, &crate::t!("sidebar-remove-from-path"), None).clicked() {
                     app.apply(Command::RemoveStep { index: i });
-                    app.selected_step = None;
+                    app.selected_step = step_after_removal(i, app.editor.doc.path.len());
                 }
             });
             ui.add_space(2.0);
@@ -308,7 +315,7 @@ fn footer(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             let cmds: Vec<Command> = sel.iter().rev().map(|i| Command::RemoveStep { index: *i }).collect();
             let r = app.editor.apply_batch(cmds, Some(crate::t!("sidebar-undo-remove-step")), H);
             app.report(r);
-            app.selected_step = None;
+            app.selected_step = sel.first().and_then(|i| step_after_removal(*i, app.editor.doc.path.len()));
         }
         ui.add_space(6.0);
         let more = footer_button(ui, Icon::ChevronDown, true, p).on_hover_text(crate::t!("sidebar-more-tip"));
@@ -338,4 +345,16 @@ fn footer_button(ui: &mut Ui, icon: Icon, enabled: bool, p: &Palette) -> egui::R
     }
     paint_icon(ui.painter(), Rect::from_center_size(rect.center(), EVec2::splat(11.0)), icon, if enabled { p.text } else { p.disabled });
     resp
+}
+
+#[cfg(test)]
+mod removal_tests {
+    use super::step_after_removal;
+
+    #[test]
+    fn removing_a_step_highlights_its_neighbour() {
+        assert_eq!(step_after_removal(1, 2), Some(1), "the step that moved up");
+        assert_eq!(step_after_removal(2, 2), Some(1), "the last one went: the new last");
+        assert_eq!(step_after_removal(0, 0), None, "no steps left");
+    }
 }

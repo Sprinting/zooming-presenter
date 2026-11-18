@@ -18,7 +18,7 @@ use muda::{accelerator::Accelerator, CheckMenuItem, Menu, MenuEvent, MenuItem, P
 
 use crate::actions::Action;
 use crate::app::ZebraApp;
-use crate::menus::{is_checkable, spec, state, Item, ItemState};
+use crate::menus::{is_checkable, native, spec, state, Item, ItemState};
 
 enum Native {
     Plain(MenuItem),
@@ -132,11 +132,11 @@ fn build_items(sub: &Submenu, items: &[Item], m: &mut MacMenu, next: &mut u32, a
                 let spec = accel_spec(a);
                 let accel = spec.as_deref().and_then(|s| s.parse().ok());
                 let item = if is_checkable(a) {
-                    let c = CheckMenuItem::with_id(id.clone(), &st.title, st.enabled, st.checked.unwrap_or(false), accel);
+                    let c = CheckMenuItem::with_id(id.clone(), native(&st.title), st.enabled, st.checked.unwrap_or(false), accel);
                     let _ = sub.append(&c);
                     Native::Check(c)
                 } else {
-                    let mi = MenuItem::with_id(id.clone(), &st.title, st.enabled, accel);
+                    let mi = MenuItem::with_id(id.clone(), native(&st.title), st.enabled, accel);
                     let _ = sub.append(&mi);
                     Native::Plain(mi)
                 };
@@ -147,7 +147,7 @@ fn build_items(sub: &Submenu, items: &[Item], m: &mut MacMenu, next: &mut u32, a
                 let _ = sub.append(&PredefinedMenuItem::separator());
             }
             Item::Sub(t, children) => {
-                let s = Submenu::new(t, true);
+                let s = Submenu::new(native(&t), true);
                 build_items(&s, children, m, next, app);
                 let _ = sub.append(&s);
             }
@@ -167,12 +167,12 @@ impl MacMenu {
 
         // App menu
         let app_menu = Submenu::new(crate::t!("menu-mac-app"), true);
-        let about = MenuItem::with_id("zebra.about", Action::About.label(), true, None);
+        let about = MenuItem::with_id("zebra.about", native(&Action::About.label()), true, None);
         m.ids.insert("zebra.about".to_string(), Action::About);
         let settings_spec = accel_spec(&Action::Settings);
-        let settings = MenuItem::with_id("zebra.settings", Action::Settings.label(), true, accel_for(&Action::Settings));
+        let settings = MenuItem::with_id("zebra.settings", native(&Action::Settings.label()), true, accel_for(&Action::Settings));
         m.ids.insert("zebra.settings".to_string(), Action::Settings);
-        let quit = MenuItem::with_id("zebra.quit", Action::Quit.label(), true, accel_for(&Action::Quit));
+        let quit = MenuItem::with_id("zebra.quit", native(&Action::Quit.label()), true, accel_for(&Action::Quit));
         m.ids.insert("zebra.quit".to_string(), Action::Quit);
         let _ = app_menu.append_items(&[
             &about,
@@ -194,7 +194,7 @@ impl MacMenu {
         let mut window: Option<Submenu> = None;
         let help_title = crate::t!("menu-help");
         for (title, items) in spec() {
-            let sub = Submenu::new(&title, true);
+            let sub = Submenu::new(native(&title), true);
             build_items(&sub, &items, &mut m, &mut next, app);
             if title == help_title {
                 // Window menu goes before Help, macOS convention.
@@ -246,7 +246,7 @@ impl MacMenu {
             match &e.item {
                 Native::Plain(mi) => {
                     if st.title != e.last.title {
-                        mi.set_text(&st.title);
+                        mi.set_text(native(&st.title));
                     }
                     if st.enabled != e.last.enabled {
                         mi.set_enabled(st.enabled);
@@ -254,7 +254,7 @@ impl MacMenu {
                 }
                 Native::Check(c) => {
                     if st.title != e.last.title {
-                        c.set_text(&st.title);
+                        c.set_text(native(&st.title));
                     }
                     if st.enabled != e.last.enabled {
                         c.set_enabled(st.enabled);
@@ -326,7 +326,7 @@ pub fn poll(app: &mut ZebraApp, ctx: &egui::Context) {
                 // still waiting when the list is rebuilt opens what was clicked.
                 let id = format!("zebra.recent.{}", recent_key(p));
                 let name = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
-                let mi = MenuItem::with_id(id.clone(), name, true, None);
+                let mi = MenuItem::with_id(id.clone(), native(&name), true, None);
                 let _ = m.recent.append(&mi);
                 m.ids.insert(id, Action::OpenPath(p.clone()));
             }

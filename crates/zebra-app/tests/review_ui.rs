@@ -625,3 +625,37 @@ fn r26_a_dragged_step_is_let_go_when_the_path_changes() {
     h.run_steps(2);
     assert_eq!(h.state().editor.doc.path, before[1..].to_vec(), "the two steps left keep their order");
 }
+
+/// Mac round, 18 Nov: on a fresh document, Edit › Undo was greyed out while
+/// typing in a new text box, though ⌘Z would undo the typing.
+#[test]
+fn mac_undo_is_on_while_a_text_box_is_open() {
+    let mut h = harness();
+    h.run_steps(5);
+    assert!(!zebra_app::menus::state(h.state(), &Action::Undo).enabled, "nothing to undo on an empty document");
+    let c = h.state().canvas.rect.center();
+    click_at(&mut h, c, 2);
+    h.run_steps(3);
+    assert!(h.state().canvas.text.is_some(), "double-click opens a text box");
+    h.event(Event::Text("typed".into()));
+    h.run_steps(3);
+    let st = zebra_app::menus::state(h.state(), &Action::Undo);
+    assert!(st.enabled);
+    assert_eq!(st.title, Action::Undo.label());
+}
+
+/// Mac round, 18 Nov: Help › Acknowledgements opened on top of an open
+/// Diagrams panel, two panels stacked in the middle of the window.
+#[test]
+fn mac_centre_panels_open_one_at_a_time() {
+    let mut h = harness();
+    h.state_mut().queued.push(Action::InsertDiagram);
+    h.run_steps(3);
+    assert!(h.state().show_diagrams);
+    h.state_mut().queued.push(Action::Acknowledgements);
+    h.run_steps(3);
+    assert!(h.state().show_credits && !h.state().show_diagrams);
+    h.state_mut().queued.push(Action::InsertLayout);
+    h.run_steps(3);
+    assert!(h.state().show_layouts && !h.state().show_credits);
+}

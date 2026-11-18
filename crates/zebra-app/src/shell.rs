@@ -361,6 +361,16 @@ impl Shell {
     }
 }
 
+/// With no document open: is everything asked for, and everything showing,
+/// a window of its own (Settings, About)? Then no document window is needed.
+pub fn windowless_only(w: &ZebraApp) -> bool {
+    let own_window = |a: &Action| matches!(a, Action::Settings | Action::About);
+    if w.queued.is_empty() {
+        return w.show_settings || w.show_about;
+    }
+    w.queued.iter().all(own_window)
+}
+
 /// The current window is out of sight: a background tab, minimised, or
 /// fully covered.
 fn hidden(ctx: &egui::Context) -> bool {
@@ -458,6 +468,16 @@ impl Shell {
             return;
         }
         let reopen = crate::mac::take_reopen();
+        // Settings and About are windows of their own: they open without
+        // bringing a document window back. The hidden window's ui still has
+        // to run, since theirs is drawn from it.
+        if !reopen && windowless_only(w) {
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::RequestPaintWhileHidden);
+            if !w.queued.is_empty() {
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            }
+            return;
+        }
         if reopen && w.queued.is_empty() {
             // Like a fresh launch: the template chooser.
             w.welcome = Some(crate::welcome::Welcome::new());
@@ -519,7 +539,10 @@ impl eframe::App for Shell {
             let id = self.windows[i].doc_id.clone();
             let vid = egui::ViewportId::from_hash_of(("document", id.as_str()));
             // A window an agent opened doesn't take the person's focus.
-            let builder = crate::window_builder(&placeholder_title(&id)).with_active(!self.windows[i].opened_by_agent);
+            let mut builder = crate::window_builder(&placeholder_title(&id)).with_active(!self.windows[i].opened_by_agent);
+            if let Some(size) = self.windows[i].open_size {
+                builder = builder.with_inner_size(size);
+            }
             let w = &mut self.windows[i];
             let got_focus = ctx.show_viewport_immediate(vid, builder, |ui, _class| {
                 #[cfg(target_os = "macos")]
