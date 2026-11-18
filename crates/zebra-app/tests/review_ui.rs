@@ -399,3 +399,46 @@ fn r19_a_typed_title_survives_the_field_going_away() {
     assert_eq!(h.state().editor.doc.title, "Quarterly review");
     assert!(h.state().title_buf.is_none());
 }
+
+/// R9: opening a file that is already open shows its window instead of
+/// making a second one on the same file.
+#[test]
+fn r9_opening_an_open_file_shows_its_window() {
+    let mut h = shell();
+    let file = data_dir().join("r9.zebra");
+    frame(&mut h.state_mut().windows[0], 0.0, false);
+    assert!(h.state_mut().windows[0].save_to(&file));
+    // From a second window with work in it, and from an untouched one.
+    h.state_mut().windows[0].queued.push(Action::New);
+    h.run_steps(4);
+    assert_eq!(h.state().windows.len(), 2);
+    h.state_mut().windows[1].queued.push(Action::OpenPath(file.clone()));
+    h.run_steps(4);
+    assert_eq!(h.state().windows.len(), 2, "no second window on the file");
+    assert_eq!(h.state().front, 0, "its window comes forward");
+    assert!(h.state().windows[1].editor.file_path.is_none());
+    frame(&mut h.state_mut().windows[1], 0.0, false);
+    h.state_mut().windows[1].queued.push(Action::OpenPath(file.clone()));
+    h.run_steps(4);
+    assert_eq!(h.state().windows.len(), 2);
+    assert_eq!(h.state().windows.iter().filter(|w| w.editor.file_path.is_some()).count(), 1);
+}
+
+/// R25: closing a window that is presenting ends the show first.
+#[test]
+fn r25_closing_a_presenting_window_ends_the_show() {
+    let mut h = shell();
+    frame(&mut h.state_mut().windows[0], 0.0, true);
+    h.state_mut().windows[0].editor.mark_saved(None);
+    h.state_mut().windows[0].queued.push(Action::New);
+    h.run_steps(4);
+    frame(&mut h.state_mut().windows[1], 0.0, true);
+    h.state_mut().windows[1].editor.mark_saved(None);
+    h.state_mut().windows[1].view_cmd(ViewCommand::Present { step: None });
+    h.run_steps(4);
+    assert_eq!(h.state().windows[1].editor.view.mode, Mode::Present);
+    h.state_mut().windows[1].queued.push(Action::Close);
+    h.run_steps(4);
+    assert_eq!(h.state().windows.len(), 1);
+    assert_eq!(h.state().windows[0].editor.view.mode, Mode::Edit);
+}

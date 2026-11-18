@@ -272,6 +272,17 @@ impl Shell {
             spawn.append(&mut w.spawn);
         }
         for a in spawn {
+            // Open a file that is already open: show its window.
+            if let Action::OpenPath(p) = &a {
+                let p = crate::app::same_file(p);
+                if let Some(i) = self.windows.iter().position(|w| w.editor.file_path.as_deref().map(crate::app::same_file) == Some(p.clone())) {
+                    self.set_front(i);
+                    let vid = if i == 0 { egui::ViewportId::ROOT } else { egui::ViewportId::from_hash_of(("document", self.windows[i].doc_id.as_str())) };
+                    ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Focus);
+                    continue;
+                }
+            }
             self.open_window(a);
         }
         if self.windows.iter_mut().any(|w| std::mem::take(&mut w.quit_all)) {
@@ -465,8 +476,10 @@ impl eframe::App for Shell {
         if self.empty {
             self.logic_empty(ctx);
         }
+        let open: Vec<Option<std::path::PathBuf>> = self.windows.iter().map(|w| w.editor.file_path.as_deref().map(crate::app::same_file)).collect();
         for i in 0..self.windows.len() {
             let w = &mut self.windows[i];
+            w.open_elsewhere = open.iter().enumerate().filter(|(j, _)| *j != i).filter_map(|(_, p)| p.clone()).collect();
             w.viewport = if i == 0 { egui::ViewportId::ROOT } else { egui::ViewportId::from_hash_of(("document", w.doc_id.as_str())) };
             w.logic(ctx);
             self.sync_from(i);

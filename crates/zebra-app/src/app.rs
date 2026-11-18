@@ -63,6 +63,8 @@ pub struct ZebraApp {
     pub front: bool,
     /// For the shell: actions that need a new window (New, Open...).
     pub spawn: Vec<Action>,
+    /// From the shell: the files open in the other windows.
+    pub open_elsewhere: Vec<PathBuf>,
     /// For the shell: close this window (its document is saved or discarded).
     pub close_me: bool,
     /// For the shell: the person chose Quit.
@@ -255,6 +257,7 @@ impl ZebraApp {
             viewport: egui::ViewportId::ROOT,
             wake_hidden: false,
             seen_loads: 0,
+            open_elsewhere: vec![],
             renderer: renderer.clone(),
             gpu_canvas: wgpu.as_ref().map(zebra_render::gpu::VelloCanvas::new),
             wgpu,
@@ -516,11 +519,22 @@ impl ZebraApp {
             New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | OpenPath(_) if self.hosted && !self.is_pristine() => {
                 self.spawn.push(a);
             }
+            // A file another window has open: the shell shows that window
+            // (two windows on one file would overwrite each other's saves).
+            OpenPath(ref p) if self.hosted && self.open_elsewhere.contains(&same_file(p)) => {
+                self.spawn.push(a);
+            }
             Quit if self.hosted => self.quit_all = true,
             New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close if self.editor.dirty() && self.sheet.is_none() && !self.force_quit => {
                 crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(a));
             }
             Close if self.hosted => {
+                // A show ends with its window: the menu bar and Dock come
+                // back, and the next document doesn't inherit the stage.
+                if self.editor.view.mode == Mode::Present {
+                    let _ = self.editor.view(ViewCommand::ExitPresent, H);
+                    self.sync_present_mode(ctx);
+                }
                 self.close_me = true;
                 self.media.stop_all();
             }
@@ -1560,4 +1574,9 @@ impl eframe::App for ZebraApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0, 0.0, 0.0, 1.0]
     }
+}
+
+/// One spelling for a file's path, to tell whether two paths are one file.
+pub fn same_file(p: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
