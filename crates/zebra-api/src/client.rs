@@ -130,6 +130,9 @@ impl Client {
     /// Send a raw JSON-RPC message (adds `jsonrpc` if missing) and return the
     /// whole response object (or `null` for a notification).
     pub fn raw(&mut self, mut msg: Value) -> Result<Value, ClientError> {
+        if !msg.is_object() {
+            return Err(ClientError::Rpc(RpcError::invalid("a message is a JSON object: {\"method\": ..., \"params\": {...}}")));
+        }
         if msg.get("jsonrpc").is_none() {
             msg["jsonrpc"] = json!("2.0");
         }

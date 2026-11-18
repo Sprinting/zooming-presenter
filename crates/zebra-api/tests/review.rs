@@ -188,3 +188,27 @@ fn an_agent_cannot_end_the_persons_drag() {
     e.commit_as(&Origin::Human);
     assert_eq!(e.doc.get(&zebra_core::ElementId::from(id.as_str())).unwrap().transform.x, 50.0);
 }
+
+/// `zebractl raw '[1]'` panicked the client; the relay shares the code.
+#[test]
+fn a_raw_message_that_is_not_an_object_is_an_error_not_a_panic() {
+    let h = start(Permission::Edit);
+    let mut c = connect(&h, "raw");
+    for v in [json!([1]), json!(1), json!("x"), Value::Null] {
+        assert_eq!(rpc_err(c.raw(v)).kind(), "invalid_params");
+    }
+    assert_eq!(c.call("ping", json!({})).unwrap(), "pong");
+    h.stop().unwrap();
+}
+
+/// R14: "You" is the person in the history and the status bar.
+#[test]
+fn an_agent_cannot_call_itself_you() {
+    let h = start(Permission::Edit);
+    for (given, shown) in [("You", "agent \"You\""), (" you ", "agent \"you\""), ("", "agent"), ("a\nb", "ab"), ("Claude", "Claude")] {
+        let mut c = Client::connect(&h.socket).unwrap();
+        let v = c.call("hello", json!({"name": given, "token": h.token})).unwrap();
+        assert_eq!(v["name"], shown, "{given:?}");
+    }
+    h.stop().unwrap();
+}

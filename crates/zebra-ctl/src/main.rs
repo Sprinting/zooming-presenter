@@ -619,6 +619,9 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Raw { json: j } => {
             let mut v = parse_json(&j, "message")?;
+            if !v.is_object() {
+                bail!("a raw message is a JSON object, like '{{\"method\":\"state\"}}'");
+            }
             if v.get("id").is_none() {
                 v["id"] = json!(1000);
             }

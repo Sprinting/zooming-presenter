@@ -229,7 +229,7 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
             }
             let h: H = params_of(method, &p, r#"{"name":"my-agent","token":"<from the discovery file>"}"#)?;
             return Ok(Parsed::Local(Local::Hello {
-                name: h.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "agent".into()),
+                name: agent_name(h.name),
                 token: h.token.unwrap_or_default(),
             }));
         }
@@ -570,5 +570,20 @@ pub fn parse_until(u: &Value) -> Result<WaitUntil, RpcError> {
             Err(bad())
         }
         _ => Err(bad()),
+    }
+}
+
+/// The name an agent goes by in the status bar and the history: its own,
+/// trimmed to one short line. "You" is how the person's own steps are
+/// shown, so an agent can't take it.
+pub(crate) fn agent_name(name: Option<String>) -> String {
+    let n: String = name.unwrap_or_default().chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(40).collect();
+    let n = n.trim().to_string();
+    if n.is_empty() {
+        "agent".into()
+    } else if n.eq_ignore_ascii_case("you") || n.eq_ignore_ascii_case("human") {
+        format!("agent \"{n}\"")
+    } else {
+        n
     }
 }

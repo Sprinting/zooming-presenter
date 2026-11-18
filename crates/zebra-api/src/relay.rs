@@ -99,6 +99,9 @@ fn serve(stream: UnixStream, upstream: &mut Client, token: &str, name: &str) -> 
     });
     let mut out = stream;
     let mut line = String::new();
+    // Nothing is forwarded until this process has shown the token, as on
+    // Zebra's own socket.
+    let mut authed = false;
     loop {
         line.clear();
         match reader.read_line(&mut line) {
@@ -106,17 +109,26 @@ fn serve(stream: UnixStream, upstream: &mut Client, token: &str, name: &str) -> 
             Ok(_) => {}
         }
         let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else { continue };
+        // Only an object is a message; a stray array or number is skipped.
+        if !msg.is_object() {
+            continue;
+        }
         let id = msg.get("id").cloned();
+        let unauthenticated = |id: &Option<Value>| json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32001, "message": "wrong or missing token", "data": {"code": "unauthenticated"}}});
         let reply = if msg.get("method").and_then(Value::as_str) == Some("hello") {
             let p = msg.get("params").cloned().unwrap_or(Value::Null);
             if p.get("token").and_then(Value::as_str) != Some(token) {
-                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32001, "message": "wrong or missing token", "data": {"code": "unauthenticated"}}})
+                unauthenticated(&id)
             } else {
+                authed = true;
                 json!({"jsonrpc": "2.0", "id": id, "result": {"server": "zebra", "name": name, "relay": true}})
             }
+        } else if !authed {
+            unauthenticated(&id)
         } else {
             match upstream.raw(msg) {
                 Ok(v) => v,
+                Err(crate::client::ClientError::Rpc(e)) => json!({"jsonrpc": "2.0", "id": id, "error": e.to_json()}),
                 Err(_) => return Err(()),
             }
         };
