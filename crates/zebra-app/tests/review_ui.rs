@@ -317,3 +317,45 @@ fn r23_a_mouse_up_leaves_an_agents_transaction_open() {
     assert_eq!(app.editor.transaction_owner(), Some(&agent), "still the agent's");
     assert_eq!(app.editor.history().len(), n);
 }
+
+/// W7: clicking into a number field and out again wrote the rounded text
+/// back (123.4 became 123) with no undo step.
+#[test]
+fn w7_clicking_through_a_number_field_changes_nothing() {
+    use zebra_app::widgets::{Num, number_field};
+    let mut h = Harness::builder().with_size(egui::vec2(300.0, 120.0)).with_accessibility_check(false).build_ui_state(
+        |ui, s: &mut (f64, f64, u32)| {
+            zebra_app::style::install_fonts(ui.ctx());
+            zebra_app::style::apply_visuals(ui.ctx());
+            let a = number_field(ui, &mut s.0, Num { decimals: 0, ..Default::default() }.width(72.0));
+            let b = number_field(ui, &mut s.1, Num { decimals: 0, ..Default::default() }.width(72.0));
+            if a.changed() || b.changed() {
+                s.2 += 1;
+            }
+        },
+        (123.4, 7.0, 0),
+    );
+    h.run_steps(2);
+    let fields: Vec<egui::Rect> = h.query_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.rect()).collect();
+    assert_eq!(fields.len(), 2);
+    for r in [fields[0], fields[1], fields[0]] {
+        let p = r.center();
+        h.event(Event::PointerMoved(p));
+        h.event(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    }
+    assert_eq!(*h.state(), (123.4, 7.0, 0));
+    // Typing a new value still commits when focus leaves.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.step();
+    h.event(Event::Text("50".into()));
+    h.run_steps(2);
+    let p = fields[1].center();
+    h.event(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    h.event(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!((h.state().0, h.state().1), (50.0, 7.0));
+}

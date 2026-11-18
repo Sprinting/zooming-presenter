@@ -698,6 +698,12 @@ pub fn number_field(ui: &mut Ui, value: &mut f64, opt: Num) -> Response {
     );
     let mut resp = te.clone();
     let commit = |buf: &str, value: &mut f64| -> bool {
+        // Text the person didn't change is not a new value: the field
+        // shows the value rounded, and writing that back would change the
+        // object just for clicking in and out.
+        if buf == fmt(*value) {
+            return false;
+        }
         let t: String = buf.chars().filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == ',').collect();
         if let Ok(v) = t.replace(',', ".").parse::<f64>() {
             let v = (v / opt.display_scale).clamp(opt.min, opt.max);

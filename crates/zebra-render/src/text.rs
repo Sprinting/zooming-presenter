@@ -186,6 +186,10 @@ struct Inner {
     /// Keys touched since the last trim, to evict layouts no longer drawn.
     generation: u64,
     used: HashMap<Key, u64>,
+    /// The generation the cache was last trimmed in.
+    swept: Option<u64>,
+    /// Layouts computed (cache misses), for tests.
+    misses: u64,
 }
 
 /// Font database + layout cache. Cheap to clone (shared).
@@ -195,6 +199,9 @@ pub struct Fonts {
 }
 
 const CACHE_SOFT_LIMIT: usize = 4096;
+/// With no frames to count (headless measuring), the cache is cut back
+/// once it reaches this.
+const CACHE_HARD_LIMIT: usize = 4 * CACHE_SOFT_LIMIT;
 
 impl Fonts {
     pub fn new() -> Self {
@@ -216,6 +223,8 @@ impl Fonts {
                 cache: HashMap::new(),
                 generation: 0,
                 used: HashMap::new(),
+                swept: None,
+                misses: 0,
             })),
         }
     }
@@ -264,13 +273,22 @@ impl Fonts {
             return l.clone();
         }
         let l = Arc::new(do_layout(&mut g, &key, style.size as f32));
-        if g.cache.len() >= CACHE_SOFT_LIMIT {
-            // Drop everything not used in the current or previous generation.
+        g.misses += 1;
+        if g.cache.len() >= CACHE_HARD_LIMIT {
+            // Nobody is marking frames: start a new generation ourselves.
+            g.generation += 1;
+        }
+        if g.cache.len() >= CACHE_SOFT_LIMIT && g.swept != Some(g.generation) {
+            // Once per generation (frame), drop everything not used in it
+            // or the one before. A deck that draws more texts than the
+            // soft limit keeps them all: trimming on every miss, and
+            // counting each trim as a frame, threw out layouts the same
+            // frame was about to ask for again.
             let keep = g.generation.saturating_sub(1);
             let Inner { cache, used, .. } = &mut *g;
             used.retain(|_, v| *v >= keep);
             cache.retain(|k, _| used.contains_key(k));
-            g.generation += 1;
+            g.swept = Some(g.generation);
         }
         g.cache.insert(key, l.clone());
         l
@@ -356,6 +374,12 @@ impl Fonts {
     /// Cached layouts (for the perf query).
     pub fn cached_layouts(&self) -> usize {
         self.inner.lock().map(|g| g.cache.len()).unwrap_or(0)
+    }
+
+    /// Layouts computed so far (cache misses).
+    #[doc(hidden)]
+    pub fn layout_misses(&self) -> u64 {
+        self.inner.lock().map(|g| g.misses).unwrap_or(0)
     }
 
     /// Mark a frame boundary for cache eviction.
@@ -640,4 +664,45 @@ impl zebra_core::TextMeasure for ParleyMeasure {
 /// The wrap width a text element is laid out with when drawn.
 pub fn wrap_for(t: &TextData, size_w: f64) -> Option<f64> {
     if t.fixed_width { Some(size_w) } else { None }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    /// W8: above the soft limit every miss counted as a frame and threw
+    /// out nearly the whole cache, so each text was laid out again on
+    /// every frame.
+    #[test]
+    fn a_deck_with_more_texts_than_the_soft_limit_is_laid_out_once() {
+        let fonts = Fonts::new();
+        let theme = Theme::by_id("classic").unwrap();
+        let n = CACHE_SOFT_LIMIT + 300;
+        let texts: Vec<TextData> = (0..n).map(|i| TextData { text: format!("t{i}"), ..Default::default() }).collect();
+        let frame = |fonts: &Fonts| {
+            fonts.next_generation();
+            for t in &texts {
+                fonts.layout(t, &theme, None);
+            }
+        };
+        frame(&fonts);
+        assert_eq!(fonts.layout_misses(), n as u64);
+        frame(&fonts);
+        frame(&fonts);
+        assert_eq!(fonts.layout_misses(), n as u64, "frames two and three lay nothing out again");
+        assert_eq!(fonts.cached_layouts(), n);
+        // Texts no longer drawn do go, once the cache is over the limit.
+        for g in 0..3 {
+            fonts.next_generation();
+            for i in 0..CACHE_SOFT_LIMIT + 10 {
+                fonts.layout(&TextData { text: format!("other{g}-{i}"), ..Default::default() }, &theme, None);
+            }
+        }
+        assert!(fonts.cached_layouts() < 3 * CACHE_SOFT_LIMIT, "{}", fonts.cached_layouts());
+        // And with nobody marking frames (headless measuring) it stays bounded.
+        for i in 0..3 * CACHE_HARD_LIMIT {
+            fonts.layout(&TextData { text: format!("m{i}"), ..Default::default() }, &theme, None);
+        }
+        assert!(fonts.cached_layouts() <= 2 * CACHE_HARD_LIMIT, "{}", fonts.cached_layouts());
+    }
 }
