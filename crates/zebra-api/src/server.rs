@@ -29,6 +29,20 @@ pub(crate) struct Conn {
     /// None = not subscribed; Some(None) = all events; Some(Some(set)) = filter.
     pub subs: Option<Option<HashSet<String>>>,
     stream: UnixStream,
+    /// Bytes queued for this client and not yet written to its socket.
+    backlog: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// Events queued for a subscriber that has stopped reading are kept up to
+/// this many bytes; then it is disconnected, instead of the queue growing
+/// for as long as Zebra runs.
+pub(crate) const MAX_EVENT_BACKLOG: usize = 16 << 20;
+
+impl Conn {
+    fn push(&self, line: String) {
+        self.backlog.fetch_add(line.len(), Ordering::SeqCst);
+        let _ = self.out.send(line);
+    }
 }
 
 pub(crate) struct Shared {
@@ -44,21 +58,27 @@ pub(crate) struct Shared {
 impl Shared {
     pub fn send(&self, client: u64, line: String) {
         if let Some(c) = self.clients.lock().unwrap().get(&client) {
-            let _ = c.out.send(line);
+            c.push(line);
         }
     }
     pub fn broadcast_event(&self, name: &str, params: &Value) {
         let line = protocol::notification("event", params.clone());
         for c in self.clients.lock().unwrap().values() {
-            match &c.subs {
-                Some(None) => {
-                    let _ = c.out.send(line.clone());
-                }
-                Some(Some(set)) if set.contains(name) => {
-                    let _ = c.out.send(line.clone());
-                }
-                _ => {}
+            let wants = match &c.subs {
+                Some(None) => true,
+                Some(Some(set)) => set.contains(name),
+                None => false,
+            };
+            if !wants {
+                continue;
             }
+            if c.backlog.load(Ordering::SeqCst) > MAX_EVENT_BACKLOG {
+                // It subscribed and stopped reading. Closing the socket
+                // ends its reader, which reports the disconnect.
+                let _ = c.stream.shutdown(std::net::Shutdown::Both);
+                continue;
+            }
+            c.push(line.clone());
         }
     }
 }
@@ -199,11 +219,15 @@ fn connection(id: u64, stream: UnixStream, shared: Arc<Shared>, tx: Sender<Inbou
     let (out_tx, out_rx) = channel::<String>();
     let Ok(write_half) = stream.try_clone() else { return };
     let Ok(ctl) = stream.try_clone() else { return };
-    shared.clients.lock().unwrap().insert(id, Conn { name: None, out: out_tx.clone(), subs: None, stream: ctl });
+    let backlog = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    shared.clients.lock().unwrap().insert(id, Conn { name: None, out: out_tx.clone(), subs: None, stream: ctl, backlog: backlog.clone() });
+    let written = backlog.clone();
     let writer = std::thread::spawn(move || {
         let mut w = std::io::BufWriter::new(write_half);
         while let Ok(line) = out_rx.recv() {
-            if w.write_all(line.as_bytes()).and_then(|_| w.write_all(b"\n")).is_err() {
+            let r = w.write_all(line.as_bytes()).and_then(|_| w.write_all(b"\n"));
+            let _ = written.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some(n.saturating_sub(line.len())));
+            if r.is_err() {
                 break;
             }
             // Flush when nothing else is queued.
@@ -230,6 +254,7 @@ fn connection(id: u64, stream: UnixStream, shared: Arc<Shared>, tx: Sender<Inbou
             continue;
         }
         let reply = |s: String| {
+            backlog.fetch_add(s.len(), Ordering::SeqCst);
             let _ = out_tx.send(s);
         };
         let msg: Value = match serde_json::from_str(line) {

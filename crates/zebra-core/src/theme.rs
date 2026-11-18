@@ -40,6 +40,10 @@ pub struct Theme {
     /// without them: family name -> font file asset keys.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fonts: BTreeMap<String, Vec<String>>,
+    /// A custom theme: the theme it was made from. Deleting the custom
+    /// theme goes back to this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 /// One layer of a 3D (parallax) background.
@@ -87,6 +91,7 @@ impl Theme {
                 background_image: None,
                 layers: vec![],
                 fonts: BTreeMap::new(),
+                base: None,
             },
             Theme {
                 id: "chalkboard".into(),
@@ -104,6 +109,7 @@ impl Theme {
                 background_image: None,
                 layers: vec![],
                 fonts: BTreeMap::new(),
+                base: None,
             },
             Theme {
                 id: "blueprint".into(),
@@ -119,6 +125,7 @@ impl Theme {
                 background_image: None,
                 layers: vec![],
                 fonts: BTreeMap::new(),
+                base: None,
             },
             Theme {
                 id: "paper".into(),
@@ -134,6 +141,7 @@ impl Theme {
                 background_image: None,
                 layers: vec![],
                 fonts: BTreeMap::new(),
+                base: None,
             },
             Theme {
                 id: "night".into(),
@@ -149,6 +157,7 @@ impl Theme {
                 background_image: None,
                 layers: vec![],
                 fonts: BTreeMap::new(),
+                base: None,
             },
         ]
     }

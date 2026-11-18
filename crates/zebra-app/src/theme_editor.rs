@@ -34,6 +34,7 @@ impl ThemeEditor {
             while app.editor.doc.themes.iter().any(|t| t.id == format!("custom-{n}")) {
                 n += 1;
             }
+            draft.base = Some(draft.id.clone());
             draft.id = format!("custom-{n}");
             draft.name = crate::t!("theme-editor-custom-name", name = base.as_str());
         }

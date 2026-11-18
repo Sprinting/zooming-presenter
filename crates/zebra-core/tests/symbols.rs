@@ -160,3 +160,23 @@ fn agents_can_list_symbols_and_diagrams() {
 fn cmd_q(j: serde_json::Value) -> Query {
     serde_json::from_value(j).unwrap()
 }
+
+/// R13: replacing a symbol's picture leaves an ordinary picture, not one
+/// still drawn with the symbol's tint and sticker settings.
+#[test]
+fn replacing_a_symbols_picture_drops_the_symbol_look() {
+    pack();
+    let mut ed = Editor::default();
+    let out = ed.apply(cmd(serde_json::json!({"op":"add_symbol","set":"glyphs","name":"lightbulb","color":"#336699"})), Origin::Human).unwrap();
+    let id = out.created[0].clone();
+    let png = {
+        use base64::Engine;
+        let img = image::RgbImage::from_fn(8, 8, |x, y| image::Rgb([x as u8 * 30, y as u8 * 30, 1]));
+        let mut out = std::io::Cursor::new(vec![]);
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(out.into_inner())
+    };
+    ed.apply(cmd(serde_json::json!({"op":"replace_image","id":id,"data_base64":png})), Origin::Human).unwrap();
+    let ElementKind::Image(img) = &ed.doc.get(&id).unwrap().kind else { panic!() };
+    assert!(img.symbol.is_none());
+}

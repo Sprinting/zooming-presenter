@@ -1087,6 +1087,9 @@ impl Editor {
                 };
                 img.asset = key;
                 img.crop = None;
+                // No longer the library's symbol: its tint and outline
+                // settings would be applied to a picture they don't fit.
+                img.symbol = None;
                 // Keep the width; the height follows the new picture.
                 let (nw, nh) = (info.width.max(1) as f64, info.height.max(1) as f64);
                 let world_w = e.size.w * e.transform.scale;
@@ -1704,9 +1707,12 @@ impl Editor {
                     return Err(ZError::new("not_found", format!("no custom theme '{id}'"))
                         .values(self.doc.themes.iter().map(|t| t.id.clone()).collect()));
                 };
-                self.doc.themes.remove(i);
+                let gone = self.doc.themes.remove(i);
                 if self.doc.theme == id {
-                    self.set_theme_id("classic".into());
+                    // Back to the theme it was made from, if that is still
+                    // around; else the default.
+                    let base = gone.base.filter(|b| *b != id && (Theme::is_builtin(b) || self.doc.themes.iter().any(|t| t.id == *b)));
+                    self.set_theme_id(base.unwrap_or_else(|| "classic".into()));
                 }
             }
             Command::AddAsset { data_base64 } => {

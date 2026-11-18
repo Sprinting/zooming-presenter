@@ -441,3 +441,21 @@ fn undo_in_a_big_deck_costs_about_what_the_edit_did() {
     assert_eq!(ed.doc.z_order[0], first);
     assert!(undo < edit * 3.0 + 0.02, "edit {:.1} ms, undo {:.1} ms", edit * 1e3, undo * 1e3);
 }
+
+/// R13: deleting a custom theme goes back to the theme it was made from.
+#[test]
+fn r13_deleting_a_custom_theme_returns_to_its_base() {
+    let mut ed = Editor::default();
+    let mut t = Theme::by_id("night").expect("a built-in theme");
+    t.base = Some(t.id.clone());
+    t.id = "custom-1".into();
+    ed.apply(Command::SaveTheme { theme: t.clone(), apply: true }, H).unwrap();
+    assert_eq!(ed.doc.theme, "custom-1");
+    ed.apply(Command::DeleteTheme { id: "custom-1".into() }, H).unwrap();
+    assert_eq!(ed.doc.theme, "night");
+    // A base that no longer exists: the default.
+    t.base = Some("custom-9".into());
+    ed.apply(Command::SaveTheme { theme: t, apply: true }, H).unwrap();
+    ed.apply(Command::DeleteTheme { id: "custom-1".into() }, H).unwrap();
+    assert_eq!(ed.doc.theme, "classic");
+}

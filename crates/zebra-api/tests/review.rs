@@ -212,3 +212,34 @@ fn an_agent_cannot_call_itself_you() {
     }
     h.stop().unwrap();
 }
+
+/// R14: a subscriber that never reads is disconnected once its queue is
+/// large, instead of the queue growing without end.
+#[test]
+fn a_subscriber_that_never_reads_is_dropped() {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    let host = Host::start(Permission::Edit);
+    // A raw connection: hello, subscribe, then never read again.
+    let mut deaf = UnixStream::connect(&host.socket).unwrap();
+    writeln!(deaf, "{}", json!({"jsonrpc":"2.0","id":1,"method":"hello","params":{"name":"deaf","token":host.token}})).unwrap();
+    writeln!(deaf, "{}", json!({"jsonrpc":"2.0","id":2,"method":"subscribe","params":{}})).unwrap();
+    let mut c = host.connect("writer");
+    c.call("describe", json!({})).unwrap();
+    // Each event carries a long label; a few hundred MB would pile up.
+    let label = "x".repeat(256 * 1024);
+    let mut gone = false;
+    for i in 0..400 {
+        c.call("batch", json!({"label": label, "commands":[{"op":"add_text","text":format!("t{i}")}]})).unwrap();
+        if i > 80 && c.call("state", json!({})).is_ok() {
+            // The deaf client's socket has been shut: a write to it fails.
+            if writeln!(deaf, "{}", json!({"jsonrpc":"2.0","id":3,"method":"ping"})).is_err() {
+                gone = true;
+                break;
+            }
+        }
+    }
+    assert!(gone, "the subscriber that stopped reading was disconnected");
+    // The one that reads is untouched.
+    assert_eq!(c.call("ping", json!({})).unwrap(), "pong");
+}
