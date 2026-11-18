@@ -59,12 +59,21 @@ fn recolour(svg: &str, style: &SvgStyle) -> String {
     }
 }
 
+/// An SVG may hold pictures of its own, but only inside itself (`data:`
+/// links). The default also opens any file an `<image href>` names, so a
+/// picture someone sent could pull a file from this Mac into an export.
+fn options() -> usvg::Options<'static> {
+    let mut opt = usvg::Options::default();
+    opt.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    opt
+}
+
 /// Draw `svg` into a `w` x `h` picture (premultiplied RGBA8), fitted and
 /// centred. None when the SVG can't be read.
 pub fn rasterize(svg: &[u8], style: &SvgStyle, w: u32, h: u32) -> Option<Vec<u8>> {
     let text = std::str::from_utf8(svg).ok()?;
     let text = if style.color.is_some() || style.color2.is_some() { recolour(text, style) } else { text.to_string() };
-    let opt = usvg::Options::default();
+    let opt = options();
     let tree = usvg::Tree::from_str(&text, &opt).ok()?;
     let mut pm = tiny_skia::Pixmap::new(w.max(1), h.max(1))?;
     let margin = if style.sticker { STICKER_MARGIN * w.max(h) as f64 } else { 0.0 };
@@ -212,6 +221,30 @@ mod tests {
     fn at(px: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
         let i = ((y * w + x) * 4) as usize;
         [px[i], px[i + 1], px[i + 2], px[i + 3]]
+    }
+
+    /// R28: an SVG cannot show a file from this computer.
+    #[test]
+    fn an_svg_cannot_open_local_files() {
+        const RED: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><rect width="4" height="4" fill="red"/></svg>"#;
+        let dir = std::env::temp_dir().join(format!("zebra-svg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("secret.svg");
+        std::fs::write(&file, RED).unwrap();
+        let with = |href: &str| {
+            let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><image x="0" y="0" width="10" height="10" href="{href}"/></svg>"#);
+            rasterize(svg.as_bytes(), &SvgStyle::default(), 10, 10).unwrap()
+        };
+        // The file would be drawn with usvg's own options: the test means something.
+        let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><image x="0" y="0" width="10" height="10" href="{}"/></svg>"#, file.display());
+        let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).unwrap();
+        assert!(tree.root().has_children(), "usvg's default opens the file");
+        assert!(with(&file.display().to_string()).iter().all(|b| *b == 0), "nothing of the file is drawn");
+        // A picture inside the SVG itself still shows.
+        use base64::Engine;
+        let px = with(&format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(RED)));
+        assert_eq!(at(&px, 10, 5, 5), [255, 0, 0, 255]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

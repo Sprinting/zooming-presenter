@@ -306,6 +306,17 @@ fn connection(id: u64, stream: UnixStream, shared: Arc<Shared>, tx: Sender<Inbou
                 });
             }
         };
+        // Before anything is read from the request: parsing `add_image
+        // {path}` opens that file, and its error says whether it exists.
+        if origin.is_none() && !matches!(method, "hello" | "ping") {
+            respond(Err(RpcError::new(
+                codes::UNAUTHENTICATED,
+                "unauthenticated",
+                format!("call `hello {{\"name\":..., \"token\":...}}` before `{method}`"),
+            )
+            .hint("the token is in the instance's discovery file; zebractl does this for you")));
+            continue;
+        }
         let parsed = match protocol::parse(method, &params) {
             Ok(p) => p,
             Err(e) => {

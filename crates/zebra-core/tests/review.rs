@@ -480,3 +480,31 @@ fn r20_lint_is_fast_on_a_big_deck_and_still_finds_overlaps() {
     assert_eq!(overlaps.len(), 1, "{overlaps:?}");
     assert_eq!(overlaps[0]["ids"], serde_json::json!(["s0", "over"]));
 }
+
+/// R28: a picture cropped to no width at all is refused; it used to give
+/// a transform of infinity or NaN.
+#[test]
+fn r28_a_crop_of_no_size_is_refused() {
+    let mut ed = Editor::default();
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    let id = ed.apply(cmd(json!({"op":"add_image","data_base64":png,"x":0,"y":0})), H).unwrap().created[0].clone();
+    let mut kind = serde_json::to_value(&ed.doc.get(&id).unwrap().kind).unwrap();
+    let n = ed.doc.elements.len();
+    for (w, h) in [(0.0, 0.5), (0.5, 0.0), (-0.2, 0.5)] {
+        let crop = json!({"x":0.0,"y":0.0,"w":w,"h":h});
+        kind["crop"] = crop.clone();
+        let r = ed.apply(cmd(json!({"op":"add_element","element":{"x":0,"y":0,"kind":kind}})), agent());
+        assert!(r.is_err(), "a new picture with crop {w} x {h} must be refused");
+        // As a change to a picture that exists, the crop is pulled back
+        // into range instead (never narrower than 1%).
+        ed.apply(cmd(json!({"op":"update","id":id,"patch":{"crop":crop}})), agent()).unwrap();
+        let e = ed.doc.get(&id).unwrap();
+        let zebra_core::ElementKind::Image(d) = &e.kind else { unreachable!() };
+        assert!(d.crop.is_none_or(|c| c.w >= 0.01 && c.h >= 0.01 && c.w <= 1.0 && c.h <= 1.0), "{:?}", d.crop);
+        assert!(e.size.w.is_finite() && e.size.h.is_finite() && e.size.w > 0.0 && e.size.h > 0.0, "{:?}", e.size);
+        assert!(e.transform.scale.is_finite());
+    }
+    assert_eq!(ed.doc.elements.len(), n);
+    let e = ed.doc.get(&id).unwrap();
+    assert!(e.size.w.is_finite() && e.size.h.is_finite() && e.size.w > 0.0);
+}

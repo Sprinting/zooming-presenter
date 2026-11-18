@@ -331,6 +331,10 @@ impl FakePlayer {
         self.started = None;
     }
     fn do_seek(&mut self, secs: f64) {
+        // Not a time (a NaN from a 0/0 somewhere): stay where we are.
+        if !secs.is_finite() {
+            return;
+        }
         self.base = secs.clamp(0.0, self.duration);
         if self.started.is_some() {
             self.started = Some(Instant::now());
@@ -410,6 +414,16 @@ mod tests {
         assert_eq!(fit(1920, 1080, 960), (960, 540));
         assert_eq!(fit(320, 180, 960), (320, 180));
         assert_eq!(fit(1080, 1920, 480), (270, 480));
+    }
+
+    /// R28: a seek to "not a number" is ignored.
+    #[test]
+    fn a_nan_seek_is_ignored() {
+        let mut p = FakePlayer::new(64, 36, 5.0);
+        VideoPlayer::seek(&mut p, 2.0);
+        VideoPlayer::seek(&mut p, f64::NAN);
+        VideoPlayer::seek(&mut p, f64::INFINITY);
+        assert_eq!(VideoPlayer::position(&p), 2.0);
     }
 
     #[test]

@@ -243,3 +243,19 @@ fn a_subscriber_that_never_reads_is_dropped() {
     // The one that reads is untouched.
     assert_eq!(c.call("ping", json!({})).unwrap(), "pong");
 }
+
+/// R28: nothing in a request is acted on before `hello`. `add_image
+/// {path}` used to open the file first, so anyone who could reach the
+/// socket could learn which files exist.
+#[test]
+fn r28_no_file_is_touched_before_hello() {
+    let h = start(Permission::Edit);
+    let mut anon = Client::connect(&h.socket).unwrap();
+    for path in ["/definitely/not/here.png", "/etc/hosts"] {
+        let e = rpc_err(anon.call("apply", json!({ "command": { "op": "add_image", "path": path } })));
+        assert_eq!(e.kind(), "unauthenticated", "{e}");
+        assert!(!e.message.contains(path), "{e}");
+    }
+    let e = rpc_err(anon.call("no_such_method", json!({})));
+    assert_eq!(e.kind(), "unauthenticated", "{e}");
+}

@@ -256,6 +256,10 @@ impl VideoPlayer for Video {
         unsafe { self.player.rate() != 0.0 }
     }
     fn seek(&mut self, secs: f64) {
+        // Not a time (a NaN from a 0/0 somewhere): stay where we are.
+        if !secs.is_finite() {
+            return;
+        }
         let secs = match self.duration() {
             Some(d) => secs.clamp(0.0, d),
             None => secs.max(0.0),
@@ -492,6 +496,10 @@ impl AudioPlayer for Audio {
         unsafe { self.player.isPlaying() }
     }
     fn seek(&mut self, secs: f64) {
+        // Not a time (a NaN from a 0/0 somewhere): stay where we are.
+        if !secs.is_finite() {
+            return;
+        }
         let secs = match self.duration() {
             Some(d) => secs.clamp(0.0, d),
             None => secs.max(0.0),
