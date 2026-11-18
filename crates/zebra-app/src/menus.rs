@@ -98,6 +98,26 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
     ]
 }
 
+/// The titles of the submenus in `spec`, each followed by those nested in
+/// it, in the order the native bar creates them. The bar is built once, so
+/// a new language reaches these titles through this list.
+pub fn sub_titles() -> Vec<String> {
+    fn nested(items: &[Item], out: &mut Vec<String>) {
+        for it in items {
+            if let Item::Sub(t, children) = it {
+                out.push(t.clone());
+                nested(children, out);
+            }
+        }
+    }
+    let mut out = vec![];
+    for (title, items) in spec() {
+        out.push(title);
+        nested(&items, &mut out);
+    }
+    out
+}
+
 /// A title as the native menu wants it. The menu library reads a single `&`
 /// as a keyboard-mnemonic mark and drops it ("Symbols & Shapes" came out as
 /// "Symbols  Shapes"); a doubled one is shown as written. Every title goes
@@ -316,5 +336,27 @@ mod native_title_tests {
         }
         // The bug: without it the ampersand is swallowed.
         assert_eq!(shown("Symbols & Shapes…"), "Symbols  Shapes…");
+    }
+}
+
+#[cfg(test)]
+mod sub_title_tests {
+    use super::*;
+
+    /// The native bar keeps its submenus in creation order and retitles
+    /// them from this list: one title per submenu, parents before children.
+    #[test]
+    fn sub_titles_lists_every_submenu_in_build_order() {
+        fn count(items: &[Item]) -> usize {
+            items.iter().map(|i| if let Item::Sub(_, c) = i { 1 + count(c) } else { 0 }).sum()
+        }
+        let spec = spec();
+        let titles = sub_titles();
+        assert_eq!(titles.len(), spec.len() + spec.iter().map(|(_, i)| count(i)).sum::<usize>());
+        assert_eq!(titles[0], spec[0].0);
+        // File's nested Export To comes before the next top-level menu.
+        let export = titles.iter().position(|t| *t == crate::t!("menu-export-to")).unwrap();
+        let edit = titles.iter().position(|t| *t == spec[1].0).unwrap();
+        assert!(export < edit);
     }
 }

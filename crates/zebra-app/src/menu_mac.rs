@@ -33,12 +33,32 @@ struct Entry {
     accel: Option<String>,
 }
 
-pub struct MacMenu {
+/// Held by the window the person is using: it has the menu bar. The bar
+/// itself is one per app (see `Bar`).
+pub struct MacMenu(());
+
+/// The menu bar. It is built once and then only changed in place. AppKit
+/// adds its own commands to the Window menu (Show Next Tab, Move Tab to New
+/// Window, Merge All Windows) a single time per app; a bar built anew after
+/// that (we used to on a language change, and whenever the front window
+/// closed) never gets them again, and nothing we can call asks for them.
+struct Bar {
     _menu: Menu,
     ids: HashMap<String, Action>,
     entries: Vec<Entry>,
     recent: Submenu,
     recent_shown: Vec<std::path::PathBuf>,
+    /// Our submenus in the order `menus::sub_titles` lists their titles.
+    subs: Vec<Submenu>,
+    app_menu: Option<Submenu>,
+    window: Option<Submenu>,
+    about: Option<MenuItem>,
+    quit: Option<MenuItem>,
+}
+
+thread_local! {
+    // AppKit menus live on the main thread, and so does this.
+    static BAR: std::cell::RefCell<Option<Bar>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Actions whose key equivalent the native menu owns.
@@ -122,7 +142,7 @@ fn text_field_spec(a: &Action) -> Option<&'static str> {
     })
 }
 
-fn build_items(sub: &Submenu, items: &[Item], m: &mut MacMenu, next: &mut u32, app: &ZebraApp) {
+fn build_items(sub: &Submenu, items: &[Item], m: &mut Bar, next: &mut u32, app: &ZebraApp) {
     for it in items {
         match it {
             Item::A(a) => {
@@ -148,6 +168,7 @@ fn build_items(sub: &Submenu, items: &[Item], m: &mut MacMenu, next: &mut u32, a
             }
             Item::Sub(t, children) => {
                 let s = Submenu::new(native(&t), true);
+                m.subs.push(s.clone());
                 build_items(&s, children, m, next, app);
                 let _ = sub.append(&s);
             }
@@ -159,10 +180,36 @@ fn build_items(sub: &Submenu, items: &[Item], m: &mut MacMenu, next: &mut u32, a
 }
 
 impl MacMenu {
-    /// Call once the event loop is running (first frame).
+    /// Give `app` the menu bar: built the first time (once the event loop is
+    /// running), and after that brought up to date in place, e.g. in a new
+    /// language.
     pub fn install(app: &ZebraApp) -> MacMenu {
+        BAR.with(|b| {
+            let mut b = b.borrow_mut();
+            match b.as_mut() {
+                Some(bar) => bar.retitle(),
+                None => *b = Some(Bar::build(app)),
+            }
+        });
+        MacMenu(())
+    }
+}
+
+impl Bar {
+    fn build(app: &ZebraApp) -> Bar {
         let menu = Menu::new();
-        let mut m = MacMenu { _menu: menu, ids: HashMap::new(), entries: vec![], recent: Submenu::new(crate::t!("menu-open-recent"), true), recent_shown: vec![] };
+        let mut m = Bar {
+            _menu: menu,
+            ids: HashMap::new(),
+            entries: vec![],
+            recent: Submenu::new(crate::t!("menu-open-recent"), true),
+            recent_shown: vec![],
+            subs: vec![],
+            app_menu: None,
+            window: None,
+            about: None,
+            quit: None,
+        };
         let mut next = 0u32;
 
         // App menu
@@ -195,6 +242,7 @@ impl MacMenu {
         let help_title = crate::t!("menu-help");
         for (title, items) in spec() {
             let sub = Submenu::new(native(&title), true);
+            m.subs.push(sub.clone());
             build_items(&sub, &items, &mut m, &mut next, app);
             if title == help_title {
                 // Window menu goes before Help, macOS convention.
@@ -224,7 +272,32 @@ impl MacMenu {
         if let Some(h) = &help {
             h.set_as_help_menu_for_nsapp();
         }
+        m.app_menu = Some(app_menu);
+        m.window = window;
+        m.about = Some(about);
+        m.quit = Some(quit);
         m
+    }
+
+    /// The titles that don't follow an action's state, in the current
+    /// language. (Items with an action are retitled by `sync`.)
+    fn retitle(&mut self) {
+        for (sub, title) in self.subs.iter().zip(crate::menus::sub_titles()) {
+            sub.set_text(native(&title));
+        }
+        self.recent.set_text(native(&crate::t!("menu-open-recent")));
+        if let Some(s) = &self.app_menu {
+            s.set_text(native(&crate::t!("menu-mac-app")));
+        }
+        if let Some(s) = &self.window {
+            s.set_text(native(&crate::t!("menu-mac-window")));
+        }
+        if let Some(i) = &self.about {
+            i.set_text(native(&Action::About.label()));
+        }
+        if let Some(i) = &self.quit {
+            i.set_text(native(&Action::Quit.label()));
+        }
     }
 
     /// Push changed titles, enabled states and ✓ marks to AppKit.
@@ -312,8 +385,10 @@ pub fn poll(app: &mut ZebraApp, ctx: &egui::Context) {
     if app.menu.is_none() {
         app.menu = Some(MacMenu::install(app));
     }
-    // Keep Open Recent in sync.
-    if let Some(m) = &mut app.menu {
+    BAR.with(|b| {
+        let mut b = b.borrow_mut();
+        let Some(m) = b.as_mut() else { return };
+        // Keep Open Recent in sync.
         if m.recent_shown != app.recent {
             for item in m.recent.items() {
                 if let Some(mi) = item.as_menuitem() {
@@ -332,13 +407,10 @@ pub fn poll(app: &mut ZebraApp, ctx: &egui::Context) {
             }
             m.recent_shown = app.recent.clone();
         }
-    }
-    if let Some(mut m) = app.menu.take() {
         m.sync(app);
-        app.menu = Some(m);
-    }
+    });
     while let Some(ev) = next_event(ctx) {
-        let Some(a) = app.menu.as_ref().and_then(|m| m.ids.get(ev.id().0.as_str()).cloned()) else { continue };
+        let Some(a) = BAR.with(|b| b.borrow().as_ref().and_then(|m| m.ids.get(ev.id().0.as_str()).cloned())) else { continue };
         // Settings › Keyboard is recording: a key the menu bar owns was
         // pressed. Hand its keys to the recorder instead of acting.
         if let Some(cap) = &mut app.key_capture {
