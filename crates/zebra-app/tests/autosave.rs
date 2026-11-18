@@ -41,7 +41,11 @@ fn untitled_work_comes_back_unsaved_and_dont_save_removes_it() {
     assert_eq!(s.editor.doc.elements.len(), n);
     assert!(s.editor.dirty(), "reopened work is unsaved");
     assert!(s.editor.file_path.is_none());
-    assert_eq!(s.autosave_name, "Untitled-a");
+    // R10: the reopened autosave now belongs to this process, so a second
+    // copy of Zebra (or this one, asked again) doesn't offer it as a leftover.
+    assert!(s.autosave_name.contains(&format!("-{}-", std::process::id())), "{}", s.autosave_name);
+    assert!(files::untitled_dir().join(format!("{}.zebra.autosave", s.autosave_name)).exists());
+    assert_eq!(files::leftover_untitled().len(), 1, "only the one nobody has open");
 
     files::discard_autosave(h.state());
     assert!(!files::untitled_dir().join("Untitled-a.zebra.autosave").exists());

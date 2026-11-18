@@ -272,6 +272,23 @@ impl Editor {
     pub fn history(&self) -> &[HistoryEntry] {
         &self.undo
     }
+
+    /// Fold the newest undo step into the one before it (same label kept):
+    /// a run of arrow-key nudges is one step to undo, like one drag.
+    pub fn merge_last_two_steps(&mut self) -> bool {
+        if self.undo.len() < 2 || self.tx.is_some() {
+            return false;
+        }
+        let b = self.undo.pop().expect("two entries");
+        let a = self.undo.last_mut().expect("two entries");
+        a.deltas.extend(b.deltas);
+        a.ids.extend(b.ids);
+        dedup(&mut a.ids);
+        a.time = b.time;
+        a.revision = b.revision;
+        a.steps += b.steps;
+        true
+    }
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

@@ -155,6 +155,7 @@ pub struct ZebraApp {
     pub motion_override: Option<bool>,
     pub last_autosave: f64,
     pub autosaved_rev: u64,
+    pub autosave_job: Arc<crate::files::AutosaveJob>,
     pub recovered: Option<PathBuf>,
     /// This window's untitled autosave is `<name>.zebra.autosave`.
     pub autosave_name: String,
@@ -317,6 +318,7 @@ impl ZebraApp {
             motion_override,
             last_autosave: 0.0,
             autosaved_rev: 0,
+            autosave_job: Default::default(),
             recovered: None,
             autosave_name: crate::files::new_autosave_name(),
             reopen_untitled: vec![],
@@ -953,12 +955,24 @@ impl ZebraApp {
                 kind: ElementKind::Frame(zebra_core::FrameData { style: zebra_core::FrameStyle::Invisible, color: None }),
             },
         };
-        let r = self.editor.apply_batch(vec![cmd], Some(crate::t!("app-undo-add-current-view")), H);
-        if let Some(out) = self.report(r) {
-            if let Some(id) = out.created.first().cloned() {
-                self.apply(Command::AddStep { target: StepTarget::Element { id }, index: None, builds: vec![], notes: String::new() });
+        // The frame and its step are one thing to the person: one undo step.
+        if let Err(e) = self.editor.begin(crate::t!("app-undo-add-current-view"), H) {
+            self.report::<()>(Err(e));
+            return;
+        }
+        let r = self.editor.apply(cmd, H).and_then(|out| {
+            let id = out.created.first().cloned().ok_or_else(|| zebra_core::ZError::new("internal", "no frame was made"))?;
+            self.editor.apply(Command::AddStep { target: StepTarget::Element { id }, index: None, builds: vec![], notes: String::new() }, H)
+        });
+        match r {
+            Ok(_) => {
+                self.editor.commit_as(&H);
                 self.selected_step = Some(self.editor.doc.path.len() - 1);
                 self.flash_step = Some((self.editor.doc.path.len() - 1, self.now()));
+            }
+            Err(e) => {
+                self.editor.abort_as(&H);
+                self.report::<()>(Err(e));
             }
         }
     }
@@ -1080,8 +1094,7 @@ impl ZebraApp {
         self.editor.revision += 1;
         self.autosaved_rev = self.editor.revision;
         self.welcome = None;
-        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        self.autosave_name = name.strip_suffix(".zebra.autosave").unwrap_or(&name).to_string();
+        self.autosave_name = crate::files::adopt_autosave(path);
         true
     }
 
@@ -1441,7 +1454,14 @@ impl ZebraApp {
         }
         let cam = self.editor.view.camera;
         let w = Vec2::new(sx, sy).rotate_deg(cam.rotation) * (1.0 / cam.zoom);
-        let r = self.editor.apply_batch(vec![Command::Move { ids, dx: w.x, dy: w.y, with_contents: true }], Some(crate::t!("app-undo-nudge")), H);
+        let label = crate::t!("app-undo-nudge");
+        // A run of nudges of the same objects is one undo step, like a drag.
+        let (n, now) = (self.editor.history().len(), self.editor.view.now);
+        let run = self.editor.history().last().is_some_and(|h| h.origin == H && h.label == label && h.ids == ids && now - h.time < 1.0);
+        let r = self.editor.apply_batch(vec![Command::Move { ids, dx: w.x, dy: w.y, with_contents: true }], Some(label), H);
+        if r.is_ok() && run && self.editor.history().len() == n + 1 {
+            self.editor.merge_last_two_steps();
+        }
         self.report(r);
     }
 

@@ -77,6 +77,28 @@ pub fn new_autosave_name() -> String {
     format!("Untitled-{t:x}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed))
 }
 
+/// The process that owns an untitled autosave, from its name
+/// (`Untitled-<time>-<pid>-<n>`). None for names from older builds.
+fn autosave_owner(p: &Path) -> Option<u32> {
+    let name = p.file_name()?.to_string_lossy().to_string();
+    let mut parts = name.strip_suffix(".zebra.autosave")?.strip_prefix("Untitled-")?.split('-');
+    let (_time, pid, _n) = (parts.next()?, parts.next()?, parts.next()?);
+    pid.parse().ok()
+}
+
+/// Take over a leftover autosave: it gets a name of this process, so
+/// another copy of Zebra started later doesn't open it as well. Returns
+/// the new name (without the extension).
+pub fn adopt_autosave(path: &Path) -> String {
+    let name = new_autosave_name();
+    let to = untitled_dir().join(format!("{name}.zebra.autosave"));
+    if path.parent() == Some(untitled_dir().as_path()) && std::fs::rename(path, &to).is_ok() {
+        return name;
+    }
+    let old = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    old.strip_suffix(".zebra.autosave").unwrap_or(&old).to_string()
+}
+
 fn untitled_autosave(app: &ZebraApp) -> PathBuf {
     untitled_dir().join(format!("{}.zebra.autosave", app.autosave_name))
 }
@@ -88,12 +110,14 @@ pub fn remove_autosave(file: &Path) {
 /// Forget this window's untitled autosave (saved, or the person chose
 /// Don't Save).
 pub fn remove_autosave_untitled(app: &ZebraApp) {
+    app.autosave_job.cancel();
     let _ = std::fs::remove_file(untitled_autosave(app));
 }
 
 /// The person chose Don't Save: their unsaved changes are meant to go,
 /// so the autosave holding them goes too.
 pub fn discard_autosave(app: &ZebraApp) {
+    app.autosave_job.cancel();
     match &app.editor.file_path {
         Some(f) => remove_autosave(f),
         None => remove_autosave_untitled(app),
@@ -108,7 +132,8 @@ pub fn leftover_untitled() -> Vec<PathBuf> {
     let legacy = zebra_api::discovery::app_dir().join("Untitled.zebra.autosave");
     if legacy.is_file() {
         let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::rename(&legacy, dir.join(format!("{}.zebra.autosave", new_autosave_name())));
+        // Owner 0: no running Zebra has it open.
+        let _ = std::fs::rename(&legacy, dir.join("Untitled-0-0-0.zebra.autosave"));
     }
     let mut v: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&dir)
         .into_iter()
@@ -116,6 +141,9 @@ pub fn leftover_untitled() -> Vec<PathBuf> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.to_string_lossy().ends_with(".zebra.autosave"))
+        // Not the ones a running Zebra is still writing (this one, or
+        // another copy): those are open windows, not leftovers.
+        .filter(|p| !autosave_owner(p).is_some_and(zebra_api::discovery::pid_alive))
         .map(|p| (std::fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), p))
         .collect();
     v.sort();
@@ -147,17 +175,55 @@ pub fn autosave_tick(app: &mut ZebraApp) {
     if app.editor.in_transaction() || app.editor.doc.elements.is_empty() {
         return;
     }
+    // One at a time: a deck with large video can take longer to write
+    // than the time between two autosaves.
+    use std::sync::atomic::Ordering;
+    if app.autosave_job.busy.swap(true, Ordering::SeqCst) {
+        return;
+    }
     app.last_autosave = now;
     app.autosaved_rev = app.editor.revision;
-    let path = match &app.editor.file_path {
-        Some(f) => Some(autosave_path(f)),
-        None => Some(untitled_autosave(app)),
+    let p = match &app.editor.file_path {
+        Some(f) => autosave_path(f),
+        None => untitled_autosave(app),
     };
-    if let Some(p) = path {
+    // Written on a worker from a copy (pictures and video are shared, not
+    // copied): writing every asset here stalled the window on big decks.
+    let doc = app.editor.doc.clone();
+    let job = app.autosave_job.clone();
+    let epoch = job.epoch.load(Ordering::SeqCst);
+    let write = move || {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = zebra_core::io::write_file(&app.editor.doc, &p);
+        let _ = zebra_core::io::write_file(&doc, &p);
+        // Saved or discarded while this was being written: it is stale.
+        if job.epoch.load(Ordering::SeqCst) != epoch {
+            let _ = std::fs::remove_file(&p);
+        }
+        job.busy.store(false, Ordering::SeqCst);
+    };
+    if std::thread::Builder::new().name("zebra-autosave".into()).spawn(write).is_err() {
+        app.autosave_job.busy.store(false, Ordering::SeqCst);
+        app.autosaved_rev = 0;
+    }
+}
+
+/// The autosave being written in the background, if any.
+#[derive(Default)]
+pub struct AutosaveJob {
+    busy: std::sync::atomic::AtomicBool,
+    /// Bumped when the document is saved or its changes discarded: an
+    /// autosave still being written then removes its own file.
+    epoch: std::sync::atomic::AtomicU64,
+}
+
+impl AutosaveJob {
+    pub fn cancel(&self) {
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub fn busy(&self) -> bool {
+        self.busy.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

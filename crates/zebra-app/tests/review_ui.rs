@@ -191,6 +191,10 @@ fn r1_r3_autosave_and_the_clock_run_without_a_frame() {
     app.last_autosave = app.now() - 1000.0;
     app.editor.view.now = 0.0;
     app.logic(&ctx);
+    let t0 = std::time::Instant::now();
+    while app.autosave_job.busy() && t0.elapsed().as_secs() < 10 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert!(file.exists(), "autosave written from logic(), with no frame drawn");
     assert!(app.editor.view.now > 0.0 && (app.editor.view.now - app.now()).abs() < 1.0, "the clock moved");
 
@@ -441,4 +445,62 @@ fn r25_closing_a_presenting_window_ends_the_show() {
     h.run_steps(4);
     assert_eq!(h.state().windows.len(), 1);
     assert_eq!(h.state().windows[0].editor.view.mode, Mode::Edit);
+}
+
+/// R8: Add Current View is one undo step, and so is a run of nudges.
+#[test]
+fn r8_add_current_view_and_a_run_of_nudges_are_one_undo_step_each() {
+    let mut h = harness();
+    let id = frame(h.state_mut(), 0.0, false);
+    h.state_mut().view_cmd(ViewCommand::ClearSelection);
+    h.run_steps(2);
+    let n = h.state().editor.history().len();
+    h.state_mut().queued.push(Action::AddCurrentView);
+    h.run_steps(3);
+    assert_eq!(h.state().editor.doc.path.len(), 1);
+    assert_eq!(h.state().editor.history().len(), n + 1);
+    h.state_mut().queued.push(Action::Undo);
+    h.run_steps(3);
+    assert_eq!(h.state().editor.doc.path.len(), 0);
+    assert_eq!(h.state().editor.doc.elements.len(), 1, "the view's frame went with its step");
+
+    h.state_mut().select(vec![id.as_str().into()]);
+    h.run_steps(2);
+    let n = h.state().editor.history().len();
+    let x0 = h.state().editor.doc.get(id.as_str()).unwrap().transform.x;
+    for _ in 0..5 {
+        h.key_press(Key::ArrowRight);
+        h.run_steps(2);
+    }
+    assert_ne!(h.state().editor.doc.get(id.as_str()).unwrap().transform.x, x0);
+    assert_eq!(h.state().editor.history().len(), n + 1, "five nudges, one step");
+    h.state_mut().queued.push(Action::Undo);
+    h.run_steps(3);
+    assert_eq!(h.state().editor.doc.get(id.as_str()).unwrap().transform.x, x0);
+    h.state_mut().queued.push(Action::Redo);
+    h.run_steps(3);
+    assert_ne!(h.state().editor.doc.get(id.as_str()).unwrap().transform.x, x0);
+}
+
+/// R12: the autosave is written off the UI thread, and one that is still
+/// being written when the document is saved doesn't come back as a stale
+/// "unsaved changes" file.
+#[test]
+fn r12_autosave_does_not_outlive_a_save() {
+    let mut h = harness();
+    frame(h.state_mut(), 0.0, false);
+    let app = h.state_mut();
+    let saved = data_dir().join("r12.zebra");
+    assert!(app.save_to(&saved));
+    frame(app, 2000.0, false);
+    app.last_autosave = app.now() - 1000.0;
+    zebra_app::files::autosave_tick(app);
+    // Saved while (or just after) the autosave is written.
+    assert!(app.save_to(&saved));
+    let t0 = std::time::Instant::now();
+    while app.autosave_job.busy() && t0.elapsed().as_secs() < 10 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!zebra_app::files::autosave_path(&saved).exists(), "no autosave left beside a saved file");
+    assert!(zebra_app::files::autosave_newer(&saved).is_none());
 }
