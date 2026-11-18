@@ -759,6 +759,7 @@ fn document(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             let mut title = app.title_buf.clone().unwrap_or_else(|| app.editor.doc.title.clone());
             w::row(ui, &crate::t!("inspector-doc-title"), |ui| {
                 let r = w::text_field(ui, &mut title, ui.available_width(), &crate::t!("inspector-untitled"));
+                app.title_seen = ui.ctx().cumulative_pass_nr();
                 if r.has_focus() {
                     app.title_buf = Some(title.clone());
                 }

@@ -765,7 +765,9 @@ fn in_quad(p: Pos2, q: &[Pos2; 4]) -> bool {
 pub fn crop_interact(app: &mut ZebraApp, ui: &mut Ui, resp: &egui::Response) {
     let Some(id) = app.media.crop.as_ref().map(|c| c.id.clone()) else { return };
     let Some(e) = app.editor.doc.get(&id).cloned() else {
-        app.media.crop = None;
+        // The picture is gone (an agent deleted it): close the crop's
+        // undo step too, or every later edit would join it.
+        end_crop(app, true);
         return;
     };
     let ctx = ui.ctx().clone();

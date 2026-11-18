@@ -35,6 +35,9 @@ pub struct Stage {
     pub notes_size: f32,
     /// Notes being typed: (step, text, last keystroke time).
     pub notes_buf: Option<(usize, String, f64)>,
+    /// The step those notes are for, as it was when the typing began: the
+    /// path can change under them (an agent, an undo).
+    pub notes_for: Option<zebra_core::model::PathStep>,
     /// Window frame to restore after playing borderless on a display.
     saved_frame: Option<Rect>,
     pub slides: Slides,
@@ -53,6 +56,7 @@ impl Stage {
             timer_paused: None,
             notes_size: get("notes_size").and_then(|v| v.parse().ok()).unwrap_or(22.0),
             notes_buf: None,
+            notes_for: None,
             saved_frame: None,
             slides: Slides::new(ctx.clone(), renderer),
             frame_start: None,
@@ -92,6 +96,9 @@ pub fn notes_editor(app: &mut ZebraApp, ui: &mut Ui, step: usize, rows: usize, i
             .desired_width(f32::INFINITY),
     );
     if r.changed() {
+        if app.stage.notes_buf.is_none() {
+            app.stage.notes_for = Some(s.clone());
+        }
         app.stage.notes_buf = Some((step, text, now));
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(1100));
     }
@@ -103,6 +110,29 @@ pub fn notes_editor(app: &mut ZebraApp, ui: &mut Ui, step: usize, rows: usize, i
 /// Save buffered notes (if any) through the command bus.
 pub fn commit_notes(app: &mut ZebraApp) {
     let Some((step, text, _)) = app.stage.notes_buf.take() else { return };
+    // The step the notes were typed for, wherever it is now. If steps were
+    // removed or reordered meanwhile, its number is no longer `step`.
+    let path = &app.editor.doc.path;
+    let step = match app.stage.notes_for.take() {
+        None => Some(step),
+        Some(was) => {
+            let same = |s: &zebra_core::model::PathStep| s.target == was.target;
+            if path.get(step) == Some(&was) {
+                Some(step)
+            } else if let Some(i) = path.iter().position(|s| *s == was) {
+                Some(i)
+            } else if path.get(step).is_some_and(same) {
+                Some(step)
+            } else {
+                let mut hits = path.iter().enumerate().filter(|(_, s)| same(s));
+                match (hits.next(), hits.next()) {
+                    (Some((i, _)), None) => Some(i),
+                    _ => None,
+                }
+            }
+        }
+    };
+    let Some(step) = step else { return };
     if app.editor.doc.path.get(step).is_some_and(|s| s.notes != text) {
         app.apply(Command::UpdateStep { index: step, target: None, builds: None, notes: Some(text), duration: None, dwell: None, hide_builds: None });
     }

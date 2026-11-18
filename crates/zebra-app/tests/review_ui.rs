@@ -359,3 +359,43 @@ fn w7_clicking_through_a_number_field_changes_nothing() {
     h.run_steps(2);
     assert_eq!((h.state().0, h.state().1), (50.0, 7.0));
 }
+
+/// R22: notes being typed follow their step when the path changes under
+/// them, instead of landing on whichever step now has that number.
+#[test]
+fn r22_typed_notes_follow_their_step() {
+    let mut h = harness();
+    let ids: Vec<String> = (0..3).map(|i| frame(h.state_mut(), i as f64 * 1000.0, true)).collect();
+    let app = h.state_mut();
+    app.stage.notes_for = Some(app.editor.doc.path[2].clone());
+    app.stage.notes_buf = Some((2, "for the third frame".into(), app.now()));
+    // An agent removes the first step before the notes are saved.
+    app.editor.apply(Command::RemoveStep { index: 0 }, Origin::Agent { name: "a".into() }).unwrap();
+    zebra_app::presenting::commit_notes(app);
+    let path = &app.editor.doc.path;
+    assert_eq!(path.len(), 2);
+    assert!(matches!(&path[1].target, StepTarget::Element { id } if id.to_string() == ids[2]));
+    assert_eq!(path[1].notes, "for the third frame");
+    assert_eq!(path[0].notes, "");
+    // The step itself is removed: the notes go nowhere else.
+    app.stage.notes_for = Some(app.editor.doc.path[1].clone());
+    app.stage.notes_buf = Some((1, "orphan".into(), app.now()));
+    app.editor.apply(Command::RemoveStep { index: 1 }, Origin::Agent { name: "a".into() }).unwrap();
+    zebra_app::presenting::commit_notes(app);
+    assert_eq!(app.editor.doc.path[0].notes, "");
+}
+
+/// R19: a title typed in the inspector is kept when the field disappears
+/// before it loses focus (a click on an object).
+#[test]
+fn r19_a_typed_title_survives_the_field_going_away() {
+    let mut h = harness();
+    let id = frame(h.state_mut(), 0.0, false);
+    h.state_mut().view_cmd(ViewCommand::ClearSelection);
+    h.run_steps(2);
+    h.state_mut().title_buf = Some("Quarterly review".into());
+    h.state_mut().select(vec![id.as_str().into()]);
+    h.run_steps(3);
+    assert_eq!(h.state().editor.doc.title, "Quarterly review");
+    assert!(h.state().title_buf.is_none());
+}

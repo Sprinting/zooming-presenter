@@ -162,6 +162,8 @@ pub struct ZebraApp {
     pub was_presenting: bool,
     pub force_quit: bool,
     pub title_buf: Option<String>,
+    /// The pass the title field was last drawn in.
+    pub title_seen: u64,
     pub last_title: String,
     pub screenshot: Option<(f64, PathBuf)>,
     pub screenshot_requested: bool,
@@ -316,6 +318,7 @@ impl ZebraApp {
             was_presenting: false,
             force_quit: false,
             title_buf: None,
+            title_seen: 0,
             last_title: String::new(),
             screenshot: opts.screenshot,
             screenshot_requested: false,
@@ -1259,6 +1262,14 @@ impl ZebraApp {
         } else {
             self.handle_shortcuts(&ctx);
             crate::panels::layout(self, ui);
+            // A title typed in the inspector, then a click on the canvas:
+            // the field is gone before it could lose focus. Keep the title.
+            if self.title_buf.is_some() && self.title_seen != ctx.cumulative_pass_nr() {
+                let t = self.title_buf.take().unwrap_or_default().trim().to_string();
+                if !t.is_empty() && t != self.editor.doc.title {
+                    self.apply(Command::SetTitle { title: t });
+                }
+            }
             crate::presenting::playback_window(self, &ctx);
             crate::theme_editor::window(self, &ctx);
             crate::welcome::layout_gallery(self, &ctx);
