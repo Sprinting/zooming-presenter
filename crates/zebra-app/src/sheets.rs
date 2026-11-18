@@ -223,7 +223,7 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
     let s = spec(app, &k);
     let p = Palette::of(ctx);
     let content = ctx.content_rect();
-    let top = content.top() + crate::panels::TITLE_ROW + crate::panels::TOOLBAR_ROW;
+    let top = content.top() + crate::mac::title_row(app) + crate::panels::TOOLBAR_ROW;
     let mut chosen: Option<String> = None;
 
     // Block the window behind the sheet (sheets are document-modal), with

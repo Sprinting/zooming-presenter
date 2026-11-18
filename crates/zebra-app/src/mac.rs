@@ -23,6 +23,33 @@ pub fn system_reduce_motion() -> bool {
     }
 }
 
+/// Height of a document window's title row: the part at the top that
+/// AppKit draws over our content. That is the title bar (28 pt) and, when
+/// the window is one of several tabs, the tab bar under it. With a fixed
+/// 28 the tab bar sat on top of the toolbar (Mac round, 18 Nov).
+pub fn title_row(app: &crate::app::ZebraApp) -> f32 {
+    #[cfg(target_os = "macos")]
+    {
+        title_row_from(imp::top_inset(app), app.ctx.zoom_factor())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        crate::panels::TITLE_ROW
+    }
+}
+
+/// `inset` is what AppKit covers at the top, in its points; ours are scaled
+/// by the zoom factor. Never less than the plain title row (in full screen
+/// AppKit reports none while the title bar is tucked away; the row stays).
+pub fn title_row_from(inset: Option<f64>, zoom: f32) -> f32 {
+    let row = crate::panels::TITLE_ROW;
+    match inset {
+        Some(i) if i.is_finite() && zoom > 0.0 => (i as f32 / zoom).clamp(row, row + 60.0),
+        _ => row,
+    }
+}
+
 /// Read the system accent colour into `style::accent()`. Returns true if
 /// it changed.
 pub fn refresh_accent() -> bool {
@@ -50,6 +77,15 @@ mod imp {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     use crate::app::ZebraApp;
+
+    /// What AppKit covers at the top of the window's content (title bar,
+    /// tab bar), in points.
+    pub fn top_inset(app: &ZebraApp) -> Option<f64> {
+        let win = app.mac_sync.window.as_ref()?;
+        let view = win.contentView()?;
+        let free = win.contentLayoutRect();
+        Some(view.frame().size.height - (free.origin.y + free.size.height))
+    }
 
     pub fn reduce_motion() -> bool {
         NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
@@ -307,3 +343,23 @@ mod reopen {
 #[cfg(not(target_os = "macos"))]
 #[derive(Default)]
 pub struct WindowSync;
+
+#[cfg(test)]
+mod title_row_tests {
+    use super::title_row_from;
+
+    /// Mac round, 18 Nov: two windows merged into tabs, and the tab bar was
+    /// drawn over the toolbar. The title row grows by the tab bar's height.
+    #[test]
+    fn the_title_row_makes_room_for_a_tab_bar() {
+        let row = crate::panels::TITLE_ROW;
+        assert_eq!(title_row_from(None, 1.0), row, "no window yet");
+        assert_eq!(title_row_from(Some(28.0), 1.0).max(28.0), row.max(28.0), "title bar alone");
+        if cfg!(target_os = "macos") {
+            assert_eq!(title_row_from(Some(56.0), 1.0), 56.0, "title bar and tab bar");
+            assert_eq!(title_row_from(Some(56.0), 2.0), 28.0, "our points are zoomed");
+            assert_eq!(title_row_from(Some(0.0), 1.0), 28.0, "full screen keeps the row");
+        }
+        assert_eq!(title_row_from(Some(f64::NAN), 1.0), row);
+    }
+}

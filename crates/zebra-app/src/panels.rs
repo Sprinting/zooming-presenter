@@ -41,7 +41,7 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
         .show(ui, |ui| crate::menus::egui_menu_bar(app, ui));
 
     egui::Panel::top("toolbar")
-        .exact_size(TITLE_ROW + TOOLBAR_ROW)
+        .exact_size(crate::mac::title_row(app) + TOOLBAR_ROW)
         .frame(egui::Frame::new().fill(p.toolbar))
         .show(ui, |ui| {
                 let t = std::time::Instant::now();
@@ -121,7 +121,8 @@ fn toolbar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
     }
 
-    let row = Rect::from_min_max(Pos2::new(full.left(), full.top() + TITLE_ROW), Pos2::new(full.right(), full.top() + TITLE_ROW + TOOLBAR_ROW - 3.0));
+    let title_row = crate::mac::title_row(app);
+    let row = Rect::from_min_max(Pos2::new(full.left(), full.top() + title_row), Pos2::new(full.right(), full.top() + title_row + TOOLBAR_ROW - 3.0));
     let inset = if cfg!(target_os = "macos") { 12.0 } else { 10.0 };
 
     // Left group
