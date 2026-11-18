@@ -724,6 +724,8 @@ fn mac_the_canvas_follows_the_caret_past_its_edge() {
     let end = h.state().canvas.w2s(&h.state().editor, t.anchor).x + t.size_px.x;
     let rect = h.state().canvas.rect;
     assert!(end <= rect.right() && end >= rect.left(), "caret at {end}, canvas {rect:?}");
+    let tb = h.state().canvas.text_toolbar.expect("the text toolbar is up");
+    assert!(tb.left() >= rect.left(), "the toolbar stays on the canvas, not over the sidebar: {tb:?}");
 
     let r = egui::Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(400.0, 300.0));
     let caret = |x: f32, y: f32| egui::Rect::from_min_size(Pos2::new(x, y), egui::vec2(1.0, 20.0));

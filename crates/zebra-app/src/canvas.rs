@@ -1784,7 +1784,12 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
 
     // Mini text toolbar, like Prezi's: box style, then character and
     // paragraph formatting for the selection.
-    let tb_pos = resp.rect.left_top() - egui::vec2(4.0, 44.0);
+    let mut tb_pos = resp.rect.left_top() - egui::vec2(4.0, 44.0);
+    // A text that starts left of the canvas (the view followed the caret):
+    // the toolbar stays on the canvas, not over the sidebar.
+    if app.canvas.rect_valid {
+        tb_pos.x = tb_pos.x.max(app.canvas.rect.left() + 4.0);
+    }
     let p = style::Palette::of(ctx);
     let (sa, sb) = t.sel;
     let has_sel = sa < sb;
