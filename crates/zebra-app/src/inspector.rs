@@ -198,7 +198,7 @@ fn finish(insp: Insp) {
     }
     // Crop mode (stream 2) keeps its own transaction open.
     if !gesture && app.editor.human_gesture_active() && matches!(app.canvas.gesture, crate::canvas::Gesture::None) && !crate::media_ui::crop_active(app) {
-        app.editor.commit();
+        app.editor.commit_as(&crate::app::HUMAN);
     }
 }
 

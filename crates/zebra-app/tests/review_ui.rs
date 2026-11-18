@@ -224,3 +224,96 @@ fn r2_a_minimised_window_still_runs_queued_actions() {
     assert_ne!(h.state().show_sidebar, before);
     assert!(!h.state().wake_hidden);
 }
+
+fn click_at(h: &mut Harness<'static, ZebraApp>, p: Pos2, count: usize) {
+    h.event(Event::PointerMoved(p));
+    h.step();
+    for _ in 0..count {
+        h.event(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+    }
+}
+
+/// D6: ⌘Z in a text box brought back what was typed in the box edited
+/// before it, and finishing the edit saved that as this box's text.
+#[test]
+fn d6_undo_in_a_text_box_knows_nothing_of_the_last_one() {
+    let mut h = harness();
+    let add = |h: &mut Harness<'static, ZebraApp>, text: &str, y: f64, id: &str| {
+        h.state_mut().apply(Command::AddText { text: text.into(), x: 0.0, y, style: Default::default(), scale: None, color: None, id: Some(id.into()), markdown: false, on: None, place: None });
+    };
+    add(&mut h, "Add a title", -200.0, "a");
+    add(&mut h, "Topic 1", 200.0, "b");
+    h.state_mut().queued.push(Action::FitAll);
+    h.run_steps(40);
+    let at = |h: &Harness<'static, ZebraApp>, id: &str| {
+        let app = h.state();
+        app.canvas.w2s(&app.editor, app.editor.doc.get(id).unwrap().transform.center())
+    };
+    // Edit the title: type, undo the typing, finish.
+    let p = at(&h, "a");
+    click_at(&mut h, p, 2);
+    h.run_steps(3);
+    assert_eq!(h.state().canvas.text.as_ref().and_then(|t| t.id.clone()).map(|i| i.to_string()), Some("a".into()));
+    h.event(Event::Text("QQQ".into()));
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    h.key_press(Key::Escape);
+    h.run_steps(40);
+    // Edit the other text: type, then undo twice.
+    let p = at(&h, "b");
+    click_at(&mut h, p, 2);
+    h.run_steps(3);
+    assert_eq!(h.state().canvas.text.as_ref().and_then(|t| t.id.clone()).map(|i| i.to_string()), Some("b".into()));
+    h.event(Event::Text("X".into()));
+    h.run_steps(3);
+    for _ in 0..3 {
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run_steps(3);
+        if let Some(t) = &h.state().canvas.text {
+            assert!(!t.buf.contains("title"), "the other box's text came back: {:?}", t.buf);
+        }
+    }
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    let app = h.state();
+    let text = |id: &str| match &app.editor.doc.get(id).unwrap().kind {
+        zebra_core::ElementKind::Text(t) => t.text.clone(),
+        _ => unreachable!(),
+    };
+    assert!(text("b").starts_with("Topic 1"), "{:?}", text("b"));
+    assert!(text("a").starts_with("Add a title"), "{:?}", text("a"));
+}
+
+/// R23: the end of the person's drag doesn't close a batch an agent has
+/// open.
+#[test]
+fn r23_a_mouse_up_leaves_an_agents_transaction_open() {
+    let mut h = harness();
+    let id = frame(h.state_mut(), 0.0, false);
+    let agent = Origin::Agent { name: "a".into() };
+    h.state_mut().editor.begin("agent batch", agent.clone()).unwrap();
+    let n = h.state().editor.history().len();
+    // The person clicks and drags on the frame; the editor refuses the
+    // move (an agent's batch is open), and mouse-up must not commit it.
+    let p = {
+        let app = h.state();
+        app.canvas.w2s(&app.editor, app.editor.doc.get(id.as_str()).unwrap().transform.center())
+    };
+    h.event(Event::PointerMoved(p));
+    h.step();
+    h.event(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    for i in 1..=5 {
+        h.event(Event::PointerMoved(p + egui::vec2(10.0 * i as f32, 0.0)));
+        h.step();
+    }
+    h.event(Event::PointerButton { pos: p + egui::vec2(50.0, 0.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(app.editor.transaction_owner(), Some(&agent), "still the agent's");
+    assert_eq!(app.editor.history().len(), n);
+}

@@ -563,7 +563,10 @@ impl ZebraApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             Undo => {
-                crate::canvas::cancel_text_edit(self);
+                // Text still being typed is kept as its own step, which this
+                // then undoes (Redo brings it back); it used to be thrown
+                // away, and the step before it undone as well.
+                crate::canvas::commit_text_edit(self);
                 // The Edit menu names the action ("Undo Rotate"); no toast.
                 let r = self.editor.undo(H);
                 self.report(r);

@@ -877,7 +877,9 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
     let world = app.canvas.s2w(&app.editor, p);
     let zoom = app.editor.view.camera.zoom;
     match g {
-        Gesture::Move { .. } | Gesture::Scale { .. } | Gesture::Rotate { .. } => app.editor.commit(),
+        Gesture::Move { .. } | Gesture::Scale { .. } | Gesture::Rotate { .. } => {
+            app.editor.commit_as(&crate::app::HUMAN);
+        }
         Gesture::Marquee { start, additive } => {
             let a = app.canvas.s2w(&app.editor, start);
             let r = Rect::from_points([a, world]).unwrap();
@@ -917,7 +919,7 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
                 let patch = if to_end { ElementPatch { to: Some(spec), ..Default::default() } } else { ElementPatch { from: Some(spec), ..Default::default() } };
                 let _ = app.editor.apply(Command::Update { id, patch }, H);
             }
-            app.editor.commit();
+            app.editor.commit_as(&crate::app::HUMAN);
         }
         Gesture::Pan | Gesture::None => {}
     }
@@ -1571,6 +1573,12 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
             .layouter(&mut layouter)
             .hint_text(egui::RichText::new(crate::t!("canvas-text-placeholder")).color(color.gamma_multiply(0.35)).font(font.clone()))
             .id(edit_id);
+        if !t.focused_once {
+            // A new edit starts with no history: egui keeps a field's undo
+            // steps under its id, and this one field edits every text, so
+            // ⌘Z here brought back what was typed into the last one.
+            ui.ctx().data_mut(|d| d.remove::<egui::text_edit::TextEditState>(edit_id));
+        }
         let out = edit.show(ui);
         let resp = out.response.clone();
         if !t.focused_once {

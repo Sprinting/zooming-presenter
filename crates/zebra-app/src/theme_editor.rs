@@ -93,7 +93,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
     if let Some(t) = te.last_change {
         if now - t > COMMIT_AFTER {
             if app.editor.human_gesture_active() {
-                app.editor.commit();
+                app.editor.commit_as(&crate::app::HUMAN);
             }
             te.last_change = None;
         } else {
@@ -103,7 +103,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
     if open && !close {
         app.theme_ed = Some(te);
     } else if app.editor.human_gesture_active() {
-        app.editor.commit();
+        app.editor.commit_as(&crate::app::HUMAN);
     }
 }
 

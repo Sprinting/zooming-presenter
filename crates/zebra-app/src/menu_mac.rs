@@ -338,7 +338,9 @@ pub fn poll(app: &mut ZebraApp, ctx: &egui::Context) {
             continue;
         }
         // Clipboard and undo items while typing go to the text field.
-        if ctx.egui_wants_keyboard_input() {
+        // A text box open on the canvas takes these even in the moment
+        // egui has not given it the keyboard yet.
+        if ctx.egui_wants_keyboard_input() || app.canvas.text.is_some() {
             let cmd = egui::Modifiers::COMMAND;
             let key = |k: egui::Key, modifiers: egui::Modifiers| egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers };
             let ev = match a {

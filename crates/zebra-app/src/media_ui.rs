@@ -693,9 +693,9 @@ pub fn end_crop(app: &mut ZebraApp, keep: bool) {
     let Some(c) = app.media.crop.take() else { return };
     if c.began {
         if keep {
-            app.editor.commit();
+            app.editor.commit_as(&crate::app::HUMAN);
         } else {
-            app.editor.abort();
+            app.editor.abort_as(&crate::app::HUMAN);
         }
     }
 }
@@ -1018,7 +1018,7 @@ pub fn document_section(app: &mut ZebraApp, ui: &mut Ui) {
                 let _ = app.editor.apply(Command::SetSoundtrack { data_base64: String::new(), path: None, looping: None, volume: Some(vol), name: None }, crate::app::HUMAN);
             }
             if r.drag_stopped() && app.editor.in_transaction() {
-                app.editor.commit();
+                app.editor.commit_as(&crate::app::HUMAN);
             }
             let mut lp = t.looping;
             if ui.checkbox(&mut lp, crate::t!("media-loop")).changed() {
