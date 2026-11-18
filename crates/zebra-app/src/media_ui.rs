@@ -923,7 +923,14 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
         }
         let pos = app.media.videos.get(id).map(|l| l.player.position()).unwrap_or(v.start);
         let dur = if v.duration > 0.0 { v.duration } else { app.media.videos.get(id).and_then(|l| l.player.duration()).unwrap_or(0.0) };
-        ui.label(egui::RichText::new(format!("{} / {}", fmt_time(pos), fmt_time(dur))).monospace().size(11.5));
+        // The inspector's own font; the width is that of the same text in
+        // zeros, so the buttons after it don't shift as the time runs.
+        let text = format!("{} / {}", fmt_time(pos), fmt_time(dur));
+        let font = crate::style::ui_font(11.5);
+        let zeros: String = text.chars().map(|c| if c.is_ascii_digit() { '0' } else { c }).collect();
+        let w = ui.painter().layout_no_wrap(zeros, font.clone(), ui.visuals().text_color()).size().x;
+        let (r, _) = ui.allocate_exact_size(egui::vec2(w.ceil(), ui.spacing().interact_size.y), egui::Sense::hover());
+        ui.painter().text(r.left_center(), egui::Align2::LEFT_CENTER, text, font, ui.visuals().text_color());
         if ui.button(crate::t!("media-replace")).on_hover_text(crate::t!("media-replace-video-tip")).clicked() {
             replace_video_dialog(app, id);
         }

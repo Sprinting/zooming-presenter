@@ -724,7 +724,18 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     ui.add_space(4.0);
     w::separator(ui);
     let now = app.editor.view.now;
-    let items: Vec<_> = app.editor.activity.iter().rev().filter(|a| a.origin.is_agent()).take(200).cloned().collect();
+    // The agent entries of the undo stack itself, so this list and Undo
+    // always agree: steps grouped there are one row here, and a change
+    // that was undone is gone from both.
+    let items: Vec<zebra_core::editor::Activity> = app
+        .editor
+        .history()
+        .iter()
+        .rev()
+        .filter(|h| h.origin.is_agent())
+        .take(200)
+        .map(|h| zebra_core::editor::Activity { time: h.time, origin: h.origin.clone(), label: h.label.clone(), ids: h.ids.clone() })
+        .collect();
     if items.is_empty() {
         ui.add_space(6.0);
         w::caption(ui, &crate::t!("activity-empty"));
@@ -739,9 +750,16 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 ui.painter().circle_filled(r.center(), 3.5, AGENT);
                 ui.label(RichText::new(&a.label).size(13.0));
             });
-            ui.label(RichText::new(crate::t!("activity-item-meta", origin = a.origin.display(), when = when.as_str(), count = (a.ids.len() as u64))).size(11.0).color(p.weak));
+            // A change to the path or the theme is about no object: no count.
+            let meta = if a.ids.is_empty() {
+                crate::t!("activity-item-meta-plain", origin = a.origin.display(), when = when.as_str())
+            } else {
+                crate::t!("activity-item-meta", origin = a.origin.display(), when = when.as_str(), count = (a.ids.len() as u64))
+            };
+            ui.label(RichText::new(meta).size(11.0).color(p.weak));
         });
-        let resp = r.response.interact(Sense::click()).on_hover_text(&crate::t!("activity-item-tip"));
+        let resp = r.response.interact(Sense::click());
+        let resp = if a.ids.is_empty() { resp } else { resp.on_hover_text(&crate::t!("activity-item-tip")) };
         if resp.hovered() {
             ui.painter().rect_filled(resp.rect, 5.0, p.hover);
         }

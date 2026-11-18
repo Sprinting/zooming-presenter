@@ -184,6 +184,7 @@ activity-item-meta = { $origin } · { $when } · { $count ->
         [one] 1 object
        *[other] { $count } objects
     }
+activity-item-meta-plain = { $origin } · { $when }
 activity-item-tip = Click to show these objects
 palette-hint = Type a command
 shortcuts-title = Keyboard Shortcuts

@@ -188,25 +188,29 @@ fn timeline() -> Vec<Piece> {
 fn perspective() -> Vec<Piece> {
     // Frames shrink along a line toward a vanishing point at the right,
     // side by side so none hides another.
+    // Each frame is the one before it scaled about the vanishing point,
+    // so sizes, gaps and the guide lines all agree. Three quarters each
+    // time: the fifth frame is still a third of the first (at 0.62 it was
+    // a seventh, too small to work in).
     let (vx, vy) = (0.49, -0.2);
-    let (mut x, mut y, mut w) = (-0.31, 0.1, 0.36);
-    let slope = (vy - y) / (vx - x);
-    let ratio = 0.62;
-    let h0 = w * 0.62;
+    let (ratio, gap) = (0.75, 0.05);
+    let (left, y0) = (-0.49, 0.1);
+    let w0 = (vx - left) * (1.0 - ratio) / (1.0 + gap);
+    let h0 = w0 * 0.62;
     let mut v = vec![
-        stroked(line(x - w / 2.0, y - h0 / 2.0, vx, vy, false), 0.002, Dash::Dashed),
-        stroked(line(x - w / 2.0, y + h0 / 2.0, vx, vy, false), 0.002, Dash::Dashed),
+        stroked(line(left, y0 - h0 / 2.0, vx, vy, false), 0.002, Dash::Dashed),
+        stroked(line(left, y0 + h0 / 2.0, vx, vy, false), 0.002, Dash::Dashed),
     ];
+    let mut k = 1.0;
     for _ in 0..5 {
+        let w = w0 * k;
         let h = w * 0.62;
+        let x = vx - (vx - left) * k + w / 2.0;
+        let y = vy + (y0 - vy) * k;
         v.push(frame(FrameStyle::Rectangle, x, y, w, h));
         v.push(ph(Title, "Add a title", x, y - h * 0.2, w * 0.7, h * 0.16, None));
         v.push(ph(Body, "Add text", x, y + h * 0.12, w * 0.6, h * 0.1, None));
-        let next = w * ratio;
-        let nx = x + w / 2.0 + 0.02 + next / 2.0;
-        y += (nx - x) * slope;
-        x = nx;
-        w = next;
+        k *= ratio;
     }
     v
 }
