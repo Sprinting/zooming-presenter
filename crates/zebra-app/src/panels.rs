@@ -789,10 +789,19 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
         let all = Action::palette();
         let ql = q.to_lowercase();
         let matches: Vec<Action> = all.into_iter().filter(|a| ql.split_whitespace().all(|w| a.label().to_lowercase().contains(w))).collect();
+        // The list may be shorter than when the row was picked.
+        sel = sel.min(matches.len().saturating_sub(1));
         let m = egui::Modal::new(app.uid("palette")).backdrop_color(Color32::TRANSPARENT).show(ctx, |ui| {
             ui.set_width(440.0);
             let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(&crate::t!("palette-hint")).desired_width(f32::INFINITY).font(FontId::proportional(15.0)));
             r.request_focus();
+            if r.changed() {
+                // Another search: the first match is the one Return takes.
+                // The row picked for the old search used to stay picked,
+                // on whatever now had that number (or on nothing).
+                sel = 0;
+                ui.ctx().request_repaint();
+            }
             if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
                 sel = (sel + 1).min(matches.len().saturating_sub(1));
             }
@@ -819,7 +828,9 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
                     }
                 }
             });
-            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            // Not in the frame the search changed: `matches` is still the
+            // list for the old text.
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !r.changed() {
                 if let Some(a) = matches.get(sel) {
                     app.queued.push(a.clone());
                 }

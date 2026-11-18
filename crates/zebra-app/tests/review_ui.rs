@@ -571,3 +571,57 @@ fn r24_the_theme_editor_follows_the_document() {
     h.run_steps(2);
     assert!(h.state().theme_ed.is_none(), "another document: the editor closes");
 }
+
+/// R26: the row picked in the command palette belongs to the search it was
+/// picked in. Typing a new search starts at its first match again.
+#[test]
+fn r26_a_new_palette_search_starts_at_its_first_match() {
+    let mut h = harness();
+    h.state_mut().palette = Some((String::new(), 30));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::Text("zoom".into()));
+    h.run_steps(2);
+    let (q, sel) = h.state().palette.clone().unwrap();
+    assert_eq!((q.as_str(), sel), ("zoom", 0));
+    // A row past the end of a short list is pulled back onto it.
+    h.state_mut().palette = Some(("zoom".into(), 500));
+    h.run_steps(2);
+    let n = Action::palette().iter().filter(|a| a.label().to_lowercase().contains("zoom")).count();
+    assert!(n > 0);
+    assert_eq!(h.state().palette.as_ref().unwrap().1, n - 1);
+}
+
+/// R26: a step row being dragged in the sidebar when the path changes
+/// under it (an agent removes a step) is let go; the drop used to move
+/// whichever step had taken that number.
+#[test]
+fn r26_a_dragged_step_is_let_go_when_the_path_changes() {
+    let mut h = harness();
+    for i in 0..3 {
+        frame(h.state_mut(), i as f64 * 1000.0, true);
+    }
+    h.run_steps(3);
+    let rows: Vec<Pos2> = h.state().step_rows.iter().map(|r| r.center()).collect();
+    // The drag itself works: first to last.
+    let start = h.state().editor.doc.path.clone();
+    h.input_mut().events.push(Event::PointerMoved(rows[0]));
+    h.input_mut().events.push(Event::PointerButton { pos: rows[0], button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerMoved(rows[2] + egui::vec2(0.0, 30.0)));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: rows[2] + egui::vec2(0.0, 30.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.state().editor.doc.path, vec![start[1].clone(), start[2].clone(), start[0].clone()]);
+    let before = h.state().editor.doc.path.clone();
+    assert_eq!(rows.len(), 3);
+    h.input_mut().events.push(Event::PointerMoved(rows[0]));
+    h.input_mut().events.push(Event::PointerButton { pos: rows[0], button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerMoved(rows[2] + egui::vec2(0.0, 30.0)));
+    h.run_steps(2);
+    h.state_mut().editor.apply(Command::RemoveStep { index: 0 }, Origin::agent("a")).unwrap();
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerButton { pos: rows[2] + egui::vec2(0.0, 30.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.state().editor.doc.path, before[1..].to_vec(), "the two steps left keep their order");
+}

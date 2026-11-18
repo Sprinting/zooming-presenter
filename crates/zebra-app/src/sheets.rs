@@ -142,6 +142,8 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
 #[cfg(target_os = "macos")]
 pub struct OpenSheet {
     kind: SheetKind,
+    /// Steps on the path when the sheet went up (its text names the count).
+    steps: usize,
     answer: std::pin::Pin<Box<dyn std::future::Future<Output = rfd::MessageDialogResult>>>,
 }
 
@@ -176,19 +178,27 @@ pub fn run_native(app: &mut ZebraApp, frame: Option<&eframe::Frame>) -> bool {
             (None, None) => dialog,
         };
         let answer = dialog.show();
-        app.open_sheet = Some(OpenSheet { kind: k, answer: Box::pin(answer) });
+        app.open_sheet = Some(OpenSheet { kind: k, steps: app.editor.doc.path.len(), answer: Box::pin(answer) });
     }
     let ctx = app.ctx.clone();
     let waker = std::task::Waker::from(std::sync::Arc::new(Repaint(ctx)));
     let mut cx = std::task::Context::from_waker(&waker);
     let open = app.open_sheet.as_mut().expect("sheet");
     let std::task::Poll::Ready(r) = open.answer.as_mut().poll(&mut cx) else { return true };
-    let k = app.open_sheet.take().expect("sheet").kind;
+    let OpenSheet { kind: k, steps, .. } = app.open_sheet.take().expect("sheet");
     let label = match r {
         rfd::MessageDialogResult::Custom(l) => l,
         rfd::MessageDialogResult::Ok => crate::t!("sheet-ok"),
         _ => crate::t!("sheet-cancel"),
     };
+    // The sheet said how many steps go. If that changed while it was up
+    // (an agent added some), ask again with the number that is true now.
+    if matches!(k, SheetKind::ClearPath) && label == crate::t!("sheet-clear-path") && steps != app.editor.doc.path.len() {
+        if !app.editor.doc.path.is_empty() {
+            app.sheet = Some(SheetKind::ClearPath);
+        }
+        return true;
+    }
     resolve(app, k, &label);
     true
 }

@@ -113,6 +113,8 @@ pub struct ZebraApp {
     pub inspector_tab: crate::inspector::Tab,
     pub show_activity: bool,
     pub palette: Option<(String, usize)>,
+    /// Where the sidebar drew each step's row in the last frame.
+    pub step_rows: Vec<egui::Rect>,
     pub show_shortcuts: bool,
     pub library: crate::shape_library::Library,
     pub show_about: bool,
@@ -280,6 +282,7 @@ impl ZebraApp {
             thumbs: Thumbs::new(ctx.clone(), renderer.clone()),
             stage: crate::presenting::Stage::new(ctx, renderer.clone(), storage),
             theme_ed: None,
+            step_rows: vec![],
             welcome: None,
             previews: None,
             show_layouts: false,

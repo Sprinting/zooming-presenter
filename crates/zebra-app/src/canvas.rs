@@ -56,6 +56,9 @@ pub enum Gesture {
     },
     Badge {
         step: usize,
+        /// The step as it was when the drag began: if the path changes
+        /// under the drag, `step` may be another step by the time it ends.
+        was: Box<zebra_core::PathStep>,
     },
     /// Dragging one end of a connector (`to_end`: the arrow end).
     ConnectorEnd {
@@ -702,8 +705,8 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
         return;
     }
     if ed.view.mode == Mode::PathEdit {
-        if let Some(step) = badge_at(app, start) {
-            app.canvas.gesture = Gesture::Badge { step };
+        if let Some((step, was)) = badge_at(app, start).and_then(|s| Some((s, app.editor.doc.path.get(s)?.clone()))) {
+            app.canvas.gesture = Gesture::Badge { step, was: Box::new(was) };
             return;
         }
         app.canvas.gesture = Gesture::Pan;
@@ -907,7 +910,11 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
                 app.apply(Command::AddInk { points: pts, color: "theme:accent".into(), width: w, highlighter: hl, id: None });
             }
         }
-        Gesture::Badge { step } => {
+        Gesture::Badge { step, was } => {
+            // The path changed under the drag: this number is another step now.
+            if app.editor.doc.path.get(step) != Some(&*was) {
+                return;
+            }
             if let Some(id) = hit(app, p, true) {
                 app.apply(Command::UpdateStep { index: step, target: Some(StepTarget::Element { id }), builds: None, notes: None, duration: None, dwell: None, hide_builds: None });
                 app.toast(crate::t!("canvas-toast-step-retargeted", step = ((step + 1) as u64)));
@@ -2220,7 +2227,7 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
             let theme = ed.theme();
             painter.add(Shape::line(pts, Stroke::new(4.0, crate::fallback::theme_color(&theme, "theme:accent"))));
         }
-        Gesture::Badge { step } => {
+        Gesture::Badge { step, .. } => {
             if let Some(cur) = painter.ctx().input(|i| i.pointer.hover_pos()) {
                 draw_badge(painter, cur, *step + 1, true);
             }

@@ -269,6 +269,13 @@ impl MacMenu {
     }
 }
 
+fn recent_key(p: &std::path::Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    p.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
 /// Read the general pasteboard's plain text (for ⌘V into a text field).
 fn pasteboard_text() -> Option<String> {
     use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
@@ -314,8 +321,10 @@ pub fn poll(app: &mut ZebraApp, ctx: &egui::Context) {
                 }
             }
             m.ids.retain(|k, _| !k.starts_with("zebra.recent."));
-            for (i, p) in app.recent.iter().enumerate() {
-                let id = format!("zebra.recent.{i}");
+            for p in app.recent.iter() {
+                // The id names the file, not its place in the list: a click
+                // still waiting when the list is rebuilt opens what was clicked.
+                let id = format!("zebra.recent.{}", recent_key(p));
                 let name = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
                 let mi = MenuItem::with_id(id.clone(), name, true, None);
                 let _ = m.recent.append(&mi);

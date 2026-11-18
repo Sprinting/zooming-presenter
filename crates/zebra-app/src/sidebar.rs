@@ -94,7 +94,11 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let selected = selected_steps(app);
     let current = if app.editor.view.mode == Mode::Present { app.editor.view.present.step } else { app.selected_step };
     let drag_id = app.uid("path-drag");
-    let mut dragging: Option<usize> = ui.ctx().data(|d| d.get_temp(drag_id));
+    // The row being dragged, with the step it was when the drag began: if
+    // the path changes under the drag (an agent, Undo), the drag ends
+    // rather than move whichever step has that number now.
+    let held: Option<(usize, zebra_core::PathStep)> = ui.ctx().data(|d| d.get_temp(drag_id));
+    let mut dragging: Option<usize> = held.as_ref().filter(|(i, was)| app.editor.doc.path.get(*i) == Some(was)).map(|(i, _)| *i);
     let mut rows: Vec<Rect> = vec![];
     let pointer = ui.ctx().pointer_hover_pos();
     // Scroll to the selected step when it changes.
@@ -271,12 +275,14 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             dragging = None;
         }
     }
-    ui.ctx().data_mut(|d| match dragging {
+    app.step_rows = rows;
+    let held = dragging.and_then(|i| Some((i, app.editor.doc.path.get(i)?.clone())));
+    ui.ctx().data_mut(|d| match held {
         Some(v) => {
             d.insert_temp(drag_id, v);
         }
         None => {
-            d.remove::<usize>(drag_id);
+            d.remove::<(usize, zebra_core::PathStep)>(drag_id);
         }
     });
 }
