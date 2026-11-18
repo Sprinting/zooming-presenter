@@ -44,6 +44,9 @@ fn harness(dark: bool) -> H {
     if dark {
         h.ctx.set_theme(egui::Theme::Dark);
     }
+    // A launch offers the template chooser; the pages that show it open it
+    // themselves.
+    h.state_mut().welcome = None;
     settle(&mut h, 4);
     h
 }
@@ -332,6 +335,31 @@ fn main() {
                 Some(p) => click_at(h, p, PointerButton::Primary),
                 None => h.state_mut().open_ai_panel = true,
             }
+        });
+    }
+
+    if want("toolbar") {
+        let ai = zebra_app::t!("ai-toolbar");
+        a.run("AI popover (AI control on)", false, false, move |h| {
+            h.state_mut().set_ai_control(true);
+            settle(h, 3);
+            match toolbar_pos(h, &ai) {
+                Some(p) => click_at(h, p, PointerButton::Primary),
+                None => h.state_mut().open_ai_panel = true,
+            }
+        });
+        a.run("The narrowest window (760 wide)", false, false, |h| {
+            h.set_size(egui::vec2(760.0, 600.0));
+            settle(h, 4);
+        });
+        a.run("The narrowest window (760 wide), a box selected", false, false, |h| {
+            h.set_size(egui::vec2(760.0, 600.0));
+            select(h, &["box"]);
+            settle(h, 4);
+        });
+        a.run("The narrowest window (760 by 480), the template chooser", false, true, |h| {
+            h.set_size(egui::vec2(760.0, 480.0));
+            perform(h, Action::ShowTemplates);
         });
     }
 

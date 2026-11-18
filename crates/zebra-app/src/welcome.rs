@@ -133,16 +133,26 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
     let p = Palette::of(ctx);
     let mut choose: Option<Selection> = None;
     let mut cancel = false;
+    // The chooser fits the window: fewer cards to a row in a narrow one,
+    // and the cards scroll in a short one. At the smallest window (760 by
+    // 480) it used to be wider than the window, with Create out of reach.
+    let room = ctx.content_rect().size();
+    let total = (room.x - 48.0).clamp(330.0, 860.0);
+    let side = if total >= 700.0 { 180.0 } else { 0.0 };
+    let cards_w = total - side - if side > 0.0 { 40.0 } else { 0.0 };
+    let cols = (((cards_w + 10.0) / 162.0).floor() as usize).clamp(1, 4);
+    let body_h = (room.y - 150.0).max(140.0);
     egui::Modal::new(app.uid("welcome")).show(ctx, |ui| {
-        ui.set_width(860.0);
+        ui.set_width(total);
         ui.horizontal(|ui| {
             ui.label(RichText::new(crate::t!("welcome-title")).font(style::bold(18.0)));
         });
         ui.add_space(8.0);
+        egui::ScrollArea::vertical().max_height(body_h).auto_shrink([false, true]).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             // Templates.
             ui.vertical(|ui| {
-                ui.set_width(640.0);
+                ui.set_width(cards_w);
                 let welcome = app.welcome.as_mut().unwrap();
                 let tex = app.previews.as_ref().map(|p| &p.textures);
                 egui::Grid::new("templates").spacing([10.0, 10.0]).show(ui, |ui| {
@@ -155,7 +165,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
                         if r.double_clicked() {
                             choose = Some(sel);
                         }
-                        if i % 4 == 3 {
+                        if i % cols == cols - 1 {
                             ui.end_row();
                         }
                     }
@@ -177,10 +187,13 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
                     });
                 }
             });
+            if side == 0.0 {
+                return;
+            }
             ui.add_space(12.0);
             // Recent files.
             ui.vertical(|ui| {
-                ui.set_width(180.0);
+                ui.set_width(side);
                 ui.label(RichText::new(crate::t!("welcome-recent")).font(style::bold(13.0)));
                 ui.add_space(4.0);
                 if app.recent.is_empty() {
@@ -194,6 +207,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
                     }
                 }
             });
+        });
         });
         ui.add_space(10.0);
         ui.horizontal(|ui| {

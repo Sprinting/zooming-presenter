@@ -373,7 +373,7 @@ export-toast-failed = Export failed: { $error }
 
 ## ---- cli.rs ----
 
-cli-agent-prompt = Zebra (a zooming presentation app) is open on my Mac and I've allowed AI control. Run `{ $ctl } --help` to learn how to drive it, then `{ $ctl } describe` to see what's on the canvas. Pass `--agent` with your name on every command.
+cli-agent-prompt = Zebra (a zooming presentation app) is open on my Mac and I've allowed AI control. Run `{ $ctl } --help` to learn how to drive it, then its `describe` command to see what's on the canvas. Pass `--agent` with your name on every command.
 cli-install-prompt = Zebra wants to install the zebractl command so AI agents can use it.
 cli-error-not-bundled = zebractl isn't inside this copy of Zebra
 cli-error-cancelled = cancelled

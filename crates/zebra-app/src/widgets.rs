@@ -905,7 +905,14 @@ pub fn separator(ui: &mut Ui) {
 /// 11 pt secondary text (captions, help under a control).
 pub fn caption(ui: &mut Ui, text: impl Into<String>) -> Response {
     let p = pal(ui);
-    ui.add(egui::Label::new(egui::RichText::new(text.into()).font(style::ui_font(11.0)).color(p.weak)).wrap())
+    let label = egui::Label::new(egui::RichText::new(text.into()).font(style::ui_font(11.0)).color(p.weak)).wrap();
+    // In a menu or popover (a justified column) the words would be spread
+    // to both edges, with wide gaps: captions are always set flush left.
+    if ui.layout().is_vertical() && ui.layout().horizontal_justify() {
+        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| ui.add(label)).inner
+    } else {
+        ui.add(label)
+    }
 }
 
 /// Small grid of equal-width push buttons, `cols` per row (Keynote's
