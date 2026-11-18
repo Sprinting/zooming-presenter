@@ -92,9 +92,16 @@ fn main() -> anyhow::Result<()> {
         event_loop_builder: Some(Box::new(move |b| {
             use winit::platform::macos::EventLoopBuilderExtMacOS;
             b.with_activate_ignoring_other_apps(!background);
+            // Our menu bar is already in place (below); winit's would
+            // replace it.
+            b.with_default_menu(false);
         })),
         ..Default::default()
     };
+    // Before launch finishes, or AppKit leaves the tab commands out of the
+    // Window menu.
+    #[cfg(target_os = "macos")]
+    zebra_app::menu_mac::install_early();
     eframe::run_native(
         "Zebra",
         native,

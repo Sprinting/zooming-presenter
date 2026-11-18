@@ -129,9 +129,9 @@ mod imp {
     }
 
     /// Get hold of the root window and name its tab group before anything
-    /// else happens in its first frame. The menu bar is registered during
-    /// that frame, and AppKit decides right then, once, whether the Window
-    /// menu gets tab commands: a window must already qualify.
+    /// else happens in its first frame, so the tab commands AppKit put in
+    /// the menu bar at launch (see `menu_mac::install_early`) apply to it
+    /// from the start.
     pub fn adopt_root(app: &mut ZebraApp, frame: &eframe::Frame) {
         if app.mac_sync.window.is_some() {
             return;

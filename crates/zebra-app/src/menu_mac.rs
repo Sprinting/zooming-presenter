@@ -37,11 +37,12 @@ struct Entry {
 /// itself is one per app (see `Bar`).
 pub struct MacMenu(());
 
-/// The menu bar. It is built once and then only changed in place. AppKit
-/// adds its own commands to the Window menu (Show Next Tab, Move Tab to New
-/// Window, Merge All Windows) a single time per app; a bar built anew after
-/// that (we used to on a language change, and whenever the front window
-/// closed) never gets them again, and nothing we can call asks for them.
+/// The menu bar. It is built once, before the app finishes launching (see
+/// `install_early`), and then only changed in place. AppKit adds its own
+/// commands to the Window menu (Show Next Tab, Move Tab to New Window, Merge
+/// All Windows) a single time per app; a bar built anew after that (we used
+/// to on a language change, and whenever the front window closed) never
+/// gets them again, and nothing we can call asks for them.
 struct Bar {
     _menu: Menu,
     ids: HashMap<String, Action>,
@@ -142,13 +143,22 @@ fn text_field_spec(a: &Action) -> Option<&'static str> {
     })
 }
 
-fn build_items(sub: &Submenu, items: &[Item], m: &mut Bar, next: &mut u32, app: &ZebraApp) {
+/// An item's state when the bar is built: the app's, or, before there is an
+/// app, its plain title and off (the first `sync` brings it up to date).
+fn first_state(app: Option<&ZebraApp>, a: &Action) -> ItemState {
+    match app {
+        Some(app) => state(app, a),
+        None => ItemState { title: a.label(), enabled: false, checked: is_checkable(a).then_some(false) },
+    }
+}
+
+fn build_items(sub: &Submenu, items: &[Item], m: &mut Bar, next: &mut u32, app: Option<&ZebraApp>) {
     for it in items {
         match it {
             Item::A(a) => {
                 *next += 1;
                 let id = format!("zebra.{next}");
-                let st = state(app, a);
+                let st = first_state(app, a);
                 let spec = accel_spec(a);
                 let accel = spec.as_deref().and_then(|s| s.parse().ok());
                 let item = if is_checkable(a) {
@@ -188,15 +198,34 @@ impl MacMenu {
             let mut b = b.borrow_mut();
             match b.as_mut() {
                 Some(bar) => bar.retitle(),
-                None => *b = Some(Bar::build(app)),
+                None => *b = Some(Bar::build(Some(app))),
             }
         });
         MacMenu(())
     }
 }
 
+/// Build the menu bar before `eframe::run_native`, so it is in place when
+/// NSApp finishes launching. In a bundled app AppKit decides then whether
+/// the Window menu gets its tab commands (Show Previous Tab, Show Next Tab,
+/// Move Tab to New Window, Merge All Windows); a Window menu registered on
+/// the first frame, as before, never got them in Zebra.app (a bare binary
+/// did, which hid the problem). winit's own default menu must stay off
+/// (`with_default_menu(false)`), or it replaces this one at launch.
+pub fn install_early() {
+    if objc2::MainThreadMarker::new().is_none() {
+        return;
+    }
+    BAR.with(|b| {
+        let mut b = b.borrow_mut();
+        if b.is_none() {
+            *b = Some(Bar::build(None));
+        }
+    });
+}
+
 impl Bar {
-    fn build(app: &ZebraApp) -> Bar {
+    fn build(app: Option<&ZebraApp>) -> Bar {
         let menu = Menu::new();
         let mut m = Bar {
             _menu: menu,
@@ -235,7 +264,7 @@ impl Bar {
             &quit,
         ]);
         let _ = m._menu.append(&app_menu);
-        m.entries.push(Entry { item: Native::Plain(settings.clone()), action: Action::Settings, last: state(app, &Action::Settings), accel: settings_spec });
+        m.entries.push(Entry { item: Native::Plain(settings.clone()), action: Action::Settings, last: first_state(app, &Action::Settings), accel: settings_spec });
 
         let mut help: Option<Submenu> = None;
         let mut window: Option<Submenu> = None;
