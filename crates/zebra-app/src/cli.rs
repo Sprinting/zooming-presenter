@@ -40,6 +40,14 @@ fn quote(s: &str) -> String {
     }
 }
 
+/// The reverse of [`quote`].
+fn unquote(s: &str) -> String {
+    match s.strip_prefix('\'').and_then(|r| r.strip_suffix('\'')) {
+        Some(inner) => inner.replace(r"'\''", "'"),
+        None => s.to_string(),
+    }
+}
+
 /// The text a person pastes into any agent's chat.
 pub fn agent_prompt(ctl: &str) -> String {
     crate::t!("cli-agent-prompt", ctl = ctl)
@@ -47,8 +55,8 @@ pub fn agent_prompt(ctl: &str) -> String {
 
 /// An MCP server entry for apps that take a JSON config.
 pub fn mcp_config(ctl: &str) -> String {
-    let cmd = ctl.trim_matches('\'');
-    format!("{{\n  \"mcpServers\": {{\n    \"zebra\": {{ \"command\": {}, \"args\": [\"mcp\"] }}\n  }}\n}}", serde_json::to_string(cmd).unwrap_or_default())
+    let cmd = unquote(ctl);
+    format!("{{\n  \"mcpServers\": {{\n    \"zebra\": {{ \"command\": {}, \"args\": [\"mcp\"] }}\n  }}\n}}", serde_json::to_string(&cmd).unwrap_or_default())
 }
 
 /// `None` when installing isn't offered (no bundled binary, sandboxed, or
@@ -65,9 +73,7 @@ pub fn install_state() -> Option<bool> {
 /// password through the standard macOS prompt.
 pub fn install() -> anyhow::Result<()> {
     let b = bundled().ok_or_else(|| anyhow::anyhow!(crate::t!("cli-error-not-bundled")))?;
-    let path = b.display().to_string().replace('\\', "\\\\").replace('"', "\\\"").replace('\'', "'\\''");
-    let prompt = crate::t!("cli-install-prompt").replace('\\', "\\\\").replace('"', "\\\"");
-    let script = format!("do shell script \"mkdir -p /usr/local/bin && ln -sf '{path}' {LINK}\" with administrator privileges with prompt \"{prompt}\"");
+    let script = install_script(&b.display().to_string(), &crate::t!("cli-install-prompt"));
     let out = std::process::Command::new("/usr/bin/osascript").arg("-e").arg(script).output()?;
     if out.status.success() {
         Ok(())
@@ -80,9 +86,33 @@ pub fn install() -> anyhow::Result<()> {
     }
 }
 
+/// The AppleScript that makes the link. The path is an AppleScript
+/// string, quoted for the shell by AppleScript itself (`quoted form of`):
+/// quoting it by hand broke on an apostrophe in the app's path.
+fn install_script(path: &str, prompt: &str) -> String {
+    let lit = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+    format!(
+        "do shell script \"mkdir -p /usr/local/bin && ln -sf \" & quoted form of {} & \" {LINK}\" with administrator privileges with prompt {}",
+        lit(path),
+        lit(prompt)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_apostrophe_in_the_app_path_survives() {
+        let s = install_script("/Users/k/Kartik's \"Apps\"/Zebra.app/Contents/MacOS/zebractl", "Zebra wants to install \"zebractl\"");
+        assert!(s.contains(r#"quoted form of "/Users/k/Kartik's \"Apps\"/Zebra.app/Contents/MacOS/zebractl""#), "{s}");
+        assert!(!s.contains(r"\'"), "no backslash-apostrophe, which AppleScript rejects: {s}");
+        let q = quote("/Users/k/Kartik's Apps/zebractl");
+        assert_eq!(unquote(&q), "/Users/k/Kartik's Apps/zebractl");
+        let v: serde_json::Value = serde_json::from_str(&mcp_config(&q)).unwrap();
+        assert_eq!(v["mcpServers"]["zebra"]["command"], "/Users/k/Kartik's Apps/zebractl");
+    }
+
     #[test]
     fn mcp_config_is_json() {
         let v: serde_json::Value = serde_json::from_str(&mcp_config("'/Applications/My Zebra.app/Contents/MacOS/zebractl'")).unwrap();

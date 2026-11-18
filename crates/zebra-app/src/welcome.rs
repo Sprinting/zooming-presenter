@@ -257,7 +257,10 @@ pub fn save_as_template(app: &mut ZebraApp) {
     };
     let name = app.editor.doc.title.clone();
     match crate::library::save_template(&app.editor.doc, &name, &dir) {
-        Ok(_) => app.toast(crate::t!("welcome-toast-template-saved", name = name.as_str())),
+        Ok(p) => {
+            let saved = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(name);
+            app.toast(crate::t!("welcome-toast-template-saved", name = saved.as_str()))
+        }
         Err(e) => app.toast(crate::t!("welcome-toast-template-save-failed", error = e.message.as_str())),
     }
 }

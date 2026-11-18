@@ -33,9 +33,26 @@ pub fn save_theme(from: &Document, theme: &Theme, dir: &Path) -> ZResult<PathBuf
             doc.assets.insert(k.to_string(), a.clone());
         }
     }
-    let path = dir.join(format!("{}.zebra", file_stem(&theme.name)));
+    // Saving the same theme again updates its file. A different theme whose
+    // name gives the same file name gets a file of its own: it used to
+    // replace the other theme without a word.
+    let path = free_path(dir, &file_stem(&theme.name), |p| io::load(p).is_ok_and(|d| d.theme == theme.id));
     io::write_file(&doc, &path)?;
     Ok(path)
+}
+
+/// `stem.zebra` in `dir`, or `stem 2.zebra`, `stem 3.zebra`… : the first
+/// that does not exist yet, or that `mine` says may be replaced.
+fn free_path(dir: &Path, stem: &str, mine: impl Fn(&Path) -> bool) -> PathBuf {
+    let mut n = 1;
+    loop {
+        let name = if n == 1 { format!("{stem}.zebra") } else { format!("{stem} {n}.zebra") };
+        let p = dir.join(name);
+        if !p.exists() || mine(&p) {
+            return p;
+        }
+        n += 1;
+    }
 }
 
 /// Themes saved in the library: (file, document holding it, theme).
@@ -93,10 +110,16 @@ pub fn list_templates() -> Vec<(PathBuf, String)> {
 }
 
 /// Save the current presentation as a template.
+///
+/// A template of that name stays as it is; this one is saved as "name 2".
 pub fn save_template(doc: &Document, name: &str, dir: &Path) -> ZResult<PathBuf> {
-    let path = dir.join(format!("{}.zebra", file_stem(name)));
+    let path = free_path(dir, &file_stem(name), |_| false);
     let mut d = doc.clone();
-    d.title = name.to_string();
+    d.title = if path.file_stem().is_some_and(|s| s.to_string_lossy() == file_stem(name)) {
+        name.to_string()
+    } else {
+        path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| name.to_string())
+    };
     io::write_file(&d, &path).map_err(|e| ZError::new("io", e.message))?;
     Ok(path)
 }
@@ -110,6 +133,33 @@ fn zebra_files(d: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saving_never_replaces_another_theme_or_template() {
+        let tmp = std::env::temp_dir().join(format!("zebra-lib-clash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut a = Theme::resolve("night");
+        a.id = "mine-a".into();
+        a.name = "Mine".into();
+        let mut b = a.clone();
+        b.id = "mine-b".into();
+        let pa = save_theme(&Document::default(), &a, &tmp).unwrap();
+        let pb = save_theme(&Document::default(), &b, &tmp).unwrap();
+        assert_ne!(pa, pb, "a second theme called Mine gets its own file");
+        assert_eq!(io::load(&pa).unwrap().theme, "mine-a");
+        assert_eq!(save_theme(&Document::default(), &a, &tmp).unwrap(), pa, "saving the same theme again updates it");
+        assert_eq!(save_theme(&Document::default(), &b, &tmp).unwrap(), pb);
+
+        let mut one = Document::default();
+        one.title = "Pitch".into();
+        let t1 = save_template(&one, "Pitch", &tmp).unwrap();
+        let t2 = save_template(&Document::default(), "Pitch", &tmp).unwrap();
+        assert_ne!(t1, t2);
+        assert_eq!(io::load(&t1).unwrap().title, "Pitch");
+        assert_eq!(io::load(&t2).unwrap().title, "Pitch 2");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn theme_file_round_trip() {

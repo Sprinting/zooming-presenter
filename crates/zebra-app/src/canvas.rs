@@ -1061,10 +1061,13 @@ fn click(app: &mut ZebraApp, p: Pos2, shift: bool) {
             return;
         }
         if let Some(id) = hit(app, p, true) {
-            app.apply(Command::AddStep { target: StepTarget::Element { id }, index: None, builds: vec![], notes: String::new() });
-            let n = app.editor.doc.path.len();
-            app.selected_step = Some(n - 1);
-            app.toast(crate::t!("canvas-toast-added-step", step = n));
+            // Only when the step was added: a refused one used to select
+            // the last step and say "added" all the same.
+            if app.apply(Command::AddStep { target: StepTarget::Element { id }, index: None, builds: vec![], notes: String::new() }).is_some() {
+                let n = app.editor.doc.path.len();
+                app.selected_step = n.checked_sub(1);
+                app.toast(crate::t!("canvas-toast-added-step", step = n));
+            }
         }
         return;
     }

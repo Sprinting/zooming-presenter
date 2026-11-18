@@ -607,6 +607,23 @@ pub fn copied_to_system(app: &mut ZebraApp, ids: &[ElementId]) {
     app.clipboard_marker = None;
 }
 
+/// Whether the system clipboard holds anything at all. Asked while the
+/// menus are drawn, so it only looks at the list of types (no data is read).
+#[cfg(target_os = "macos")]
+pub fn system_clipboard_has_content() -> bool {
+    use objc2_app_kit::NSPasteboard;
+    NSPasteboard::generalPasteboard().types().is_some_and(|t| t.count() > 0)
+}
+
+/// Elsewhere there is no cheap way to ask; tests set [`TEST_SYSTEM_CLIPBOARD`].
+#[cfg(not(target_os = "macos"))]
+pub fn system_clipboard_has_content() -> bool {
+    TEST_SYSTEM_CLIPBOARD.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub static TEST_SYSTEM_CLIPBOARD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Paste from the system clipboard if it holds something newer than
 /// Zebra's own copy: files (Finder), a picture, or text. Returns false when
 /// the caller should paste Zebra's copied objects instead.

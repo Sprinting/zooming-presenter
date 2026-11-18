@@ -139,7 +139,9 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
         }
         Cut | Delete => editable,
         Copy | Duplicate | WrapInFrame | BringForward | BringToFront | SendBackward | SendToBack | ZoomToSelection | Group | Ungroup => has_sel,
-        Paste => !app.clipboard.is_empty(),
+        // Zebra's own copy, or anything another app put on the clipboard
+        // (a picture, files, text): Paste takes those too.
+        Paste => !app.clipboard.is_empty() || crate::media_ui::system_clipboard_has_content(),
         Deselect => has_sel,
         SelectAll | FitAll | ExportPdf | ExportPng | PresentStart | AutoPath | AddCurrentView | AddToPath => has_doc,
         PresentCurrent => has_doc && !app.editor.doc.path.is_empty(),

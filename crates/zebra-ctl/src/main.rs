@@ -633,25 +633,57 @@ fn run(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-/// Make `add_image {path}` paths absolute (relative to our cwd).
+/// The commands that name a file to read.
+const FILE_OPS: [&str; 6] = ["add_image", "add_video", "replace_image", "set_poster", "set_soundtrack", "set_voiceover"];
+
+/// Make the `path` of every command that reads a file absolute (relative
+/// to our working directory: the app's is somewhere else). Only
+/// `add_image` used to be handled; the others were refused by the app.
 fn absolutize_image_paths(v: &mut Value) -> Result<()> {
+    absolutize_paths_in(v, &std::env::current_dir()?);
+    Ok(())
+}
+
+fn absolutize_paths_in(v: &mut Value, cwd: &Path) {
     match v {
         Value::Array(a) => {
             for x in a {
-                absolutize_image_paths(x)?;
+                absolutize_paths_in(x, cwd);
             }
         }
         Value::Object(o) => {
-            if o.get("op").and_then(|x| x.as_str()) == Some("add_image") {
+            if o.get("op").and_then(|x| x.as_str()).is_some_and(|op| FILE_OPS.contains(&op)) {
                 if let Some(Value::String(p)) = o.get("path") {
-                    let ap = abs(Path::new(p))?;
-                    o.insert("path".into(), json!(ap));
+                    if !Path::new(p).is_absolute() {
+                        let ap = cwd.join(p);
+                        o.insert("path".into(), json!(ap));
+                    }
                 }
             }
         }
         _ => {}
     }
-    Ok(())
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn every_file_command_gets_an_absolute_path() {
+        let mut v = json!([
+            { "op": "add_image", "path": "a.png" },
+            { "op": "add_video", "path": "clips/b.mov" },
+            { "op": "replace_image", "id": "e1", "path": "c.png" },
+            { "op": "set_poster", "id": "e2", "path": "d.png" },
+            { "op": "set_soundtrack", "path": "e.mp3" },
+            { "op": "set_voiceover", "index": 0, "path": "/abs/f.m4a" },
+            { "op": "add_text", "text": "path", "path": "not a file" }
+        ]);
+        absolutize_paths_in(&mut v, Path::new("/work/deck"));
+        let got: Vec<&str> = v.as_array().unwrap().iter().map(|c| c["path"].as_str().unwrap()).collect();
+        assert_eq!(got, ["/work/deck/a.png", "/work/deck/clips/b.mov", "/work/deck/c.png", "/work/deck/d.png", "/work/deck/e.mp3", "/abs/f.m4a", "not a file"]);
+    }
 }
 
 // ---------------------------------------------------------------------------

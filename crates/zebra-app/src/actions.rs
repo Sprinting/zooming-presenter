@@ -258,25 +258,29 @@ pub fn tool_name(t: Tool) -> String {
     }
 }
 
-/// Display name of a frame style. Stays `&'static str` (callers hand it to
-/// widgets that keep it): each name is looked up once, in the language
-/// chosen at startup.
+/// Display name of a frame style, in the language in use now. Stays
+/// `&'static str` (callers hand it to widgets that keep it), so each
+/// distinct name is kept for good: four per language used. It used to be
+/// looked up once, and stayed in the launch language after a switch.
 pub fn frame_name(s: FrameStyle) -> &'static str {
-    use std::sync::LazyLock;
-    static NAMES: LazyLock<[&'static str; 4]> = LazyLock::new(|| {
-        [
-            crate::t!("frame-style-bracket"),
-            crate::t!("frame-style-circle"),
-            crate::t!("frame-style-rectangle"),
-            crate::t!("frame-style-invisible"),
-        ]
-        .map(|n| &*Box::leak(n.into_boxed_str()))
-    });
-    match s {
-        FrameStyle::Bracket => NAMES[0],
-        FrameStyle::Circle => NAMES[1],
-        FrameStyle::Rectangle => NAMES[2],
-        FrameStyle::Invisible => NAMES[3],
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SEEN: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+    let name = match s {
+        FrameStyle::Bracket => crate::t!("frame-style-bracket"),
+        FrameStyle::Circle => crate::t!("frame-style-circle"),
+        FrameStyle::Rectangle => crate::t!("frame-style-rectangle"),
+        FrameStyle::Invisible => crate::t!("frame-style-invisible"),
+    };
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = seen.get_or_insert_with(HashSet::new);
+    match seen.get(name.as_str()) {
+        Some(kept) => kept,
+        None => {
+            let kept: &'static str = Box::leak(name.into_boxed_str());
+            seen.insert(kept);
+            kept
+        }
     }
 }
 
