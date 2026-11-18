@@ -103,6 +103,20 @@ mod imp {
         let Some(mtm) = objc2::MainThreadMarker::new() else { return };
         let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
         app.mac_sync.window = ns_app.windows().iter().find(|w| w.title().to_string() == title);
+        if let Some(w) = &app.mac_sync.window {
+            name_tab_group(w);
+        }
+    }
+
+    /// Give a document window its tab group's name. Our title bar is
+    /// see-through (the content runs under it), and for such a window AppKit
+    /// offers none of its tab commands (Show Tab Bar, Show Next Tab, Move Tab
+    /// to New Window, Merge All Windows) unless the window names its group
+    /// itself. The mode stays Automatic, so the person's "Prefer tabs"
+    /// setting still decides when a new window becomes a tab. (winit's own
+    /// tabbing_identifier option also forces the mode to Preferred.)
+    fn name_tab_group(win: &NSWindow) {
+        win.setTabbingIdentifier(&NSString::from_str("app.zebra.Zebra.document"));
     }
 
     fn ns_window(frame: &eframe::Frame) -> Option<Retained<NSWindow>> {
@@ -147,6 +161,9 @@ mod imp {
         }
         if s.window.is_none() {
             s.window = frame.and_then(ns_window);
+            if let Some(w) = &s.window {
+                name_tab_group(w);
+            }
         }
         let Some(win) = s.window.clone() else { return };
         if s.title != title {

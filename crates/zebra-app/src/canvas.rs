@@ -374,6 +374,22 @@ pub fn sync_viewport(app: &mut ZebraApp, rect: ERect, window: egui::Vec2) {
     if (vp.x - rect.width() as f64).abs() > 0.5 || (vp.y - rect.height() as f64).abs() > 0.5 {
         let _ = app.editor.view(ViewCommand::SetViewport { width: rect.width().max(1.0) as f64, height: rect.height().max(1.0) as f64 }, H);
     }
+    // Presenting, and the show's area changed size: a step is fitted to the
+    // size the canvas had at that moment, and Play from a small window fits
+    // step 1 to that window while it is still growing into full screen (on
+    // the Mac the step then sat small in a corner of the screen). Fit the
+    // step again; a flight still under way keeps flying, to the new fit.
+    if app.editor.view.mode == Mode::Present && app.canvas.rect_valid && old.size() != rect.size() && !app.editor.view.present.off_path {
+        let ed = &app.editor;
+        let cam = match ed.view.present.step {
+            Some(i) if i < ed.doc.path.len() => ed.camera_for_step(i),
+            _ => ed.fit_all_camera(),
+        };
+        match &mut app.editor.view.flight {
+            Some(f) => f.to = cam,
+            None => app.editor.view.camera = cam,
+        }
+    }
     // When a side panel opens or closes inside an unchanged window, keep the
     // content still on screen (nothing jumps under the pointer). When the
     // window itself changes (resize, leaving full screen after presenting),

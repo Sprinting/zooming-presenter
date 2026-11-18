@@ -659,3 +659,28 @@ fn mac_centre_panels_open_one_at_a_time() {
     h.run_steps(3);
     assert!(h.state().show_layouts && !h.state().show_credits);
 }
+
+/// Mac round, 18 Nov: Play from an 800 by 600 window fitted step 1 to that
+/// window and kept that zoom after the window had grown to the full screen,
+/// so the step sat small and off centre. The step is fitted again whenever
+/// the show's area changes size.
+#[test]
+fn mac_a_step_is_refitted_when_the_show_changes_size() {
+    let mut h = harness();
+    frame(h.state_mut(), 0.0, true);
+    h.set_size(egui::vec2(800.0, 600.0));
+    h.run_steps(5);
+    h.state_mut().view_cmd(ViewCommand::Present { step: Some(0) });
+    h.run_steps(5);
+    assert_eq!(h.state().editor.view.mode, Mode::Present);
+    // Where the camera is heading (the opening flight may still be under way).
+    let small = h.state().editor.view.target_camera().zoom;
+    // The window reaches full screen.
+    h.set_size(egui::vec2(1600.0, 1200.0));
+    h.run_steps(5);
+    let app = h.state();
+    let big = app.editor.view.target_camera();
+    assert!((big.zoom / small - 2.0).abs() < 0.01, "twice the screen, twice the zoom: {small} -> {}", big.zoom);
+    let want = app.editor.camera_for_step(0);
+    assert!((big.zoom - want.zoom).abs() < 1e-9 && (big.cx - want.cx).abs() < 1e-9);
+}
