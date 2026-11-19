@@ -447,7 +447,7 @@ impl zebra_api::Documents for Docs<'_> {
         *self.next_id += 1;
         let mut w = self.windows[self.front].new_window(id.clone());
         self.shared.write(&mut w);
-        let doc = zebra_core::Document { theme: w.default_theme.clone(), ..Default::default() };
+        let doc = crate::app::new_document(&w.default_theme);
         w.editor.load(doc, None);
         w.after_load();
         w.opened_by_agent = true;

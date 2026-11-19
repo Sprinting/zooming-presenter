@@ -235,3 +235,19 @@ fn new_documents_are_numbered() {
     assert_eq!(h.state().windows[1].window_title().replace(" — Edited", ""), "Plan");
     assert_eq!(zebra_app::app::untitled_name("Untitled", "Untitled", 0), "Untitled");
 }
+
+/// zebra-core leaves a new document untitled; the app names it in the
+/// person's language (window title, Save As name, export names).
+#[test]
+fn a_new_document_is_named_by_the_app() {
+    assert_eq!(zebra_core::Document::default().title, "", "core types no English title");
+    let mut h = harness();
+    h.run_steps(2);
+    let untitled = zebra_app::i18n::tr("app-untitled");
+    assert_eq!(h.state().windows[0].editor.doc.title, untitled);
+    h.state_mut().windows[0].queued.push(Action::New);
+    h.run_steps(4);
+    assert!(h.state().windows.iter().all(|w| w.editor.doc.title == untitled));
+    assert_eq!(zebra_app::app::new_document("classic").title, untitled);
+    assert_eq!(zebra_app::app::untitled_name("", &untitled, 0), untitled, "an empty title (an old or agent file) reads as untitled");
+}

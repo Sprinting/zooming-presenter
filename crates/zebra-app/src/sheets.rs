@@ -49,7 +49,7 @@ struct Spec {
 fn spec(app: &ZebraApp, k: &SheetKind) -> Spec {
     let doc_name = || match &app.editor.file_path {
         Some(p) => p.file_stem().unwrap_or_default().to_string_lossy().to_string(),
-        None => app.editor.doc.title.clone(),
+        None => crate::app::untitled_name(&app.editor.doc.title, &crate::t!("app-untitled"), 0),
     };
     match k {
         SheetKind::SaveChanges(_) => Spec {

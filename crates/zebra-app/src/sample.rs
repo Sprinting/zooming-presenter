@@ -132,7 +132,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 }
             }
             "connectors" => {
-                app.editor.load(Document::default(), None);
+                app.editor.load(crate::app::new_document(&Document::default().theme), None);
                 app.after_load();
                 let add = |app: &mut ZebraApp, j: serde_json::Value| {
                     let _ = app.editor.apply(serde_json::from_value(j).unwrap(), H);
@@ -153,7 +153,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             }
             "whiteboard" => {
                 // Debug: sticky notes and shapes with text typed on them.
-                app.editor.load(Document::default(), None);
+                app.editor.load(crate::app::new_document(&Document::default().theme), None);
                 app.after_load();
                 let add = |app: &mut ZebraApp, j: serde_json::Value| {
                     let _ = app.editor.apply(serde_json::from_value(j).unwrap(), H);
@@ -171,7 +171,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             }
             "shapes" => {
                 // Gallery of every shape plus a row of icons.
-                app.editor.load(Document::default(), None);
+                app.editor.load(crate::app::new_document(&Document::default().theme), None);
                 app.after_load();
                 let fills = ["theme:shape1", "theme:shape2", "theme:shape3", "theme:shape4"];
                 for (i, &k) in ShapeKind::ALL.iter().enumerate() {
@@ -224,7 +224,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             "symboldeck" => {
                 // Debug: one symbol from several kinds of set, plain, tinted
                 // and as stickers.
-                app.editor.load(Document::default(), None);
+                app.editor.load(crate::app::new_document(&Document::default().theme), None);
                 app.after_load();
                 let picks = [
                     ("noto", "rocket", None, false),
@@ -289,7 +289,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 }
             }
             "empty" => {
-                app.editor.load(Document::default(), None);
+                app.editor.load(crate::app::new_document(&Document::default().theme), None);
                 app.after_load();
             }
             _ => {}
@@ -355,7 +355,7 @@ pub fn media_demo(app: &mut ZebraApp, which: &str) {
     use base64::Engine;
     use zebra_core::Origin;
     let h = Origin::Human;
-    app.editor.load(zebra_core::Document::default(), None);
+    app.editor.load(crate::app::new_document(&zebra_core::Document::default().theme), None);
     app.after_load();
     let ed = &mut app.editor;
     let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
