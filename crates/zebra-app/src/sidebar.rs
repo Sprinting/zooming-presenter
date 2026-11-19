@@ -2,10 +2,19 @@
 //! navigator), with the classic + / − list footer.
 //!
 //! Two highlight states (critique item 12):
-//! - **selected** (accent plate): the steps that show what is selected on
-//!   the canvas, or the step clicked last when nothing is selected;
-//! - **current** (grey plate): the step last visited or presented.
-use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2 as EVec2};
+//! - **selected**: the steps picked in the list, or those showing what is
+//!   selected on the canvas. In the accent while the list has the keys,
+//!   grey when the canvas has them (the macOS focus look);
+//! - **current** (light plate): the step last visited or presented.
+//!
+//! Keys go to the pane clicked last, as in Keynote's navigator (spec 08):
+//! clicking a step gives the list the keys, clicking the canvas gives them
+//! back. With the list focused, Up/Down and Home/End move the selected step,
+//! Shift+Up/Down grow a selection of several steps (one made by ⇧- or
+//! ⌘-click), Delete takes the selected steps out of the path, Escape hands
+//! the keys back. The step selection is by step number, apart from the
+//! canvas selection: a frame used by two steps lights only the one picked.
+use egui::{Align2, Color32, Modifiers, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2 as EVec2};
 use zebra_core::{Command, Mode, Origin, StepTarget, ViewCommand};
 
 use crate::actions::Action;
@@ -16,6 +25,16 @@ use crate::thumbs::{THUMB_H, THUMB_W};
 use crate::widgets as w;
 
 const H: Origin = Origin::Human;
+
+/// Several steps picked in the list (by number, sorted), the end a Shift
+/// range grows from, and the document revision they were picked at: any
+/// edit can renumber the steps, so it ends them.
+#[derive(Clone, Debug)]
+pub struct StepMulti {
+    pub steps: Vec<usize>,
+    pub anchor: usize,
+    pub revision: u64,
+}
 
 pub fn step_label(app: &ZebraApp, i: usize) -> String {
     let doc = &app.editor.doc;
@@ -40,8 +59,24 @@ pub fn step_after_removal(removed: usize, left: usize) -> Option<usize> {
     (left > 0).then(|| removed.min(left - 1))
 }
 
-/// Steps highlighted with the accent: those zooming to the canvas
-/// selection, else the step clicked last.
+/// The selection of several steps, while it still holds.
+fn multi(app: &ZebraApp) -> Option<&StepMulti> {
+    let n = app.editor.doc.path.len();
+    app.step_multi.as_ref().filter(|m| {
+        m.revision == app.editor.revision && m.anchor < n && m.steps.iter().all(|s| *s < n) && app.selected_step.is_some_and(|s| m.steps.contains(&s))
+    })
+}
+
+/// The steps picked in the list, by number (the canvas selection aside).
+pub fn step_selection(app: &ZebraApp) -> Vec<usize> {
+    if let Some(m) = multi(app) {
+        return m.steps.clone();
+    }
+    app.selected_step.filter(|s| *s < app.editor.doc.path.len()).into_iter().collect()
+}
+
+/// Steps highlighted: those zooming to the canvas selection, else the
+/// steps picked in the list.
 pub fn selected_steps(app: &ZebraApp) -> Vec<usize> {
     let sel = &app.editor.view.selection;
     if !sel.is_empty() {
@@ -50,7 +85,143 @@ pub fn selected_steps(app: &ZebraApp) -> Vec<usize> {
         v.dedup();
         return v;
     }
-    app.selected_step.filter(|s| *s < app.editor.doc.path.len()).into_iter().collect()
+    step_selection(app)
+}
+
+/// The path list has the keys: it was clicked last (not the canvas), it
+/// is on screen, and nothing is selected on the canvas.
+pub fn list_focused(app: &ZebraApp) -> bool {
+    app.path_focus && app.show_sidebar && app.editor.view.mode != Mode::Present && app.editor.view.selection.is_empty() && !app.editor.doc.path.is_empty()
+}
+
+/// Select one step and fly to it, as a click on its row does.
+pub fn select_step(app: &mut ZebraApp, i: usize) {
+    app.selected_step = Some(i);
+    app.step_multi = None;
+    if !app.editor.view.selection.is_empty() {
+        let _ = app.editor.view(ViewCommand::ClearSelection, H);
+    }
+    let _ = app.editor.view(ViewCommand::GotoStep { step: i }, H);
+}
+
+/// A click on step `i`'s row: ⇧ selects the range from the anchor, ⌘ adds
+/// or takes out one step, a plain click selects just that one.
+pub fn click_step(app: &mut ZebraApp, i: usize, m: Modifiers) {
+    app.path_focus = true;
+    let n = app.editor.doc.path.len();
+    let revision = app.editor.revision;
+    let anchor = multi(app).map(|m| m.anchor).or(app.selected_step).filter(|a| *a < n && app.editor.view.selection.is_empty());
+    if m.shift && anchor.is_some() {
+        let a = anchor.unwrap_or(i);
+        app.step_multi = Some(StepMulti { steps: (a.min(i)..=a.max(i)).collect(), anchor: a, revision });
+        app.selected_step = Some(i);
+    } else if m.command {
+        let mut steps = if app.editor.view.selection.is_empty() { step_selection(app) } else { vec![] };
+        if let Some(k) = steps.iter().position(|s| *s == i).filter(|_| steps.len() > 1) {
+            // Taken out: the list stays on a step still selected.
+            steps.remove(k);
+            let keep = steps[k.min(steps.len() - 1)];
+            app.step_multi = Some(StepMulti { steps, anchor: keep, revision });
+            app.selected_step = Some(keep);
+            return;
+        }
+        if !steps.contains(&i) {
+            steps.push(i);
+            steps.sort_unstable();
+        }
+        app.step_multi = Some(StepMulti { steps, anchor: i, revision });
+        app.selected_step = Some(i);
+    } else {
+        app.step_multi = None;
+        app.selected_step = Some(i);
+    }
+    if !app.editor.view.selection.is_empty() {
+        let _ = app.editor.view(ViewCommand::ClearSelection, H);
+    }
+    let _ = app.editor.view(ViewCommand::GotoStep { step: i }, H);
+}
+
+/// A key pressed while the list has the keys. True when the list used it.
+/// Delete and Escape come as actions (so the menus agree), not here.
+pub fn key(app: &mut ZebraApp, key: egui::Key, m: Modifiers) -> bool {
+    use egui::Key;
+    let n = app.editor.doc.path.len();
+    if n == 0 || m.command || m.alt || m.ctrl || m.mac_cmd {
+        return false;
+    }
+    match key {
+        Key::ArrowUp | Key::ArrowDown => {
+            let down = key == Key::ArrowDown;
+            let from = app.selected_step.filter(|s| *s < n);
+            let to = match from {
+                None => 0,
+                Some(c) if down => (c + 1).min(n - 1),
+                Some(c) => c.saturating_sub(1),
+            };
+            if m.shift {
+                // Grows a selection of several steps; with one step it
+                // does nothing (Shift isn't a way to start one).
+                if let Some(anchor) = multi(app).map(|m| m.anchor) {
+                    let revision = app.editor.revision;
+                    app.step_multi = Some(StepMulti { steps: (anchor.min(to)..=anchor.max(to)).collect(), anchor, revision });
+                    app.selected_step = Some(to);
+                    let _ = app.editor.view(ViewCommand::GotoStep { step: to }, H);
+                }
+                return true;
+            }
+            select_step(app, to);
+            true
+        }
+        Key::Home | Key::End if !m.shift => {
+            select_step(app, if key == Key::Home { 0 } else { n - 1 });
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Take steps out of the path (never their frames), as one undo step;
+/// the step after them is selected.
+pub fn remove_steps(app: &mut ZebraApp, steps: &[usize]) {
+    let Some(first) = steps.iter().min().copied() else { return };
+    let mut steps = steps.to_vec();
+    steps.sort_unstable();
+    steps.dedup();
+    let cmds: Vec<Command> = steps.iter().rev().map(|i| Command::RemoveStep { index: *i }).collect();
+    let r = app.editor.apply_batch(cmds, Some(crate::t!("sidebar-undo-remove-step", count = steps.len())), H);
+    if app.report(r).is_some() {
+        app.selected_step = step_after_removal(first, app.editor.doc.path.len());
+        app.step_multi = None;
+    }
+}
+
+/// Edit › Delete (and ⌫) with the list focused.
+pub fn delete_selected(app: &mut ZebraApp) {
+    let sel = step_selection(app);
+    remove_steps(app, &sel);
+    if let Some(s) = app.selected_step {
+        let _ = app.editor.view(ViewCommand::GotoStep { step: s }, H);
+    }
+}
+
+/// Edit › Select All with the list focused: every step.
+pub fn select_all_steps(app: &mut ZebraApp) {
+    let n = app.editor.doc.path.len();
+    if n == 0 {
+        return;
+    }
+    let cur = app.selected_step.filter(|s| *s < n).unwrap_or(0);
+    app.selected_step = Some(cur);
+    app.step_multi = Some(StepMulti { steps: (0..n).collect(), anchor: cur, revision: app.editor.revision });
+}
+
+/// Once a frame: something selected on the canvas (a toolbar insert, an
+/// undo) takes the keys from the list, so a later Escape doesn't hand them
+/// back to it.
+pub fn check_focus(app: &mut ZebraApp) {
+    if !app.editor.view.selection.is_empty() {
+        app.path_focus = false;
+    }
 }
 
 pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
@@ -99,6 +270,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     // The footer's − button may just have shortened the path: count again.
     let n = app.editor.doc.path.len();
     let selected = selected_steps(app);
+    let focused = list_focused(app);
     let current = if app.editor.view.mode == Mode::Present { app.editor.view.present.step } else { app.selected_step };
     let drag_id = app.uid("path-drag");
     // The row being dragged, with the step it was when the drag began: if
@@ -163,13 +335,22 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         if let Some(i) = scroll_to.filter(|i| *i < n) {
             ui.scroll_to_rect(rows[i], None);
         }
-        let first = ((view.min.y / pitch).floor().max(0.0) as usize).min(n);
-        let last = ((view.max.y / pitch).ceil().max(0.0) as usize).min(n);
-        app.thumbs.show(first..last);
+        let fs = ((view.min.y / pitch).floor().max(0.0) as usize).min(n);
+        let ls = ((view.max.y / pitch).ceil().max(0.0) as usize).min(n);
+        app.thumbs.show(fs..ls);
         // The row being dragged stays live when scrolled out of view.
-        let extra = dragging.filter(|d| !(first..last).contains(d));
-        let row = StepRow { tw, num_w, th, bg: style::c32(app.editor.theme().color(&"theme:background".into())), selected: &selected, current, flash };
-        for i in (first..last).chain(extra) {
+        let extra = dragging.filter(|d| !(fs..ls).contains(d));
+        let row = StepRow {
+            tw,
+            num_w,
+            th,
+            bg: style::c32(app.editor.theme().color(&"theme:background".into())),
+            selected: &selected,
+            focused,
+            current,
+            flash,
+        };
+        for i in (fs..ls).chain(extra) {
             // A row's menu can remove or add steps: the rows after it wait
             // for the next frame instead of reading steps that moved.
             if app.editor.doc.path.len() != n {
@@ -204,6 +385,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 if to != from && to < app.editor.doc.path.len() && from < app.editor.doc.path.len() {
                     app.apply(Command::MoveStep { from, to });
                     app.selected_step = Some(to);
+                    app.step_multi = None;
                 }
             }
             dragging = None;
@@ -237,6 +419,8 @@ struct StepRow<'a> {
     th: f32,
     bg: Color32,
     selected: &'a [usize],
+    /// The list has the keys: selected rows in the accent, else grey.
+    focused: bool,
     current: Option<usize>,
     flash: Option<(usize, f32)>,
 }
@@ -249,15 +433,17 @@ impl StepRow<'_> {
         let (tw, num_w, th) = (self.tw, self.num_w, self.th);
         let resp = ui.interact(r, app.uid("path-step").with(i), Sense::click_and_drag());
         let is_sel = self.selected.contains(&i);
+        let lit = is_sel && self.focused;
         let is_cur = self.current == Some(i);
         if ui.is_rect_visible(r) {
             let painter = ui.painter();
             let plate = r.shrink2(EVec2::new(0.0, 1.0));
-            if is_sel {
+            if lit {
                 painter.rect_filled(plate, 6.0, accent());
-            } else if is_cur {
+            } else if is_sel {
+                // Selected, but the keys are with the canvas: grey.
                 painter.rect_filled(plate, 6.0, p.pressed);
-            } else if resp.hovered() && dragging.is_none() {
+            } else if is_cur || (resp.hovered() && dragging.is_none()) {
                 painter.rect_filled(plate, 6.0, p.hover);
             }
             if let Some((fi, a)) = self.flash {
@@ -265,8 +451,8 @@ impl StepRow<'_> {
                     painter.rect_stroke(plate, 6.0, Stroke::new(2.0, accent().gamma_multiply(a)), egui::StrokeKind::Inside);
                 }
             }
-            let tc = if is_sel { w::on_accent() } else { p.text };
-            let wc = if is_sel { w::on_accent() } else { p.weak };
+            let tc = if lit { w::on_accent() } else { p.text };
+            let wc = if lit { w::on_accent() } else { p.weak };
             // Step number, top-left like Keynote's slide numbers.
             painter.text(Pos2::new(r.min.x + num_w / 2.0 + 1.0, r.min.y + 12.0), Align2::CENTER_CENTER, (i + 1).to_string(), style::semibold(11.0), tc);
             // Thumbnail.
@@ -276,7 +462,7 @@ impl StepRow<'_> {
                 let tint = if fresh && !app.thumbs.stale(app.editor.revision) { Color32::WHITE } else { Color32::from_white_alpha(200) };
                 painter.image(tex.id(), img_r.shrink(0.5), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
             }
-            painter.rect_stroke(img_r, 3.0, Stroke::new(1.0, if is_sel { Color32::from_white_alpha(160) } else { p.border }), egui::StrokeKind::Outside);
+            painter.rect_stroke(img_r, 3.0, Stroke::new(1.0, if lit { Color32::from_white_alpha(160) } else { p.border }), egui::StrokeKind::Outside);
             // Label and badges.
             let step = &app.editor.doc.path[i];
             let mut right = img_r.max.x;
@@ -298,11 +484,8 @@ impl StepRow<'_> {
             painter.with_clip_rect(clip).text(Pos2::new(img_r.min.x, ly), Align2::LEFT_CENTER, &label, style::ui_font(11.0), tc);
         }
         if resp.clicked() {
-            app.selected_step = Some(i);
-            if !app.editor.view.selection.is_empty() {
-                let _ = app.editor.view(ViewCommand::ClearSelection, H);
-            }
-            let _ = app.editor.view(ViewCommand::GotoStep { step: i }, H);
+            let m = ui.input(|i| i.modifiers);
+            click_step(app, i, m);
         }
         if resp.drag_started() {
             *dragging = Some(i);
@@ -319,6 +502,7 @@ impl StepRow<'_> {
             if w::menu_row(ui, None, &crate::t!("sidebar-select-on-canvas"), None, has_target).clicked() {
                 if let StepTarget::Element { id } = &app.editor.doc.path[i].target {
                     app.select(vec![id.clone()]);
+                    app.path_focus = false;
                 }
             }
             if matches!(&app.editor.doc.path[i].target, StepTarget::Overview) {
@@ -340,8 +524,7 @@ impl StepRow<'_> {
             }
             w::menu_separator(ui);
             if w::menu_item(ui, &crate::t!("sidebar-remove-from-path"), None).clicked() {
-                app.apply(Command::RemoveStep { index: i });
-                app.selected_step = step_after_removal(i, app.editor.doc.path.len());
+                remove_steps(app, &[i]);
             }
         });
     }
@@ -366,10 +549,7 @@ fn footer(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         let rm_tip = crate::t!("sidebar-remove-tip");
         let rm = footer_button(ui, Icon::Minus, !sel.is_empty(), p, &rm_tip).on_hover_text(rm_tip.as_str());
         if rm.clicked() {
-            let cmds: Vec<Command> = sel.iter().rev().map(|i| Command::RemoveStep { index: *i }).collect();
-            let r = app.editor.apply_batch(cmds, Some(crate::t!("sidebar-undo-remove-step")), H);
-            app.report(r);
-            app.selected_step = sel.first().and_then(|i| step_after_removal(*i, app.editor.doc.path.len()));
+            remove_steps(app, &sel);
         }
         ui.add_space(6.0);
         let more_tip = crate::t!("sidebar-more-tip");

@@ -543,6 +543,10 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
         app.canvas.refit_until = None;
     }
     let resp = ui.interact(rect, app.uid("zebra-canvas"), Sense::click_and_drag());
+    // A press on the canvas gives it the keys back from the path list.
+    if resp.hovered() && ui.input(|i| i.pointer.any_pressed()) {
+        app.path_focus = false;
+    }
     paint_content(app, ui, rect, false);
     if crate::media_ui::crop_active(app) {
         crate::media_ui::crop_interact(app, ui, &resp);

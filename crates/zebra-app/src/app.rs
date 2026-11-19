@@ -136,6 +136,11 @@ pub struct ZebraApp {
     pub library: crate::shape_library::Library,
     pub show_about: bool,
     pub selected_step: Option<usize>,
+    /// The path list has the keys (it was clicked last, not the canvas):
+    /// Keynote's navigator model, spec 08. See `sidebar::list_focused`.
+    pub path_focus: bool,
+    /// Several steps selected in the path list (⇧/⌘-click, Select All).
+    pub step_multi: Option<crate::sidebar::StepMulti>,
     /// Objects copied in any window (shared by all of them).
     pub clipboard: Arc<zebra_core::clip::Clip>,
     /// The text Copy put on the system clipboard: while it's still there,
@@ -353,6 +358,8 @@ impl ZebraApp {
             library: Default::default(),
             show_about: false,
             selected_step: None,
+            path_focus: false,
+            step_multi: None,
             clipboard: Default::default(),
             clipboard_marker: None,
             paste_count: 0,
@@ -688,13 +695,17 @@ impl ZebraApp {
                     }
                 }
             }
+            // Keys and menus go to the pane clicked last (spec 08).
+            Delete if crate::sidebar::list_focused(self) => crate::sidebar::delete_selected(self),
             Delete => {
                 let ids = self.editable_selection();
                 if !ids.is_empty() {
                     self.apply(Command::Delete { ids });
                 }
             }
+            SelectAll if crate::sidebar::list_focused(self) => crate::sidebar::select_all_steps(self),
             SelectAll => self.view_cmd(ViewCommand::SelectAll),
+            Deselect if crate::sidebar::list_focused(self) => self.path_focus = false,
             Deselect => {
                 if self.editor.view.mode == Mode::PathEdit {
                     self.view_cmd(ViewCommand::SetMode { mode: Mode::Edit });
@@ -1182,6 +1193,8 @@ impl ZebraApp {
     pub fn after_load(&mut self) {
         self.media.stop_all();
         self.selected_step = None;
+        self.path_focus = false;
+        self.step_multi = None;
         self.canvas = CanvasState::default();
         self.thumbs.clear();
         self.recovered = None;
@@ -1378,6 +1391,7 @@ impl ZebraApp {
         crate::media_ui::tick(self);
         self.handle_close(&ctx);
         self.sync_present_mode(&ctx);
+        crate::sidebar::check_focus(self);
 
         if self.editor.view.mode == Mode::Present {
             crate::present::ui(self, ui);
@@ -1468,6 +1482,11 @@ impl ZebraApp {
         let events = ctx.input(|i| i.events.clone());
         for ev in events {
             let egui::Event::Key { key, pressed: true, modifiers, .. } = ev else { continue };
+            // The path list has the keys: Up/Down/Home/End move through the
+            // steps (Delete and Escape reach it as actions, below).
+            if !text_focus && self.palette.is_none() && crate::sidebar::list_focused(self) && crate::sidebar::key(self, key, modifiers) {
+                continue;
+            }
             // Arrow keys: nudge selection (screen-relative), else pan.
             if !text_focus && self.palette.is_none() {
                 let arrow = match key {
