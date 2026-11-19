@@ -72,8 +72,15 @@ fn build_player() -> Result<Vec<u8>, String> {
         .arg("--target-dir")
         .arg(&target_dir);
     // Flags meant for the outer (native) build must not reach the player.
+    // (DSYM=1 bundles set CARGO_PROFILE_RELEASE_DEBUG: debug info would
+    // double the player.)
     for v in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "CARGO_TARGET_DIR", "RUSTC_WORKSPACE_WRAPPER"] {
         cmd.env_remove(v);
+    }
+    for (k, _) in std::env::vars_os() {
+        if k.to_string_lossy().starts_with("CARGO_PROFILE_") {
+            cmd.env_remove(k);
+        }
     }
     let status = cmd.status().map_err(|e| format!("cargo: {e}"))?;
     if !status.success() {

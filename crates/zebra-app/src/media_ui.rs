@@ -59,6 +59,8 @@ pub struct Media {
     reported: HashSet<String>,
     /// Background work that ends with a message (exports).
     pub background: Vec<Receiver<String>>,
+    /// Web page exports under way (File > Export > Web Page).
+    pub web_exports: Vec<Receiver<Result<zebra_web::export::Written, String>>>,
 }
 
 struct Insert {
@@ -86,6 +88,7 @@ impl Default for Media {
             crop: None,
             reported: HashSet::new(),
             background: vec![],
+            web_exports: vec![],
         }
     }
 }
@@ -232,6 +235,21 @@ pub fn tick(app: &mut ZebraApp) {
     });
     for m in msgs {
         app.toast(m);
+    }
+    let mut pages = vec![];
+    app.media.web_exports.retain(|rx| match rx.try_recv() {
+        Ok(r) => {
+            pages.push(r);
+            false
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => true,
+        Err(_) => false,
+    });
+    for r in pages {
+        match r {
+            Ok(w) => crate::sheets::request(app, crate::sheets::SheetKind::WebExported { page: w.page, folder: w.folder }),
+            Err(e) => app.toast(crate::t!("export-toast-failed", error = e)),
+        }
     }
 
     // Finished inserts.

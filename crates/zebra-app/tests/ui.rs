@@ -632,3 +632,33 @@ fn right_click_menu_selects_and_acts() {
     h.run_steps(3);
     assert!(h.state().editor.doc.get("a").unwrap().group.is_some());
 }
+
+#[test]
+fn web_export_sheet_offers_the_browser() {
+    use zebra_app::sheets::SheetKind;
+    let mut h = harness(Some("sample"));
+    h.run_steps(5);
+    // The toolbar's Export menu lists the web page.
+    h.get_by_label("Export").click();
+    h.run_steps(3);
+    h.get_by_label("Web Page (HTML)…");
+    if let Some(dir) = std::env::var_os("ZEBRA_SHOTS") {
+        h.render().unwrap().save(std::path::Path::new(&dir).join("export-menu.png")).unwrap();
+    }
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    for folder in [false, true] {
+        let page = if folder { "/tmp/Talk/index.html" } else { "/tmp/Talk.html" };
+        zebra_app::sheets::request(h.state_mut(), SheetKind::WebExported { page: page.into(), folder });
+        h.run_steps(3);
+        h.get_by_label("Open in Browser");
+        let title = if folder { "Exported “Talk”" } else { "Exported “Talk.html”" };
+        h.get_by_label(title);
+        if let Some(dir) = std::env::var_os("ZEBRA_SHOTS") {
+            h.render().unwrap().save(std::path::Path::new(&dir).join(format!("export-sheet{}.png", if folder { "-folder" } else { "" }))).unwrap();
+        }
+        h.get_by_label("Done").click();
+        h.run_steps(3);
+        assert!(h.state().sheet.is_none());
+    }
+}

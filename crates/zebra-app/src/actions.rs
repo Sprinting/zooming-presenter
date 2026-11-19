@@ -21,6 +21,8 @@ pub enum Action {
     SaveAs,
     ExportPdf,
     ExportPng,
+    /// File > Export > Web Page (HTML)…
+    ExportHtml,
     Close,
     Quit,
     // Edit
@@ -126,6 +128,7 @@ impl Action {
             SaveAs => crate::t!("action-save-as"),
             ExportPdf => crate::t!("action-export-pdf"),
             ExportPng => crate::t!("action-export-png"),
+            ExportHtml => crate::t!("action-export-html"),
             Close => crate::t!("action-close"),
             Quit => crate::t!("action-quit"),
             Undo => crate::t!("action-undo"),
@@ -209,7 +212,7 @@ impl Action {
     pub fn palette() -> Vec<Action> {
         use Action::*;
         let mut v = vec![
-            New, NewFromSample, ShowTemplates, SaveAsTemplate, Open, Save, SaveAs, ExportPdf, ExportPng, Undo, Redo, Cut, Copy, Paste, Duplicate, Delete,
+            New, NewFromSample, ShowTemplates, SaveAsTemplate, Open, Save, SaveAs, ExportPdf, ExportPng, ExportHtml, Undo, Redo, Cut, Copy, Paste, Duplicate, Delete,
             SelectAll, Deselect,
         ];
         for t in TOOLS {

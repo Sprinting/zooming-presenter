@@ -23,6 +23,26 @@ pub fn system_reduce_motion() -> bool {
     }
 }
 
+/// Open a file in the default web browser (the app that opens https
+/// links), whatever opens .html files: an exported web page.
+#[cfg(target_os = "macos")]
+pub fn open_in_browser(page: &std::path::Path) {
+    use objc2_app_kit::{NSWorkspace, NSWorkspaceOpenConfiguration};
+    use objc2_foundation::{NSArray, NSString, NSURL};
+    let ws = NSWorkspace::sharedWorkspace();
+    let file = NSURL::fileURLWithPath(&NSString::from_str(&page.to_string_lossy()));
+    let browser = NSURL::URLWithString(&NSString::from_str("https://example.com")).and_then(|u| ws.URLForApplicationToOpenURL(&u));
+    match browser {
+        Some(app) => {
+            let urls = NSArray::from_retained_slice(&[file]);
+            ws.openURLs_withApplicationAtURL_configuration_completionHandler(&urls, &app, &NSWorkspaceOpenConfiguration::configuration(), None);
+        }
+        None => {
+            ws.openURL(&file);
+        }
+    }
+}
+
 /// Height of a document window's title row: the part at the top that
 /// AppKit draws over our content. That is the title bar (28 pt) and, when
 /// the window is one of several tabs, the tab bar under it. With a fixed

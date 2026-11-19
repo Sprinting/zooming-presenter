@@ -357,7 +357,11 @@ impl Shell {
     fn pump(&mut self, ctx: &egui::Context) {
         let api = self.shared.api.clone();
         match (&api, &mut self.dispatcher) {
-            (Some(_), None) => self.dispatcher = Some(zebra_api::Dispatcher::new(self.windows[0].renderer.clone())),
+            (Some(_), None) => {
+                let mut d = zebra_api::Dispatcher::new(self.windows[0].renderer.clone());
+                d.web_labels = crate::files::web_labels();
+                self.dispatcher = Some(d);
+            }
             (None, Some(d)) => {
                 d.shutdown_docs(&mut Docs { windows: &mut self.windows, front: self.front, next_id: &mut self.next_id, shared: &self.shared, empty: &mut self.empty, ctx: ctx.clone() });
                 self.dispatcher = None;

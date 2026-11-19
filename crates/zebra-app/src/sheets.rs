@@ -30,6 +30,8 @@ pub enum SheetKind {
     AutoPath,
     RevertAgent { name: String },
     RaisePermission,
+    /// A web page was exported: offer to open it in the browser.
+    WebExported { page: std::path::PathBuf, folder: bool },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -86,6 +88,17 @@ fn spec(app: &ZebraApp, k: &SheetKind) -> Spec {
             buttons: vec![(crate::t!("sheet-allow-full-control"), Role::Default), (crate::t!("sheet-cancel"), Role::Cancel)],
             warning: true,
         },
+        SheetKind::WebExported { page, folder } => {
+            // A folder export is named by its folder; index.html says nothing.
+            let shown = if *folder { page.parent().unwrap_or(page) } else { page.as_path() };
+            let name = shown.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            Spec {
+                title: crate::t!("sheet-web-exported-title", name = name),
+                message: if *folder { crate::t!("sheet-web-exported-folder-message") } else { crate::t!("sheet-web-exported-message") },
+                buttons: vec![(crate::t!("sheet-open-in-browser"), Role::Default), (crate::t!("sheet-done"), Role::Cancel)],
+                warning: false,
+            }
+        }
     }
 }
 
@@ -128,6 +141,11 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
                 if n == 0 {
                     app.toast(crate::t!("sheet-toast-nothing-to-revert", name = name.as_str()));
                 }
+            }
+        }
+        SheetKind::WebExported { page, .. } => {
+            if label == crate::t!("sheet-open-in-browser") {
+                crate::files::open_in_browser(&page);
             }
         }
         SheetKind::RaisePermission => {

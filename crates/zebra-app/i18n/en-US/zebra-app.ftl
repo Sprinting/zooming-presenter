@@ -79,9 +79,10 @@ toolbar-format = Format
 toolbar-format-tip-hide = Hide the inspector
 toolbar-format-tip-show = Show the inspector
 toolbar-export = Export
-toolbar-export-tip = Export as PDF or PNG
+toolbar-export-tip = Export as PDF, PNG or web page
 toolbar-export-pdf = PDF…
 toolbar-export-png = PNG of Current View…
+toolbar-export-html = Web Page (HTML)…
 toolbar-theme = Theme
 toolbar-theme-tip = Change the presentation's colours and fonts
 toolbar-view = View
@@ -374,6 +375,18 @@ sheet-toast-nothing-to-revert = { $name } has no changes to revert.
 export-toast-exporting = Exporting…
 export-toast-exported = Exported { $path }
 export-toast-failed = Export failed: { $error }
+app-file-filter-html = Web page
+# After File > Export > Web Page. { $name } is the page or folder.
+sheet-web-exported-title = Exported “{ $name }”
+sheet-web-exported-message = One file that opens in any current browser.
+sheet-web-exported-folder-message = Saved as a folder: the video and audio are beside the page. Share the whole folder.
+sheet-open-in-browser = Open in Browser
+sheet-done = Done
+# The exported web page's control bar.
+web-full-screen = Full Screen
+web-play = Play
+web-pause = Pause
+web-unsupported = This browser can’t show this presentation. Try a current Safari, Chrome or Firefox.
 
 ## ---- end files.rs ----
 
@@ -700,6 +713,7 @@ action-save = Save
 action-save-as = Save As…
 action-export-pdf = Export PDF…
 action-export-png = Export View as PNG…
+action-export-html = Export Web Page (HTML)…
 action-close = Close
 action-quit = Quit Zebra
 action-undo = Undo
