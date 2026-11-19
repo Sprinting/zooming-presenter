@@ -14,8 +14,14 @@
 //! ⌘-click), Delete takes the selected steps out of the path, Escape hands
 //! the keys back. The step selection is by step number, apart from the
 //! canvas selection: a frame used by two steps lights only the one picked.
+//!
+//! Insert between steps: hovering the gap between two rows shows an
+//! insertion line with a +. It inserts an empty row that waits for a frame:
+//! the next frame clicked or drawn on the canvas fills it, as one undo step.
+//! Escape, a click on empty canvas or elsewhere in the sidebar cancels it.
+//! The empty row is never part of the document.
 use egui::{Align2, Color32, Modifiers, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2 as EVec2};
-use zebra_core::{Command, Mode, Origin, StepTarget, ViewCommand};
+use zebra_core::{Command, ElementId, Mode, Origin, StepTarget, ViewCommand};
 
 use crate::actions::Action;
 use crate::app::ZebraApp;
@@ -34,6 +40,19 @@ pub struct StepMulti {
     pub steps: Vec<usize>,
     pub anchor: usize,
     pub revision: u64,
+}
+
+/// An empty step waiting for a frame, shown as its own row before step
+/// `index`. Interface state only: never saved, never seen by agents.
+#[derive(Clone, Debug)]
+pub struct Pick {
+    pub index: usize,
+    /// The path as it was when the insert began: if it changes (an agent,
+    /// Undo) the place no longer means what it did, and the insert ends.
+    path_len: usize,
+    loads: u64,
+    /// The list has scrolled the empty row into view.
+    shown: bool,
 }
 
 pub fn step_label(app: &ZebraApp, i: usize) -> String {
@@ -215,16 +234,89 @@ pub fn select_all_steps(app: &mut ZebraApp) {
     app.step_multi = Some(StepMulti { steps: (0..n).collect(), anchor: cur, revision: app.editor.revision });
 }
 
+/// Start inserting a step before step `index` (or at the end): an empty
+/// row waits for a frame.
+pub fn start_pick(app: &mut ZebraApp, index: usize) {
+    let n = app.editor.doc.path.len();
+    app.step_pick = Some(Pick { index: index.min(n), path_len: n, loads: app.editor.loads, shown: false });
+    app.step_multi = None;
+    app.path_focus = true;
+}
+
+/// Drop the empty row; nothing was changed, so there is nothing to undo.
+pub fn cancel_pick(app: &mut ZebraApp) {
+    app.step_pick = None;
+}
+
 /// Once a frame: something selected on the canvas (a toolbar insert, an
 /// undo) takes the keys from the list, so a later Escape doesn't hand them
-/// back to it.
+/// back to it. And an insert ends when its place no longer means what it
+/// did, or it can't be finished from here.
 pub fn check_focus(app: &mut ZebraApp) {
     if !app.editor.view.selection.is_empty() {
         app.path_focus = false;
     }
+    check_pick(app);
+}
+
+fn check_pick(app: &mut ZebraApp) {
+    if let Some(pk) = &app.step_pick {
+        if pk.path_len != app.editor.doc.path.len() || pk.loads != app.editor.loads || app.editor.view.mode == Mode::Present || !app.show_sidebar {
+            app.step_pick = None;
+        }
+    }
+}
+
+/// Fill the empty row with a frame that is already there.
+pub fn fill_pick(app: &mut ZebraApp, id: ElementId) -> bool {
+    let Some(pk) = app.step_pick.take() else { return false };
+    let cmd = Command::AddStep { target: StepTarget::Element { id }, index: Some(pk.index), builds: vec![], notes: String::new() };
+    let r = app.editor.apply_batch(vec![cmd], Some(crate::t!("sidebar-undo-insert-step")), H);
+    if app.report(r).is_none() {
+        return false;
+    }
+    app.selected_step = Some(pk.index);
+    app.step_multi = None;
+    true
+}
+
+/// A frame drawn (or inserted) while a row waits: the frame and its step
+/// are one undo step. `cmd` adds the frame.
+pub fn add_frame_for_pick(app: &mut ZebraApp, cmd: Command) -> Option<zebra_core::Outcome> {
+    let Some(pk) = app.step_pick.take() else { return app.apply(cmd) };
+    if let Err(e) = app.editor.begin(crate::t!("sidebar-undo-insert-step"), H) {
+        app.report::<()>(Err(e));
+        return None;
+    }
+    let r = app.editor.apply(cmd, H).and_then(|out| {
+        let id = out.created.first().cloned().ok_or_else(|| zebra_core::ZError::new("internal", "no frame was made"))?;
+        app.editor.apply(Command::AddStep { target: StepTarget::Element { id }, index: Some(pk.index), builds: vec![], notes: String::new() }, H)?;
+        Ok(out)
+    });
+    match r {
+        Ok(out) => {
+            app.editor.commit_as(&H);
+            app.selected_step = Some(pk.index);
+            app.step_multi = None;
+            Some(out)
+        }
+        Err(e) => {
+            app.editor.abort_as(&H);
+            app.report::<()>(Err(e));
+            None
+        }
+    }
+}
+
+/// The frame of the canvas selection, for Add Step After This One.
+fn selected_frame(app: &ZebraApp) -> Option<ElementId> {
+    app.top_level(&app.selection()).into_iter().find(|id| app.editor.doc.get(id).is_some_and(|e| e.is_frame()))
 }
 
 pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
+    check_pick(app);
+    let had_pick = app.step_pick.is_some();
+    let side = ui.max_rect();
     let n = app.editor.doc.path.len();
     let editing = app.editor.view.mode == Mode::PathEdit;
 
@@ -268,6 +360,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     }
 
     // The footer's − button may just have shortened the path: count again.
+    check_pick(app);
     let n = app.editor.doc.path.len();
     let selected = selected_steps(app);
     let focused = list_focused(app);
@@ -279,6 +372,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let held: Option<(usize, zebra_core::PathStep)> = ui.ctx().data(|d| d.get_temp(drag_id));
     let mut dragging: Option<usize> = held.as_ref().filter(|(i, was)| app.editor.doc.path.get(*i) == Some(was)).map(|(i, _)| *i);
     let mut rows: Vec<Rect> = vec![];
+    let mut empty_row: Option<Rect> = None;
     let pointer = ui.ctx().pointer_hover_pos();
     // Scroll to a step the camera was sent to (by anyone: an agent's
     // goto_step too), else to the selected or current step when it changes.
@@ -304,6 +398,10 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     } else {
         app.flash_step = None;
     }
+    // The empty row of an insert takes a place of its own in the list.
+    let gap_at = app.step_pick.as_ref().map(|pk| pk.index);
+    let slots = n + gap_at.is_some() as usize;
+    let mut insert_at: Option<usize> = None;
 
     // Only the rows in view are laid out (and their thumbnails drawn): a
     // long path costs what a short one does. Rows are all one height, so
@@ -323,20 +421,35 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             return;
         }
         let tw = ui.available_width();
-        let num_w = number_column_width(ui, n);
+        let num_w = number_column_width(ui, slots);
         app.step_number_w = num_w;
         let th = (tw - num_w - 6.0) * THUMB_H as f32 / THUMB_W as f32;
         let row_h = th + 26.0;
         // As the rows were spaced when each was allocated in turn.
         let pitch = row_h + 2.0 + ui.spacing().item_spacing.y;
         let origin = ui.max_rect().min;
-        rows = (0..n).map(|i| Rect::from_min_size(origin + EVec2::new(0.0, i as f32 * pitch), EVec2::new(tw, row_h))).collect();
-        ui.allocate_space(EVec2::new(tw, n as f32 * pitch));
-        if let Some(i) = scroll_to.filter(|i| *i < n) {
+        let slot_rect = |k: usize| Rect::from_min_size(origin + EVec2::new(0.0, k as f32 * pitch), EVec2::new(tw, row_h));
+        // Step i's place in the list, after the empty row if there is one.
+        let slot = |i: usize| i + gap_at.is_some_and(|g| i >= g) as usize;
+        rows = (0..n).map(|i| slot_rect(slot(i))).collect();
+        empty_row = gap_at.map(slot_rect);
+        ui.allocate_space(EVec2::new(tw, slots as f32 * pitch));
+        if let Some(pk) = app.step_pick.as_mut().filter(|pk| !pk.shown) {
+            pk.shown = true;
+            if let Some(r) = empty_row {
+                ui.scroll_to_rect(r, None);
+            }
+        } else if let Some(i) = scroll_to.filter(|i| *i < n) {
             ui.scroll_to_rect(rows[i], None);
         }
-        let fs = ((view.min.y / pitch).floor().max(0.0) as usize).min(n);
-        let ls = ((view.max.y / pitch).ceil().max(0.0) as usize).min(n);
+        let first = ((view.min.y / pitch).floor().max(0.0) as usize).min(slots);
+        let last = ((view.max.y / pitch).ceil().max(0.0) as usize).min(slots);
+        // The steps in those places.
+        let step_of = |k: usize| match gap_at {
+            Some(g) if k > g => k - 1,
+            _ => k,
+        };
+        let (fs, ls) = (step_of(first).min(n), step_of(last).min(n));
         app.thumbs.show(fs..ls);
         // The row being dragged stays live when scrolled out of view.
         let extra = dragging.filter(|d| !(fs..ls).contains(d));
@@ -349,6 +462,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             focused,
             current,
             flash,
+            picking: gap_at.is_some(),
         };
         for i in (fs..ls).chain(extra) {
             // A row's menu can remove or add steps: the rows after it wait
@@ -357,9 +471,51 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 ui.ctx().request_repaint();
                 break;
             }
-            row.ui(app, ui, p, i, rows[i], n, &mut dragging);
+            row.ui(app, ui, p, i, slot(i) + 1, rows[i], n, &mut dragging);
+        }
+        if let (Some(r), Some(g)) = (empty_row, gap_at) {
+            if ui.is_rect_visible(r) {
+                empty_step_row(ui, app.uid("path-empty-step"), p, r, num_w, th, g + 1);
+            }
+        }
+        // Insert between steps: the gap nearest the pointer shows an
+        // insertion line with a + (Keynote's navigator).
+        let idle = dragging.is_none() && gap_at.is_none() && app.editor.doc.path.len() == n && n >= 2;
+        if let Some(pp) = pointer.filter(|pp| idle && ui.clip_rect().contains(*pp) && pp.x >= origin.x && pp.x <= origin.x + tw) {
+            let k = ((pp.y - origin.y) / pitch).round();
+            if k >= 1.0 && (k as usize) < n {
+                let k = k as usize;
+                let y = (rows[k - 1].max.y + rows[k].min.y) / 2.0;
+                if (pp.y - y).abs() <= 7.0 {
+                    let c = Pos2::new(origin.x + num_w / 2.0 + 1.0, y);
+                    let tip = crate::t!("sidebar-insert-step-tip");
+                    let resp = ui.interact(Rect::from_center_size(c, EVec2::new(20.0, 16.0)), app.uid("path-insert"), Sense::click());
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &tip));
+                    let painter = ui.painter();
+                    let col = if resp.is_pointer_button_down_on() { accent().gamma_multiply(0.8) } else { accent() };
+                    painter.line_segment([Pos2::new(c.x + 7.0, y), Pos2::new(origin.x + tw - 2.0, y)], Stroke::new(2.0, col));
+                    painter.circle_filled(c, 6.0, col);
+                    let s = Stroke::new(1.5, w::on_accent());
+                    painter.line_segment([c - EVec2::new(3.0, 0.0), c + EVec2::new(3.0, 0.0)], s);
+                    painter.line_segment([c - EVec2::new(0.0, 3.0), c + EVec2::new(0.0, 3.0)], s);
+                    if resp.on_hover_text(tip).clicked() {
+                        insert_at = Some(k);
+                    }
+                }
+            }
         }
     });
+    if let Some(k) = insert_at {
+        start_pick(app, k);
+        ui.ctx().request_repaint();
+    }
+    // A press anywhere else in the sidebar cancels a waiting insert.
+    if had_pick && app.step_pick.is_some() {
+        let press = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+        if press.is_some_and(|pp| side.contains(pp) && !empty_row.is_some_and(|r| r.contains(pp))) {
+            cancel_pick(app);
+        }
+    }
 
     // Drag to reorder: an accent insertion line between rows.
     if let Some(from) = dragging {
@@ -412,6 +568,24 @@ pub fn number_column_width(ui: &Ui, n: usize) -> f32 {
     (widest + 10.0).max(22.0).ceil()
 }
 
+/// The empty row of an insert: a dashed place for the frame to come.
+fn empty_step_row(ui: &mut Ui, id: egui::Id, p: &Palette, r: Rect, num_w: f32, th: f32, number: usize) {
+    let resp = ui.interact(r, id, Sense::hover());
+    let painter = ui.painter();
+    let plate = r.shrink2(EVec2::new(0.0, 1.0));
+    painter.rect_filled(plate, 6.0, p.hover);
+    painter.text(Pos2::new(r.min.x + num_w / 2.0 + 1.0, r.min.y + 12.0), Align2::CENTER_CENTER, number.to_string(), style::semibold(11.0), p.weak);
+    let img_r = Rect::from_min_size(r.min + EVec2::new(num_w, 5.0), EVec2::new(r.width() - num_w - 6.0, th));
+    let q = [img_r.left_top(), img_r.right_top(), img_r.right_bottom(), img_r.left_bottom(), img_r.left_top()];
+    painter.extend(egui::Shape::dashed_line(&q, Stroke::new(1.5, accent()), 5.0, 4.0));
+    let text = crate::t!("sidebar-pick-a-frame");
+    let icon = Rect::from_center_size(img_r.center() - EVec2::new(0.0, 10.0), EVec2::splat(18.0));
+    paint_icon(painter, icon, Icon::Frame(zebra_core::FrameStyle::Rectangle), accent());
+    painter.text(img_r.center() + EVec2::new(0.0, 12.0), Align2::CENTER_CENTER, &text, style::ui_font(11.0), p.text);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ListItem, true, &text));
+    resp.on_hover_text(crate::t!("sidebar-pick-a-frame-tip"));
+}
+
 /// What every step row needs to know, worked out once per frame.
 struct StepRow<'a> {
     tw: f32,
@@ -423,15 +597,18 @@ struct StepRow<'a> {
     focused: bool,
     current: Option<usize>,
     flash: Option<(usize, f32)>,
+    /// An insert waits for a frame: rows don't drag.
+    picking: bool,
 }
 
 impl StepRow<'_> {
-    /// Step `i`'s row in `r`: plate, number, thumbnail, label and badges,
-    /// click, drag and its context menu.
+    /// Step `i`'s row in `r`, shown as number `number`: plate, number,
+    /// thumbnail, label and badges, click, drag and its context menu.
     #[allow(clippy::too_many_arguments)]
-    fn ui(&self, app: &mut ZebraApp, ui: &mut Ui, p: &Palette, i: usize, r: Rect, n: usize, dragging: &mut Option<usize>) {
+    fn ui(&self, app: &mut ZebraApp, ui: &mut Ui, p: &Palette, i: usize, number: usize, r: Rect, n: usize, dragging: &mut Option<usize>) {
         let (tw, num_w, th) = (self.tw, self.num_w, self.th);
-        let resp = ui.interact(r, app.uid("path-step").with(i), Sense::click_and_drag());
+        let sense = if self.picking { Sense::click() } else { Sense::click_and_drag() };
+        let resp = ui.interact(r, app.uid("path-step").with(i), sense);
         let is_sel = self.selected.contains(&i);
         let lit = is_sel && self.focused;
         let is_cur = self.current == Some(i);
@@ -454,7 +631,7 @@ impl StepRow<'_> {
             let tc = if lit { w::on_accent() } else { p.text };
             let wc = if lit { w::on_accent() } else { p.weak };
             // Step number, top-left like Keynote's slide numbers.
-            painter.text(Pos2::new(r.min.x + num_w / 2.0 + 1.0, r.min.y + 12.0), Align2::CENTER_CENTER, (i + 1).to_string(), style::semibold(11.0), tc);
+            painter.text(Pos2::new(r.min.x + num_w / 2.0 + 1.0, r.min.y + 12.0), Align2::CENTER_CENTER, number.to_string(), style::semibold(11.0), tc);
             // Thumbnail.
             let img_r = Rect::from_min_size(r.min + EVec2::new(num_w, 5.0), EVec2::new(tw - num_w - 6.0, th));
             painter.rect_filled(img_r, 3.0, self.bg);
@@ -487,7 +664,7 @@ impl StepRow<'_> {
             let m = ui.input(|i| i.modifiers);
             click_step(app, i, m);
         }
-        if resp.drag_started() {
+        if resp.drag_started() && !self.picking {
             *dragging = Some(i);
         }
         let resp = if resp.hovered() { resp.on_hover_text(crate::t!("sidebar-step-tip", number = ((i + 1) as u64), label = step_label(app, i))) } else { resp };
@@ -512,6 +689,20 @@ impl StepRow<'_> {
                 }
             }
             w::menu_separator(ui);
+            // The frame selected on the canvas, else an empty step that
+            // waits for one to be clicked or drawn.
+            if w::menu_item(ui, &crate::t!("sidebar-add-step-after"), None).clicked() {
+                match selected_frame(app) {
+                    Some(id) => {
+                        let cmd = Command::AddStep { target: StepTarget::Element { id }, index: Some(i + 1), builds: vec![], notes: String::new() };
+                        if app.apply(cmd).is_some() {
+                            app.selected_step = Some(i + 1);
+                            app.step_multi = None;
+                        }
+                    }
+                    None => start_pick(app, i + 1),
+                }
+            }
             if w::menu_item(ui, &crate::t!("sidebar-duplicate-step"), None).clicked() {
                 let s = app.editor.doc.path[i].clone();
                 app.apply(Command::AddStep { target: s.target, index: Some(i + 1), builds: vec![], notes: s.notes });

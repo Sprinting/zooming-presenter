@@ -577,6 +577,15 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     let handle_under = pointer.and_then(|p| sb.as_ref().and_then(|b| hit_handle(b, p)));
     let badge_under = if path_mode { pointer.and_then(|p| badge_at(app, p)) } else { None };
     app.canvas.step_hover = badge_under;
+    // A step waits for a frame: the frame a click here would give it.
+    let pick_hover = match (&app.canvas.gesture, pointer) {
+        (Gesture::None, Some(p)) if app.step_pick.is_some() && matches!(tool, Tool::Select | Tool::Hand) => pick_target(app, p),
+        _ => None,
+    };
+    if app.step_pick.is_some() {
+        // Only the frame a click would pick shows as hovered (with its chip).
+        app.canvas.hover = pick_hover.clone();
+    }
 
     // Enter edits the selected text.
     if !text_focus && app.canvas.text.is_none() && ctx.input(|i| i.key_pressed(Key::Enter) && i.modifiers.is_none()) {
@@ -618,7 +627,9 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     // ---- clicks
     if resp.clicked() {
         if let Some(p) = resp.interact_pointer_pos() {
-            if app.canvas.text.is_some() {
+            if app.step_pick.is_some() && pick_click(app, p) {
+                // The waiting step took the frame, or the insert ended.
+            } else if app.canvas.text.is_some() {
                 commit_text_edit(app);
             } else if app.canvas.agent_edge.is_some_and(|r| r.contains(p)) && app.editor.agent_cursor.is_some() {
                 let c = app.editor.agent_cursor.unwrap_or_default();
@@ -676,7 +687,9 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
         (_, Some(Handle::Body)) => CursorIcon::Move,
         _ => CursorIcon::Default,
     };
-    let cursor = if pointer.is_some_and(|p| app.canvas.agent_edge.is_some_and(|r| r.contains(p)) || app.canvas.chip_chevron.is_some_and(|r| r.contains(p))) {
+    let cursor = if pick_hover.is_some()
+        || pointer.is_some_and(|p| app.canvas.agent_edge.is_some_and(|r| r.contains(p)) || app.canvas.chip_chevron.is_some_and(|r| r.contains(p)))
+    {
         CursorIcon::PointingHand
     } else {
         cursor
@@ -688,6 +701,11 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     // ---- overlays
     let painter = ui.painter_at(rect);
     draw_overlays(app, &painter, path_mode, zoom);
+    if let Some(e) = pick_hover.as_ref().and_then(|id| app.editor.doc.get(id)) {
+        let mut q = outline_screen(app, e);
+        q.push(q[0]);
+        painter.add(Shape::line(q, Stroke::new(2.0, style::accent())));
+    }
     rename_overlay(app, ui);
     text_overlay(app, &ctx);
 }
@@ -727,7 +745,8 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
     let ed = &app.editor;
     let tool = ed.view.tool;
     let world = app.canvas.s2w(ed, start);
-    if space || tool == Tool::Hand {
+    // While a step waits for a frame, dragging looks around for one.
+    if space || tool == Tool::Hand || (app.step_pick.is_some() && tool == Tool::Select) {
         app.canvas.gesture = Gesture::Pan;
         return;
     }
@@ -984,7 +1003,8 @@ pub fn insert_frame(app: &mut ZebraApp) {
     };
     let at = app.editor.doc.free_spot(at, bw, bh);
     let el = NewElement { id: None, x: at.x, y: at.y, scale: s, rotation: cam.rotation, w: Some(w), h: Some(h), name: String::new(), kind: ElementKind::Frame(FrameData { style, color: None }) };
-    if let Some(out) = app.apply(Command::AddElement { element: el }) {
+    // A step waiting for a frame takes this one (one undo step for both).
+    if let Some(out) = crate::sidebar::add_frame_for_pick(app, Command::AddElement { element: el }) {
         app.select(out.created);
         reveal_selection(app);
     }
@@ -1073,7 +1093,10 @@ fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
         center = app.editor.doc.free_spot(center, bw, bh);
     }
     let el = NewElement { id: None, x: center.x, y: center.y, scale: s, rotation, w: Some(w), h: Some(h), name: String::new(), kind };
-    if let Some(out) = app.apply(Command::AddElement { element: el }) {
+    let cmd = Command::AddElement { element: el };
+    // A drawn frame fills a step waiting for one (one undo step for both).
+    let out = if is_frame { crate::sidebar::add_frame_for_pick(app, cmd) } else { app.apply(cmd) };
+    if let Some(out) = out {
         app.select(out.created.clone());
         if is_frame {
             let n = out.created.first().map(|id| app.editor.frame_contents(id).len()).unwrap_or(0);
@@ -1083,6 +1106,43 @@ fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
         }
     }
     let _ = app.editor.view(ViewCommand::SetTool { tool: Tool::Select }, H);
+}
+
+/// The frame a click at `p` gives a step waiting for one: the frame
+/// clicked, or the one around the object clicked.
+fn pick_target(app: &ZebraApp, p: Pos2) -> Option<ElementId> {
+    if let Some((r, id)) = &app.canvas.frame_chip {
+        if r.contains(p) {
+            return Some(id.clone());
+        }
+    }
+    let id = hit(app, p, true)?;
+    if app.editor.doc.get(&id)?.is_frame() {
+        return Some(id);
+    }
+    app.editor.parent_frame(&id)
+}
+
+/// A click while a step waits for a frame. True when it was used: a frame
+/// fills the step; anything else (empty canvas) ends the insert. With the
+/// frame tool the click draws a frame, which fills the step as it is made.
+fn pick_click(app: &mut ZebraApp, p: Pos2) -> bool {
+    match app.editor.view.tool {
+        Tool::Frame => false,
+        Tool::Select | Tool::Hand => {
+            match pick_target(app, p) {
+                Some(id) => {
+                    crate::sidebar::fill_pick(app, id);
+                }
+                None => crate::sidebar::cancel_pick(app),
+            }
+            true
+        }
+        _ => {
+            crate::sidebar::cancel_pick(app);
+            false
+        }
+    }
 }
 
 fn click(app: &mut ZebraApp, p: Pos2, shift: bool) {
