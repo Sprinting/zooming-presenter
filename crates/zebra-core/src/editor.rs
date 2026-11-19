@@ -3105,7 +3105,7 @@ fn plural(n: usize, w: &str) -> String {
     if n == 1 { format!("1 {w}") } else { format!("{n} {w}s") }
 }
 
-fn content_key(bytes: &[u8]) -> String {
+pub(crate) fn content_key(bytes: &[u8]) -> String {
     // FNV-1a 64 + length: stable across runs and platforms.
     let mut h: u64 = 0xcbf29ce484222325;
     for b in bytes {

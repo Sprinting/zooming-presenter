@@ -17,6 +17,7 @@ pub mod editor;
 pub mod error;
 pub mod geom;
 pub mod icons;
+pub mod import;
 pub mod io;
 pub mod media;
 pub mod model;
