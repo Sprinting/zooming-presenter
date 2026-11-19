@@ -231,7 +231,17 @@ struct Job {
     size: (u32, u32),
     /// SVG symbols: how to draw them.
     svg: Option<crate::svg::SvgStyle>,
+    /// Pictures made rather than decoded (tiles of a PDF page).
+    make: Option<Make>,
 }
+
+/// Makes a picture on a worker (None when it can't).
+pub type Make = Arc<dyn Fn() -> Option<ImageLevel> + Send + Sync>;
+
+/// Cache keys of made tiles start with this. Each tile is its own entry
+/// with one level, so the idle trim must not keep "the smallest level" of
+/// each.
+pub const TILE_PREFIX: &str = "tile:";
 
 /// Thread-safe decoded-image cache; see the module docs.
 pub struct ImageCache {
@@ -298,7 +308,7 @@ impl ImageCache {
         let now = Instant::now();
         let mut i = lock(&self.shared.inner);
         let mut smallest: HashMap<String, u8> = HashMap::new();
-        for (k, _) in i.map.iter() {
+        for (k, _) in i.map.iter().filter(|(k, _)| !k.0.starts_with(TILE_PREFIX)) {
             let l = smallest.entry(k.0.clone()).or_insert(k.1);
             *l = (*l).max(k.1);
         }
@@ -349,7 +359,7 @@ impl ImageCache {
                 if !i.pending.contains(&key) {
                     i.pending.insert(key.clone());
                     drop(i);
-                    self.enqueue(Job { key, ext: ext.to_string(), bytes: bytes.clone(), size, svg });
+                    self.enqueue(Job { key, ext: ext.to_string(), bytes: bytes.clone(), size, svg, make: None });
                     i = lock(&self.shared.inner);
                 }
                 // Nearest cached level: prefer sharper, then blurrier.
@@ -365,8 +375,46 @@ impl ImageCache {
                 });
             }
         }
-        let out = decode_job(&Job { key: key.clone(), ext: ext.to_string(), bytes: bytes.clone(), size, svg });
+        let out = decode_job(&Job { key: key.clone(), ext: ext.to_string(), bytes: bytes.clone(), size, svg, make: None });
         insert(&self.shared, key, out, g)
+    }
+
+    /// The picture `key` made by `make` (now if `sync`, else on a worker:
+    /// None until it lands). `key` should start with [`TILE_PREFIX`].
+    pub fn get_made(&self, key: &str, sync: bool, make: Make) -> Option<Decoded> {
+        let g = self.shared.generation.load(Ordering::Relaxed);
+        let key: Key = (key.to_string(), 0);
+        {
+            let mut i = lock(&self.shared.inner);
+            if i.failed.contains(&key.0) {
+                return None;
+            }
+            if let Some(e) = i.map.get_mut(&key) {
+                e.used = g;
+                e.at = Instant::now();
+                return Some(e.img.clone());
+            }
+            if !sync {
+                if i.pending.insert(key.clone()) {
+                    drop(i);
+                    self.enqueue(Job { key, ext: String::new(), bytes: AssetBytes::from(Vec::new()), size: (0, 0), svg: None, make: Some(make) });
+                }
+                return None;
+            }
+        }
+        let out = decode_job(&Job { key: key.clone(), ext: String::new(), bytes: AssetBytes::from(Vec::new()), size: (0, 0), svg: None, make: Some(make) });
+        insert(&self.shared, key, out, g)
+    }
+
+    /// `key` if it is already cached (made by [`ImageCache::get_made`]);
+    /// never starts any work.
+    pub fn peek(&self, key: &str) -> Option<Decoded> {
+        let g = self.shared.generation.load(Ordering::Relaxed);
+        let mut i = lock(&self.shared.inner);
+        let e = i.map.get_mut(&(key.to_string(), 0))?;
+        e.used = g;
+        e.at = Instant::now();
+        Some(e.img.clone())
     }
 
     fn enqueue(&self, job: Job) {
@@ -439,6 +487,9 @@ fn evict(i: &mut Inner, budget: usize, generation: u64) {
 /// Decode `job.key.1`, plus the smallest level as a quick fallback for
 /// next time. Empty on failure.
 fn decode_job(job: &Job) -> Vec<(u8, Decoded)> {
+    if let Some(make) = &job.make {
+        return make().map(|l| vec![(job.key.1, Decoded::Still(Arc::new(l)))]).unwrap_or_default();
+    }
     let (w, h) = job.size;
     let last = last_level(w, h);
     let level = job.key.1.min(last);
