@@ -322,17 +322,27 @@ fn backspace_mid_paragraph_deletes_and_shift_tab_outdents() {
     assert_eq!(para(&h, 1), (ListKind::None, 1));
 }
 
-/// Tab in the middle of a plain paragraph: zebra-render (parley) has no
-/// tab stops, so a tab character would lay out differently on the canvas
-/// than in the editor; Tab indents the paragraph, as before.
+/// Tab in the middle of a line of a plain paragraph types spaces (the
+/// canvas text has no tab stops); at the start of a paragraph it indents.
 #[test]
-fn tab_mid_paragraph_indents() {
+fn tab_mid_line_types_spaces() {
     let mut h = harness();
     editing(&mut h, "first\nsecond", vec![]);
     key(&mut h, Key::ArrowLeft);
     key(&mut h, Key::ArrowLeft);
     key(&mut h, Key::Tab);
-    assert_eq!(buf(&h), "first\nsecond", "no tab character");
+    assert_eq!(buf(&h), "first\nseco    nd");
+    assert_eq!(para(&h, 1), (ListKind::None, 0), "not indented");
+}
+
+#[test]
+fn tab_at_line_start_indents() {
+    let mut h = harness();
+    editing(&mut h, "first\nsecond", vec![]);
+    for _ in 0..6 {
+        key(&mut h, Key::ArrowLeft);
+    }
+    key(&mut h, Key::Tab);
+    assert_eq!(buf(&h), "first\nsecond");
     assert_eq!(para(&h, 1), (ListKind::None, 1));
-    assert_eq!(para(&h, 0), (ListKind::None, 0));
 }
