@@ -172,6 +172,9 @@ pub struct ZebraApp {
     /// (revision, loads, camera and viewport bits): the sidebar asks for it
     /// a few times a frame, and every frame while idle.
     nearest_step: std::cell::Cell<Option<((u64, u64, [u64; 6]), Option<usize>)>>,
+    /// Every step's camera for the revision, loads and viewport it was
+    /// built for: `nearest_step` searches it.
+    step_index: std::cell::RefCell<Option<((u64, u64, [u64; 2]), zebra_core::step_index::StepIndex)>>,
     pub queued: Vec<Action>,
     pub scroll_mode: ScrollMode,
     /// Reduce Motion chosen in Settings; `None` follows the system.
@@ -369,6 +372,7 @@ impl ZebraApp {
             mac_sync: Default::default(),
             flash_step: None,
             nearest_step: Default::default(),
+            step_index: Default::default(),
             queued: vec![],
             scroll_mode,
             motion_override,
@@ -1062,23 +1066,14 @@ impl ZebraApp {
                 return s;
             }
         }
-        // Each step's distance once (a long path is thousands), and the
-        // whole-deck framing (a walk of every element) at most once.
-        let all = std::cell::OnceCell::new();
-        let fit_all = || *all.get_or_init(|| ed.fit_all_camera());
-        let s = ed
-            .doc
-            .path
-            .iter()
-            .map(|st| match &st.target {
-                StepTarget::Overview => fit_all(),
-                StepTarget::Element { id } if ed.doc.get(id).is_none() => fit_all(),
-                t => ed.camera_for_target(t),
-            })
-            .map(|c| (c.center() - cam.center()).len() * cam.zoom / vp.x + (c.zoom / cam.zoom).ln().abs())
-            .enumerate()
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(i, _)| i);
+        // Step cameras once per revision and viewport (a long path is
+        // thousands); each camera change then searches them sub-linearly.
+        let ix_key = (ed.revision, ed.loads, [vp.x, vp.y].map(f64::to_bits));
+        let mut ix = self.step_index.borrow_mut();
+        if ix.as_ref().is_none_or(|(k, _)| *k != ix_key) {
+            *ix = Some((ix_key, zebra_core::step_index::StepIndex::build(ed)));
+        }
+        let s = ix.as_ref().and_then(|(_, ix)| ix.nearest(&cam, vp.x));
         self.nearest_step.set(Some((key, s)));
         s
     }
