@@ -19,9 +19,11 @@ use zebra_core::{AssetBytes, Element, ElementKind, ImageData, PageRef, Size, Tra
 
 use crate::{Control, ImportError, Options, Reader};
 
-/// Long side of each page's picture, pixels. Sharp on a 2560-pixel-wide
-/// screen showing the page full size; past that the app draws the PDF.
-pub const PICTURE_PX: u32 = 2560;
+/// Long side of each page's picture, pixels: what thumbnails, exports and
+/// the web player show. The app draws the PDF itself past this size.
+/// (PNG; JPEG is about half the size for slides with gradients but ten
+/// times slower to make, and no smaller for plain ones.)
+pub const PICTURE_PX: u32 = 2048;
 /// Long side of the largest page on the canvas, world units (a default
 /// frame is 800 wide). Pages keep their sizes relative to each other.
 pub const PAGE_UNITS: f64 = 1000.0;
@@ -93,18 +95,9 @@ fn render(page: &PdfPage, w: u32, h: u32) -> Option<image::RgbImage> {
     Some(image::DynamicImage::ImageRgba8(rgba).to_rgb8())
 }
 
-/// PNG, or JPEG when the page is mostly photograph (much smaller).
 fn encode(img: &image::RgbImage) -> Vec<u8> {
     let mut png = vec![];
     let _ = image::DynamicImage::ImageRgb8(img.clone()).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png);
-    if png.len() < 400 << 10 {
-        return png;
-    }
-    let mut jpg = vec![];
-    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 90);
-    if img.write_with_encoder(enc).is_ok() && jpg.len() * 2 < png.len() {
-        return jpg;
-    }
     png
 }
 
