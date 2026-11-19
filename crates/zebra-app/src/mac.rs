@@ -255,6 +255,43 @@ mod imp {
 #[cfg(target_os = "macos")]
 pub use imp::WindowSync;
 
+/// Room for a window's content on the main screen, in points: below the
+/// menu bar and beside the Dock, less a title bar. None off the Mac.
+pub fn main_screen_room() -> Option<egui::Vec2> {
+    #[cfg(target_os = "macos")]
+    {
+        let mtm = objc2::MainThreadMarker::new()?;
+        let screen = objc2_app_kit::NSScreen::mainScreen(mtm)?;
+        let f = screen.visibleFrame();
+        return Some(egui::vec2(f.size.width as f32, (f.size.height - 28.0).max(0.0) as f32));
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+/// The size Zebra's first window opens at when it has no remembered
+/// place: 1440 × 900, or less on a screen with less room (macOS would
+/// otherwise squeeze a window taller than the screen itself).
+pub fn first_window_size(room: Option<egui::Vec2>) -> egui::Vec2 {
+    let want = egui::vec2(1440.0, 900.0);
+    match room {
+        Some(r) if r.x > 0.0 && r.y > 0.0 => want.min(r).max(egui::vec2(760.0, 480.0)),
+        _ => want,
+    }
+}
+
+/// The window shares a tab group with others (moving it moves them all).
+pub fn shares_tab_group(app: &crate::app::ZebraApp) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(w) = &app.mac_sync.window {
+            return w.tabbedWindows().is_some_and(|t| t.len() > 1);
+        }
+    }
+    let _ = app;
+    false
+}
+
 /// Clicking the Dock icon while no window is open asks for one (like
 /// Keynote). Call once; [`take_reopen`] then says when it happened.
 pub fn install_reopen_hook(ctx: &egui::Context) {
@@ -539,6 +576,15 @@ pub struct WindowSync;
 #[cfg(test)]
 mod title_row_tests {
     use super::title_row_from;
+
+    #[test]
+    fn the_first_window_fits_a_small_screen() {
+        use super::first_window_size;
+        assert_eq!(first_window_size(None), egui::vec2(1440.0, 900.0));
+        // A 13-inch MacBook Air at its default scaling, Dock at the bottom.
+        assert_eq!(first_window_size(Some(egui::vec2(1440.0, 787.0))), egui::vec2(1440.0, 787.0));
+        assert_eq!(first_window_size(Some(egui::vec2(2560.0, 1360.0))), egui::vec2(1440.0, 900.0));
+    }
 
     /// Mac round, 18 Nov: two windows merged into tabs, and the tab bar was
     /// drawn over the toolbar. The title row grows by the tab bar's height.
