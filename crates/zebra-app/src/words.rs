@@ -18,6 +18,14 @@ pub fn phrase(p: Phrase) -> Option<String> {
     })
 }
 
+/// Who made a change, as the Activity panel and Edit menu name them.
+pub fn origin_name(o: &zebra_core::Origin) -> String {
+    match o {
+        zebra_core::Origin::Human => t!("origin-you"),
+        zebra_core::Origin::Agent { name } => name.clone(),
+    }
+}
+
 /// The Fluent key fragment for a serde snake_case name: `rounded_rect` → `rounded-rect`.
 fn key_part<T: serde::Serialize>(v: &T) -> String {
     serde_json::to_value(v).ok().and_then(|v| v.as_str().map(|s| s.replace('_', "-"))).unwrap_or_default()
@@ -175,6 +183,12 @@ mod tests {
             assert_eq!(phrase(Phrase::Content(k)).as_deref(), zebra_core::content::english(k), "{k}");
         }
         assert_eq!(phrase(Phrase::Content("7")), None, "a number has no key and stays as it is");
+    }
+
+    #[test]
+    fn the_person_is_named_from_the_ftl() {
+        assert_eq!(origin_name(&zebra_core::Origin::Human), "You");
+        assert_eq!(origin_name(&zebra_core::Origin::agent("Claude")), "Claude");
     }
 
     #[test]

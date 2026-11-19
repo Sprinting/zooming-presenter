@@ -754,9 +754,9 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             });
             // A change to the path or the theme is about no object: no count.
             let meta = if a.ids.is_empty() {
-                crate::t!("activity-item-meta-plain", origin = a.origin.display(), when = when.as_str())
+                crate::t!("activity-item-meta-plain", origin = crate::words::origin_name(&a.origin), when = when.as_str())
             } else {
-                crate::t!("activity-item-meta", origin = a.origin.display(), when = when.as_str(), count = (a.ids.len() as u64))
+                crate::t!("activity-item-meta", origin = crate::words::origin_name(&a.origin), when = when.as_str(), count = (a.ids.len() as u64))
             };
             ui.label(RichText::new(meta).size(11.0).color(p.weak));
         });

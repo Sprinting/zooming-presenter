@@ -186,6 +186,8 @@ activity-item-meta = { $origin } · { $when } · { $count ->
     }
 activity-item-meta-plain = { $origin } · { $when }
 activity-item-tip = Click to show these objects
+# Who made a change, when it was the person using this Mac.
+origin-you = You
 palette-hint = Type a command
 shortcuts-title = Keyboard Shortcuts
 shortcuts-caption = Every shortcut is also a menu item or a button.

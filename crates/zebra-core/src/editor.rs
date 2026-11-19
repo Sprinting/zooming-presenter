@@ -29,6 +29,8 @@ impl Origin {
     pub fn is_agent(&self) -> bool {
         matches!(self, Origin::Agent { .. })
     }
+    /// Who, in the API's English (`history` query, agent errors). Never
+    /// shown to the person: the app names them itself, translated.
     pub fn display(&self) -> String {
         match self {
             Origin::Human => "You".into(),
