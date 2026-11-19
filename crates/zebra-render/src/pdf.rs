@@ -54,6 +54,9 @@ pub(crate) fn export(r: &Renderer, editor: &Editor) -> Result<Vec<u8>, ZError> {
 struct Resources {
     fonts: HashMap<(u64, u32), Option<Font>>,
     images: HashMap<String, Option<krilla::image::Image>>,
+    /// Pictures the PDF can't embed as files (SVG symbols...), as pixels:
+    /// one per asset and size, however many times they are drawn.
+    pixels: HashMap<(String, u32, u32), krilla::image::Image>,
 }
 
 fn fill_of(c: Rgba) -> Fill {
@@ -197,6 +200,10 @@ fn draw_list(s: &mut Surface<'_>, list: &DisplayList, editor: &Editor, res: &mut
                     // SVG symbols (and anything else without a file PDF can
                     // embed): the pixels drawn for the page.
                     .or_else(|| {
+                        let key = (image.asset.clone(), image.width, image.height);
+                        if let Some(i) = res.pixels.get(&key) {
+                            return Some(i.clone());
+                        }
                         let mut px = image.data.data.data().to_vec();
                         for p in px.chunks_exact_mut(4) {
                             let a = p[3] as u32;
@@ -206,7 +213,9 @@ fn draw_list(s: &mut Surface<'_>, list: &DisplayList, editor: &Editor, res: &mut
                                 }
                             }
                         }
-                        Some(krilla::image::Image::from_rgba8(px, image.width, image.height))
+                        let i = krilla::image::Image::from_rgba8(px, image.width, image.height);
+                        res.pixels.insert(key, i.clone());
+                        Some(i)
                     });
                 let Some(img) = img else { continue };
                 if let Some(sz) = Size::from_wh(image.width as f32, image.height as f32) {

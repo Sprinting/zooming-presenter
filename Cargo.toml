@@ -29,6 +29,7 @@ ruzstd = { version = "0.9", default-features = false, features = ["std"] }
 
 # rendering
 kurbo = "0.13"
+skrifa = "0.49"
 peniko = "*"
 vello = "0.12"
 # multithreading is turned on per target in zebra-render (none on wasm32).

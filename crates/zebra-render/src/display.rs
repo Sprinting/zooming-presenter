@@ -102,7 +102,15 @@ pub(crate) fn build(r: &Renderer, editor: &Editor, cam: &Camera, vp: [f64; 2], p
     build_with(r, editor, cam, vp, ppp, o, false)
 }
 
-/// `full_res_images`: always choose image level 0 (PDF).
+/// Pictures in an export (PDF) are decoded at this many pixels per point
+/// of their printed size (about 288 dpi), never more than the picture has.
+/// Level 0 for every picture made a deck of clip-art (4096 px symbols)
+/// decode gigabytes. Files the PDF embeds as they are (PNG, JPEG...) keep
+/// their full quality whatever level is decoded.
+pub const EXPORT_OVERSAMPLE: f64 = 4.0;
+
+/// `full_res_images`: pictures at print resolution (PDF), see
+/// [`EXPORT_OVERSAMPLE`]; decoded before returning.
 pub(crate) fn build_with(
     r: &Renderer,
     editor: &Editor,
@@ -335,7 +343,7 @@ impl Ctx<'_> {
     /// bounded image cache; first frame of an animation).
     fn still(&self, key: &str, on_screen_px: f64) -> Option<Arc<ImageLevel>> {
         let src = self.editor.doc.assets.get(key)?;
-        let level = if self.full_res_images { 0 } else { level_for(src.width, src.height, on_screen_px) };
+        let level = level_for(src.width, src.height, if self.full_res_images { on_screen_px * EXPORT_OVERSAMPLE } else { on_screen_px });
         let sync = !self.o.async_images || self.full_res_images;
         match self.r.images.get(key, &src.ext, &src.bytes, (src.width, src.height), level, sync) {
             Some(Decoded::Still(l)) => Some(l),
@@ -357,7 +365,7 @@ impl Ctx<'_> {
         // The whole picture's box in local units.
         let (fw, fh) = (w / c.w, h / c.h);
         let on_screen = fw * affine_scale(a);
-        let level = if self.full_res_images { 0 } else { level_for(src.width, src.height, on_screen) };
+        let level = level_for(src.width, src.height, if self.full_res_images { on_screen * EXPORT_OVERSAMPLE } else { on_screen });
         let sync = !self.o.async_images || self.full_res_images;
         let got = if src.ext == "svg" {
             let style = svg.unwrap_or_default();

@@ -247,7 +247,12 @@ pub fn tick(app: &mut ZebraApp) {
     });
     for r in pages {
         match r {
-            Ok(w) => crate::sheets::request(app, crate::sheets::SheetKind::WebExported { page: w.page, folder: w.folder }),
+            Ok(w) => {
+                for family in &w.apple_ui_families {
+                    app.toast(crate::t!("export-toast-apple-ui-font", family = family.clone()));
+                }
+                crate::sheets::request(app, crate::sheets::SheetKind::WebExported { page: w.page, folder: w.folder })
+            }
             Err(e) => app.toast(crate::t!("export-toast-failed", error = e)),
         }
     }
@@ -888,9 +893,9 @@ pub fn crop_interact(app: &mut ZebraApp, ui: &mut Ui, resp: &egui::Response) {
     let painter = ui.painter_at(resp.rect);
     let g = app.editor.doc.get(&id).and_then(|e| crop_geom(app, e)).unwrap_or(g);
     let dash = Stroke::new(1.0, Color32::from_white_alpha(200));
-    for i in 0..4 {
-        painter.extend(egui::Shape::dashed_line(&[g.full[i], g.full[(i + 1) % 4]], dash, 4.0, 3.0));
-    }
+    // Cut to the screen: when zoomed in, the whole picture can be far larger
+    // than the window.
+    crate::overlay::dashed(&painter, &g.full, true, dash, 4.0, 3.0);
     let edge = Stroke::new(1.5, crate::style::ACCENT);
     painter.add(egui::Shape::closed_line(g.window.to_vec(), edge));
     for (h, _) in handle_points(&g.window) {

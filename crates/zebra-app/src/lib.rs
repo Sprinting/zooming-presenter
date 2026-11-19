@@ -19,6 +19,7 @@ pub mod symbols_ui;
 pub mod credits;
 pub mod mac;
 pub mod media_ui;
+pub mod overlay;
 pub mod menus;
 pub mod open_events;
 pub mod opening;

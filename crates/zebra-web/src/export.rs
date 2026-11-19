@@ -62,6 +62,11 @@ pub struct Written {
     pub folder: bool,
     /// Bytes written in all.
     pub bytes: u64,
+    /// For the person: fonts with licence trouble (see
+    /// [`zebra_render::Renderer::web_text`]).
+    pub notes: Vec<String>,
+    /// See [`zebra_render::WebText::apple_ui_families`].
+    pub apple_ui_families: Vec<String>,
 }
 
 /// A built page, before it is written.
@@ -70,6 +75,9 @@ pub struct Page {
     /// Video and audio kept out of the page (folder export): path relative
     /// to the page, bytes.
     pub media: Vec<(String, Vec<u8>)>,
+    /// See [`Written::notes`].
+    pub notes: Vec<String>,
+    pub apple_ui_families: Vec<String>,
 }
 
 impl Page {
@@ -123,7 +131,11 @@ pub fn build(renderer: &Renderer, editor: &Editor, labels: &Labels, inline_limit
     }
     // PDF pages: a sharp picture each, drawn now from the PDF, in a copy.
     let sharp = zebra_render::pages::export_pictures(renderer, &editor.doc);
-    let doc = sharp.as_ref().unwrap_or(&editor.doc);
+    // Fonts: only what the page may carry, cut to the glyphs used. Text in
+    // other fonts (Apple's...) becomes pictures drawn here, in a copy.
+    let web = renderer.web_text(editor);
+    let pictured = if web.rasterise.is_empty() { None } else { Some(text_pictures(renderer, editor, sharp.as_ref().unwrap_or(&editor.doc), &web.rasterise)) };
+    let doc = pictured.as_ref().or(sharp.as_ref()).unwrap_or(&editor.doc);
     // Blobs: id -> base64, each in its own <script> element.
     let mut blobs: Vec<(String, String)> = vec![];
     fn add(blobs: &mut Vec<(String, String)>, data: String) -> String {
@@ -139,7 +151,7 @@ pub fn build(renderer: &Renderer, editor: &Editor, labels: &Labels, inline_limit
     let wasm = add_blob!(b64(PLAYER_WASM_GZ));
     let json = zebra_core::io::to_json(doc);
     let doc_id = add_blob!(b64(&gzip(json.as_bytes())));
-    let fonts: Vec<String> = renderer.font_files_used(editor).iter().map(|f| add_blob!(b64(&gzip(f)))).collect();
+    let fonts: Vec<String> = web.fonts.iter().map(|f| add_blob!(b64(&gzip(f)))).collect();
 
     // Video and audio: what is used, in the page or (too big) as files.
     // An imported PDF stays out: the player draws its pages' pictures.
@@ -215,7 +227,40 @@ pub fn build(renderer: &Renderer, editor: &Editor, labels: &Labels, inline_limit
     html.push_str("<script>\n");
     html.push_str(PLAYER_JS);
     html.push_str("</script>\n</body></html>\n");
-    Ok(Page { html, media })
+    Ok(Page { html, media, notes: web.notes, apple_ui_families: web.apple_ui_families })
+}
+
+/// `doc` with the text elements `ids` turned into pictures of themselves,
+/// drawn on this Mac at about twice the largest size any path step shows
+/// them (the page can zoom; 512 to 4096 pixels wide).
+fn text_pictures(renderer: &Renderer, editor: &Editor, doc: &zebra_core::Document, ids: &[zebra_core::ElementId]) -> zebra_core::Document {
+    let mut out = doc.clone();
+    let vp = editor.view.viewport;
+    let cams: Vec<zebra_core::Camera> = (0..editor.doc.path.len())
+        .filter_map(|i| renderer.step_camera(editor, i))
+        .chain(std::iter::once(editor.fit_all_camera()))
+        .collect();
+    for id in ids {
+        let Some(e) = editor.doc.get(id) else { continue };
+        if e.placeholder {
+            continue;
+        }
+        let (ww, _) = e.world_size();
+        let shown = cams.iter().map(|c| ww * c.zoom).fold(0.0, f64::max) * 2.0;
+        let px = (shown.max(vp.x * 0.25)).clamp(512.0, 4096.0) as u32;
+        let Some(pic) = renderer.rasterise_text(editor, id, px) else { continue };
+        let Ok((key, asset)) = zebra_core::import::asset_from(pic.png) else { continue };
+        out.assets.insert(key.clone(), asset);
+        let alt = match &e.kind {
+            ElementKind::Text(t) => t.text.clone(),
+            _ => String::new(),
+        };
+        if let Some(el) = out.elements.get_mut(id) {
+            el.size = zebra_core::Size { w: e.size.w + 2.0 * pic.pad, h: e.size.h + 2.0 * pic.pad };
+            el.kind = ElementKind::Image(zebra_core::ImageData { asset: key, alt, crop: None, mask: Default::default(), symbol: None, page: None });
+        }
+    }
+    out
 }
 
 /// Build and write the page. A single page goes to `path`; a folder
@@ -230,7 +275,7 @@ pub fn export_with_limit(renderer: &Renderer, editor: &Editor, labels: &Labels, 
     let ioe = |p: &Path, e: std::io::Error| ZError::new("io", format!("{}: {e}", p.display()));
     if !page.is_folder() {
         std::fs::write(path, &page.html).map_err(|e| ioe(path, e))?;
-        return Ok(Written { page: path.to_path_buf(), folder: false, bytes: page.html.len() as u64 });
+        return Ok(Written { page: path.to_path_buf(), folder: false, bytes: page.html.len() as u64, notes: page.notes, apple_ui_families: page.apple_ui_families });
     }
     let dir = path.with_extension("");
     let dir = if dir == path { path.with_extension("web") } else { dir };
@@ -243,5 +288,5 @@ pub fn export_with_limit(renderer: &Renderer, editor: &Editor, labels: &Labels, 
         std::fs::write(&p, data).map_err(|e| ioe(&p, e))?;
         bytes += data.len() as u64;
     }
-    Ok(Written { page: index, folder: true, bytes })
+    Ok(Written { page: index, folder: true, bytes, notes: page.notes, apple_ui_families: page.apple_ui_families })
 }

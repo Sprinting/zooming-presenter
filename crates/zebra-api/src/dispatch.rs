@@ -595,11 +595,11 @@ impl Dispatcher {
                     if page.is_folder() {
                         return Err(RpcError::app("too_big", "this page keeps its video and audio in files beside it").hint("give a `path`; a folder is written there"));
                     }
-                    return Ok(json!({ "mime": "text/html", "bytes": page.html.len(),
+                    return Ok(json!({ "mime": "text/html", "bytes": page.html.len(), "notes": page.notes,
                                       "data_base64": base64::engine::general_purpose::STANDARD.encode(page.html.as_bytes()) }));
                 };
                 let w = zebra_web::export::export(r, editor, labels, &p)?;
-                return Ok(json!({ "path": w.page, "folder": w.folder, "bytes": w.bytes, "mime": "text/html" }));
+                return Ok(json!({ "path": w.page, "folder": w.folder, "bytes": w.bytes, "mime": "text/html", "notes": w.notes }));
             }
             ExportFormat::Png => {
                 let mut cap = cap.clone();

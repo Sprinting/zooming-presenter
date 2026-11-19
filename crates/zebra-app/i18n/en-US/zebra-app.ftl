@@ -386,6 +386,8 @@ sheet-toast-nothing-to-revert = { $name } has no changes to revert.
 export-toast-exporting = Exporting…
 export-toast-exported = Exported { $path }
 export-toast-failed = Export failed: { $error }
+# A web page exported from a deck set in SF Pro, SF Mono, New York...
+export-toast-apple-ui-font = { $family } is licensed by Apple only for interface mock-ups, so its text went into the page as pictures. Consider Inter.
 app-file-filter-html = Web page
 # After File > Export > Web Page. { $name } is the page or folder.
 sheet-web-exported-title = Exported “{ $name }”

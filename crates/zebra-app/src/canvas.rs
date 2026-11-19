@@ -1599,7 +1599,8 @@ fn rich_job(rich: &TextData, text: &str, theme: &zebra_core::Theme, base: &FontI
         };
         let line = Stroke::new((size * k * 0.06).max(1.0), c);
         let mut fmt = egui::TextFormat {
-            font_id: FontId::new((size * k).max(1.0), style::doc_family(font_name, bold, italic)),
+            // Same cap as the box itself: egui rasterises glyphs at this size.
+            font_id: FontId::new((size * k).clamp(1.0, 600.0), style::doc_family(font_name, bold, italic)),
             color: c,
             ..Default::default()
         };
@@ -1931,7 +1932,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
             }
         }
         let r = resp.rect.expand(4.0);
-        ui.painter().add(Shape::dashed_line(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], Stroke::new(1.0, style::accent()), 4.0, 3.0));
+        crate::overlay::dashed(ui.painter(), &[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], true, Stroke::new(1.0, style::accent()), 4.0, 3.0);
         // Width handles on the box's sides: drag to set where it wraps.
         let mut width_hit = None;
         let mut on_handle = false;
@@ -2373,10 +2374,11 @@ fn quad_screen(app: &ZebraApp, corners: [Vec2; 4]) -> Vec<Pos2> {
     corners.iter().map(|c| app.canvas.w2s(&app.editor, *c)).collect()
 }
 
+/// A dashed closed outline in screen points, drawn only near the screen
+/// (see [`crate::overlay`]): outlines of things far away or huge on screen
+/// would otherwise cost one shape per dash.
 fn dashed_quad(painter: &Painter, q: &[Pos2], stroke: Stroke, dash: f32, gap: f32) {
-    let mut pts = q.to_vec();
-    pts.push(q[0]);
-    painter.extend(Shape::dashed_line(&pts, stroke, dash, gap));
+    crate::overlay::dashed(painter, q, true, stroke, dash, gap);
 }
 
 pub fn draw_agent_presence(app: &ZebraApp, painter: &Painter) -> Option<ERect> {
