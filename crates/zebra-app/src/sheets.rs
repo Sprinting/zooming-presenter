@@ -32,6 +32,8 @@ pub enum SheetKind {
     RaisePermission,
     /// A web page was exported: offer to open it in the browser.
     WebExported { page: std::path::PathBuf, folder: bool },
+    /// File › Import… is done: what came in as pictures or was left out.
+    ImportNotes { title: String, message: String },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -61,6 +63,7 @@ fn spec(app: &ZebraApp, k: &SheetKind) -> Spec {
             warning: false,
         },
         SheetKind::Alert { title, message } => Spec { title: title.clone(), message: message.clone(), buttons: vec![(crate::t!("sheet-ok"), Role::Default)], warning: true },
+        SheetKind::ImportNotes { title, message } => Spec { title: title.clone(), message: message.clone(), buttons: vec![(crate::t!("sheet-ok"), Role::Default)], warning: false },
         SheetKind::ClearPath => {
             let n = app.editor.doc.path.len();
             Spec {
@@ -122,7 +125,7 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
                 app.queued.push(action);
             }
         }
-        SheetKind::Alert { .. } => {}
+        SheetKind::Alert { .. } | SheetKind::ImportNotes { .. } => {}
         SheetKind::ClearPath => {
             if label == crate::t!("sheet-clear-path") && !app.editor.doc.path.is_empty() {
                 app.apply(zebra_core::Command::ClearPath { discard_notes: true });

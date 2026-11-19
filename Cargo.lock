@@ -6564,6 +6564,7 @@ dependencies = [
  "winit",
  "zebra-api",
  "zebra-core",
+ "zebra-import",
  "zebra-media",
  "zebra-render",
  "zebra-web",
