@@ -189,6 +189,18 @@ struct Tx {
     ids: BTreeSet<ElementId>,
 }
 
+/// A document ready to load, from [`Editor::prepare`].
+pub struct Prepared {
+    doc: Document,
+    index: crate::spatial::SpatialIndex,
+}
+
+impl Prepared {
+    pub fn doc(&self) -> &Document {
+        &self.doc
+    }
+}
+
 pub struct Editor {
     /// How many times a whole document was loaded into this editor. A
     /// host that keeps state about the document (thumbnails, an open text
@@ -325,13 +337,37 @@ impl Editor {
     }
 
     /// Replace the whole document (open file). Clears history.
-    pub fn load(&mut self, mut doc: Document, path: Option<std::path::PathBuf>) {
-        self.tx = None;
-        self.loads += 1;
+    pub fn load(&mut self, doc: Document, path: Option<std::path::PathBuf>) {
+        let p = Self::prepare(doc, &*self.measure, &|_| {});
+        self.load_prepared(p, path);
+    }
+
+    /// The slow part of [`Editor::load`] (repair, measure every text,
+    /// index), which needs no editor: a big file is prepared on a worker
+    /// thread while the window stays responsive. `progress` hears 0..1.
+    pub fn prepare(mut doc: Document, measure: &dyn TextMeasure, progress: &dyn Fn(f32)) -> Prepared {
         crate::check::repair(&mut doc);
-        self.remeasure_all(&mut doc);
-        self.doc = doc;
-        self.reindex();
+        measure.prepare(&doc);
+        let theme = Theme::resolve_in(&doc, &doc.theme);
+        let n = doc.elements.len().max(1);
+        for (i, e) in doc.elements.values_mut().enumerate() {
+            measure_text(measure, &theme, e);
+            if i % 1024 == 0 {
+                progress(0.9 * i as f32 / n as f32);
+            }
+        }
+        let index = crate::spatial::SpatialIndex::build(&doc);
+        progress(1.0);
+        Prepared { doc, index }
+    }
+
+    /// Load a document made ready by [`Editor::prepare`]. Clears history.
+    pub fn load_prepared(&mut self, p: Prepared, path: Option<std::path::PathBuf>) {
+        self.tx = None;
+        self.journal = None;
+        self.loads += 1;
+        self.doc = p.doc;
+        self.index = p.index;
         self.undo.clear();
         self.redo.clear();
         self.revision += 1;
@@ -353,6 +389,7 @@ impl Editor {
     }
 
     fn remeasure_all(&self, doc: &mut Document) {
+        // (Loading measures in `prepare`; this is for a theme change.)
         self.measure.prepare(doc);
         let theme = Theme::resolve_in(doc, &doc.theme);
         for e in doc.elements.values_mut() {
