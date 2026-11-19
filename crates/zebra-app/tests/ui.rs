@@ -162,10 +162,10 @@ fn path_edit_click_adds_steps() {
     h.key_press(Key::P);
     h.run_steps(1);
     assert_eq!(h.state().editor.view.mode, Mode::PathEdit);
-    // click inside the "A new angle" frame
+    // click inside the "Rotated frames" frame
     let p = {
         let app = h.state();
-        let f = app.editor.doc.ordered().find(|e| e.name == "A new angle").unwrap();
+        let f = app.editor.doc.ordered().find(|e| e.name == "Rotated frames").unwrap();
         app.canvas.w2s(&app.editor, f.transform.center() + zebra_core::Vec2::new(0.0, 200.0))
     };
     click_at(&mut h, p, 1);

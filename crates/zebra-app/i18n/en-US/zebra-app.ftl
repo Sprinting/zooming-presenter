@@ -1096,25 +1096,25 @@ mac-activity-presenting = Presenting
 ## ---- sample.rs ----
 # File › New from Sample: the sample presentation (data/sample.json).
 # Frame names (sample-frame-*) show in the path sidebar.
-sample-a-new-angle = A new angle
-sample-a-tiny-tour-of-a = a tiny tour of a zooming canvas
-sample-brackets-circles-rectangles-invisible = brackets · circles · rectangles · invisible
-sample-frame-a-new-angle = A new angle
-sample-frame-a-secret = A secret
+sample-a-short-tour = A short tour
+sample-brackets-circles-rectangles-and-invisible = Brackets, circles, rectangles and invisible frames
 sample-frame-circles = Circles
-sample-frame-why-zoom = Why zoom?
+sample-frame-how-ideas-connect = How ideas connect
+sample-frame-rotated-frames = Rotated frames
+sample-frame-small-detail = Small detail
 sample-frames-come-in-four-styles = Frames come in four styles
-sample-hidden-in-plain-sight = hidden in plain sight!
-sample-look-closer = Look closer…
 sample-notes-click-to-reveal-each-point = Click to reveal each point.
-sample-rotate-a-frame-and-the =
-    Rotate a frame and the camera
-    rolls to meet it when presenting.
+sample-presenting-on-a-zooming-canvas = Presenting on a zooming canvas
+sample-rotate-a-frame-and-the-view =
+    Rotate a frame, and the view turns
+    to match it when you play.
+sample-rotated-frames = Rotated frames
 sample-show-the-big-picture-first = Show the big picture first
-sample-then-dive-into-the-details = Then dive into the details
-sample-thinking-in-zoom = Thinking in Zoom
-sample-why-zoom = Why zoom?
+sample-then-zoom-into-the-details = Then zoom into the details
+sample-you-can-read-this-only = You can read this only after you zoom in
+sample-zoom-in-to-see-small-details = Zoom in to see small details
 sample-zoom-out-again-to-connect = Zoom out again to connect them
+sample-zooming-shows-how-ideas-connect = Zooming shows how ideas connect
 ## ---- end sample.rs ----
 
 
@@ -1327,7 +1327,7 @@ diagram-name-funnel = Funnel
 diagram-description-funnel = Many inputs narrowing to one outcome.
 diagram-name-iceberg = Iceberg
 diagram-description-iceberg = A small tip above the waterline, the larger part below.
-diagram-name-org-chart = Org chart
+diagram-name-org-chart = Organisation chart
 diagram-description-org-chart = A top-down tree.
 diagram-name-block-list = Block list
 diagram-description-block-list = Side-by-side blocks, each with a heading.
@@ -1341,9 +1341,9 @@ diagram-name-segmented-ring = Segmented ring
 diagram-description-segmented-ring = A ring in four parts around a centre idea.
 diagram-name-tree = Tree
 diagram-description-tree = Branches out to the right, for breakdowns and decisions.
-diagram-name-venn2 = Venn, two circles
+diagram-name-venn2 = Two-circle Venn
 diagram-description-venn2 = Two overlapping sets.
-diagram-name-venn3 = Venn, three circles
+diagram-name-venn3 = Three-circle Venn
 diagram-description-venn3 = Three overlapping sets.
 diagram-name-target = Target
 diagram-description-target = Rings from the outer context to the inner focus.
@@ -1366,77 +1366,86 @@ diagram-description-big-picture = An overview frame with detail frames inside. I
 ## and frame names (content-frame-*). Filled in once, when the diagram,
 ## layout or template is placed; after that the text is the person's own.
 ## zebra-core reads the English from this file too (zebra_core::content).
-content-a-detail-to-zoom-into = A detail to zoom into
-content-a-line-or-two =
-    A line or two
+content-add-a-caption = Add a caption
+content-add-a-detail = Add a detail
+content-add-a-detail-to-zoom-into = Add a detail to zoom into
+content-add-a-hidden-part = Add a hidden part
+content-add-a-line-about-this-topic =
+    Add a line or two
     about this topic
 content-add-a-note = Add a note
 content-add-a-subtitle = Add a subtitle
-content-add-a-thought = Add a thought
 content-add-a-title = Add a title
-content-add-text = Add text
+content-add-an-event = Add an event
+content-add-context = Add context
+content-add-text = Double-click to add text
 content-add-your-points =
-    Add your points here
-    One idea per line
-    Keep it short
+    Add your points
+    One point per line
+    Keep each point short
 content-add-your-points-block =
-    Add your points here
-    One idea per line
+    Add your points
+    One point per line
 content-after = After
 content-all = All
-content-almost-there = Almost there
-content-and-in-the-end = And in the end
 content-before = Before
 content-both = Both
 content-branch = Branch
+content-broadest = Broadest
 content-business-model = Business model
 content-cause = Cause
 content-chapter-1 = Chapter 1
 content-chapter-2 = Chapter 2
 content-chapter-3 = Chapter 3
-content-course-or-class = Course or class
+content-course-name = Course name
 content-date = Date
-content-detail-to-zoom-into = Detail to zoom into
+content-describe-the-result = Describe the result
+content-describe-the-turning-point = Describe the turning point
+content-destination = Destination
 content-doing = Doing
 content-done = Done
-content-drop-a-picture-here = Drop a picture here
+content-drag-a-picture-here = Drag a picture here
 content-effect = Effect
-content-first-stop = First stop
-content-focus = Focus
+content-first-step = First step
+content-goal = Goal
 content-heading = Heading
-content-how-it-turned-out = How it turned out
+content-hidden = Hidden
+content-how-it-ended = How it ended
+content-how-it-started = How it started
 content-idea = Idea
+content-list-three-things = List the three things to remember
+content-main-point = Main point
 content-market = Market
-content-name = Name
-content-once-upon-a-time = Once upon a time…
-content-one-line-on-what-you-do = One line on what you do
+# Two lines in each org chart box.
+content-name-and-role =
+    Name
+    Role
+content-narrowest = Narrowest
+content-next-step = Next step
 content-outcome = Outcome
-content-point = Point
 content-problem = Problem
 content-recap = Recap
-content-say-what-the-picture-shows = Say what the picture shows
-content-second-stop = Second stop
+content-say-what-you-do = Say what you do in one line
 content-solution = Solution
-content-step = Step
+content-stage-1 = Stage 1
+content-stage-2 = Stage 2
+content-stage-3 = Stage 3
+content-start = Start
+content-stop-1 = Stop 1
+content-stop-2 = Stop 2
+content-stop-3 = Stop 3
+content-stop-4 = Stop 4
 content-team = Team
-content-the-ask = The ask
-content-the-three-things-to-remember = The three things to remember
-content-then-something-changed = Then something changed
-content-third-stop = Third stop
 content-to-do = To do
 content-topic = Topic
 content-topic-1 = Topic 1
 content-topic-2 = Topic 2
 content-topic-3 = Topic 3
 content-topic-4 = Topic 4
-content-what-happened = What happened
-content-what-happened-next = What happened next
-content-what-lies-beneath = What lies beneath
-content-what-people-see = What people see
+content-visible = Visible
+content-what-changed = What changed
+content-what-were-asking-for = What we're asking for
 content-what-youll-learn = What you'll learn
-content-where-we-arrive = Where we arrive
-content-where-we-start = Where we start
-content-year = Year
 
 content-frame-after = After
 content-frame-before = Before
@@ -1448,7 +1457,9 @@ content-frame-chapter-1 = Chapter 1
 content-frame-chapter-2 = Chapter 2
 content-frame-chapter-3 = Chapter 3
 content-frame-destination = Destination
-content-frame-detail = Detail
+content-frame-detail-1 = Detail 1
+content-frame-detail-2 = Detail 2
+content-frame-detail-3 = Detail 3
 content-frame-end = End
 content-frame-left = Left
 content-frame-main-idea = Main idea
@@ -1458,12 +1469,11 @@ content-frame-objectives = Objectives
 content-frame-overview = Overview
 content-frame-problem = Problem
 content-frame-recap = Recap
+content-frame-request = Request
 content-frame-right = Right
 content-frame-solution = Solution
 content-frame-start = Start
 content-frame-team = Team
-content-frame-the-ask = The ask
-content-frame-the-road-ahead = The road ahead
 content-frame-title = Title
 content-frame-topic-1 = Topic 1
 content-frame-topic-2 = Topic 2

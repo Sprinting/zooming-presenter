@@ -38,7 +38,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "content-one-line-on-what-you-do",
+      "text": "content-say-what-you-do",
       "w": 0.36,
       "x": 0,
       "y": -0.165
@@ -201,7 +201,7 @@
     {
       "h": 0.18,
       "kind": "frame",
-      "name": "content-frame-the-ask",
+      "name": "content-frame-request",
       "style": "rectangle",
       "w": 0.3,
       "x": 0.33,
@@ -212,7 +212,7 @@
       "h": 0.04,
       "kind": "text",
       "style": "subtitle",
-      "text": "content-the-ask",
+      "text": "content-what-were-asking-for",
       "w": 0.22,
       "x": 0.33,
       "y": 0.17
