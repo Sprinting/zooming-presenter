@@ -327,7 +327,7 @@ settings-toast-cli-install-failed = Couldn't install zebractl: { $error }
 welcome-title = Choose a Template
 welcome-my-templates = My Templates
 welcome-recent = Recent
-welcome-recent-empty = Nothing opened yet.
+welcome-recent-empty = No recent presentations
 welcome-open = Open…
 welcome-create = Create
 welcome-cancel = Cancel
@@ -1087,10 +1087,10 @@ sample-hidden-in-plain-sight = hidden in plain sight!
 sample-look-closer = Look closer…
 sample-notes-click-to-reveal-each-point = Click to reveal each point.
 sample-rotate-a-frame-and-the =
-    Rotate a frame and the camera
-    rolls to meet it when presenting.
+    Rotate a frame, and the view
+    turns to match it when you play.
 sample-show-the-big-picture-first = Show the big picture first
-sample-then-dive-into-the-details = Then dive into the details
+sample-then-dive-into-the-details = Then zoom into the details
 sample-thinking-in-zoom = Thinking in Zoom
 sample-why-zoom = Why zoom?
 sample-zoom-out-again-to-connect = Zoom out again to connect them
