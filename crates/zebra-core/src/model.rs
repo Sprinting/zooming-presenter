@@ -868,12 +868,18 @@ impl Element {
     /// text), or `None` when only its type would describe it. The app
     /// shows a translated type name in that case.
     pub fn own_label(&self, doc: &Document) -> Option<String> {
+        self.own_label_in(doc, || doc.frame_contents(&self.id))
+    }
+
+    /// [`Element::own_label`], taking a frame's contents from `contents`
+    /// (called only when needed), e.g. from the editor's spatial index.
+    pub fn own_label_in(&self, doc: &Document, contents: impl FnOnce() -> Vec<ElementId>) -> Option<String> {
         if !self.name.is_empty() {
             return Some(self.name.clone());
         }
         match &self.kind {
             ElementKind::Text(t) => Some(truncate(t.text.lines().next().unwrap_or(""), 40)),
-            ElementKind::Frame(_) => doc.frame_contents(&self.id).iter().filter_map(|id| doc.elements.get(id)).find_map(|e| match &e.kind {
+            ElementKind::Frame(_) => contents().iter().filter_map(|id| doc.elements.get(id)).find_map(|e| match &e.kind {
                 ElementKind::Text(t) => Some(truncate(t.text.lines().next().unwrap_or(""), 40)),
                 _ => None,
             }),
