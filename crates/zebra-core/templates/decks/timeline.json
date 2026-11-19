@@ -15,7 +15,7 @@
     {
       "h": 0.16,
       "kind": "frame",
-      "name": "Title",
+      "name": "content-frame-title",
       "style": "bracket",
       "w": 0.26,
       "x": -0.36,
@@ -27,7 +27,7 @@
       "kind": "text",
       "ph": true,
       "style": "title",
-      "text": "Add a title",
+      "text": "content-add-a-title",
       "w": 0.22,
       "x": -0.36,
       "y": -0.31
@@ -38,7 +38,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Add a subtitle",
+      "text": "content-add-a-subtitle",
       "w": 0.2,
       "x": -0.36,
       "y": -0.26
@@ -66,7 +66,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Year",
+      "text": "content-year",
       "w": 0.1,
       "x": -0.4,
       "y": -0.135
@@ -77,7 +77,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "What happened",
+      "text": "content-what-happened",
       "w": 0.11,
       "x": -0.4,
       "y": -0.09
@@ -96,7 +96,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Year",
+      "text": "content-year",
       "w": 0.1,
       "x": -0.24,
       "y": 0.085
@@ -107,7 +107,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "What happened",
+      "text": "content-what-happened",
       "w": 0.11,
       "x": -0.24,
       "y": 0.13
@@ -126,7 +126,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Year",
+      "text": "content-year",
       "w": 0.1,
       "x": -0.08,
       "y": -0.135
@@ -137,7 +137,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "What happened",
+      "text": "content-what-happened",
       "w": 0.11,
       "x": -0.08,
       "y": -0.09
@@ -156,7 +156,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Year",
+      "text": "content-year",
       "w": 0.1,
       "x": 0.08,
       "y": 0.085
@@ -167,7 +167,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "What happened",
+      "text": "content-what-happened",
       "w": 0.11,
       "x": 0.08,
       "y": 0.13
@@ -186,7 +186,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Year",
+      "text": "content-year",
       "w": 0.1,
       "x": 0.24,
       "y": -0.135
@@ -197,7 +197,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "What happened",
+      "text": "content-what-happened",
       "w": 0.11,
       "x": 0.24,
       "y": -0.09
@@ -216,7 +216,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Year",
+      "text": "content-year",
       "w": 0.1,
       "x": 0.4,
       "y": 0.085
@@ -227,7 +227,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "What happened",
+      "text": "content-what-happened",
       "w": 0.11,
       "x": 0.4,
       "y": 0.13

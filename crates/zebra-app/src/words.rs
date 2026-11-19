@@ -12,6 +12,9 @@ pub fn phrase(p: Phrase) -> Option<String> {
     Some(match p {
         Phrase::Command(c) => command(c),
         Phrase::Changes(n) => t!("history-changes", count = (n as u64)),
+        // Built-in content: filled in once, when it is placed.
+        Phrase::Content(key) if crate::i18n::LOADER.has(key) => tr(key),
+        Phrase::Content(_) => return None,
     })
 }
 
@@ -159,6 +162,19 @@ mod tests {
         for t in ["frame", "text", "shape", "image", "video", "ink", "icon", "connector"] {
             assert!(crate::i18n::LOADER.has(&format!("element-{t}")), "missing element-{t}");
         }
+    }
+
+    /// Built-in content gets its words from this .ftl, and core's English
+    /// fallback reads the very same file the same way.
+    #[test]
+    fn content_keys_come_from_the_ftl() {
+        let keys = zebra_core::content::keys();
+        assert!(keys.len() > 50, "{}", keys.len());
+        for k in keys {
+            assert!(crate::i18n::LOADER.has(k), "{k}");
+            assert_eq!(phrase(Phrase::Content(k)).as_deref(), zebra_core::content::english(k), "{k}");
+        }
+        assert_eq!(phrase(Phrase::Content("7")), None, "a number has no key and stays as it is");
     }
 
     #[test]

@@ -110,6 +110,10 @@ pub enum Phrase<'a> {
     Command(&'a Command),
     /// Several commands in one entry.
     Changes(usize),
+    /// Text a built-in diagram, layout or template puts on the canvas, by
+    /// key (`content-add-a-title`); see [`crate::content`]. Asked once, when
+    /// the piece is placed. Text without a key (a number) is kept as it is.
+    Content(&'a str),
 }
 
 /// Words for a [`Phrase`], or `None` for the built-in English.
@@ -250,6 +254,7 @@ impl Editor {
         self.labeler.and_then(|f| f(p)).unwrap_or_else(|| match p {
             Phrase::Command(c) => command_label(c),
             Phrase::Changes(n) => format!("{n} changes"),
+            Phrase::Content(k) => crate::content::english(k).unwrap_or(k).to_string(),
         })
     }
 
@@ -1846,7 +1851,7 @@ impl Editor {
                     transform: Transform { x: at.x + x * width, y: at.y + y * width, scale: 1.0, rotation: *rot },
                     size: Size { w: w * width, h: h * width },
                     locked: false,
-                    name: name.to_string(),
+                    name: if name.is_empty() { String::new() } else { self.phrase(Phrase::Content(name)) },
                     placeholder: false,
                     group: None,
                     kind: ElementKind::Frame(FrameData { style: *style, color: color.clone() }),
@@ -1861,7 +1866,7 @@ impl Editor {
                         placeholder: *ph,
                         group: None,
                         kind: ElementKind::Text(TextData {
-                            text: text.to_string(),
+                            text: self.phrase(Phrase::Content(text)),
                             style: *style,
                             bullets: *bullets,
                             align: *align,

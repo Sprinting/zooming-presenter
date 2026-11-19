@@ -17,7 +17,7 @@
     {
       "h": 0.19,
       "kind": "frame",
-      "name": "Title",
+      "name": "content-frame-title",
       "style": "bracket",
       "w": 0.3,
       "x": -0.33,
@@ -29,7 +29,7 @@
       "kind": "text",
       "ph": true,
       "style": "title",
-      "text": "Add a title",
+      "text": "content-add-a-title",
       "w": 0.25,
       "x": -0.33,
       "y": -0.18
@@ -40,7 +40,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Course or class",
+      "text": "content-course-or-class",
       "w": 0.2,
       "x": -0.33,
       "y": -0.12
@@ -48,7 +48,7 @@
     {
       "h": 0.19,
       "kind": "frame",
-      "name": "Objectives",
+      "name": "content-frame-objectives",
       "style": "rectangle",
       "w": 0.3,
       "x": -0.33,
@@ -59,7 +59,7 @@
       "h": 0.035,
       "kind": "text",
       "style": "subtitle",
-      "text": "What you'll learn",
+      "text": "content-what-youll-learn",
       "w": 0.22,
       "x": -0.33,
       "y": 0.06
@@ -71,7 +71,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "text": "content-add-your-points",
       "w": 0.24,
       "x": -0.33,
       "y": 0.14
@@ -79,7 +79,7 @@
     {
       "h": 0.18,
       "kind": "frame",
-      "name": "Chapter 1",
+      "name": "content-frame-chapter-1",
       "style": "bracket",
       "w": 0.42,
       "x": 0.18,
@@ -90,7 +90,7 @@
       "h": 0.035,
       "kind": "text",
       "style": "subtitle",
-      "text": "Chapter 1",
+      "text": "content-chapter-1",
       "w": 0.16,
       "x": 0.07,
       "y": -0.24
@@ -102,7 +102,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "text": "content-add-your-points",
       "w": 0.17,
       "x": 0.07,
       "y": -0.175
@@ -110,7 +110,7 @@
     {
       "h": 0.12,
       "kind": "frame",
-      "name": "Detail",
+      "name": "content-frame-detail",
       "style": "circle",
       "w": 0.12,
       "x": 0.32,
@@ -122,7 +122,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "A detail to zoom into",
+      "text": "content-a-detail-to-zoom-into",
       "w": 0.08,
       "x": 0.32,
       "y": -0.2
@@ -130,7 +130,7 @@
     {
       "h": 0.18,
       "kind": "frame",
-      "name": "Chapter 2",
+      "name": "content-frame-chapter-2",
       "style": "bracket",
       "w": 0.42,
       "x": 0.18,
@@ -141,7 +141,7 @@
       "h": 0.035,
       "kind": "text",
       "style": "subtitle",
-      "text": "Chapter 2",
+      "text": "content-chapter-2",
       "w": 0.16,
       "x": 0.07,
       "y": -0.04
@@ -153,7 +153,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "text": "content-add-your-points",
       "w": 0.17,
       "x": 0.07,
       "y": 0.025
@@ -161,7 +161,7 @@
     {
       "h": 0.12,
       "kind": "frame",
-      "name": "Detail",
+      "name": "content-frame-detail",
       "style": "circle",
       "w": 0.12,
       "x": 0.32,
@@ -173,7 +173,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "A detail to zoom into",
+      "text": "content-a-detail-to-zoom-into",
       "w": 0.08,
       "x": 0.32,
       "y": 0
@@ -181,7 +181,7 @@
     {
       "h": 0.18,
       "kind": "frame",
-      "name": "Chapter 3",
+      "name": "content-frame-chapter-3",
       "style": "bracket",
       "w": 0.42,
       "x": 0.18,
@@ -192,7 +192,7 @@
       "h": 0.035,
       "kind": "text",
       "style": "subtitle",
-      "text": "Chapter 3",
+      "text": "content-chapter-3",
       "w": 0.16,
       "x": 0.07,
       "y": 0.16
@@ -204,7 +204,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "text": "content-add-your-points",
       "w": 0.17,
       "x": 0.07,
       "y": 0.225
@@ -212,7 +212,7 @@
     {
       "h": 0.12,
       "kind": "frame",
-      "name": "Detail",
+      "name": "content-frame-detail",
       "style": "circle",
       "w": 0.12,
       "x": 0.32,
@@ -224,7 +224,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "A detail to zoom into",
+      "text": "content-a-detail-to-zoom-into",
       "w": 0.08,
       "x": 0.32,
       "y": 0.2
@@ -232,7 +232,7 @@
     {
       "h": 0.1,
       "kind": "frame",
-      "name": "Recap",
+      "name": "content-frame-recap",
       "style": "rectangle",
       "w": 0.3,
       "x": -0.33,
@@ -243,7 +243,7 @@
       "h": 0.03,
       "kind": "text",
       "style": "subtitle",
-      "text": "Recap",
+      "text": "content-recap",
       "w": 0.12,
       "x": -0.33,
       "y": 0.27
@@ -254,7 +254,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "The three things to remember",
+      "text": "content-the-three-things-to-remember",
       "w": 0.24,
       "x": -0.33,
       "y": 0.31

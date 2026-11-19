@@ -10,6 +10,7 @@ pub mod check;
 pub mod clip;
 pub mod command;
 pub mod connector;
+pub mod content;
 pub mod delta;
 pub mod describe;
 pub mod editor;

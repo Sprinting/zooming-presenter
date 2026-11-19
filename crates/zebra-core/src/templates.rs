@@ -26,6 +26,8 @@ pub enum Piece {
         h: f64,
         #[serde(default, skip_serializing_if = "is_zero")]
         rot: f64,
+        /// A [`crate::content`] key (`content-frame-title`), filled in
+        /// when the frame is placed.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         name: String,
         /// A path step (layouts); templates list their path separately.
@@ -38,6 +40,8 @@ pub enum Piece {
     /// Text scaled to fit inside `w`×`h`. `ph`: a placeholder, not content.
     Text {
         style: TextStyle,
+        /// A [`crate::content`] key (`content-add-a-title`), filled in when
+        /// the text is placed; or a number, kept as it is. Never English.
         text: String,
         x: f64,
         y: f64,
@@ -164,5 +168,39 @@ mod tests {
         }
         assert_eq!(TEMPLATES.len(), 8);
         assert_eq!(LAYOUTS.len(), 10);
+    }
+
+    /// Words on the canvas are translated, so built-in content carries
+    /// keys from the app's .ftl, never English typed into core.
+    #[test]
+    fn built_in_content_has_keys_not_english() {
+        let mut sources: Vec<(String, Vec<Piece>)> = vec![];
+        for d in crate::diagrams::ALL {
+            sources.push((format!("diagram {}", d.key), (d.build)()));
+        }
+        for l in LAYOUTS.iter() {
+            sources.push((format!("layout {}", l.id), layout(&l.id).unwrap()));
+        }
+        for t in TEMPLATES.iter() {
+            sources.push((format!("template {}", t.id), template(&t.id).unwrap().pieces));
+        }
+        let mut bad = vec![];
+        for (src, pieces) in &sources {
+            for p in pieces {
+                let (s, frame) = match p {
+                    Piece::Text { text, .. } => (text, false),
+                    Piece::Frame { name, .. } => (name, true),
+                    _ => continue,
+                };
+                if crate::content::is_neutral(s) {
+                    continue;
+                }
+                let prefix = if frame { "content-frame-" } else { crate::content::PREFIX };
+                if !s.starts_with(prefix) || crate::content::english(s).is_none() {
+                    bad.push(format!("{src}: {s:?}"));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "built-in content must use content-* keys from zebra-app.ftl (frames: content-frame-*), not words:\n{}", bad.join("\n"));
     }
 }

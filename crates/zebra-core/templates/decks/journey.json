@@ -15,7 +15,7 @@
     {
       "h": 0.5,
       "kind": "frame",
-      "name": "The road ahead",
+      "name": "content-frame-the-road-ahead",
       "style": "invisible",
       "w": 1,
       "x": 0,
@@ -74,7 +74,7 @@
     {
       "h": 0.15,
       "kind": "frame",
-      "name": "Start",
+      "name": "content-frame-start",
       "rot": -8,
       "style": "bracket",
       "w": 0.24,
@@ -86,7 +86,7 @@
       "h": 0.0288,
       "kind": "text",
       "style": "subtitle",
-      "text": "Where we start",
+      "text": "content-where-we-start",
       "w": 0.192,
       "x": -0.36,
       "y": 0.1208
@@ -97,7 +97,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a note",
+      "text": "content-add-a-note",
       "w": 0.168,
       "x": -0.36,
       "y": 0.164
@@ -117,7 +117,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "First stop",
+      "text": "content-first-stop",
       "w": 0.16,
       "x": -0.13,
       "y": -0.086
@@ -128,7 +128,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a note",
+      "text": "content-add-a-note",
       "w": 0.14,
       "x": -0.13,
       "y": -0.05
@@ -148,7 +148,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Second stop",
+      "text": "content-second-stop",
       "w": 0.136,
       "x": 0.07,
       "y": 0.1064
@@ -159,7 +159,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a note",
+      "text": "content-add-a-note",
       "w": 0.119,
       "x": 0.07,
       "y": 0.137
@@ -179,7 +179,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Third stop",
+      "text": "content-third-stop",
       "w": 0.112,
       "x": 0.23,
       "y": -0.0912
@@ -190,7 +190,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a note",
+      "text": "content-add-a-note",
       "w": 0.098,
       "x": 0.23,
       "y": -0.066
@@ -210,7 +210,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Almost there",
+      "text": "content-almost-there",
       "w": 0.088,
       "x": 0.35,
       "y": 0.0812
@@ -221,7 +221,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a note",
+      "text": "content-add-a-note",
       "w": 0.077,
       "x": 0.35,
       "y": 0.101
@@ -229,7 +229,7 @@
     {
       "h": 0.05,
       "kind": "frame",
-      "name": "Destination",
+      "name": "content-frame-destination",
       "style": "bracket",
       "w": 0.08,
       "x": 0.44,
@@ -240,7 +240,7 @@
       "h": 0.0096,
       "kind": "text",
       "style": "subtitle",
-      "text": "Where we arrive",
+      "text": "content-where-we-arrive",
       "w": 0.064,
       "x": 0.44,
       "y": -0.0764
@@ -251,7 +251,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a note",
+      "text": "content-add-a-note",
       "w": 0.056,
       "x": 0.44,
       "y": -0.062

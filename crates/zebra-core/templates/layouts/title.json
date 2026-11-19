@@ -6,7 +6,7 @@
     {
       "h": 0.625,
       "kind": "frame",
-      "name": "Title",
+      "name": "content-frame-title",
       "path": true,
       "style": "bracket",
       "w": 1,
@@ -19,7 +19,7 @@
       "kind": "text",
       "ph": true,
       "style": "title",
-      "text": "Add a title",
+      "text": "content-add-a-title",
       "w": 0.8,
       "x": 0,
       "y": -0.05
@@ -30,7 +30,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Add a subtitle",
+      "text": "content-add-a-subtitle",
       "w": 0.6,
       "x": 0,
       "y": 0.1

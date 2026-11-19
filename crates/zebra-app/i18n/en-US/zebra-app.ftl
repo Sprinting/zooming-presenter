@@ -1281,3 +1281,111 @@ diagram-name-orbit = Orbit
 diagram-description-orbit = Frames round a centre. Its frames join the path.
 diagram-name-big-picture = Big picture
 diagram-description-big-picture = An overview frame with detail frames inside. Its frames join the path.
+
+## Text that diagrams, layouts and templates put on the canvas: placeholders
+## and frame names (content-frame-*). Filled in once, when the diagram,
+## layout or template is placed; after that the text is the person's own.
+## zebra-core reads the English from this file too (zebra_core::content).
+content-a-detail-to-zoom-into = A detail to zoom into
+content-a-line-or-two =
+    A line or two
+    about this topic
+content-add-a-note = Add a note
+content-add-a-subtitle = Add a subtitle
+content-add-a-thought = Add a thought
+content-add-a-title = Add a title
+content-add-text = Add text
+content-add-your-points =
+    Add your points here
+    One idea per line
+    Keep it short
+content-add-your-points-block =
+    Add your points here
+    One idea per line
+content-after = After
+content-all = All
+content-almost-there = Almost there
+content-and-in-the-end = And in the end
+content-before = Before
+content-both = Both
+content-branch = Branch
+content-business-model = Business model
+content-cause = Cause
+content-chapter-1 = Chapter 1
+content-chapter-2 = Chapter 2
+content-chapter-3 = Chapter 3
+content-course-or-class = Course or class
+content-date = Date
+content-detail-to-zoom-into = Detail to zoom into
+content-doing = Doing
+content-done = Done
+content-drop-a-picture-here = Drop a picture here
+content-effect = Effect
+content-first-stop = First stop
+content-focus = Focus
+content-heading = Heading
+content-how-it-turned-out = How it turned out
+content-idea = Idea
+content-market = Market
+content-name = Name
+content-once-upon-a-time = Once upon a time…
+content-one-line-on-what-you-do = One line on what you do
+content-outcome = Outcome
+content-point = Point
+content-problem = Problem
+content-recap = Recap
+content-say-what-the-picture-shows = Say what the picture shows
+content-second-stop = Second stop
+content-solution = Solution
+content-step = Step
+content-team = Team
+content-the-ask = The ask
+content-the-three-things-to-remember = The three things to remember
+content-then-something-changed = Then something changed
+content-third-stop = Third stop
+content-to-do = To do
+content-topic = Topic
+content-topic-1 = Topic 1
+content-topic-2 = Topic 2
+content-topic-3 = Topic 3
+content-topic-4 = Topic 4
+content-what-happened = What happened
+content-what-happened-next = What happened next
+content-what-lies-beneath = What lies beneath
+content-what-people-see = What people see
+content-what-youll-learn = What you'll learn
+content-where-we-arrive = Where we arrive
+content-where-we-start = Where we start
+content-year = Year
+
+content-frame-after = After
+content-frame-before = Before
+content-frame-beginning = Beginning
+content-frame-business-model = Business model
+content-frame-central-topic = Central topic
+content-frame-centre = Centre
+content-frame-chapter-1 = Chapter 1
+content-frame-chapter-2 = Chapter 2
+content-frame-chapter-3 = Chapter 3
+content-frame-destination = Destination
+content-frame-detail = Detail
+content-frame-end = End
+content-frame-left = Left
+content-frame-main-idea = Main idea
+content-frame-market = Market
+content-frame-middle = Middle
+content-frame-objectives = Objectives
+content-frame-overview = Overview
+content-frame-problem = Problem
+content-frame-recap = Recap
+content-frame-right = Right
+content-frame-solution = Solution
+content-frame-start = Start
+content-frame-team = Team
+content-frame-the-ask = The ask
+content-frame-the-road-ahead = The road ahead
+content-frame-title = Title
+content-frame-topic-1 = Topic 1
+content-frame-topic-2 = Topic 2
+content-frame-topic-3 = Topic 3
+content-frame-topic-4 = Topic 4
