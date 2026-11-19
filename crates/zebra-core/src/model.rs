@@ -879,6 +879,13 @@ impl Element {
     pub fn is_frame(&self) -> bool {
         matches!(self.kind, ElementKind::Frame(_))
     }
+    /// The margin (a fraction of the screen) left around this element when
+    /// the camera fits it, as a path step or by zooming to it. Frames and
+    /// pictures (an imported page is a picture step) nearly fill the
+    /// screen; other things get room around them.
+    pub fn fit_margin(&self) -> f64 {
+        if matches!(self.kind, ElementKind::Frame(_) | ElementKind::Image(_)) { 0.04 } else { 0.12 }
+    }
     /// Short human label: name, else first text line, else type.
     pub fn label(&self, doc: &Document) -> String {
         self.own_label(doc).unwrap_or_else(|| self.kind.type_name().into())

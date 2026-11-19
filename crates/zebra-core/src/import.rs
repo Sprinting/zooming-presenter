@@ -1,6 +1,6 @@
 //! Pages read from another program's file (File › Import…, the API's
-//! `import`): one frame per page, laid out to the right of what is already
-//! on the canvas, with a path step per page, added as one undo step.
+//! `import`): the pages laid out to the right of what is already on the
+//! canvas inside one frame, with a path step per page, as one undo step.
 //!
 //! The readers live in `zebra-import`; this is the part every format
 //! shares, so a PDF and a PowerPoint file land on the canvas the same way.
@@ -110,10 +110,12 @@ pub fn columns(n: usize) -> usize {
 }
 
 impl Editor {
-    /// Add the pages of `deck` as one undo step named `label`: each page
-    /// in a rectangle frame (named after the page), the frames in rows to
-    /// the right of everything already on the canvas, and a path step per
-    /// page appended in page order (carrying the page's notes).
+    /// Add the pages of `deck` as one undo step named `label`: the pages in
+    /// rows to the right of everything already on the canvas, one rectangle
+    /// frame (named after the file) around them all, and a path step per
+    /// page appended in page order (carrying the page's notes). A page that
+    /// is a single picture (every PDF page) is its own step and carries the
+    /// page's name; a page of several objects is framed on its own.
     pub fn import_deck(&mut self, deck: &ImportedDeck, label: String, origin: Origin) -> ZResult<Outcome> {
         if deck.pages.is_empty() {
             return Err(ZError::invalid("the file has no pages to import"));
@@ -130,31 +132,52 @@ impl Editor {
             None => (-(cw + gap) * (columns(deck.pages.len()) as f64 - 1.0) / 2.0 - cw / 2.0, -ch / 2.0),
         };
         let cols = columns(deck.pages.len());
+        let rows = deck.pages.len().div_ceil(cols);
         let theme = self.theme();
         let mut clip = Clip { elements: vec![], assets: deck.assets.clone() };
-        let mut frames = vec![];
         let mut n = 0u64;
         let mut tmp = |prefix: &str| {
             n += 1;
             format!("import-{prefix}{n}")
         };
+        // One frame around every page, first so it sits behind them. It
+        // holds the pages ([`crate::model::frame_holds`]: they are smaller),
+        // so moving, turning or resizing it carries the whole file.
+        let pad = gap / 2.0;
+        let (gw, gh) = (cols as f64 * (cw + gap) - gap, rows as f64 * (ch + gap) - gap);
+        clip.elements.push(Element {
+            id: tmp("f"),
+            transform: Transform { x: left + gw / 2.0, y: top + gh / 2.0, scale: 1.0, rotation: 0.0 },
+            size: Size { w: gw + 2.0 * pad, h: gh + 2.0 * pad },
+            locked: false,
+            name: deck.title.clone(),
+            placeholder: false,
+            group: None,
+            kind: ElementKind::Frame(FrameData { style: FrameStyle::Rectangle, color: None }),
+        });
+        // What each page's path step shows: a page that is one picture is
+        // its own step; a page of several objects gets a frame of its own.
+        let mut steps = vec![];
         for (i, p) in deck.pages.iter().enumerate() {
             let (col, row) = ((i % cols) as f64, (i / cols) as f64);
             // Centred in its cell, so pages of different sizes line up.
             let ox = left + col * (cw + gap) + (cw - p.w) / 2.0;
             let oy = top + row * (ch + gap) + (ch - p.h) / 2.0;
-            let fid = tmp("f");
-            clip.elements.push(Element {
-                id: fid.clone(),
-                transform: Transform { x: ox + p.w / 2.0, y: oy + p.h / 2.0, scale: 1.0, rotation: 0.0 },
-                size: Size { w: p.w, h: p.h },
-                locked: false,
-                name: p.name.clone(),
-                placeholder: false,
-                group: None,
-                kind: ElementKind::Frame(FrameData { style: FrameStyle::Rectangle, color: None }),
-            });
-            frames.push((fid, p.notes.clone()));
+            let single = p.items.len() == 1;
+            if !single {
+                let fid = tmp("f");
+                clip.elements.push(Element {
+                    id: fid.clone(),
+                    transform: Transform { x: ox + p.w / 2.0, y: oy + p.h / 2.0, scale: 1.0, rotation: 0.0 },
+                    size: Size { w: p.w, h: p.h },
+                    locked: false,
+                    name: p.name.clone(),
+                    placeholder: false,
+                    group: None,
+                    kind: ElementKind::Frame(FrameData { style: FrameStyle::Rectangle, color: None }),
+                });
+                steps.push((fid, p.notes.clone()));
+            }
             for it in &p.items {
                 let mut e = it.element.clone();
                 e.id = tmp(e.kind.id_prefix());
@@ -164,11 +187,15 @@ impl Editor {
                 }
                 e.transform.x += ox;
                 e.transform.y += oy;
+                if single {
+                    e.name = p.name.clone();
+                    steps.push((e.id.clone(), p.notes.clone()));
+                }
                 clip.elements.push(e);
             }
         }
         self.paste_clip_then(&clip, 0.0, 0.0, Some(label), origin, |ids| {
-            frames
+            steps
                 .iter()
                 .map(|(f, notes)| Command::AddStep { target: StepTarget::Element { id: ids[f.as_str()].clone() }, index: None, builds: vec![], notes: notes.clone() })
                 .collect()

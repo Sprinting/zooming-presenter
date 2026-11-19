@@ -165,7 +165,7 @@ fn tools() -> Value {
         {
             "name": "import_file",
             "title": "Import a PDF",
-            "description": "File › Import…: add a PDF's pages to the document, each in a frame with a path step, right of what is on the canvas, as one undo step. Text, shapes and pictures come in as objects; equations, gradients and effects as pictures (the result's `notes` count them). Fonts become the theme's.",
+            "description": "File › Import…: add a PDF's pages to the document as pictures, one frame around them all (the result's `frames`; move or turn it to carry every page) and a path step per page, right of what is on the canvas, as one undo step. The result's `notes` count pages that could not be read.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

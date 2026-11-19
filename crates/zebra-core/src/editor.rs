@@ -2729,7 +2729,7 @@ impl Editor {
     /// The camera that shows `e` on a screen of `viewport` points.
     pub fn camera_for_element_in(&self, e: &Element, viewport: Vec2) -> Camera {
         let (w, h) = e.visual_world_size();
-        let margin = if e.is_frame() { 0.04 } else { 0.12 };
+        let margin = e.fit_margin();
         Camera::fit(
             &ViewRect { cx: e.transform.x, cy: e.transform.y, width: w, height: h, rotation: e.transform.rotation },
             viewport,
