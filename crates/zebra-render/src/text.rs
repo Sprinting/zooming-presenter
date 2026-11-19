@@ -14,7 +14,7 @@ use parley::fontique::{
 };
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, IndentOptions, LayoutContext,
-    LineHeight, PositionedLayoutItem, StyleProperty,
+    FontFamilyName, LineHeight, PositionedLayoutItem, StyleProperty,
 };
 use unicode_script::{Script as UScript, UnicodeScript};
 use zebra_core::rich;
@@ -462,6 +462,20 @@ fn data_of(key: &Key) -> TextData {
     }
 }
 
+/// Spaces, controls, joiners, variation selectors and tags: drawn with no
+/// glyph of their own, so a font lacking them is no reason to fall back.
+fn needs_no_glyph(c: char) -> bool {
+    c.is_whitespace()
+        || c.is_control()
+        || matches!(c,
+            '\u{00AD}' | '\u{034F}' | '\u{FEFF}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{E0000}'..='\u{E0FFF}')
+}
+
 fn real_script(s: UScript) -> bool {
     !matches!(s, UScript::Common | UScript::Inherited | UScript::Unknown)
 }
@@ -559,13 +573,64 @@ fn covering(
     found
 }
 
+/// Clusters a layout drew with .notdef (glyph 0), with the families that
+/// have their characters: what to add to those ranges' family lists.
+fn tofu_fixes(
+    layout: &parley::Layout<[u8; 4]>,
+    text: &str,
+    family: &str,
+    font_cx: &mut FontContext,
+    cache: &mut HashMap<(char, Option<UScript>), Option<String>>,
+) -> Vec<(Range<usize>, Vec<String>)> {
+    let mut bad: Vec<Range<usize>> = vec![];
+    for line in layout.lines() {
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(gr) = item else {
+                continue;
+            };
+            for c in gr.run().visual_clusters() {
+                if c.glyphs().any(|g| g.id == 0) {
+                    bad.push(c.text_range());
+                }
+            }
+        }
+    }
+    if bad.is_empty() {
+        return vec![];
+    }
+    bad.sort_by_key(|r| (r.start, r.end));
+    bad.dedup();
+    let mut prefer: Vec<UScript> = text
+        .chars()
+        .map(|c| c.script())
+        .filter(|s| real_script(*s))
+        .collect();
+    prefer.dedup();
+    let mut out = vec![];
+    for r in bad {
+        let mut fams: Vec<String> = vec![];
+        for ch in text[r.clone()].chars().filter(|c| !needs_no_glyph(*c)) {
+            if let Some(f) = fallback_family(font_cx, cache, ch, &prefer)
+                && f != family
+                && !fams.contains(&f)
+            {
+                fams.push(f);
+            }
+        }
+        if !fams.is_empty() {
+            out.push((r, fams));
+        }
+    }
+    out
+}
+
 const BULLETS: [&str; 3] = ["\u{2022}", "\u{25E6}", "\u{25AA}"];
 
 /// Lays out each paragraph on its own (so each can have its own indent,
 /// list marker and alignment) and stacks them.
 fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
     let t = data_of(key);
-    let Inner { font_cx, layout_cx, .. } = g;
+    let Inner { font_cx, layout_cx, fallbacks, .. } = g;
     let wrap = key.wrap_bits.map(|b| f64::from_bits(b) as f32);
     let paras: Vec<&str> = t.text.split('\n').collect();
     let formats: Vec<SpanFormat> = t.spans.iter().map(|s| s.format.clone()).collect();
@@ -605,7 +670,12 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
         char0 += p.chars().count() + 1;
     }
 
-    let build = |font_cx: &mut FontContext, layout_cx: &mut LayoutContext<[u8; 4]>, p: &P| {
+    // `extra`: byte ranges to set in the theme family followed by
+    // fallback families (see `tofu_fixes`).
+    let build = |font_cx: &mut FontContext,
+                 layout_cx: &mut LayoutContext<[u8; 4]>,
+                 p: &P,
+                 extra: &[(Range<usize>, Vec<String>)]| {
         let mut b = layout_cx.ranged_builder(font_cx, &p.text, 1.0, true);
         b.push_default(StyleProperty::FontFamily(FontFamily::named(&key.family)));
         b.push_default(StyleProperty::FontSize(size));
@@ -637,6 +707,11 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
             let n = (si + 1) as u16;
             b.push(StyleProperty::Brush([n as u8, (n >> 8) as u8, 0, 0]), r);
         }
+        for (r, fams) in extra {
+            let list: Vec<FontFamilyName> =
+                std::iter::once(&key.family).chain(fams).map(|f| FontFamilyName::named(f)).collect();
+            b.push(StyleProperty::FontFamily(FontFamily::List(list.into())), r.clone());
+        }
         let mut layout = b.build(&p.text);
         if p.marker_len > 0 {
             // Hanging indent: wrapped lines line up after the marker.
@@ -661,9 +736,18 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
 
     let mut layouts = vec![];
     for p in &ps {
-        let mut l = build(font_cx, layout_cx, p);
+        let width = wrap.map(|w| (w - p.indent_x).max(size));
+        let mut l = build(font_cx, layout_cx, p, &[]);
         l.set_alignment(alignment(p.align), AlignmentOptions::default());
-        l.break_all_lines(wrap.map(|w| (w - p.indent_x).max(size)));
+        l.break_all_lines(width);
+        // A character the run's fonts lack: lay out again with a font
+        // that has it added for just that cluster.
+        let fixes = tofu_fixes(&l, &p.text, &key.family, font_cx, fallbacks);
+        if !fixes.is_empty() {
+            l = build(font_cx, layout_cx, p, &fixes);
+            l.set_alignment(alignment(p.align), AlignmentOptions::default());
+            l.break_all_lines(width);
+        }
         layouts.push(l);
     }
     // Without wrapping, align paragraphs within the widest one.
