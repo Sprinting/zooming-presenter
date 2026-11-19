@@ -94,6 +94,8 @@ pub struct ZebraApp {
     /// The size this window opens at: that of the window it was made from,
     /// as in Keynote (without it every new window came up 800 by 600).
     pub open_size: Option<egui::Vec2>,
+    /// Where this window was put and noted (see `window_frames`).
+    pub placement: crate::window_frames::Placement,
     /// `editor.loads` when `after_load` last ran.
     pub seen_loads: u64,
     /// When decoded pictures were last trimmed.
@@ -340,6 +342,7 @@ impl ZebraApp {
             viewport: egui::ViewportId::ROOT,
             wake_hidden: false,
             open_size: None,
+            placement: Default::default(),
             seen_loads: 0,
             last_image_trim: 0.0,
             open_elsewhere: vec![],

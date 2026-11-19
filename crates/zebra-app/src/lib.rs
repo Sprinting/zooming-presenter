@@ -37,6 +37,7 @@ pub mod thumbs;
 pub mod widgets;
 pub mod words;
 pub mod welcome;
+pub mod window_frames;
 #[cfg(target_os = "macos")]
 pub mod menu_mac;
 

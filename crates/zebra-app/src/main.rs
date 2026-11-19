@@ -40,8 +40,9 @@ struct Cli {
     #[arg(long)]
     background: bool,
     /// Debug: window size WxH.
-    #[arg(long, hide = true, default_value = "1440x900")]
-    size: String,
+    /// Without it, Zebra opens where it was last (like Keynote).
+    #[arg(long, hide = true)]
+    size: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -78,7 +79,12 @@ fn main() -> anyhow::Result<()> {
         Some(v) if v.len() == 2 => Some((v[0].parse::<f64>()?, PathBuf::from(&v[1]))),
         _ => None,
     };
-    let (w, h) = cli.size.split_once('x').and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))).unwrap_or((1440.0, 900.0));
+    let asked = cli.size.as_deref().and_then(|s| s.split_once('x')).and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)));
+    // Windows go back where they were, unless a debug run asks for a size.
+    let frames = (cli.size.is_none() && screenshot.is_none()).then(zebra_app::window_frames::Frames::load);
+    let last = frames.as_ref().and_then(|f| f.last);
+    let first = zebra_app::mac::first_window_size(zebra_app::mac::main_screen_room());
+    let (w, h) = asked.or(last.map(|f| (f.size[0], f.size[1]))).unwrap_or((first.x, first.y));
     if cli.api && !granted {
         eprintln!("zebra: {NOT_GRANTED}");
     }
@@ -87,8 +93,15 @@ fn main() -> anyhow::Result<()> {
     let background = cli.background || std::env::var_os("ZEBRA_BACKGROUND").is_some_and(|v| v != "0");
     let native = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        viewport: zebra_app::window_builder("Zebra").with_inner_size([w, h]).with_active(!background),
-        // Each run starts at the requested size (debug screenshots need it).
+        viewport: {
+            let b = zebra_app::window_builder("Zebra").with_inner_size([w, h]).with_active(!background);
+            // macOS keeps a title bar on screen if that screen is gone.
+            match last {
+                Some(f) if asked.is_none() => b.with_position(f.pos),
+                _ => b,
+            }
+        },
+        // Zebra keeps window frames itself (window_frames), per document.
         persist_window: false,
         // winit activates the app at launch unless told not to.
         #[cfg(target_os = "macos")]
@@ -117,7 +130,9 @@ fn main() -> anyhow::Result<()> {
             let mut opts = opts;
             opts.open = zebra_app::open_events::launch_file(opts.open.take());
             let app = ZebraApp::new(&cc.egui_ctx, cc.wgpu_render_state.clone(), cc.storage, opts);
-            Ok(Box::new(zebra_app::shell::Shell::new(app)))
+            let mut shell = zebra_app::shell::Shell::new(app);
+            shell.frames = frames;
+            Ok(Box::new(shell))
         }),
     )
     .map_err(|e| anyhow::anyhow!("{e}"))
