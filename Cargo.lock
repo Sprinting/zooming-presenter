@@ -6515,6 +6515,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "zebra-web"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "flate2",
+ "kurbo",
+ "serde",
+ "serde_json",
+ "zebra-core",
+ "zebra-render",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
