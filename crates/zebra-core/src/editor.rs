@@ -739,14 +739,32 @@ impl Editor {
 
     /// Bring the spatial index up to date after `changes` were applied.
     fn reindex_after<'a>(&mut self, changes: impl Iterator<Item = &'a crate::delta::Change>) {
+        let mut z = vec![];
         for c in changes {
             match c.element_ids() {
                 Some(ids) => ids.iter().for_each(|id| self.index.touch(id)),
                 None => self.index.touch_all(),
             }
             if !c.z_order.is_empty() {
-                self.index.z_changed();
+                z.push(c);
             }
+        }
+        // Draw ranks: a removal keeps the others in order, and a single
+        // insertion gets a rank between its neighbours (before the sync
+        // reads it as a newcomer). Anything else renumbers, which walks
+        // the whole draw order.
+        match z.as_slice() {
+            [] => {}
+            [c] if c.z_order.iter().all(|s| s.insert.is_empty() || (s.remove == 0 && s.insert.len() == 1)) => {
+                let mut shift = 0isize;
+                for s in &c.z_order {
+                    if !s.insert.is_empty() {
+                        self.index.z_inserted(&self.doc, (s.at as isize + shift) as usize);
+                    }
+                    shift += s.insert.len() as isize - s.remove as isize;
+                }
+            }
+            _ => self.index.z_changed(),
         }
         self.index.sync(&self.doc);
         self.check_index();
