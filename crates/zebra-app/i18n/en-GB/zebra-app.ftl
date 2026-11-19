@@ -33,22 +33,22 @@ app-file-filter-pdf = PDF
 app-file-filter-png = PNG
 app-ai-start-failed = Couldn't start AI control: { $error }
 # When something a person did can't be done (details go to the log).
-app-error-locked = It's locked. Unlock it first.
-app-error-busy = An agent is in the middle of a change. Try again in a moment.
+app-error-locked = This object is locked. Unlock it first.
+app-error-busy = An agent is making a change. Try again in a moment.
 app-error-io = Couldn't read or write the file.
-app-error-not-empty = The canvas isn't empty.
-app-error-not-found = That's no longer there.
+app-error-not-empty = The canvas already has content.
+app-error-not-found = That object no longer exists.
 app-error-other = Couldn't do that.
-app-toast-nothing-to-play = Nothing to play yet. Double-click the canvas to write something first.
-app-toast-presenter-view-on = Presenter view will open when you present.
+app-toast-nothing-to-play = There's nothing to play yet. Double-click the canvas to add text.
+app-toast-presenter-view-on = Presenter view opens when you play the presentation.
 app-toast-presenter-view-off = Presenter view is off.
-app-toast-agent-stopped = Agent stopped. Resume it from the AI button in the toolbar.
-app-toast-read-failed = Could not read { $path }: { $error }
-app-toast-read-dropped-failed = Could not read dropped file: { $error }
-app-toast-agent-switched-ai-off = { $name } switched AI control off. Turn it back on from the AI button.
+app-toast-agent-stopped = Agent stopped. To resume it, click AI in the toolbar.
+app-toast-read-failed = Couldn't read { $path }: { $error }
+app-toast-read-dropped-failed = Couldn't read the dropped file: { $error }
+app-toast-agent-switched-ai-off = { $name } turned off AI control. To turn it on again, click AI in the toolbar.
 app-open-failed-title = The document “{ $name }” could not be opened.
 app-open-failed-newer = It was made by a newer version of Zebra.
-app-open-failed-not-zebra = It isn't a Zebra presentation, or it is damaged.
+app-open-failed-not-zebra = It isn't a Zebra presentation, or it's damaged.
 app-open-failed-missing = The file no longer exists.
 app-open-failed-permission = You don't have permission to read it.
 app-open-failed-unreadable = The file couldn't be read.
@@ -333,7 +333,7 @@ welcome-create = Create
 welcome-cancel = Cancel
 welcome-toast-template-open-failed = Couldn't open the template: { $error }
 welcome-toast-templates-folder-missing = Couldn't find the templates folder.
-welcome-toast-template-saved = Saved “{ $name }” to My Templates. Find it in File ▸ New from Template…
+welcome-toast-template-saved = Saved “{ $name }” to My Templates. To use it, choose File › New from Template.
 welcome-toast-template-save-failed = Couldn't save the template: { $error }
 layouts-title = Layouts
 layouts-caption = Click a layout to add it to the centre of the view. Its frames are added to the path.
@@ -373,7 +373,7 @@ sheet-toast-nothing-to-revert = { $name } has no changes to revert.
 
 export-toast-exporting = Exporting…
 export-toast-exported = Exported { $path }
-export-toast-failed = Export failed: { $error }
+export-toast-failed = Couldn't export: { $error }
 
 ## ---- end files.rs ----
 
@@ -382,7 +382,7 @@ export-toast-failed = Export failed: { $error }
 
 cli-agent-prompt = Zebra (a zooming presentation app) is open on my Mac and I've allowed AI control. Run `{ $ctl } --help` to learn how to drive it, then its `describe` command to see what's on the canvas. Pass `--agent` with your name on every command.
 cli-install-prompt = Zebra wants to install the zebractl command so that AI agents can use it.
-cli-error-not-bundled = zebractl isn't inside this copy of Zebra
+cli-error-not-bundled = this copy of Zebra doesn't include zebractl
 cli-error-cancelled = cancelled
 
 ## ---- end cli.rs ----
@@ -996,10 +996,10 @@ present-hud-next-step = Next Step
 
 
 ## ---- media_ui.rs ----
-media-toast-video-macos-only = Videos play in Zebra on macOS. Here you see the poster frame.
+media-toast-video-macos-only = Videos play only on macOS. Zebra shows the poster frame instead.
 # $error is the reason from the media player.
 media-error-play-video = Couldn't play the video: { $error }
-media-error-play-soundtrack = Couldn't play the soundtrack: { $error }
+media-error-play-soundtrack = Couldn't play the background music: { $error }
 media-error-play-voiceover = Couldn't play the voice-over: { $error }
 # Text put on the system clipboard when copying objects that have no text.
 media-clipboard-objects = { $count ->
