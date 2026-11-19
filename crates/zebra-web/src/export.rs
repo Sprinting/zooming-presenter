@@ -140,7 +140,9 @@ pub fn build(renderer: &Renderer, editor: &Editor, labels: &Labels, inline_limit
     let fonts: Vec<String> = renderer.font_files_used(editor).iter().map(|f| add_blob!(b64(&gzip(f)))).collect();
 
     // Video and audio: what is used, in the page or (too big) as files.
-    let used = doc.used_assets();
+    // An imported PDF stays out: the player draws its pages' pictures.
+    let used: std::collections::BTreeSet<&str> =
+        doc.used_assets().into_iter().filter(|k| doc.assets.get(*k).is_none_or(|a| a.media_kind() != MediaKind::Document)).collect();
     let font_keys: std::collections::HashSet<&str> = doc.themes.iter().flat_map(|t| t.fonts.values().flatten()).map(|s| s.as_str()).collect();
     let media_bytes: usize = doc
         .assets
@@ -157,7 +159,7 @@ pub fn build(renderer: &Renderer, editor: &Editor, labels: &Labels, inline_limit
     for (key, a) in doc.assets.iter().filter(|(k, _)| used.contains(k.as_str()) && !font_keys.contains(k.as_str())) {
         let kind = a.media_kind();
         let mut entry = json!({"key": key, "ext": a.ext, "w": a.width, "h": a.height, "mime": mime(&a.ext),
-            "kind": match kind { MediaKind::Image => "image", MediaKind::Video => "video", MediaKind::Audio => "audio" }});
+            "kind": match kind { MediaKind::Image => "image", MediaKind::Video => "video", MediaKind::Audio => "audio", MediaKind::Document => "pdf" }});
         if kind != MediaKind::Image && folder {
             let rel = format!("media/{key}.{}", a.ext);
             entry["src"] = json!(rel);

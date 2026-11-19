@@ -65,52 +65,34 @@ pub struct SourceBox {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportNote {
-    /// Equations (maths fonts) came in as pictures.
-    EquationAsPicture,
-    /// Gradients came in as pictures.
-    GradientAsPicture,
-    /// Transparency effects and blend modes came in as pictures.
-    EffectAsPicture,
-    /// Clipped (cropped to a shape) objects came in as pictures.
-    ClippedAsPicture,
-    /// Other objects Zebra has no match for came in as pictures.
-    OtherAsPicture,
-    /// Invisible text (such as a scanned page's search layer) was left out.
-    InvisibleTextSkipped,
-    /// Objects that could not be read were left out.
-    ObjectSkipped,
+    /// Pages that could not be read were left out.
+    PageSkipped,
 }
 
 impl ImportNote {
-    pub const ALL: [ImportNote; 7] = [
-        ImportNote::EquationAsPicture,
-        ImportNote::GradientAsPicture,
-        ImportNote::EffectAsPicture,
-        ImportNote::ClippedAsPicture,
-        ImportNote::OtherAsPicture,
-        ImportNote::InvisibleTextSkipped,
-        ImportNote::ObjectSkipped,
-    ];
+    pub const ALL: [ImportNote; 1] = [ImportNote::PageSkipped];
 
     /// English, for the API and the undo history of agents.
     pub fn english(self, n: usize) -> String {
         let (one, many) = match self {
-            ImportNote::EquationAsPicture => ("equation imported as a picture", "equations imported as pictures"),
-            ImportNote::GradientAsPicture => ("gradient imported as a picture", "gradients imported as pictures"),
-            ImportNote::EffectAsPicture => ("transparency effect imported as a picture", "transparency effects imported as pictures"),
-            ImportNote::ClippedAsPicture => ("clipped object imported as a picture", "clipped objects imported as pictures"),
-            ImportNote::OtherAsPicture => ("other object imported as a picture", "other objects imported as pictures"),
-            ImportNote::InvisibleTextSkipped => ("invisible text left out", "invisible texts left out"),
-            ImportNote::ObjectSkipped => ("unreadable object left out", "unreadable objects left out"),
+            ImportNote::PageSkipped => ("unreadable page left out", "unreadable pages left out"),
         };
         format!("{n} {}", if n == 1 { one } else { many })
     }
 }
 
-/// A picture asset (PNG, JPEG, WebP, GIF or SVG) and its content key, for
-/// [`ImportedDeck::assets`].
+/// Is this a PDF? (PDF allows junk before its header, within 1 KB.)
+pub fn is_pdf(bytes: &[u8]) -> bool {
+    bytes.len() >= 5 && bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-")
+}
+
+/// A picture asset (PNG, JPEG, WebP, GIF or SVG), or the PDF that pages
+/// are drawn from, and its content key, for [`ImportedDeck::assets`].
 pub fn asset_from(bytes: Vec<u8>) -> ZResult<(String, Asset)> {
     let key = crate::editor::content_key(&bytes);
+    if is_pdf(&bytes) {
+        return Ok((key, Asset { ext: "pdf".into(), bytes: bytes.into(), width: 0, height: 0 }));
+    }
     if bytes.starts_with(b"<svg") {
         let (w, h) = crate::symbols::svg_pixels(&bytes);
         return Ok((key, Asset { ext: "svg".into(), bytes: bytes.into(), width: w, height: h }));

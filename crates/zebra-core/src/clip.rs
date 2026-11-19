@@ -45,7 +45,7 @@ impl Clip {
 
 fn asset_keys(e: &Element) -> Vec<&str> {
     match &e.kind {
-        ElementKind::Image(i) => vec![i.asset.as_str()],
+        ElementKind::Image(i) => std::iter::once(i.asset.as_str()).chain(i.page.as_ref().map(|p| p.pdf.as_str())).collect(),
         ElementKind::Video(v) => std::iter::once(v.asset.as_str()).chain(v.poster.as_deref()).collect(),
         _ => vec![],
     }
