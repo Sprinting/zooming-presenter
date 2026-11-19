@@ -102,6 +102,9 @@ fn main() -> anyhow::Result<()> {
     // Window menu.
     #[cfg(target_os = "macos")]
     zebra_app::menu_mac::install_early();
+    // Before launch finishes too: Finder sends the file it launched us for
+    // while launch finishes, before any window exists.
+    zebra_app::mac::install_open_hook();
     eframe::run_native(
         "Zebra",
         native,
