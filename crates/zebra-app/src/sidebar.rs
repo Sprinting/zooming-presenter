@@ -141,7 +141,8 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             return;
         }
         let tw = ui.available_width();
-        let num_w = 22.0;
+        let num_w = number_column_width(ui, n);
+        app.step_number_w = num_w;
         let th = (tw - num_w - 6.0) * THUMB_H as f32 / THUMB_W as f32;
         let row_h = th + 26.0;
         // As the rows were spaced when each was allocated in turn.
@@ -208,6 +209,15 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             d.remove::<(usize, zebra_core::PathStep)>(drag_id);
         }
     });
+}
+
+/// The step number column: 22 points, or wider when the path's last
+/// number needs it ("1198" used to run into the thumbnail).
+pub fn number_column_width(ui: &Ui, n: usize) -> f32 {
+    // Digits differ in width: as many of the widest as the last number has.
+    let digit = |d: char| ui.painter().layout_no_wrap(d.to_string(), style::semibold(11.0), Color32::WHITE).size().x;
+    let widest = ('0'..='9').map(digit).fold(0.0, f32::max) * n.max(1).to_string().len() as f32;
+    (widest + 10.0).max(22.0).ceil()
 }
 
 /// What every step row needs to know, worked out once per frame.
