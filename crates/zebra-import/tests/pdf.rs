@@ -1,10 +1,11 @@
-//! PDF import, golden: a deck Zebra exports as PDF comes back as frames,
-//! text, shapes and pictures; damaged files give an error, never a panic.
+//! PDF import: a deck Zebra exports as PDF comes back a picture per page,
+//! drawn from the PDF kept in the document; tiles of a page match the
+//! page; damaged files give an error, never a panic.
 //!
 //! Needs PDFium: `scripts/fetch-pdfium.sh linux-x64` (or mac-arm64) puts
 //! it in target/pdfium/, or set ZEBRA_PDFIUM. Without it these tests say
 //! so and pass.
-use zebra_core::{Editor, ElementKind, ListKind, Origin};
+use zebra_core::{Editor, ElementKind, Origin};
 use zebra_import::{Control, ImportError, ImportNote, Options};
 
 fn engine() -> bool {
@@ -59,16 +60,17 @@ fn sample_pdf() -> Vec<u8> {
     r.export_pdf(&ed).unwrap()
 }
 
-fn texts(deck: &zebra_core::import::ImportedDeck, page: usize) -> Vec<String> {
-    deck.pages[page].items.iter().filter_map(|i| if let ElementKind::Text(t) = &i.element.kind { Some(t.text.clone()) } else { None }).collect()
+fn rgba(img: &image::RgbaImage) -> &[u8] {
+    img.as_raw()
 }
 
 #[test]
-fn a_zebra_pdf_comes_back_as_frames_text_shapes_and_pictures() {
+fn each_page_comes_in_as_a_picture_drawn_from_the_pdf() {
     if !engine() {
         return;
     }
-    let reader = zebra_import::open_bytes(sample_pdf(), "sample".into()).unwrap();
+    let pdf = sample_pdf();
+    let reader = zebra_import::open_bytes(pdf.clone(), "sample".into()).unwrap();
     assert_eq!(reader.kind(), "PDF");
     assert_eq!(reader.page_count(), 3);
     let mut ed = Editor::default();
@@ -76,28 +78,27 @@ fn a_zebra_pdf_comes_back_as_frames_text_shapes_and_pictures() {
     let deck = reader.read(&Options::all(ed.theme()), &Control::default()).unwrap();
     assert_eq!(deck.pages.len(), 3);
     assert_eq!(deck.pages[0].name, "Page 1");
-    let t0 = texts(&deck, 0);
-    assert!(t0.iter().any(|t| t == "Hello Import"), "{t0:?}");
-    assert!(t0.iter().any(|t| t == "Plain body line"), "{t0:?}");
-    // The title is ranked a title, the body line body.
-    for it in &deck.pages[0].items {
-        if let ElementKind::Text(t) = &it.element.kind {
-            let want = if t.text.starts_with("Hello") { zebra_core::TextStyle::Title } else { zebra_core::TextStyle::Body };
-            assert_eq!(t.style, want, "{}", t.text);
-        }
+    // The PDF once, plus a picture per page.
+    let pdfs: Vec<_> = deck.assets.iter().filter(|(_, a)| a.ext == "pdf").collect();
+    assert_eq!(pdfs.len(), 1);
+    let (pdf_key, pdf_asset) = pdfs[0];
+    assert_eq!(&pdf_asset.bytes[..], &pdf[..]);
+    for (i, p) in deck.pages.iter().enumerate() {
+        assert_eq!(p.items.len(), 1);
+        let it = &p.items[0];
+        let ElementKind::Image(img) = &it.element.kind else { panic!("{:?}", it.element.kind) };
+        let page = img.page.as_ref().expect("page ref");
+        assert_eq!((&page.pdf, page.index), (pdf_key, i as u32));
+        let pic = &deck.assets[&img.asset];
+        assert_eq!(pic.width.max(pic.height), zebra_import::pdf::PICTURE_PX);
+        // The picture fills the page, which is its frame's size.
+        assert_eq!((it.element.size.w, it.element.size.h), (p.w, p.h));
+        assert!((p.w / p.h - pic.width as f64 / pic.height as f64).abs() < 0.01);
+        assert!((p.w.max(p.h) - zebra_import::pdf::PAGE_UNITS).abs() < 1.0);
     }
-    // Lines stay lines; bullets stay bullets.
-    let bullets = deck.pages[1].items.iter().find_map(|i| match &i.element.kind {
-        ElementKind::Text(t) if t.text.contains("point") => Some(t.clone()),
-        _ => None,
-    });
-    let b = bullets.expect("bullet text");
-    assert_eq!(b.text, "First point\nSecond point");
-    assert!(b.paras.iter().all(|p| p.list == Some(ListKind::Bullet)), "{:?}", b.paras);
-    // Page 3: two shapes and a picture (plus the white page).
-    let kinds: Vec<&str> = deck.pages[2].items.iter().map(|i| i.element.kind.type_name()).collect();
-    assert!(kinds.iter().filter(|k| **k == "image").count() >= 1, "{kinds:?}");
-    assert!(kinds.iter().any(|k| *k == "shape"), "{kinds:?}");
+    // The page's first line describes it.
+    let ElementKind::Image(img0) = &deck.pages[0].items[0].element.kind else { unreachable!() };
+    assert_eq!(img0.alt, "Hello Import");
 
     // On the canvas: three frames, three steps, one undo.
     let before = ed.doc.clone();
@@ -105,10 +106,46 @@ fn a_zebra_pdf_comes_back_as_frames_text_shapes_and_pictures() {
     assert!(!out.created.is_empty());
     assert_eq!(ed.doc.ordered().filter(|e| e.is_frame()).count(), 3);
     assert_eq!(ed.doc.path.len(), 3);
+    // Saved and opened again, the PDF is still there for the pages.
+    let back = zebra_core::io::load_bytes(&zebra_core::io::save_bytes(&ed.doc).unwrap()).unwrap();
+    assert_eq!(back.assets[pdf_key].ext, "pdf");
+    assert_eq!(back.assets[pdf_key].bytes.len(), pdf.len());
+    let pages = back.elements.values().filter(|e| matches!(&e.kind, ElementKind::Image(i) if i.page.is_some())).count();
+    assert_eq!(pages, 3);
     ed.undo(Origin::Human).unwrap();
     // (The pictures' bytes stay in memory, unused, as after any undone
     // paste; saving leaves them out.)
     assert_eq!((&ed.doc.elements, &ed.doc.z_order, &ed.doc.path), (&before.elements, &before.z_order, &before.path));
+    assert!(zebra_core::io::load_bytes(&zebra_core::io::save_bytes(&ed.doc).unwrap()).unwrap().assets.is_empty());
+}
+
+#[test]
+fn tiles_match_the_whole_page_drawn_at_that_size() {
+    if !engine() {
+        return;
+    }
+    let pdf = sample_pdf();
+    let bytes = zebra_core::AssetBytes::from(pdf);
+    // Page 3 (shapes and a picture), 1024 wide.
+    let (w, h) = (1024u32, 768u32);
+    let whole = zebra_import::pdf::raster("k", &bytes, 2, (w, h), (0, 0, w, h)).expect("whole page");
+    assert_eq!(whole.len(), (w * h * 4) as usize);
+    let whole = image::RgbaImage::from_raw(w, h, whole).unwrap();
+    // Not a blank page.
+    assert!(rgba(&whole).chunks(4).any(|p| p[2] > 150 && p[0] < 100), "no blue rectangle");
+    // Each 512 tile is that part of the whole page.
+    for (x, y) in [(0, 0), (512, 0), (0, 512), (512, 512)] {
+        let th = 512.min(h - y);
+        let tile = zebra_import::pdf::raster("k", &bytes, 2, (w, h), (x, y, 512, th)).expect("tile");
+        let tile = image::RgbaImage::from_raw(512, th, tile).unwrap();
+        let want = image::imageops::crop_imm(&whole, x, y, 512, th).to_image();
+        let diff: u64 = rgba(&tile).iter().zip(rgba(&want)).map(|(a, b)| (*a as i32 - *b as i32).unsigned_abs() as u64).sum();
+        assert!(diff / (512 * th as u64 * 4) < 2, "tile {x},{y} differs by {diff}");
+    }
+    // Another PDF on the same thread, and back: each is drawn from its own.
+    assert!(zebra_import::pdf::raster("other", &zebra_core::AssetBytes::from(b"%PDF-1.4 junk".to_vec()), 0, (64, 64), (0, 0, 64, 64)).is_none());
+    assert!(zebra_import::pdf::raster("k", &bytes, 9, (64, 64), (0, 0, 64, 64)).is_none(), "no page 10");
+    assert!(zebra_import::pdf::raster("k", &bytes, 0, (64, 64), (0, 0, 64, 64)).is_some());
 }
 
 #[test]
@@ -124,6 +161,8 @@ fn pages_from_to_and_cancel() {
     let deck = reader.read(&o, &Control::default()).unwrap();
     assert_eq!(deck.pages.len(), 1);
     assert_eq!(deck.pages[0].name, "Page 2");
+    let ElementKind::Image(img) = &deck.pages[0].items[0].element.kind else { panic!() };
+    assert_eq!(img.page.as_ref().unwrap().index, 1);
     // Out-of-range asks are clamped to the file.
     o.first = 0;
     o.last = 99;
@@ -165,6 +204,5 @@ fn damaged_files_give_an_error_not_a_panic() {
         }
     }
     assert!(matches!(zebra_import::open(std::path::Path::new("/nonexistent/file.pdf")), Err(ImportError::Read(_))));
-    // Notes are listed in a stable order.
-    let _ = ImportNote::ALL;
+    assert_eq!(ImportNote::ALL.len(), 1);
 }

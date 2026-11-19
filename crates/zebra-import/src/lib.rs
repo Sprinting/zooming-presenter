@@ -6,9 +6,7 @@
 //! the UI thread: they report pages done and stop when asked
 //! ([`Control`]).
 //!
-//! Fonts are never copied: text takes the theme's fonts, with the source's
-//! sizes ranked into title, subtitle and body and the rest kept as
-//! relative sizes (see [`text`]). Line breaks are the source's.
+//! A PDF's pages come in as pictures drawn from the PDF (see [`pdf`]).
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -17,7 +15,6 @@ pub use zebra_core::import::{ImportNote, ImportedDeck};
 use zebra_core::Theme;
 
 pub mod pdf;
-pub mod text;
 
 /// The file types File › Import… offers (lower case, no dot).
 pub const EXTENSIONS: &[&str] = &["pdf"];
@@ -70,7 +67,8 @@ pub struct Options {
     /// First and last page, 1-based and inclusive. Clamped to the file.
     pub first: usize,
     pub last: usize,
-    /// The document's theme: text sizes are ranked into its styles.
+    /// The document's theme (readers that bring in text rank its sizes
+    /// into the theme's styles).
     pub theme: Theme,
     /// The frame name for page `n` (1-based), in the person's language.
     pub page_name: Arc<dyn Fn(usize) -> String + Send + Sync>,
@@ -100,8 +98,7 @@ pub fn open(path: &Path) -> Result<Box<dyn Reader>, ImportError> {
 /// Open a file's bytes; `title` names the import (the file name without
 /// its extension).
 pub fn open_bytes(bytes: Vec<u8>, title: String) -> Result<Box<dyn Reader>, ImportError> {
-    // PDF allows junk before the header (within the first 1 KB).
-    if bytes.len() >= 5 && bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") {
+    if zebra_core::import::is_pdf(&bytes) {
         return Ok(Box::new(pdf::PdfReader::new(bytes, title)?));
     }
     Err(ImportError::NotSupported)
