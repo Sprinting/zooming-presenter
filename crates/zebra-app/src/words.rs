@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(l, format!("Insert Layout: {}", tr("layout-name-title-bullets")));
         assert!(!l.contains("title_bullets"), "{l}");
         let t = command(&Command::ApplyTemplate { template: "big_picture".into(), replace: false });
-        assert_eq!(t, format!("Template: {}", tr("template-name-big-picture")));
+        assert_eq!(t, format!("Apply Template: {}", tr("template-name-big-picture")));
     }
 
     /// Built-in content gets its words from this .ftl, and core's English

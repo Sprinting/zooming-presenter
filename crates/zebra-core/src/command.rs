@@ -445,7 +445,7 @@ pub enum Command {
         #[serde(default = "yes")]
         add_to_path: bool,
     },
-    /// A symbol from the clip-art library (Insert › Symbols & Shapes),
+    /// A symbol from the clip-art library (Insert › Shapes, Icons & Symbols),
     /// centred at x, y. Find sets and names with the `symbols` query. The
     /// drawing is copied into the document.
     AddSymbol {

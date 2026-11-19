@@ -78,15 +78,15 @@ rewrites it).
 | Open… | ⌘O |
 | Save | ⌘S |
 | Save As… | ⇧⌘S |
-| Export PDF… | ⌘E |
+| Export as PDF… | ⌘E |
 | Duplicate | ⌘D |
 | Delete | ⌫ or Del |
-| Deselect | Esc |
+| Deselect All | Esc |
 | Select Tool | V |
 | Hand Tool | H |
 | Text Tool | T |
 | Rectangle Tool | R |
-| Ellipse Tool | O |
+| Oval Tool | O |
 | Line Tool | L |
 | Arrow Tool | A |
 | Pen Tool | D |
@@ -99,9 +99,9 @@ rewrites it).
 | Lock | ⌘L |
 | Zoom In | ⌘= or ⌘+ |
 | Zoom Out | ⌘− |
-| Zoom to Fit All | ⇧1 or ! |
+| Zoom to Fit | ⇧1 or ! |
 | Zoom to Selection | ⇧2 |
-| Actual Size (100%) | ⌘0 |
+| Actual Size | ⌘0 |
 | Show Sidebar | ⌃⌘S or ⌘\ |
 | Show Inspector | ⌥⌘I |
 | Keyboard Shortcuts | ? |
@@ -110,13 +110,13 @@ rewrites it).
 | Ungroup | ⌥⇧⌘G |
 | Edit Path | P |
 | Add Selection to Path | ⇧⌘A |
-| Play Presentation | ⌥⌘P or ⌘↵ or F5 |
+| Play from Start | ⌥⌘P or ⌘↵ or F5 |
 | Play from Current Step | ⌥⇧⌘P or ⌥⌘↵ or ⇧F5 |
 | Agent Activity | ⌘J |
 | Stop Agent | ⌘. |
 | Command Palette… | ⇧⌘P or ⌘K |
 | Close | ⌘W |
-| Frame Tool (cycle style) | F |
+| Frame Tool | F |
 | Redo | ⇧⌘Z or ⌘Y |
 | Bold | ⌘B |
 | Italic | ⌘I |
