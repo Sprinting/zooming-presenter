@@ -46,6 +46,7 @@ pub mod mcp;
 pub mod protocol;
 pub mod relay;
 mod server;
+pub mod strict;
 
 pub use dispatch::EVENT_NAMES;
 pub use protocol::RpcError;
