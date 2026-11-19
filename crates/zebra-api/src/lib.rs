@@ -195,6 +195,7 @@ pub struct Dispatcher {
     waits: Vec<dispatch::Wait>,
     deferred: std::collections::VecDeque<dispatch::Pending>,
     jobs: Vec<dispatch::Job>,
+    saves: Vec<dispatch::SaveWait>,
 }
 
 impl Dispatcher {
@@ -214,6 +215,9 @@ impl Dispatcher {
         }
         self.waits.clear();
         self.deferred.clear();
+        // A save already running finishes (the host polls it); nobody is
+        // left to tell.
+        self.saves.clear();
     }
     pub fn new(renderer: Arc<zebra_render::Renderer>) -> Self {
         Dispatcher {
@@ -228,6 +232,7 @@ impl Dispatcher {
             waits: vec![],
             deferred: Default::default(),
             jobs: vec![],
+            saves: vec![],
         }
     }
     /// Apply all queued requests, push events to subscribers. Returns true if
