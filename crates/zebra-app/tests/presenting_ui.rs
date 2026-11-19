@@ -102,13 +102,13 @@ fn layout_gallery_inserts_frames_on_the_path() {
     let mut h = harness(Some("sample"));
     let steps = h.state().editor.doc.path.len();
     perform(&mut h, Action::InsertLayout);
-    h.get_by_label("Grid of four").click();
+    h.get_by_label("Grid of Four").click();
     h.run_steps(3);
     let app = h.state();
     assert!(!app.show_layouts, "the gallery closes after a pick");
     assert_eq!(app.editor.doc.path.len(), steps + 4);
     assert_eq!(app.selection().len(), 1, "the new layout's first frame is selected");
-    assert_eq!(app.editor.undo_label().as_deref(), Some("Insert Layout: Grid of four (You)"), "the undo name is the layout's name, not its id");
+    assert_eq!(app.editor.undo_label().as_deref(), Some("Insert Layout: Grid of Four (You)"), "the undo name is the layout's name, not its id");
 }
 
 #[test]
