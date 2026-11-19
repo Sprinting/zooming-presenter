@@ -108,11 +108,21 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let mut dragging: Option<usize> = held.as_ref().filter(|(i, was)| app.editor.doc.path.get(*i) == Some(was)).map(|(i, _)| *i);
     let mut rows: Vec<Rect> = vec![];
     let pointer = ui.ctx().pointer_hover_pos();
-    // Scroll to the selected step when it changes.
-    let last_sel_id = app.uid("path-last-selected");
-    let last_sel: Vec<usize> = ui.ctx().data(|d| d.get_temp(last_sel_id)).unwrap_or_default();
-    let scroll_to = if selected != last_sel { selected.first().copied() } else { None };
-    ui.ctx().data_mut(|d| d.insert_temp(last_sel_id, selected.clone()));
+    // Scroll to a step the camera was sent to (by anyone: an agent's
+    // goto_step too), else to the selected or current step when it changes.
+    let last_id = app.uid("path-last-shown");
+    let went = app.editor.went_to_step;
+    let last: (Vec<usize>, Option<usize>, u64) = ui.ctx().data(|d| d.get_temp(last_id)).unwrap_or_default();
+    let scroll_to = if went.0 != last.2 {
+        Some(went.1)
+    } else if selected != last.0 {
+        selected.first().copied()
+    } else if current != last.1 {
+        current
+    } else {
+        None
+    };
+    ui.ctx().data_mut(|d| d.insert_temp(last_id, (selected.clone(), current, went.0)));
     let flash = app.flash_step.and_then(|(i, t)| {
         let age = app.now() - t;
         (age < 1.2).then_some((i, 1.0 - (age / 1.2) as f32))
