@@ -149,6 +149,20 @@ fn changed_ids<'a>(a: &'a Document, b: &'a Document) -> Vec<&'a ElementId> {
     }
 }
 
+/// Elements that may look different in `b` than in `a`: those added,
+/// removed or edited, and those that moved in the draw order. For caches
+/// of drawings (path thumbnails), which redraw only where these are.
+pub fn visual_changes(a: &Document, b: &Document) -> Vec<ElementId> {
+    let mut ids: Vec<ElementId> = changed_ids(a, b).into_iter().cloned().collect();
+    if a.z_order != b.z_order {
+        for s in splices(&a.z_order, &b.z_order, |s| s.as_str()) {
+            ids.extend(a.z_order[s.at..s.at + s.remove].iter().cloned());
+            ids.extend(s.insert);
+        }
+    }
+    ids
+}
+
 /// A change that turns `a` into `b`.
 pub fn diff(a: &Document, b: &Document) -> Change {
     diff_with(a, b, &changed_ids(a, b))
@@ -461,6 +475,23 @@ mod tests {
         let mut c = a.clone();
         apply(&mut c, &p).unwrap();
         assert_eq!(c, b);
+    }
+
+    #[test]
+    fn visual_changes_name_edited_added_removed_and_restacked_elements() {
+        let a = deck();
+        assert!(visual_changes(&a, &a.clone()).is_empty());
+        let mut b = a.clone();
+        b.elements.get_mut("e3").unwrap().transform.x = 5.0;
+        let id = b.z_order.remove(10);
+        b.z_order.push(id);
+        b.z_order.retain(|i| i != "e20");
+        b.elements.remove("e20");
+        b.title = "not drawn".into();
+        let mut v = visual_changes(&a, &b);
+        v.sort();
+        v.dedup();
+        assert_eq!(v, vec!["e10".to_string(), "e20".into(), "e3".into()], "the restacked one, not the 39 it passed");
     }
 
     #[test]
