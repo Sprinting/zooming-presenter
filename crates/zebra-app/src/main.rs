@@ -106,6 +106,10 @@ fn main() -> anyhow::Result<()> {
         "Zebra",
         native,
         Box::new(move |cc| {
+            // Launched by a double-click in Finder: open that file instead
+            // of offering the template chooser.
+            let mut opts = opts;
+            opts.open = zebra_app::open_events::launch_file(opts.open.take());
             let app = ZebraApp::new(&cc.egui_ctx, cc.wgpu_render_state.clone(), cc.storage, opts);
             Ok(Box::new(zebra_app::shell::Shell::new(app)))
         }),

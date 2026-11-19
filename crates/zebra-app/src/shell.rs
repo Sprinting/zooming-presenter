@@ -154,6 +154,7 @@ impl Shell {
         first.doc_id = "d1".into();
         let dispatcher = first.dispatcher.take();
         crate::mac::install_reopen_hook(&first.ctx);
+        crate::open_events::set_wake(&first.ctx);
         let reopen = std::mem::take(&mut first.reopen_untitled);
         // Lets zebractl say "AI control is off" rather than "isn't open".
         let running = if first.wgpu.is_some() { zebra_api::discovery::RunningNote::write().ok() } else { None };
@@ -474,6 +475,19 @@ impl zebra_api::Documents for Docs<'_> {
 }
 
 impl Shell {
+    /// Files Finder, the Dock or Open With asked for: each one opens like
+    /// File › Open from the front window (a window of its own unless that
+    /// one is untouched; a file already open just comes to the front). With
+    /// no window open the hidden root window takes it.
+    pub fn take_open_events(&mut self) {
+        let paths = crate::open_events::take();
+        if paths.is_empty() {
+            return;
+        }
+        let i = if self.empty { 0 } else { self.front.min(self.windows.len() - 1) };
+        self.windows[i].queued.extend(paths.into_iter().map(Action::OpenPath));
+    }
+
     /// No window open: the menu bar and a Dock click bring one back.
     fn logic_empty(&mut self, ctx: &egui::Context) {
         #[cfg(target_os = "macos")]
@@ -510,6 +524,7 @@ impl Shell {
 
 impl eframe::App for Shell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.take_open_events();
         if self.empty {
             self.logic_empty(ctx);
         }
