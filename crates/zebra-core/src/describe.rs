@@ -319,7 +319,10 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
             })
         }
         Query::Symbols { query, set, limit } => match crate::symbols::library() {
-            None => json!({ "installed": false, "sets": [] }),
+            None => match crate::symbols::library_error() {
+                Some(e) => json!({ "installed": false, "error": e, "sets": [] }),
+                None => json!({ "installed": false, "sets": [] }),
+            },
             Some(lib) => {
                 if query.trim().is_empty() && set.is_none() {
                     json!({ "installed": true, "total": lib.total(), "sets": lib.sets().map(|s| json!({

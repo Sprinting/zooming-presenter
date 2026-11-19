@@ -169,11 +169,16 @@ fn group_name(g: &str) -> String {
 
 const GROUPS: [&str; 6] = ["emoji", "colour", "drawn", "people", "mono", "classic"];
 
+/// Why there are no symbols: not installed, or a pack this build can't read.
+pub fn not_installed() -> String {
+    if zebra_core::symbols::library_error().is_some() { crate::t!("symbols-old-pack") } else { crate::t!("symbols-not-installed") }
+}
+
 /// The Symbols tab: set menu, then the grid. Clicking a tile inserts the
 /// symbol in the middle of the view.
 pub fn grid(app: &mut ZebraApp, win: &mut Window, ui: &mut egui::Ui, p: &Palette) {
     let Some(lib) = library() else {
-        ui.label(RichText::new(crate::t!("symbols-not-installed")).color(p.weak));
+        ui.label(RichText::new(not_installed()).color(p.weak));
         return;
     };
     let mut sym = std::mem::take(&mut app.symbols);
