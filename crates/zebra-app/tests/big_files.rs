@@ -75,9 +75,20 @@ fn closing_waits_for_the_save_in_flight() {
     app.wait_save();
     assert!(!app.editor.dirty());
     assert!(path.exists());
+    // The waiting Save was for the document just written: it must not
+    // run against the new empty one (that would open a Save dialog).
+    assert_eq!(app.queued, vec![Action::New], "only New runs after the save");
     h.run_steps(3);
     let app = h.state();
     assert!(app.after_save.is_empty());
     assert!(app.sheet.is_none(), "nothing to ask: it was saved");
     assert!(app.editor.doc.elements.is_empty(), "then the new document");
+}
+
+#[test]
+fn saves_waiting_behind_a_new_document_are_dropped() {
+    use zebra_app::app::still_for_this_document as keep;
+    assert_eq!(keep(vec![Action::Save, Action::New]), vec![Action::Save, Action::New], "a save before New still saves the old document");
+    assert_eq!(keep(vec![Action::New, Action::Save, Action::SaveAs]), vec![Action::New]);
+    assert_eq!(keep(vec![Action::Close, Action::Save, Action::Quit]), vec![Action::Close, Action::Quit]);
 }
