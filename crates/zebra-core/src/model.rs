@@ -182,7 +182,8 @@ impl Default for Document {
     fn default() -> Self {
         Document {
             format_version: crate::FORMAT_VERSION,
-            title: "Untitled".into(),
+            // No title yet: the app names a new document in its language.
+            title: String::new(),
             theme: "classic".into(),
             elements: BTreeMap::new(),
             z_order: vec![],

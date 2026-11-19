@@ -306,11 +306,12 @@ fn footer(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             if app.editor.view.selection.is_empty() { crate::t!("sidebar-add-tip-view") } else { crate::t!("sidebar-add-tip-selection") },
             &Action::AddToPath,
         );
-        if footer_button(ui, Icon::Plus, has_doc, p).on_hover_text(add_tip).clicked() {
+        if footer_button(ui, Icon::Plus, has_doc, p, &Action::AddToPath.label()).on_hover_text(add_tip).clicked() {
             app.queued.push(Action::AddToPath);
         }
         let sel = selected_steps(app);
-        let rm = footer_button(ui, Icon::Minus, !sel.is_empty(), p).on_hover_text(crate::t!("sidebar-remove-tip"));
+        let rm_tip = crate::t!("sidebar-remove-tip");
+        let rm = footer_button(ui, Icon::Minus, !sel.is_empty(), p, &rm_tip).on_hover_text(rm_tip.as_str());
         if rm.clicked() {
             let cmds: Vec<Command> = sel.iter().rev().map(|i| Command::RemoveStep { index: *i }).collect();
             let r = app.editor.apply_batch(cmds, Some(crate::t!("sidebar-undo-remove-step")), H);
@@ -318,7 +319,8 @@ fn footer(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             app.selected_step = sel.first().and_then(|i| step_after_removal(*i, app.editor.doc.path.len()));
         }
         ui.add_space(6.0);
-        let more = footer_button(ui, Icon::ChevronDown, true, p).on_hover_text(crate::t!("sidebar-more-tip"));
+        let more_tip = crate::t!("sidebar-more-tip");
+        let more = footer_button(ui, Icon::ChevronDown, true, p, &more_tip).on_hover_text(more_tip.as_str());
         egui::Popup::menu(&more).width(200.0).show(|ui| {
             if w::menu_item(ui, &crate::t!("sidebar-path-from-frames"), None).clicked() {
                 app.queued.push(Action::AutoPath);
@@ -335,9 +337,10 @@ fn footer(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     });
 }
 
-fn footer_button(ui: &mut Ui, icon: Icon, enabled: bool, p: &Palette) -> egui::Response {
+/// `label` names it for VoiceOver (translated).
+fn footer_button(ui: &mut Ui, icon: Icon, enabled: bool, p: &Palette, label: &str) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(EVec2::new(24.0, 21.0), if enabled { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("{icon:?}")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     if enabled && resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, 3.0, p.pressed);
     } else if enabled && resp.hovered() {

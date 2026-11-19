@@ -368,7 +368,7 @@ pub fn paint_icon(painter: &Painter, r: Rect, icon: Icon, c: Color32) {
             painter.add(line(&pts));
         }
         Icon::Bold => {
-            painter.text(m, egui::Align2::CENTER_CENTER, "B", crate::style::semibold(15.0 * u), c);
+            painter.text(m, egui::Align2::CENTER_CENTER, crate::t!("icons-bold-letter"), crate::style::semibold(15.0 * u), c);
         }
         Icon::Italic => {
             painter.add(line(&[(-1.0, -7.0), (5.0, -7.0)]));

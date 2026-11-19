@@ -152,7 +152,7 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
         Undo => {
             if let Some(h) = app.editor.history().last() {
                 title = if h.origin.is_agent() {
-                    crate::t!("menu-undo-by-agent", label = h.label.as_str(), agent = h.origin.display())
+                    crate::t!("menu-undo-by-agent", label = h.label.as_str(), agent = crate::words::origin_name(&h.origin))
                 } else {
                     crate::t!("menu-undo-named", label = h.label.as_str())
                 };
@@ -162,7 +162,7 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
         Redo => {
             if let Some(h) = app.editor.redo_entry() {
                 title = if h.origin.is_agent() {
-                    crate::t!("menu-redo-by-agent", label = h.label.as_str(), agent = h.origin.display())
+                    crate::t!("menu-redo-by-agent", label = h.label.as_str(), agent = crate::words::origin_name(&h.origin))
                 } else {
                     crate::t!("menu-redo-named", label = h.label.as_str())
                 };

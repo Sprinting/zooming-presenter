@@ -75,7 +75,7 @@
     {
       "h": 0.24,
       "kind": "frame",
-      "name": "Central topic",
+      "name": "content-frame-central-topic",
       "style": "circle",
       "w": 0.24,
       "x": 0,
@@ -87,7 +87,7 @@
       "kind": "text",
       "ph": true,
       "style": "title",
-      "text": "Add a title",
+      "text": "content-add-a-title",
       "w": 0.18,
       "x": 0,
       "y": 0
@@ -106,7 +106,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Branch",
+      "text": "content-branch",
       "w": 0.13,
       "x": 0,
       "y": -0.24
@@ -117,7 +117,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a thought",
+      "text": "content-add-a-thought",
       "w": 0.13,
       "x": 0,
       "y": -0.195
@@ -136,7 +136,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Branch",
+      "text": "content-branch",
       "w": 0.13,
       "x": 0.3118,
       "y": -0.13
@@ -147,7 +147,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a thought",
+      "text": "content-add-a-thought",
       "w": 0.13,
       "x": 0.3118,
       "y": -0.085
@@ -166,7 +166,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Branch",
+      "text": "content-branch",
       "w": 0.13,
       "x": 0.3118,
       "y": 0.09
@@ -177,7 +177,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a thought",
+      "text": "content-add-a-thought",
       "w": 0.13,
       "x": 0.3118,
       "y": 0.135
@@ -196,7 +196,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Branch",
+      "text": "content-branch",
       "w": 0.13,
       "x": 0,
       "y": 0.2
@@ -207,7 +207,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a thought",
+      "text": "content-add-a-thought",
       "w": 0.13,
       "x": 0,
       "y": 0.245
@@ -226,7 +226,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Branch",
+      "text": "content-branch",
       "w": 0.13,
       "x": -0.3118,
       "y": 0.09
@@ -237,7 +237,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a thought",
+      "text": "content-add-a-thought",
       "w": 0.13,
       "x": -0.3118,
       "y": 0.135
@@ -256,7 +256,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Branch",
+      "text": "content-branch",
       "w": 0.13,
       "x": -0.3118,
       "y": -0.13
@@ -267,7 +267,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add a thought",
+      "text": "content-add-a-thought",
       "w": 0.13,
       "x": -0.3118,
       "y": -0.085

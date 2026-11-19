@@ -1860,10 +1860,10 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                 }
                 // Drawn icons, not ⇤/⇥ characters: the UI fonts may not
                 // have those glyphs (egui would draw an empty box).
-                if crate::widgets::icon_button(ui, crate::icons::Icon::Outdent, 22.0, true, false).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-decrease-indent"), egui::Modifiers::SHIFT, egui::Key::Tab)).clicked() {
+                if crate::widgets::icon_button(ui, crate::icons::Icon::Outdent, 22.0, true, false, &crate::t!("canvas-text-decrease-indent")).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-decrease-indent"), egui::Modifiers::SHIFT, egui::Key::Tab)).clicked() {
                     fx.push(Fx::Indent(-1));
                 }
-                if crate::widgets::icon_button(ui, crate::icons::Icon::Indent, 22.0, true, false).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-increase-indent"), egui::Modifiers::NONE, egui::Key::Tab)).clicked() {
+                if crate::widgets::icon_button(ui, crate::icons::Icon::Indent, 22.0, true, false, &crate::t!("canvas-text-increase-indent")).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-increase-indent"), egui::Modifiers::NONE, egui::Key::Tab)).clicked() {
                     fx.push(Fx::Indent(1));
                 }
                 ui.separator();
@@ -2371,7 +2371,7 @@ fn draw_transform_tool(app: &ZebraApp, painter: &Painter, sb: &SelBox) {
         Gesture::Rotate { base_rot, applied, .. } => {
             let a = (base_rot + applied).rem_euclid(360.0);
             let a = if a > 180.0 { a - 360.0 } else { a };
-            Some(format!("{:.0}°", a + 0.0))
+            Some(crate::t!("canvas-rotate-angle", degrees = format!("{:.0}", a + 0.0)))
         }
         Gesture::None => {
             let hover = painter.ctx().pointer_hover_pos();

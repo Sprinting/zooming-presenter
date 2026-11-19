@@ -15,7 +15,7 @@
     {
       "h": 0.62,
       "kind": "frame",
-      "name": "Overview",
+      "name": "content-frame-overview",
       "style": "invisible",
       "w": 1,
       "x": 0,
@@ -24,7 +24,7 @@
     {
       "h": 0.3,
       "kind": "frame",
-      "name": "Main idea",
+      "name": "content-frame-main-idea",
       "style": "circle",
       "w": 0.3,
       "x": 0,
@@ -36,7 +36,7 @@
       "kind": "text",
       "ph": true,
       "style": "title",
-      "text": "Add a title",
+      "text": "content-add-a-title",
       "w": 0.24,
       "x": 0,
       "y": -0.02
@@ -47,7 +47,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Add a subtitle",
+      "text": "content-add-a-subtitle",
       "w": 0.2,
       "x": 0,
       "y": 0.06
@@ -55,7 +55,7 @@
     {
       "h": 0.2,
       "kind": "frame",
-      "name": "Topic 1",
+      "name": "content-frame-topic-1",
       "style": "circle",
       "w": 0.2,
       "x": -0.33,
@@ -66,7 +66,7 @@
       "h": 0.035,
       "kind": "text",
       "style": "subtitle",
-      "text": "Topic 1",
+      "text": "content-topic-1",
       "w": 0.13,
       "x": -0.33,
       "y": -0.23
@@ -78,7 +78,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "text": "content-add-your-points",
       "w": 0.13,
       "x": -0.33,
       "y": -0.165
@@ -86,7 +86,7 @@
     {
       "h": 0.2,
       "kind": "frame",
-      "name": "Topic 2",
+      "name": "content-frame-topic-2",
       "style": "circle",
       "w": 0.2,
       "x": 0.33,
@@ -97,7 +97,7 @@
       "h": 0.035,
       "kind": "text",
       "style": "subtitle",
-      "text": "Topic 2",
+      "text": "content-topic-2",
       "w": 0.13,
       "x": 0.33,
       "y": -0.23
@@ -109,7 +109,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "text": "content-add-your-points",
       "w": 0.13,
       "x": 0.33,
       "y": -0.165
@@ -117,7 +117,7 @@
     {
       "h": 0.2,
       "kind": "frame",
-      "name": "Topic 3",
+      "name": "content-frame-topic-3",
       "style": "circle",
       "w": 0.2,
       "x": 0.33,
@@ -128,7 +128,7 @@
       "h": 0.035,
       "kind": "text",
       "style": "subtitle",
-      "text": "Topic 3",
+      "text": "content-topic-3",
       "w": 0.13,
       "x": 0.33,
       "y": 0.15
@@ -140,7 +140,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "text": "content-add-your-points",
       "w": 0.13,
       "x": 0.33,
       "y": 0.215
@@ -148,7 +148,7 @@
     {
       "h": 0.2,
       "kind": "frame",
-      "name": "Topic 4",
+      "name": "content-frame-topic-4",
       "style": "circle",
       "w": 0.2,
       "x": -0.33,
@@ -159,7 +159,7 @@
       "h": 0.035,
       "kind": "text",
       "style": "subtitle",
-      "text": "Topic 4",
+      "text": "content-topic-4",
       "w": 0.13,
       "x": -0.33,
       "y": 0.15
@@ -171,7 +171,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "text": "content-add-your-points",
       "w": 0.13,
       "x": -0.33,
       "y": 0.215

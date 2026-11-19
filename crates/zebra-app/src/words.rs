@@ -12,7 +12,18 @@ pub fn phrase(p: Phrase) -> Option<String> {
     Some(match p {
         Phrase::Command(c) => command(c),
         Phrase::Changes(n) => t!("history-changes", count = (n as u64)),
+        // Built-in content: filled in once, when it is placed.
+        Phrase::Content(key) if crate::i18n::LOADER.has(key) => tr(key),
+        Phrase::Content(_) => return None,
     })
+}
+
+/// Who made a change, as the Activity panel and Edit menu name them.
+pub fn origin_name(o: &zebra_core::Origin) -> String {
+    match o {
+        zebra_core::Origin::Human => t!("origin-you"),
+        zebra_core::Origin::Agent { name } => name.clone(),
+    }
 }
 
 /// The Fluent key fragment for a serde snake_case name: `rounded_rect` → `rounded-rect`.
@@ -128,8 +139,12 @@ fn command(c: &Command) -> String {
         Command::SaveTheme { .. } => t!("history-edit-theme"),
         Command::DeleteTheme { .. } => t!("history-delete-theme"),
         Command::AddAsset { .. } => t!("history-add-picture"),
-        Command::ApplyTemplate { template, .. } => t!("history-template", template = template.as_str()),
-        Command::AddLayout { layout, .. } => t!("history-insert-layout", layout = layout.as_str()),
+        Command::ApplyTemplate { template, .. } => {
+            t!("history-template", template = zebra_core::templates::TEMPLATES.iter().find(|i| i.id == *template).map(template_name).unwrap_or_else(|| template.clone()))
+        }
+        Command::AddLayout { layout, .. } => {
+            t!("history-insert-layout", layout = zebra_core::templates::LAYOUTS.iter().find(|i| i.id == *layout).map(layout_name).unwrap_or_else(|| layout.clone()))
+        }
         Command::AddSymbol { name, .. } => t!("history-insert-symbol", name = name.as_str()),
         Command::AddDiagram { diagram, .. } => t!("history-insert-diagram", diagram = zebra_core::diagrams::get(diagram).map(diagram_name).unwrap_or_else(|| diagram.clone())),
     }
@@ -159,6 +174,35 @@ mod tests {
         for t in ["frame", "text", "shape", "image", "video", "ink", "icon", "connector"] {
             assert!(crate::i18n::LOADER.has(&format!("element-{t}")), "missing element-{t}");
         }
+    }
+
+    /// The undo name shows the layout's and template's name, not its id.
+    #[test]
+    fn layout_and_template_undo_names_are_names() {
+        let l = command(&Command::AddLayout { layout: "title_bullets".into(), x: 0.0, y: 0.0, width: None, add_to_path: true });
+        assert_eq!(l, format!("Insert layout: {}", tr("layout-name-title-bullets")));
+        assert!(!l.contains("title_bullets"), "{l}");
+        let t = command(&Command::ApplyTemplate { template: "big_picture".into(), replace: false });
+        assert_eq!(t, format!("Template: {}", tr("template-name-big-picture")));
+    }
+
+    /// Built-in content gets its words from this .ftl, and core's English
+    /// fallback reads the very same file the same way.
+    #[test]
+    fn content_keys_come_from_the_ftl() {
+        let keys = zebra_core::content::keys();
+        assert!(keys.len() > 50, "{}", keys.len());
+        for k in keys {
+            assert!(crate::i18n::LOADER.has(k), "{k}");
+            assert_eq!(phrase(Phrase::Content(k)).as_deref(), zebra_core::content::english(k), "{k}");
+        }
+        assert_eq!(phrase(Phrase::Content("7")), None, "a number has no key and stays as it is");
+    }
+
+    #[test]
+    fn the_person_is_named_from_the_ftl() {
+        assert_eq!(origin_name(&zebra_core::Origin::Human), "You");
+        assert_eq!(origin_name(&zebra_core::Origin::agent("Claude")), "Claude");
     }
 
     #[test]

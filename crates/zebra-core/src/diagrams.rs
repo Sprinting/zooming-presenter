@@ -94,14 +94,16 @@ fn line(x1: f64, y1: f64, x2: f64, y2: f64, arrow: bool) -> Piece {
     turned(p, dy.atan2(dx).to_degrees())
 }
 
-/// Placeholder text fitted into a w x h box centred on (x, y).
-fn ph(style: TextStyle, text: &str, x: f64, y: f64, w: f64, h: f64, on: Option<&str>) -> Piece {
-    Piece::Text { style, text: text.into(), x, y, w, h, bullets: false, align: Align::Center, ph: true, on: on.map(String::from) }
+/// Placeholder text fitted into a w x h box centred on (x, y). `key` is a
+/// [`crate::content`] key, never English: the app fills in the words.
+fn ph(style: TextStyle, key: &str, x: f64, y: f64, w: f64, h: f64, on: Option<&str>) -> Piece {
+    Piece::Text { style, text: key.into(), x, y, w, h, bullets: false, align: Align::Center, ph: true, on: on.map(String::from) }
 }
 
-/// Text that shows when presenting (numbers, column headings).
-fn real(style: TextStyle, text: &str, x: f64, y: f64, w: f64, h: f64, on: Option<&str>) -> Piece {
-    Piece::Text { style, text: text.into(), x, y, w, h, bullets: false, align: Align::Center, ph: false, on: on.map(String::from) }
+/// Text that shows when presenting (numbers, column headings): a
+/// [`crate::content`] key, or a number.
+fn real(style: TextStyle, key: &str, x: f64, y: f64, w: f64, h: f64, on: Option<&str>) -> Piece {
+    Piece::Text { style, text: key.into(), x, y, w, h, bullets: false, align: Align::Center, ph: false, on: on.map(String::from) }
 }
 
 fn frame(style: FrameStyle, x: f64, y: f64, w: f64, h: f64) -> Piece {
@@ -139,8 +141,8 @@ fn process() -> Vec<Piece> {
     for i in 0..4 {
         let x = -0.375 + i as f64 * step;
         v.push(shape(K::RoundedRect, x, -0.03, w, h, Some(fill(i)), None));
-        v.push(ph(Subtitle, "Step", x, -0.03, w * 0.75, 0.045, Some(fill(i))));
-        v.push(ph(Body, "Add text", x, 0.1, w, 0.035, None));
+        v.push(ph(Subtitle, "content-step", x, -0.03, w * 0.75, 0.045, Some(fill(i))));
+        v.push(ph(Body, "content-add-text", x, 0.1, w, 0.035, None));
         if i < 3 {
             v.push(line(x + w / 2.0 + 0.012, -0.03, x + step - w / 2.0 - 0.012, -0.03, true));
         }
@@ -166,9 +168,9 @@ fn cycle() -> Vec<Piece> {
     for i in 0..n {
         let (x, y) = at(i);
         v.push(shape(K::Ellipse, x, y, d, d, Some(fill(i)), None));
-        v.push(ph(Body, "Step", x, y, d * 0.7, 0.035, Some(fill(i))));
+        v.push(ph(Body, "content-step", x, y, d * 0.7, 0.035, Some(fill(i))));
     }
-    v.push(ph(Subtitle, "Idea", 0.0, 0.01, 0.16, 0.05, None));
+    v.push(ph(Subtitle, "content-idea", 0.0, 0.01, 0.16, 0.05, None));
     v
 }
 
@@ -179,8 +181,8 @@ fn timeline() -> Vec<Piece> {
         let s = if i % 2 == 0 { -1.0 } else { 1.0 };
         v.push(line(x, 0.0, x, s * 0.07, false));
         v.push(shape(K::Ellipse, x, 0.0, 0.028, 0.028, Some("theme:accent"), None));
-        v.push(ph(Subtitle, "Date", x, s * 0.105, 0.14, 0.035, None));
-        v.push(ph(Body, "What happened", x, s * 0.155, 0.17, 0.03, None));
+        v.push(ph(Subtitle, "content-date", x, s * 0.105, 0.14, 0.035, None));
+        v.push(ph(Body, "content-what-happened", x, s * 0.155, 0.17, 0.03, None));
     }
     v
 }
@@ -208,8 +210,8 @@ fn perspective() -> Vec<Piece> {
         let x = vx - (vx - left) * k + w / 2.0;
         let y = vy + (y0 - vy) * k;
         v.push(frame(FrameStyle::Rectangle, x, y, w, h));
-        v.push(ph(Title, "Add a title", x, y - h * 0.2, w * 0.7, h * 0.16, None));
-        v.push(ph(Body, "Add text", x, y + h * 0.12, w * 0.6, h * 0.1, None));
+        v.push(ph(Title, "content-add-a-title", x, y - h * 0.2, w * 0.7, h * 0.16, None));
+        v.push(ph(Body, "content-add-text", x, y + h * 0.12, w * 0.6, h * 0.1, None));
         k *= ratio;
     }
     v
@@ -226,13 +228,13 @@ fn funnel() -> Vec<Piece> {
     for i in 0..3 {
         let d = (w * 0.2_f64).min(h);
         v.push(turned(shape(K::Trapezoid, 0.0, y, w, h, Some(fill(i)), None), 180.0));
-        v.push(ph(Body, "Add text", 0.0, y, (w - 2.0 * d) * 0.85, 0.035, Some(fill(i))));
+        v.push(ph(Body, "content-add-text", 0.0, y, (w - 2.0 * d) * 0.85, 0.035, Some(fill(i))));
         w -= 2.0 * d;
         y += h + 0.008;
     }
     v.push(line(0.0, y - h / 2.0 + 0.004, 0.0, y + 0.03, true));
     v.push(shape(K::RoundedRect, 0.0, y + 0.08, 0.22, 0.08, Some("theme:accent"), None));
-    v.push(ph(Subtitle, "Outcome", 0.0, y + 0.08, 0.16, 0.04, Some("theme:accent")));
+    v.push(ph(Subtitle, "content-outcome", 0.0, y + 0.08, 0.16, 0.04, Some("theme:accent")));
     v
 }
 
@@ -241,11 +243,11 @@ fn iceberg() -> Vec<Piece> {
         turned(shape(K::Triangle, 0.0, 0.1, 0.5, 0.36, Some("theme:shape1"), None), 180.0),
         shape(K::Triangle, 0.0, -0.14, 0.2, 0.12, Some("theme:frame_fill"), Some(LINE)),
         stroked(line(-0.48, -0.08, 0.48, -0.08, false), 0.005, Dash::Solid),
-        ph(Subtitle, "What people see", -0.3, -0.15, 0.24, 0.04, None),
-        ph(Subtitle, "What lies beneath", 0.0, 0.0, 0.26, 0.04, Some("theme:shape1")),
-        ph(Body, "Add text", 0.34, 0.0, 0.2, 0.035, None),
-        ph(Body, "Add text", 0.34, 0.08, 0.2, 0.035, None),
-        ph(Body, "Add text", 0.34, 0.16, 0.2, 0.035, None),
+        ph(Subtitle, "content-what-people-see", -0.3, -0.15, 0.24, 0.04, None),
+        ph(Subtitle, "content-what-lies-beneath", 0.0, 0.0, 0.26, 0.04, Some("theme:shape1")),
+        ph(Body, "content-add-text", 0.34, 0.0, 0.2, 0.035, None),
+        ph(Body, "content-add-text", 0.34, 0.08, 0.2, 0.035, None),
+        ph(Body, "content-add-text", 0.34, 0.16, 0.2, 0.035, None),
     ]
 }
 
@@ -261,13 +263,13 @@ fn org_chart() -> Vec<Piece> {
         for dx in [-0.075, 0.075] {
             v.push(line(x + dx, 0.07, x + dx, 0.125, false));
             v.push(shape(K::RoundedRect, x + dx, 0.16, 0.13, 0.07, Some(fill(2)), None));
-            v.push(ph(Body, "Name", x + dx, 0.16, 0.1, 0.03, Some(fill(2))));
+            v.push(ph(Body, "content-name", x + dx, 0.16, 0.1, 0.03, Some(fill(2))));
         }
         v.push(shape(K::RoundedRect, x, -0.02, 0.17, 0.08, Some(fill(1)), None));
-        v.push(ph(Body, "Name", x, -0.02, 0.13, 0.034, Some(fill(1))));
+        v.push(ph(Body, "content-name", x, -0.02, 0.13, 0.034, Some(fill(1))));
     }
     v.push(shape(K::RoundedRect, 0.0, -0.2, 0.19, 0.09, Some(fill(0)), None));
-    v.push(ph(Subtitle, "Name", 0.0, -0.2, 0.14, 0.04, Some(fill(0))));
+    v.push(ph(Subtitle, "content-name", 0.0, -0.2, 0.14, 0.04, Some(fill(0))));
     v
 }
 
@@ -276,8 +278,8 @@ fn block_list() -> Vec<Piece> {
     for i in 0..4 {
         let x = -0.36 + i as f64 * 0.24;
         v.push(shape(K::RoundedRect, x, 0.0, 0.22, 0.32, Some(fill(i)), None));
-        v.push(ph(Subtitle, "Heading", x, -0.1, 0.17, 0.045, Some(fill(i))));
-        v.push(ph(Body, "Add your points here\nOne idea per line", x, 0.03, 0.18, 0.08, Some(fill(i))));
+        v.push(ph(Subtitle, "content-heading", x, -0.1, 0.17, 0.045, Some(fill(i))));
+        v.push(ph(Body, "content-add-your-points-block", x, 0.03, 0.18, 0.08, Some(fill(i))));
     }
     v
 }
@@ -289,7 +291,7 @@ fn numbered_list() -> Vec<Piece> {
         v.push(shape(K::RoundedRect, 0.07, y, 0.62, 0.08, Some("theme:frame_fill"), None));
         v.push(shape(K::Ellipse, -0.27, y, 0.09, 0.09, Some(fill(i)), None));
         v.push(real(Subtitle, &(i + 1).to_string(), -0.27, y, 0.04, 0.045, Some(fill(i))));
-        v.push(ph(Body, "Add text", 0.08, y, 0.5, 0.034, Some("theme:frame_fill")));
+        v.push(ph(Body, "content-add-text", 0.08, y, 0.5, 0.034, Some("theme:frame_fill")));
     }
     v
 }
@@ -303,8 +305,8 @@ fn chevrons() -> Vec<Piece> {
     for i in 0..5 {
         let x = x0 + i as f64 * step;
         v.push(shape(K::Chevron, x, -0.03, w, h, Some(fill(i)), None));
-        v.push(ph(Body, "Step", x + d * 0.3, -0.03, (w - 2.0 * d) * 0.9, 0.035, Some(fill(i))));
-        v.push(ph(Body, "Add text", x, 0.08, step * 0.95, 0.03, None));
+        v.push(ph(Body, "content-step", x + d * 0.3, -0.03, (w - 2.0 * d) * 0.9, 0.035, Some(fill(i))));
+        v.push(ph(Body, "content-add-text", x, 0.08, step * 0.95, 0.03, None));
     }
     v
 }
@@ -316,8 +318,8 @@ fn step_up() -> Vec<Piece> {
         let x = -0.33 + i as f64 * 0.22;
         let h = 0.1 + i as f64 * 0.09;
         v.push(shape(K::Rectangle, x, base - h / 2.0, 0.2, h, Some(fill(i)), None));
-        v.push(ph(Subtitle, "Step", x, base - h + 0.035, 0.14, 0.04, Some(fill(i))));
-        v.push(ph(Body, "Add text", x, base - h - 0.04, 0.19, 0.03, None));
+        v.push(ph(Subtitle, "content-step", x, base - h + 0.035, 0.14, 0.04, Some(fill(i))));
+        v.push(ph(Body, "content-add-text", x, base - h - 0.04, 0.19, 0.03, None));
     }
     v
 }
@@ -330,9 +332,9 @@ fn segmented_ring() -> Vec<Piece> {
         // Round line ends reach about 12 degrees past each end.
         v.push(arc(0.0, 0.0, r, a0 + 14.0, a0 + 76.0, 0.07, fill(i)));
         let m = (a0 + 45.0) * PI / 180.0;
-        v.push(ph(Body, "Add text", 0.3 * m.cos() * 1.25, 0.27 * m.sin(), 0.16, 0.032, None));
+        v.push(ph(Body, "content-add-text", 0.3 * m.cos() * 1.25, 0.27 * m.sin(), 0.16, 0.032, None));
     }
-    v.push(ph(Subtitle, "Idea", 0.0, 0.0, 0.14, 0.045, None));
+    v.push(ph(Subtitle, "content-idea", 0.0, 0.0, 0.14, 0.045, None));
     v
 }
 
@@ -348,13 +350,13 @@ fn tree() -> Vec<Piece> {
         for dy in [-0.045, 0.045] {
             v.push(line(0.1, y + dy, 0.185, y + dy, false));
             v.push(shape(K::RoundedRect, 0.28, y + dy, 0.19, 0.07, Some(fill(2)), None));
-            v.push(ph(Body, "Add text", 0.28, y + dy, 0.15, 0.03, Some(fill(2))));
+            v.push(ph(Body, "content-add-text", 0.28, y + dy, 0.15, 0.03, Some(fill(2))));
         }
         v.push(shape(K::RoundedRect, -0.06, y, 0.15, 0.08, Some(fill(1)), None));
-        v.push(ph(Body, "Idea", -0.06, y, 0.11, 0.034, Some(fill(1))));
+        v.push(ph(Body, "content-idea", -0.06, y, 0.11, 0.034, Some(fill(1))));
     }
     v.push(shape(K::RoundedRect, -0.36, 0.0, 0.16, 0.1, Some(fill(0)), None));
-    v.push(ph(Subtitle, "Topic", -0.36, 0.0, 0.12, 0.04, Some(fill(0))));
+    v.push(ph(Subtitle, "content-topic", -0.36, 0.0, 0.12, 0.04, Some(fill(0))));
     v
 }
 
@@ -366,9 +368,9 @@ fn venn2() -> Vec<Piece> {
     vec![
         venn_circle(-0.11, 0.0, 0.21, 0),
         venn_circle(0.11, 0.0, 0.21, 1),
-        ph(Subtitle, "Idea", -0.2, 0.0, 0.13, 0.04, None),
-        ph(Subtitle, "Idea", 0.2, 0.0, 0.13, 0.04, None),
-        ph(Body, "Both", 0.0, 0.0, 0.08, 0.03, None),
+        ph(Subtitle, "content-idea", -0.2, 0.0, 0.13, 0.04, None),
+        ph(Subtitle, "content-idea", 0.2, 0.0, 0.13, 0.04, None),
+        ph(Body, "content-both", 0.0, 0.0, 0.08, 0.03, None),
     ]
 }
 
@@ -376,10 +378,10 @@ fn venn3() -> Vec<Piece> {
     let r = 0.17;
     let c = [(0.0, -0.085), (-0.1, 0.085), (0.1, 0.085)];
     let mut v: Vec<Piece> = c.iter().enumerate().map(|(i, &(x, y))| venn_circle(x, y, r, i)).collect();
-    v.push(ph(Subtitle, "Idea", 0.0, -0.17, 0.12, 0.04, None));
-    v.push(ph(Subtitle, "Idea", -0.17, 0.13, 0.12, 0.04, None));
-    v.push(ph(Subtitle, "Idea", 0.17, 0.13, 0.12, 0.04, None));
-    v.push(ph(Body, "All", 0.0, 0.03, 0.05, 0.028, None));
+    v.push(ph(Subtitle, "content-idea", 0.0, -0.17, 0.12, 0.04, None));
+    v.push(ph(Subtitle, "content-idea", -0.17, 0.13, 0.12, 0.04, None));
+    v.push(ph(Subtitle, "content-idea", 0.17, 0.13, 0.12, 0.04, None));
+    v.push(ph(Body, "content-all", 0.0, 0.03, 0.05, 0.028, None));
     v
 }
 
@@ -391,9 +393,9 @@ fn target() -> Vec<Piece> {
     }
     for i in 0..3 {
         let y = -(radii[i] + radii[i + 1]) / 2.0;
-        v.push(ph(Body, "Add text", 0.0, y, 0.16, 0.03, Some(fill(3 - i))));
+        v.push(ph(Body, "content-add-text", 0.0, y, 0.16, 0.03, Some(fill(3 - i))));
     }
-    v.push(ph(Subtitle, "Focus", 0.0, 0.0, 0.1, 0.04, Some(fill(0))));
+    v.push(ph(Subtitle, "content-focus", 0.0, 0.0, 0.1, 0.04, Some(fill(0))));
     v
 }
 
@@ -404,13 +406,13 @@ fn inverted_pyramid() -> Vec<Piece> {
     for i in 0..3 {
         let d = (w * 0.2_f64).min(h);
         v.push(turned(shape(K::Trapezoid, 0.0, y, w, h, Some(fill(i)), None), 180.0));
-        v.push(ph(Body, "Add text", 0.0, y, (w - 2.0 * d) * 0.8, 0.035, Some(fill(i))));
+        v.push(ph(Body, "content-add-text", 0.0, y, (w - 2.0 * d) * 0.8, 0.035, Some(fill(i))));
         w -= 2.0 * d;
         y += h + 0.008;
     }
     let th = 0.15;
     v.push(turned(shape(K::Triangle, 0.0, y + (th - h) / 2.0, w, th, Some(fill(3)), None), 180.0));
-    v.push(ph(Body, "Point", 0.0, y - 0.01, w * 0.45, 0.025, Some(fill(3))));
+    v.push(ph(Body, "content-point", 0.0, y - 0.01, w * 0.45, 0.025, Some(fill(3))));
     v
 }
 
@@ -426,10 +428,10 @@ fn mind_map() -> Vec<Piece> {
     }
     for (i, &(x, y)) in nodes.iter().enumerate() {
         v.push(shape(K::Pill, x, y, 0.17, 0.065, Some(fill(i)), None));
-        v.push(ph(Body, "Idea", x, y, 0.12, 0.032, Some(fill(i))));
+        v.push(ph(Body, "content-idea", x, y, 0.12, 0.032, Some(fill(i))));
     }
     v.push(shape(K::Ellipse, 0.0, 0.0, 0.22, 0.13, Some("theme:accent"), None));
-    v.push(ph(Subtitle, "Topic", 0.0, 0.0, 0.15, 0.045, Some("theme:accent")));
+    v.push(ph(Subtitle, "content-topic", 0.0, 0.0, 0.15, 0.045, Some("theme:accent")));
     v
 }
 
@@ -438,18 +440,18 @@ fn fishbone() -> Vec<Piece> {
     for x in [-0.3, -0.1, 0.1] {
         for s in [-1.0, 1.0] {
             v.push(stroked(line(x - 0.09, s * 0.2, x + 0.03, 0.0, false), 0.004, Dash::Solid));
-            v.push(ph(Subtitle, "Cause", x - 0.09, s * 0.235, 0.12, 0.035, None));
-            v.push(ph(Body, "Add text", x - 0.11, s * 0.1, 0.1, 0.026, None));
+            v.push(ph(Subtitle, "content-cause", x - 0.09, s * 0.235, 0.12, 0.035, None));
+            v.push(ph(Body, "content-add-text", x - 0.11, s * 0.1, 0.1, 0.026, None));
         }
     }
     v.push(shape(K::RoundedRect, 0.36, 0.0, 0.2, 0.12, Some("theme:accent"), None));
-    v.push(ph(Subtitle, "Effect", 0.36, 0.0, 0.14, 0.045, Some("theme:accent")));
+    v.push(ph(Subtitle, "content-effect", 0.36, 0.0, 0.14, 0.045, Some("theme:accent")));
     v
 }
 
 fn columns() -> Vec<Piece> {
     let mut v = vec![];
-    let heads = ["To do", "Doing", "Done"];
+    let heads = ["content-to-do", "content-doing", "content-done"];
     for (c, head) in heads.iter().enumerate() {
         let x = -0.32 + c as f64 * 0.32;
         v.push(shape(K::RoundedRect, x, 0.02, 0.3, 0.52, Some("theme:frame_fill"), None));
@@ -457,7 +459,7 @@ fn columns() -> Vec<Piece> {
         for k in 0..(3 - c) {
             let y = -0.11 + k as f64 * 0.11;
             v.push(shape(K::RoundedRect, x, y, 0.25, 0.085, Some(fill(c)), None));
-            v.push(ph(Body, "Add text", x, y, 0.19, 0.032, Some(fill(c))));
+            v.push(ph(Body, "content-add-text", x, y, 0.19, 0.032, Some(fill(c))));
         }
     }
     v
@@ -469,8 +471,8 @@ fn zoom_nest() -> Vec<Piece> {
     for _ in 0..4 {
         let h = w * 0.62;
         v.push(frame(FrameStyle::Rectangle, x, y, w, h));
-        v.push(ph(Title, "Add a title", x - 0.22 * w, y - 0.2 * w, 0.42 * w, 0.07 * w, None));
-        v.push(ph(Body, "Add text", x - 0.22 * w, y - 0.08 * w, 0.36 * w, 0.045 * w, None));
+        v.push(ph(Title, "content-add-a-title", x - 0.22 * w, y - 0.2 * w, 0.42 * w, 0.07 * w, None));
+        v.push(ph(Body, "content-add-text", x - 0.22 * w, y - 0.08 * w, 0.36 * w, 0.045 * w, None));
         x += 0.22 * w;
         y += 0.15 * w;
         w *= 0.4;
@@ -482,24 +484,24 @@ fn orbit() -> Vec<Piece> {
     let r = 0.25;
     let mut v = vec![stroked(shape(K::Ellipse, 0.0, 0.0, 2.0 * r, 2.0 * r, None, Some(LINE)), 0.003, Dash::Dashed)];
     v.push(frame(FrameStyle::Circle, 0.0, 0.0, 0.22, 0.22));
-    v.push(ph(Subtitle, "Topic", 0.0, 0.0, 0.15, 0.045, None));
+    v.push(ph(Subtitle, "content-topic", 0.0, 0.0, 0.15, 0.045, None));
     for i in 0..6 {
         let a = (-90.0 + i as f64 * 60.0) * PI / 180.0;
         let (x, y) = (r * a.cos() * 1.3, r * a.sin());
         v.push(frame(FrameStyle::Circle, x, y, 0.14, 0.14));
-        v.push(ph(Body, "Idea", x, y, 0.1, 0.032, None));
+        v.push(ph(Body, "content-idea", x, y, 0.1, 0.032, None));
     }
     v
 }
 
 fn big_picture() -> Vec<Piece> {
     let mut v = vec![frame(FrameStyle::Bracket, 0.0, 0.0, 1.0, 0.62)];
-    v.push(ph(Title, "Add a title", 0.0, -0.2, 0.6, 0.08, None));
+    v.push(ph(Title, "content-add-a-title", 0.0, -0.2, 0.6, 0.08, None));
     for i in 0..4 {
         let x = -0.33 + i as f64 * 0.22;
         let y = 0.06 + if i % 2 == 0 { -0.03 } else { 0.05 };
         v.push(frame(FrameStyle::Rectangle, x, y, 0.19, 0.12));
-        v.push(ph(Body, "Detail to zoom into", x, y, 0.15, 0.03, None));
+        v.push(ph(Body, "content-detail-to-zoom-into", x, y, 0.15, 0.03, None));
     }
     v
 }

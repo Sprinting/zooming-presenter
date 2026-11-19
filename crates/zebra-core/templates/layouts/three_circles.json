@@ -18,7 +18,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Topic",
+      "text": "content-topic",
       "w": 0.2,
       "x": -0.33,
       "y": -0.05
@@ -29,7 +29,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "A line or two\nabout this topic",
+      "text": "content-a-line-or-two",
       "w": 0.2,
       "x": -0.33,
       "y": 0.04
@@ -49,7 +49,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Topic",
+      "text": "content-topic",
       "w": 0.2,
       "x": 0,
       "y": -0.05
@@ -60,7 +60,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "A line or two\nabout this topic",
+      "text": "content-a-line-or-two",
       "w": 0.2,
       "x": 0,
       "y": 0.04
@@ -80,7 +80,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Topic",
+      "text": "content-topic",
       "w": 0.2,
       "x": 0.33,
       "y": -0.05
@@ -91,7 +91,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "A line or two\nabout this topic",
+      "text": "content-a-line-or-two",
       "w": 0.2,
       "x": 0.33,
       "y": 0.04

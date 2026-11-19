@@ -3,7 +3,7 @@
   "commands": [
     {
       "op": "set_title",
-      "title": "Thinking in Zoom"
+      "title": "sample-thinking-in-zoom"
     },
     {
       "op": "add_element",
@@ -14,7 +14,7 @@
         "scale": 2.2,
         "kind": {
           "type": "text",
-          "text": "Thinking in Zoom",
+          "text": "sample-thinking-in-zoom",
           "style": "title"
         }
       }
@@ -28,7 +28,7 @@
         "scale": 1.6,
         "kind": {
           "type": "text",
-          "text": "a tiny tour of a zooming canvas",
+          "text": "sample-a-tiny-tour-of-a",
           "style": "subtitle"
         }
       }
@@ -41,7 +41,7 @@
         "y": 250,
         "w": 900,
         "h": 620,
-        "name": "Why zoom?",
+        "name": "sample-frame-why-zoom",
         "kind": {
           "type": "frame",
           "style": "bracket"
@@ -57,7 +57,7 @@
         "scale": 1.0,
         "kind": {
           "type": "text",
-          "text": "Why zoom?",
+          "text": "sample-why-zoom",
           "style": "title"
         }
       }
@@ -71,7 +71,7 @@
         "scale": 1.4,
         "kind": {
           "type": "text",
-          "text": "Show the big picture first",
+          "text": "sample-show-the-big-picture-first",
           "style": "body",
           "bullets": true
         }
@@ -86,7 +86,7 @@
         "scale": 1.4,
         "kind": {
           "type": "text",
-          "text": "Then dive into the details",
+          "text": "sample-then-dive-into-the-details",
           "style": "body",
           "bullets": true
         }
@@ -101,7 +101,7 @@
         "scale": 1.4,
         "kind": {
           "type": "text",
-          "text": "Zoom out again to connect them",
+          "text": "sample-zoom-out-again-to-connect",
           "style": "body",
           "bullets": true
         }
@@ -125,7 +125,7 @@
         "y": 300,
         "w": 720,
         "h": 720,
-        "name": "Circles",
+        "name": "sample-frame-circles",
         "kind": {
           "type": "frame",
           "style": "circle"
@@ -141,7 +141,7 @@
         "scale": 1.0,
         "kind": {
           "type": "text",
-          "text": "Frames come in four styles",
+          "text": "sample-frames-come-in-four-styles",
           "style": "subtitle"
         }
       }
@@ -155,7 +155,7 @@
         "scale": 1.0,
         "kind": {
           "type": "text",
-          "text": "brackets · circles · rectangles · invisible",
+          "text": "sample-brackets-circles-rectangles-invisible",
           "style": "body"
         }
       }
@@ -184,7 +184,7 @@
         "y": 450,
         "w": 26,
         "h": 17,
-        "name": "A secret",
+        "name": "sample-frame-a-secret",
         "kind": {
           "type": "frame",
           "style": "invisible"
@@ -200,7 +200,7 @@
         "scale": 0.6,
         "kind": {
           "type": "text",
-          "text": "Look closer…",
+          "text": "sample-look-closer",
           "style": "body"
         }
       }
@@ -214,7 +214,7 @@
         "scale": 0.05,
         "kind": {
           "type": "text",
-          "text": "hidden in plain sight!",
+          "text": "sample-hidden-in-plain-sight",
           "style": "body"
         }
       }
@@ -227,7 +227,7 @@
         "y": 260,
         "w": 860,
         "h": 560,
-        "name": "A new angle",
+        "name": "sample-frame-a-new-angle",
         "kind": {
           "type": "frame",
           "style": "rectangle"
@@ -244,7 +244,7 @@
         "scale": 0.9,
         "kind": {
           "type": "text",
-          "text": "A new angle",
+          "text": "sample-a-new-angle",
           "style": "title"
         },
         "rotation": -12
@@ -259,7 +259,7 @@
         "scale": 1.2,
         "kind": {
           "type": "text",
-          "text": "Rotate a frame and the camera\nrolls to meet it when presenting.",
+          "text": "sample-rotate-a-frame-and-the",
           "style": "body"
         },
         "rotation": -12
@@ -315,7 +315,7 @@
         "why-2",
         "why-3"
       ],
-      "notes": "Click to reveal each point."
+      "notes": "sample-notes-click-to-reveal-each-point"
     },
     {
       "op": "add_step",

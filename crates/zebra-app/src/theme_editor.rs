@@ -265,7 +265,7 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
             changed |= r.drag_stopped() || (r.changed() && !r.dragged());
             let r = ui.add(egui::Slider::new(&mut l.opacity, 0.1..=1.0).show_value(false).text(crate::t!("theme-editor-opacity")));
             changed |= r.drag_stopped() || (r.changed() && !r.dragged());
-            if ui.small_button("✕").on_hover_text(crate::t!("theme-editor-remove-layer")).clicked() {
+            if ui.small_button(crate::t!("theme-editor-remove-layer-button")).on_hover_text(crate::t!("theme-editor-remove-layer")).clicked() {
                 remove = Some(i);
             }
         });

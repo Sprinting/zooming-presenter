@@ -224,7 +224,8 @@ pub struct ZebraApp {
 /// of a run is "Untitled 2", as in Keynote (two were both "Untitled").
 /// A title the person typed is left alone.
 pub fn untitled_name(title: &str, untitled: &str, no: u32) -> String {
-    if no > 1 && title == untitled { format!("{title} {no}") } else { title.to_string() }
+    let title = if title.is_empty() { untitled } else { title };
+    if no > 1 && title == untitled { crate::t!("app-untitled-numbered", title = title, no = no.to_string()) } else { title.to_string() }
 }
 
 /// The size a window made from this one opens at: the same, unless this one
@@ -281,7 +282,7 @@ impl ZebraApp {
                 renderer
             }
         };
-        let mut editor = Editor::default();
+        let mut editor = Editor::new(new_document(&zebra_core::Document::default().theme));
         editor.labeler = Some(crate::words::phrase);
         editor.measure = renderer.measure();
         let recent: Vec<PathBuf> = storage.and_then(|s| eframe::get_value(s, "recent")).unwrap_or_default();
@@ -596,7 +597,7 @@ impl ZebraApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             New => {
-                let doc = zebra_core::Document { theme: self.default_theme.clone(), ..Default::default() };
+                let doc = new_document(&self.default_theme);
                 self.editor.load(doc, None);
                 self.after_load();
             }
@@ -1625,6 +1626,11 @@ pub fn parse_permission(s: &str) -> zebra_core::view::Permission {
         "full" => Full,
         _ => Edit,
     }
+}
+
+/// A new, empty document, titled in the person's language.
+pub fn new_document(theme: &str) -> zebra_core::Document {
+    zebra_core::Document { title: crate::t!("app-untitled"), theme: theme.to_string(), ..Default::default() }
 }
 
 pub fn sanitize(s: &str) -> String {

@@ -21,12 +21,16 @@
 language-name = English
 
 app-untitled = Untitled
+# The second and later new documents of a run: "Untitled 2".
+app-untitled-numbered = { $title } { $no }
 app-agent-default-name = Agent
 app-window-title-edited = { $name } — Edited
 app-file-filter-zebra = Zebra presentation
 app-file-filter-image = Image
 app-file-filter-video = Video
 app-file-filter-audio = Audio
+app-file-filter-pdf = PDF
+app-file-filter-png = PNG
 app-ai-start-failed = Couldn't start AI control: { $error }
 # When something a person did can't be done (details go to the log).
 app-error-locked = It's locked. Unlock it first.
@@ -88,6 +92,8 @@ toolbar-view-agent-activity = Agent Activity
 toolbar-view-edit-path = Edit Path
 toolbar-zoom = Zoom
 toolbar-zoom-level = Zoom { $level }
+# The zoom level: "100%".
+toolbar-zoom-percent = { $percent }%
 toolbar-zoom-to-fit = Zoom to Fit
 toolbar-zoom-to-selection = Zoom to Selection
 toolbar-zoom-in = Zoom In
@@ -108,7 +114,6 @@ toolbar-shape = Shape
 toolbar-shape-tip = Shapes and icons
 toolbar-shape-rectangle = Rectangle
 toolbar-shape-ellipse = Ellipse
-toolbar-shape-library = Shapes and Icons…
 toolbar-line = Line
 toolbar-line-tip = Lines, arrows and drawing
 toolbar-line-arrow = Arrow
@@ -186,6 +191,8 @@ activity-item-meta = { $origin } · { $when } · { $count ->
     }
 activity-item-meta-plain = { $origin } · { $when }
 activity-item-tip = Click to show these objects
+# Who made a change, when it was the person using this Mac.
+origin-you = You
 palette-hint = Type a command
 shortcuts-title = Keyboard Shortcuts
 shortcuts-caption = Every shortcut is also a menu item or a button.
@@ -638,6 +645,7 @@ theme-editor-depth = depth
 theme-editor-depth-tip = Left: far away, barely moves. Right: moves with the canvas.
 theme-editor-opacity = opacity
 theme-editor-remove-layer = Remove layer
+theme-editor-remove-layer-button = ✕
 theme-editor-add-layer = Add Layer…
 theme-editor-save-as-theme = Save as Theme…
 theme-editor-save-as-theme-tip = Keep this theme for other presentations
@@ -656,6 +664,8 @@ widgets-colour-well = Colour
 # Units after numbers in number fields.
 widgets-unit-pt = pt
 widgets-unit-seconds = s
+widgets-unit-percent = %
+widgets-unit-degrees = °
 
 ## ---- end widgets.rs ----
 
@@ -674,7 +684,8 @@ library-file-untitled = Untitled
 
 
 ## ---- icons.rs ----
-
+# The letter drawn on the Bold button (some languages use another, e.g. F).
+icons-bold-letter = B
 
 ## ---- end icons.rs ----
 
@@ -711,7 +722,6 @@ action-replace-image = Replace Image…
 action-crop-image = Crop Image
 action-play-pause-video = Play / Pause Video
 action-wrap-in-frame = Frame Selection
-action-shape-library = Shapes and Icons…
 action-insert-video = Video…
 action-bold = Bold
 action-italic = Italic
@@ -774,6 +784,15 @@ frame-style-circle = Circle
 frame-style-rectangle = Rectangle
 frame-style-invisible = Invisible
 
+# Key names in shortcuts ("Esc", "Ctrl+S" off the Mac).
+key-escape = Esc
+key-delete = Del
+key-tab = Tab
+key-space = Space
+key-ctrl = Ctrl
+key-alt = Alt
+key-shift = Shift
+
 ## ---- end actions.rs ----
 
 
@@ -814,6 +833,15 @@ menu-no-recent-documents = No Recent Documents
 ## ---- menu_mac.rs ----
 menu-mac-app = Zebra
 menu-mac-window = Window
+# The standard macOS items (AppKit does what they do; these are their names).
+menu-mac-services = Services
+menu-mac-hide = Hide Zebra
+menu-mac-hide-others = Hide Others
+menu-mac-show-all = Show All
+menu-mac-minimize = Minimize
+menu-mac-zoom = Zoom
+menu-mac-full-screen = Toggle Full Screen
+menu-mac-bring-all-to-front = Bring All to Front
 
 ## ---- end menu_mac.rs ----
 
@@ -875,6 +903,8 @@ canvas-agent-editing-here = { $name } is editing here
 canvas-locked = Locked
 # $modifier is the modifier key glyph (⇧).
 canvas-rotate-hint = Rotate  ·  { $modifier } snaps to 15°
+# Beside the rotate handle while turning: "45°".
+canvas-rotate-angle = { $degrees }°
 canvas-menu-add-text-here = Add Text Here
 canvas-menu-add-text = Add Text
 canvas-menu-edit-text = Edit Text
@@ -1000,6 +1030,8 @@ media-trim-start = Start
 media-trim-end = End
 media-seconds-unit = s
 media-trim-clear-end-tip = Play to the end
+# Small button that clears a trim end or removes the poster.
+media-clear-button = ×
 media-poster = Poster
 media-poster-use-frame = Use This Frame
 media-poster-use-frame-tip = Show this frame until the video plays
@@ -1035,8 +1067,27 @@ mac-activity-presenting = Presenting
 
 
 ## ---- sample.rs ----
-
-
+# File › New from Sample: the sample presentation (data/sample.json).
+# Frame names (sample-frame-*) show in the path sidebar.
+sample-a-new-angle = A new angle
+sample-a-tiny-tour-of-a = a tiny tour of a zooming canvas
+sample-brackets-circles-rectangles-invisible = brackets · circles · rectangles · invisible
+sample-frame-a-new-angle = A new angle
+sample-frame-a-secret = A secret
+sample-frame-circles = Circles
+sample-frame-why-zoom = Why zoom?
+sample-frames-come-in-four-styles = Frames come in four styles
+sample-hidden-in-plain-sight = hidden in plain sight!
+sample-look-closer = Look closer…
+sample-notes-click-to-reveal-each-point = Click to reveal each point.
+sample-rotate-a-frame-and-the =
+    Rotate a frame and the camera
+    rolls to meet it when presenting.
+sample-show-the-big-picture-first = Show the big picture first
+sample-then-dive-into-the-details = Then dive into the details
+sample-thinking-in-zoom = Thinking in Zoom
+sample-why-zoom = Why zoom?
+sample-zoom-out-again-to-connect = Zoom out again to connect them
 ## ---- end sample.rs ----
 
 
@@ -1281,3 +1332,111 @@ diagram-name-orbit = Orbit
 diagram-description-orbit = Frames round a centre. Its frames join the path.
 diagram-name-big-picture = Big picture
 diagram-description-big-picture = An overview frame with detail frames inside. Its frames join the path.
+
+## Text that diagrams, layouts and templates put on the canvas: placeholders
+## and frame names (content-frame-*). Filled in once, when the diagram,
+## layout or template is placed; after that the text is the person's own.
+## zebra-core reads the English from this file too (zebra_core::content).
+content-a-detail-to-zoom-into = A detail to zoom into
+content-a-line-or-two =
+    A line or two
+    about this topic
+content-add-a-note = Add a note
+content-add-a-subtitle = Add a subtitle
+content-add-a-thought = Add a thought
+content-add-a-title = Add a title
+content-add-text = Add text
+content-add-your-points =
+    Add your points here
+    One idea per line
+    Keep it short
+content-add-your-points-block =
+    Add your points here
+    One idea per line
+content-after = After
+content-all = All
+content-almost-there = Almost there
+content-and-in-the-end = And in the end
+content-before = Before
+content-both = Both
+content-branch = Branch
+content-business-model = Business model
+content-cause = Cause
+content-chapter-1 = Chapter 1
+content-chapter-2 = Chapter 2
+content-chapter-3 = Chapter 3
+content-course-or-class = Course or class
+content-date = Date
+content-detail-to-zoom-into = Detail to zoom into
+content-doing = Doing
+content-done = Done
+content-drop-a-picture-here = Drop a picture here
+content-effect = Effect
+content-first-stop = First stop
+content-focus = Focus
+content-heading = Heading
+content-how-it-turned-out = How it turned out
+content-idea = Idea
+content-market = Market
+content-name = Name
+content-once-upon-a-time = Once upon a time…
+content-one-line-on-what-you-do = One line on what you do
+content-outcome = Outcome
+content-point = Point
+content-problem = Problem
+content-recap = Recap
+content-say-what-the-picture-shows = Say what the picture shows
+content-second-stop = Second stop
+content-solution = Solution
+content-step = Step
+content-team = Team
+content-the-ask = The ask
+content-the-three-things-to-remember = The three things to remember
+content-then-something-changed = Then something changed
+content-third-stop = Third stop
+content-to-do = To do
+content-topic = Topic
+content-topic-1 = Topic 1
+content-topic-2 = Topic 2
+content-topic-3 = Topic 3
+content-topic-4 = Topic 4
+content-what-happened = What happened
+content-what-happened-next = What happened next
+content-what-lies-beneath = What lies beneath
+content-what-people-see = What people see
+content-what-youll-learn = What you'll learn
+content-where-we-arrive = Where we arrive
+content-where-we-start = Where we start
+content-year = Year
+
+content-frame-after = After
+content-frame-before = Before
+content-frame-beginning = Beginning
+content-frame-business-model = Business model
+content-frame-central-topic = Central topic
+content-frame-centre = Centre
+content-frame-chapter-1 = Chapter 1
+content-frame-chapter-2 = Chapter 2
+content-frame-chapter-3 = Chapter 3
+content-frame-destination = Destination
+content-frame-detail = Detail
+content-frame-end = End
+content-frame-left = Left
+content-frame-main-idea = Main idea
+content-frame-market = Market
+content-frame-middle = Middle
+content-frame-objectives = Objectives
+content-frame-overview = Overview
+content-frame-problem = Problem
+content-frame-recap = Recap
+content-frame-right = Right
+content-frame-solution = Solution
+content-frame-start = Start
+content-frame-team = Team
+content-frame-the-ask = The ask
+content-frame-the-road-ahead = The road ahead
+content-frame-title = Title
+content-frame-topic-1 = Topic 1
+content-frame-topic-2 = Topic 2
+content-frame-topic-3 = Topic 3
+content-frame-topic-4 = Topic 4

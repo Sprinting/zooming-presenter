@@ -450,6 +450,7 @@ fn grouped_agent_steps_count_up_through_the_labeler() {
         match p {
             Phrase::Changes(n) => Some(format!("{n} Änderungen")),
             Phrase::Command(_) => Some("Schritt".into()),
+            Phrase::Content(_) => None,
         }
     }
     let mut ed = Editor::default();

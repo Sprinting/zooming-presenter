@@ -166,11 +166,12 @@ fn button_impl(ui: &mut Ui, text: &str, icon: Option<Icon>, size: Size, default:
 }
 
 /// A borderless icon button (toolbar-style "recessed" or inline glyph
-/// buttons): no bezel at rest, a soft plate on hover and press.
-pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, enabled: bool, active: bool) -> Response {
+/// buttons): no bezel at rest, a soft plate on hover and press. `label`
+/// names it for VoiceOver (translated: usually its tooltip).
+pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, enabled: bool, active: bool, label: &str) -> Response {
     let p = pal(ui);
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), if enabled { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, format!("{icon:?}")));
+    resp.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         if active {
@@ -660,11 +661,13 @@ impl Num {
 }
 
 /// The unit after a number, translated: " pt" and " s" are words in some
-/// languages; symbols such as "°" and "%" stay as they are.
+/// languages, and some put a space before "%".
 fn unit_text(suffix: &str) -> String {
     match suffix {
         " pt" => format!(" {}", crate::t!("widgets-unit-pt")),
         " s" => format!(" {}", crate::t!("widgets-unit-seconds")),
+        "%" => crate::t!("widgets-unit-percent"),
+        "°" => crate::t!("widgets-unit-degrees"),
         s => s.to_string(),
     }
 }

@@ -265,3 +265,44 @@ fn old_files_without_new_fields_still_load() {
     let s = io::to_json(&Document::default());
     assert!(!s.contains("\"play\"") && !s.contains("\"themes\""));
 }
+
+fn texts(ed: &Editor) -> Vec<String> {
+    let mut v: Vec<String> = ed.doc.elements.values().filter_map(|e| if let ElementKind::Text(t) = &e.kind { Some(t.text.clone()) } else { None }).collect();
+    v.sort();
+    v
+}
+
+fn frame_names(ed: &Editor) -> Vec<String> {
+    let mut v: Vec<String> = ed.doc.elements.values().filter(|e| e.is_frame() && !e.name.is_empty()).map(|e| e.name.clone()).collect();
+    v.sort();
+    v
+}
+
+/// Built-in content carries keys; the editor fills in the words when it is
+/// placed: the labeler's (the app's translation), else the English.
+#[test]
+fn placed_content_gets_words_not_keys() {
+    let mut ed = Editor::default();
+    ed.apply(cmd(json!({"op":"apply_template","template":"pitch"})), H).unwrap();
+    assert!(texts(&ed).contains(&"Add a title".to_string()), "{:?}", texts(&ed));
+    assert!(frame_names(&ed).contains(&"Problem".to_string()), "{:?}", frame_names(&ed));
+    ed.apply(cmd(json!({"op":"add_diagram","diagram":"numbered_list","x":90000,"y":0})), H).unwrap();
+    ed.apply(cmd(json!({"op":"add_layout","layout":"comparison","x":-90000,"y":0})), H).unwrap();
+    let all = texts(&ed);
+    assert!(all.contains(&"3".to_string()), "numbers stay numbers");
+    assert!(all.iter().chain(frame_names(&ed).iter()).all(|t| !t.starts_with("content-")), "{all:?}");
+
+    fn german(p: Phrase) -> Option<String> {
+        match p {
+            Phrase::Content("content-add-a-title") => Some("Titel hinzufügen".into()),
+            Phrase::Content("content-frame-before") => Some("Vorher".into()),
+            _ => None,
+        }
+    }
+    let mut ed = Editor::default();
+    ed.labeler = Some(german);
+    ed.apply(cmd(json!({"op":"add_layout","layout":"comparison"})), H).unwrap();
+    assert!(texts(&ed).contains(&"Titel hinzufügen".to_string()), "{:?}", texts(&ed));
+    assert!(texts(&ed).contains(&"After".to_string()), "no translation: English");
+    assert!(frame_names(&ed).contains(&"Vorher".to_string()), "{:?}", frame_names(&ed));
+}

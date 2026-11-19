@@ -11,13 +11,13 @@ pub fn short(s: &str, n: usize) -> String {
 
 pub fn export_pdf(app: &mut ZebraApp) {
     let name = format!("{}.pdf", crate::app::sanitize(&app.editor.doc.title));
-    let Some(p) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name).save_file() else { return };
+    let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-pdf"), &["pdf"]).set_file_name(name).save_file() else { return };
     export_in_background(app, p, |r, ed| r.export_pdf(ed));
 }
 
 pub fn export_png(app: &mut ZebraApp) {
     let name = format!("{}.png", crate::app::sanitize(&app.editor.doc.title));
-    let Some(p) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name(name).save_file() else { return };
+    let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-png"), &["png"]).set_file_name(name).save_file() else { return };
     let vp = app.editor.view.viewport;
     let (w, h) = (((vp.x * 2.0) as u32).max(1), ((vp.y * 2.0) as u32).max(1));
     export_in_background(app, p, move |r, ed| r.capture(ed, &zebra_render::CaptureTarget::Viewport, w, h));

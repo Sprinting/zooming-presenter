@@ -9,6 +9,17 @@ use crate::app::ZebraApp;
 
 const H: Origin = Origin::Human;
 
+/// The sample's words are `sample-*` keys in the .ftl: fill them in, in
+/// the person's language, before the commands run.
+fn fill_words(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::String(s) if s.starts_with("sample-") && crate::i18n::LOADER.has(s) => *s = crate::i18n::tr(s),
+        serde_json::Value::Array(a) => a.iter_mut().for_each(fill_words),
+        serde_json::Value::Object(o) => o.values_mut().for_each(fill_words),
+        _ => {}
+    }
+}
+
 /// The sample presentation, from `data/sample.json`: the same commands an
 /// agent could send.
 pub fn build(renderer: &zebra_render::Renderer) -> Document {
@@ -20,7 +31,9 @@ pub fn build_with(measure: Box<dyn zebra_core::TextMeasure>) -> Document {
     struct File {
         commands: Vec<Command>,
     }
-    let f: File = serde_json::from_str(include_str!("../data/sample.json")).expect("data/sample.json is valid");
+    let mut v: serde_json::Value = serde_json::from_str(include_str!("../data/sample.json")).expect("data/sample.json is valid");
+    fill_words(&mut v);
+    let f: File = serde_json::from_value(v).expect("data/sample.json is valid");
     let mut ed = Editor::default();
     ed.measure = measure;
     for c in f.commands {
@@ -101,7 +114,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 let agent = Origin::agent("Claude");
                 app.demo_agent = Some("Claude".into());
                 let _ = app.editor.apply(Command::AddText { text: "Added by the agent".into(), x: 0.0, y: -250.0, style: TextStyle::Subtitle, scale: Some(1.2), place: None, id: None, markdown: false, on: None, color: None }, agent.clone());
-                let found = app.editor.doc.ordered().find(|e| e.name == "Why zoom?").map(|e| e.id.clone());
+                let found = app.editor.doc.ordered().find(|e| e.id == "why").map(|e| e.id.clone());
                 if let Some(c) = found {
                     let _ = app.editor.apply(Command::Update { id: c.clone(), patch: zebra_core::ElementPatch { frame_style: Some(FrameStyle::Bracket), ..Default::default() } }, agent.clone());
                     let _ = app.editor.view(ViewCommand::Select { ids: vec![c] }, agent.clone());
@@ -132,7 +145,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 }
             }
             "connectors" => {
-                app.editor.load(Document::default(), None);
+                app.editor.load(crate::app::new_document(&Document::default().theme), None);
                 app.after_load();
                 let add = |app: &mut ZebraApp, j: serde_json::Value| {
                     let _ = app.editor.apply(serde_json::from_value(j).unwrap(), H);
@@ -153,7 +166,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             }
             "whiteboard" => {
                 // Debug: sticky notes and shapes with text typed on them.
-                app.editor.load(Document::default(), None);
+                app.editor.load(crate::app::new_document(&Document::default().theme), None);
                 app.after_load();
                 let add = |app: &mut ZebraApp, j: serde_json::Value| {
                     let _ = app.editor.apply(serde_json::from_value(j).unwrap(), H);
@@ -171,7 +184,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             }
             "shapes" => {
                 // Gallery of every shape plus a row of icons.
-                app.editor.load(Document::default(), None);
+                app.editor.load(crate::app::new_document(&Document::default().theme), None);
                 app.after_load();
                 let fills = ["theme:shape1", "theme:shape2", "theme:shape3", "theme:shape4"];
                 for (i, &k) in ShapeKind::ALL.iter().enumerate() {
@@ -224,7 +237,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             "symboldeck" => {
                 // Debug: one symbol from several kinds of set, plain, tinted
                 // and as stickers.
-                app.editor.load(Document::default(), None);
+                app.editor.load(crate::app::new_document(&Document::default().theme), None);
                 app.after_load();
                 let picks = [
                     ("noto", "rocket", None, false),
@@ -289,7 +302,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 }
             }
             "empty" => {
-                app.editor.load(Document::default(), None);
+                app.editor.load(crate::app::new_document(&Document::default().theme), None);
                 app.after_load();
             }
             _ => {}
@@ -355,7 +368,7 @@ pub fn media_demo(app: &mut ZebraApp, which: &str) {
     use base64::Engine;
     use zebra_core::Origin;
     let h = Origin::Human;
-    app.editor.load(zebra_core::Document::default(), None);
+    app.editor.load(crate::app::new_document(&zebra_core::Document::default().theme), None);
     app.after_load();
     let ed = &mut app.editor;
     let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
@@ -509,6 +522,33 @@ mod tests {
         ed.apply(step(StepTarget::Element { id: f3 }), H).unwrap();
         ed.apply(step(StepTarget::Overview), H).unwrap();
         ed.doc
+    }
+
+    /// The sample's words live in the .ftl: the data file only has keys.
+    #[test]
+    fn the_data_file_has_keys_not_words() {
+        fn walk(v: &serde_json::Value, bad: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Object(o) => {
+                    for (k, v) in o {
+                        match v {
+                            serde_json::Value::String(s) if ["text", "title", "name", "notes", "label", "alt"].contains(&k.as_str()) => {
+                                if !(s.starts_with("sample-") && crate::i18n::LOADER.has(s)) {
+                                    bad.push(format!("{k}: {s:?}"));
+                                }
+                            }
+                            v => walk(v, bad),
+                        }
+                    }
+                }
+                serde_json::Value::Array(a) => a.iter().for_each(|v| walk(v, bad)),
+                _ => {}
+            }
+        }
+        let v: serde_json::Value = serde_json::from_str(include_str!("../data/sample.json")).unwrap();
+        let mut bad = vec![];
+        walk(&v["commands"], &mut bad);
+        assert!(bad.is_empty(), "words in data/sample.json: use sample-* keys from zebra-app.ftl\n{}", bad.join("\n"));
     }
 
     #[test]

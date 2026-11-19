@@ -62,7 +62,7 @@
     {
       "h": 0.26,
       "kind": "frame",
-      "name": "Centre",
+      "name": "content-frame-centre",
       "path": true,
       "style": "circle",
       "w": 0.26,
@@ -75,7 +75,7 @@
       "kind": "text",
       "ph": true,
       "style": "title",
-      "text": "Add a title",
+      "text": "content-add-a-title",
       "w": 0.2,
       "x": 0,
       "y": 0
@@ -95,7 +95,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Idea",
+      "text": "content-idea",
       "w": 0.11,
       "x": 0,
       "y": -0.21
@@ -115,7 +115,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Idea",
+      "text": "content-idea",
       "w": 0.11,
       "x": 0.2858,
       "y": -0.105
@@ -135,7 +135,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Idea",
+      "text": "content-idea",
       "w": 0.11,
       "x": 0.2858,
       "y": 0.105
@@ -155,7 +155,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Idea",
+      "text": "content-idea",
       "w": 0.11,
       "x": 0,
       "y": 0.21
@@ -175,7 +175,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Idea",
+      "text": "content-idea",
       "w": 0.11,
       "x": -0.2858,
       "y": 0.105
@@ -195,7 +195,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "Idea",
+      "text": "content-idea",
       "w": 0.11,
       "x": -0.2858,
       "y": -0.105

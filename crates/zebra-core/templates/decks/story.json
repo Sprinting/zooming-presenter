@@ -11,7 +11,7 @@
     {
       "h": 0.62,
       "kind": "frame",
-      "name": "Beginning",
+      "name": "content-frame-beginning",
       "style": "bracket",
       "w": 1,
       "x": 0,
@@ -23,7 +23,7 @@
       "kind": "text",
       "ph": true,
       "style": "title",
-      "text": "Add a title",
+      "text": "content-add-a-title",
       "w": 0.5,
       "x": -0.22,
       "y": -0.2
@@ -33,7 +33,7 @@
       "h": 0.04,
       "kind": "text",
       "style": "subtitle",
-      "text": "Once upon a time…",
+      "text": "content-once-upon-a-time",
       "w": 0.4,
       "x": -0.22,
       "y": -0.1
@@ -45,7 +45,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "Add your points here\nOne idea per line\nKeep it short",
+      "text": "content-add-your-points",
       "w": 0.45,
       "x": -0.22,
       "y": 0.08
@@ -53,7 +53,7 @@
     {
       "h": 0.25,
       "kind": "frame",
-      "name": "Middle",
+      "name": "content-frame-middle",
       "style": "bracket",
       "w": 0.4,
       "x": 0.26,
@@ -64,7 +64,7 @@
       "h": 0.03,
       "kind": "text",
       "style": "subtitle",
-      "text": "Then something changed",
+      "text": "content-then-something-changed",
       "w": 0.22,
       "x": 0.2,
       "y": 0
@@ -75,7 +75,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "What happened next",
+      "text": "content-what-happened-next",
       "w": 0.2,
       "x": 0.2,
       "y": 0.05
@@ -83,7 +83,7 @@
     {
       "h": 0.0625,
       "kind": "frame",
-      "name": "End",
+      "name": "content-frame-end",
       "style": "bracket",
       "w": 0.1,
       "x": 0.39,
@@ -94,7 +94,7 @@
       "h": 0.012,
       "kind": "text",
       "style": "subtitle",
-      "text": "And in the end",
+      "text": "content-and-in-the-end",
       "w": 0.08,
       "x": 0.39,
       "y": 0.095
@@ -105,7 +105,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "How it turned out",
+      "text": "content-how-it-turned-out",
       "w": 0.07,
       "x": 0.39,
       "y": 0.11

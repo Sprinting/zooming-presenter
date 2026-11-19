@@ -40,6 +40,7 @@ impl Previews {
                     .chain(zebra_core::diagrams::ALL.iter().map(|d| (format!("d:{}", d.key), Command::AddDiagram { diagram: d.key.to_string(), x: 0.0, y: 0.0, width: Some(1600.0) })));
                 for (key, cmd) in jobs {
                     let mut ed = Editor::new(Document::default());
+                    ed.labeler = Some(crate::words::phrase);
                     ed.measure = renderer.measure();
                     if ed.apply(cmd, H).is_err() {
                         continue;
@@ -241,6 +242,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
 /// Start a new presentation from a built-in template.
 pub fn new_from_template(app: &mut ZebraApp, id: &str) {
     let mut ed = Editor::new(Document::default());
+    ed.labeler = Some(crate::words::phrase);
     ed.measure = app.renderer.measure();
     let r = ed.apply(Command::ApplyTemplate { template: id.into(), replace: false }, H);
     if app.report(r).is_none() {
@@ -269,7 +271,7 @@ pub fn save_as_template(app: &mut ZebraApp) {
         app.toast(crate::t!("welcome-toast-templates-folder-missing"));
         return;
     };
-    let name = app.editor.doc.title.clone();
+    let name = crate::app::untitled_name(&app.editor.doc.title, &crate::t!("app-untitled"), 0);
     match crate::library::save_template(&app.editor.doc, &name, &dir) {
         Ok(p) => {
             let saved = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(name);

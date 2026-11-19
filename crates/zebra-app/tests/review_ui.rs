@@ -69,7 +69,7 @@ fn c1_removing_a_middle_step_with_the_last_row_on_screen() {
             // guard at the top of the loop; here the path shrinks between
             // frames with the stale selection still set.
         } else {
-            h.get_by_label("Minus").click();
+            h.get_by_label(&zebra_app::i18n::tr("sidebar-remove-tip")).click();
         }
         h.run_steps(4);
         assert_eq!(h.state().editor.doc.path.len(), 3);
