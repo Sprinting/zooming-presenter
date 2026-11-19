@@ -19,6 +19,10 @@
     <dict>
       <key>CFBundleTypeName</key><string>Zebra Presentation</string>
       <key>CFBundleTypeRole</key><string>Editor</string>
+      <!-- Zebra owns the type, so Finder opens .zebra files with it. No
+           NSDocumentClass: the app delegate opens files itself
+           (application:openURLs:, see mac.rs). -->
+      <key>LSHandlerRank</key><string>Owner</string>
       <key>LSItemContentTypes</key><array><string>app.zebra.presentation</string></array>
     </dict>
   </array>

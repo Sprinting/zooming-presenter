@@ -44,6 +44,15 @@ pub struct AppOptions {
     pub demo: Option<String>,
 }
 
+impl AppOptions {
+    /// A launch with nothing to open offers the template chooser (or brings
+    /// back last run's untitled documents). One with a file, from the
+    /// command line or from Finder, just opens it.
+    pub fn offers_chooser(&self) -> bool {
+        self.open.is_none() && self.demo.is_none() && self.screenshot.is_none()
+    }
+}
+
 #[derive(Clone)]
 pub struct Toast {
     pub text: String,
@@ -258,6 +267,7 @@ impl ZebraApp {
 
     fn build(ctx: &Context, wgpu: Option<egui_wgpu::RenderState>, storage: Option<&dyn eframe::Storage>, opts: AppOptions, shared: Option<Arc<Renderer>>) -> Self {
         let is_root = shared.is_none();
+        let offers_chooser = opts.offers_chooser();
         let renderer = match shared {
             Some(r) => r,
             None => {
@@ -395,7 +405,7 @@ impl ZebraApp {
             }
             app.set_ai_control(true);
         }
-        let launch_welcome = opts.open.is_none() && app.demo.is_none() && app.screenshot.is_none() && app.wgpu.is_some();
+        let launch_welcome = offers_chooser && app.wgpu.is_some();
         if let Some(p) = opts.open {
             app.open_path(&p);
         }
@@ -1086,6 +1096,8 @@ impl ZebraApp {
                 self.after_load();
                 self.push_recent(p.to_path_buf());
                 self.recovered = crate::files::autosave_newer(p);
+                // A file Finder sent after the chooser came up replaces it.
+                self.welcome = None;
             }
             Err(e) => {
                 // Keep technical details out of the toast; log them instead.

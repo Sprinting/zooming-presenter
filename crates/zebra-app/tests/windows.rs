@@ -235,3 +235,33 @@ fn new_documents_are_numbered() {
     assert_eq!(h.state().windows[1].window_title().replace(" — Edited", ""), "Plan");
     assert_eq!(zebra_app::app::untitled_name("Untitled", "Untitled", 0), "Untitled");
 }
+
+/// The display stays awake exactly while a window presents: through the
+/// show, let go when it ends and when its window closes mid-show.
+#[test]
+fn the_display_stays_awake_only_while_presenting() {
+    use zebra_core::ViewCommand;
+    let mut h = harness();
+    assert!(!h.state().awake.is_held());
+    add_frame(&mut h.state_mut().windows[0]);
+    h.state_mut().windows[0].editor.mark_saved(None);
+    h.state_mut().windows[0].view_cmd(ViewCommand::Present { step: None });
+    h.run_steps(3);
+    assert!(h.state().awake.is_held());
+    h.state_mut().windows[0].view_cmd(ViewCommand::ExitPresent);
+    h.run_steps(3);
+    assert!(!h.state().awake.is_held(), "the show ended");
+
+    // A second window presents, then closes mid-show.
+    h.state_mut().windows[0].queued.push(Action::New);
+    h.run_steps(4);
+    add_frame(&mut h.state_mut().windows[1]);
+    h.state_mut().windows[1].editor.mark_saved(None);
+    h.state_mut().windows[1].view_cmd(ViewCommand::Present { step: None });
+    h.run_steps(3);
+    assert!(h.state().awake.is_held());
+    h.state_mut().windows[1].queued.push(Action::Close);
+    h.run_steps(4);
+    assert_eq!(h.state().windows.len(), 1);
+    assert!(!h.state().awake.is_held(), "its window closed");
+}

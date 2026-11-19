@@ -139,6 +139,10 @@ pub struct Shell {
     tab_into: Option<(String, String)>,
     /// New documents numbered so far (for "Untitled 2").
     untitled_seq: u32,
+    /// Keeps the display awake while any window presents. Dropped (so
+    /// released) with the shell when Zebra quits; macOS also drops a
+    /// process's assertions when it exits.
+    pub awake: crate::keep_awake::SystemKeepAwake,
 }
 
 /// The placeholder title a new window is created with, so its NSWindow
@@ -154,10 +158,11 @@ impl Shell {
         first.doc_id = "d1".into();
         let dispatcher = first.dispatcher.take();
         crate::mac::install_reopen_hook(&first.ctx);
+        crate::open_events::set_wake(&first.ctx);
         let reopen = std::mem::take(&mut first.reopen_untitled);
         // Lets zebractl say "AI control is off" rather than "isn't open".
         let running = if first.wgpu.is_some() { zebra_api::discovery::RunningNote::write().ok() } else { None };
-        let mut shell = Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None, untitled_seq: 0, _running: running };
+        let mut shell = Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None, untitled_seq: 0, awake: Default::default(), _running: running };
         // More untitled documents from the last run: a window each.
         for p in reopen {
             let id = format!("d{}", shell.next_id);
@@ -474,6 +479,19 @@ impl zebra_api::Documents for Docs<'_> {
 }
 
 impl Shell {
+    /// Files Finder, the Dock or Open With asked for: each one opens like
+    /// File › Open from the front window (a window of its own unless that
+    /// one is untouched; a file already open just comes to the front). With
+    /// no window open the hidden root window takes it.
+    pub fn take_open_events(&mut self) {
+        let paths = crate::open_events::take();
+        if paths.is_empty() {
+            return;
+        }
+        let i = if self.empty { 0 } else { self.front.min(self.windows.len() - 1) };
+        self.windows[i].queued.extend(paths.into_iter().map(Action::OpenPath));
+    }
+
     /// No window open: the menu bar and a Dock click bring one back.
     fn logic_empty(&mut self, ctx: &egui::Context) {
         #[cfg(target_os = "macos")]
@@ -510,6 +528,7 @@ impl Shell {
 
 impl eframe::App for Shell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.take_open_events();
         if self.empty {
             self.logic_empty(ctx);
         }
@@ -527,6 +546,9 @@ impl eframe::App for Shell {
         if !self.empty {
             self.handle_requests(ctx);
         }
+        // After the requests: a window closed mid-show lets go this frame.
+        let presenting = self.windows.iter().any(|w| w.editor.view.mode == zebra_core::Mode::Present);
+        self.awake.set(presenting, || crate::t!("mac-activity-presenting"));
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {

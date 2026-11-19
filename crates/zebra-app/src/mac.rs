@@ -380,6 +380,89 @@ mod reopen {
     }
 }
 
+/// Let Finder, the Dock, Spotlight and Open With hand Zebra files to open.
+/// Call before `eframe::run_native`: a double-click that launches Zebra
+/// delivers its file while launch finishes, before the first frame. The
+/// files go to `open_events`. No-op off macOS.
+pub fn install_open_hook() {
+    #[cfg(target_os = "macos")]
+    open_hook::install();
+}
+
+/// winit's app delegate has no `application:openURLs:`, so AppKit handed
+/// opened files to NSDocumentController, which knows no document class for
+/// our type: "Zebra cannot open files in the 'Zebra Presentation' format",
+/// then an Untitled window (Kartik, 18 Nov). We add the method to the
+/// delegate. winit only sets its delegate inside `run_native`, and AppKit
+/// sends launch files during `finishLaunching`, so the method goes on when
+/// launch is about to finish (NSApplicationWillFinishLaunchingNotification):
+/// the delegate exists by then, and no open event has been sent yet.
+#[cfg(target_os = "macos")]
+mod open_hook {
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject, Imp, NSObject, Sel};
+    use objc2::{AnyThread, define_class, msg_send, sel};
+    use objc2_foundation::{NSArray, NSNotification, NSNotificationCenter, NSURL};
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[name = "ZebraLaunchObserver"]
+        struct LaunchObserver;
+
+        impl LaunchObserver {
+            #[unsafe(method(zebraWillFinishLaunching:))]
+            fn will_finish_launching(&self, _note: &NSNotification) {
+                add_open_urls();
+            }
+        }
+    );
+
+    unsafe extern "C-unwind" fn open_urls(_this: *mut AnyObject, _cmd: Sel, _app: *mut AnyObject, urls: *mut NSArray<NSURL>) {
+        // SAFETY: AppKit passes a valid NSArray of NSURL for this selector.
+        let Some(urls) = (unsafe { urls.as_ref() }) else { return };
+        let paths: Vec<std::path::PathBuf> = urls.iter().filter_map(|u| u.to_file_path()).collect();
+        crate::open_events::push(paths);
+    }
+
+    fn add_open_urls() {
+        let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+        let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        let Some(delegate) = app.delegate() else {
+            eprintln!("zebra: no app delegate at launch; files from Finder will not open");
+            return;
+        };
+        let obj: &AnyObject = delegate.as_ref();
+        let cls: &AnyClass = obj.class();
+        let types = c"v@:@@";
+        // SAFETY: the function matches the selector's signature and the type
+        // string. A class that already has the method keeps its own.
+        unsafe {
+            let imp: Imp = std::mem::transmute(open_urls as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, *mut NSArray<NSURL>));
+            objc2::ffi::class_addMethod(cls as *const AnyClass as *mut AnyClass, sel!(application:openURLs:), imp, types.as_ptr());
+        }
+    }
+
+    pub fn install() {
+        if objc2::MainThreadMarker::new().is_none() {
+            return;
+        }
+        // SAFETY: plain init of an NSObject subclass with no ivars.
+        let observer: Retained<LaunchObserver> = unsafe { msg_send![LaunchObserver::alloc(), init] };
+        // SAFETY: the observer answers the selector and lives for the rest
+        // of the process (leaked below); the notification name is AppKit's.
+        unsafe {
+            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                &observer,
+                sel!(zebraWillFinishLaunching:),
+                Some(objc2_app_kit::NSApplicationWillFinishLaunchingNotification),
+                None,
+            );
+        }
+        // The notification centre keeps no reference of its own.
+        std::mem::forget(observer);
+    }
+}
+
 /// Off macOS there is nothing to sync.
 #[cfg(not(target_os = "macos"))]
 #[derive(Default)]
