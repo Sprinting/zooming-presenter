@@ -324,7 +324,7 @@ impl Shell {
     /// unsaved changes comes to the front before it asks, so its Save
     /// Changes sheet is the one in view; Cancel there stops the quit.
     fn quit_step(&mut self, ctx: &egui::Context) {
-        let busy = |w: &ZebraApp| w.close_me || w.sheet_showing() || !w.queued.is_empty();
+        let busy = |w: &ZebraApp| w.close_me || w.sheet_showing() || !w.queued.is_empty() || w.editor.saving().is_some() || !w.after_save.is_empty();
         if let Some(w) = self.windows.iter().find(|w| w.quit_pending) {
             if busy(w) {
                 return;
@@ -532,7 +532,7 @@ impl eframe::App for Shell {
         if self.empty {
             self.logic_empty(ctx);
         }
-        let open: Vec<Option<std::path::PathBuf>> = self.windows.iter().map(|w| w.editor.file_path.as_deref().map(crate::app::same_file)).collect();
+        let open: Vec<Option<std::path::PathBuf>> = self.windows.iter().map(|w| w.shown_file().map(crate::app::same_file)).collect();
         for i in 0..self.windows.len() {
             let w = &mut self.windows[i];
             w.open_elsewhere = open.iter().enumerate().filter(|(j, _)| *j != i).filter_map(|(_, p)| p.clone()).collect();

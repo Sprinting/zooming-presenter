@@ -52,6 +52,7 @@ app-open-failed-not-zebra = It isn't a Zebra presentation, or it is damaged.
 app-open-failed-missing = The file no longer exists.
 app-open-failed-permission = You don't have permission to read it.
 app-open-failed-unreadable = The file couldn't be read.
+app-opening = Opening “{ $name }”…
 app-save-failed-title = The document “{ $name }” could not be saved.
 app-undo-lock = Lock
 app-undo-unlock = Unlock

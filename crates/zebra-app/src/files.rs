@@ -69,6 +69,13 @@ pub fn untitled_dir() -> PathBuf {
     zebra_api::discovery::app_dir().join("Autosave")
 }
 
+/// Spill new media to `Autosave/Media` (see `zebra_core::media::spill`),
+/// after sweeping what a crashed run left there.
+pub fn start_spilling() {
+    zebra_core::media::set_spill_dir(Some(untitled_dir().join("Media")));
+    zebra_core::media::sweep_spill(zebra_api::discovery::pid_alive);
+}
+
 /// A fresh name for a window's untitled autosave.
 pub fn new_autosave_name() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -173,6 +180,11 @@ pub fn autosave_tick(app: &mut ZebraApp) {
         return;
     }
     if app.editor.in_transaction() || app.editor.doc.elements.is_empty() {
+        return;
+    }
+    // Not while the document itself is being saved: that save is about
+    // to make the autosave unneeded.
+    if app.editor.saving().is_some() {
         return;
     }
     // One at a time: a deck with large video can take longer to write

@@ -59,6 +59,9 @@ fn main() -> anyhow::Result<()> {
     for v in zebra_api::discovery::ignored_overrides() {
         eprintln!("zebra: {v} is ignored by this build (only developer builds use it)");
     }
+    // New media is spilled to files beside the autosaves and mapped, not
+    // kept on the heap (headless agents too).
+    zebra_app::files::start_spilling();
     // The clip-art index takes a moment to read: do it before anyone asks.
     let _ = std::thread::Builder::new().name("zebra-symbols".into()).spawn(|| {
         let _ = zebra_core::symbols::library();

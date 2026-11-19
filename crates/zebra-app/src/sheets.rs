@@ -99,9 +99,10 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
     match k {
         SheetKind::SaveChanges(action) => {
             if label == crate::t!("sheet-save") {
+                // The save runs aside; the action follows once it's done
+                // (and asks again if the document changed meanwhile).
                 if app.save(false) {
-                    app.force_quit = true;
-                    app.queued.push(action);
+                    app.after_save.push(action);
                 }
             } else if label == crate::t!("sheet-dont-save") {
                 crate::files::discard_autosave(app);
