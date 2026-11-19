@@ -626,6 +626,39 @@ fn r26_a_dragged_step_is_let_go_when_the_path_changes() {
     assert_eq!(h.state().editor.doc.path, before[1..].to_vec(), "the two steps left keep their order");
 }
 
+/// Spec 04: a long path lays out (and draws thumbnails for) only the rows
+/// in view, and still scrolls to the step selected and reorders by drag.
+#[test]
+fn a_long_path_lays_out_only_the_rows_in_view() {
+    let mut h = harness();
+    for i in 0..300 {
+        frame(h.state_mut(), i as f64 * 1000.0, true);
+    }
+    h.run_steps(3);
+    let on = h.state().thumbs.showing();
+    assert_eq!(on.start, 0);
+    assert!(on.len() > 2 && on.len() < 20, "only the rows in view: {on:?}");
+    assert_eq!(h.state().step_rows.len(), 300, "every row has its place");
+    h.state_mut().selected_step = Some(250);
+    h.run_steps(4);
+    let on = h.state().thumbs.showing();
+    assert!(on.contains(&250), "scrolled to the selected step: {on:?}");
+    let r = h.state().step_rows[250];
+    assert!(r.min.y >= 0.0 && r.max.y <= 1000.0, "its row is on screen: {r:?}");
+    // Drag the row on screen down one place.
+    let (a, b) = (h.state().step_rows[250].center(), h.state().step_rows[251].center());
+    let start = h.state().editor.doc.path.clone();
+    h.input_mut().events.push(Event::PointerMoved(a));
+    h.input_mut().events.push(Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerMoved(b + egui::vec2(0.0, 30.0)));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: b + egui::vec2(0.0, 30.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let path = &h.state().editor.doc.path;
+    assert_eq!((&path[250], &path[251]), (&start[251], &start[250]), "dragged one place down");
+}
+
 /// Mac round, 18 Nov: on a fresh document, Edit › Undo was greyed out while
 /// typing in a new text box, though ⌘Z would undo the typing.
 #[test]
