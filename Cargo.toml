@@ -59,3 +59,13 @@ libc = "0.2"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Smaller app (measured 19 Nov, Linux x86-64, zebra / zebractl):
+# default 62.7 / 4.7 MB; stripped 49.7 / 3.2; thin LTO 46.4 / 2.2;
+# fat LTO 38.6 / 2.0 (and faster to build than thin here).
+# DSYM=1 scripts/bundle-macos.sh keeps symbols for crash reports.
+# panic stays "unwind": the canvas and thumbnails catch renderer panics.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
