@@ -232,6 +232,10 @@ pub struct Editor {
     pub(crate) index: crate::spatial::SpatialIndex,
     /// The batch being applied: old values of what it touched.
     journal: Option<Journal>,
+    /// A save running on a worker thread (see [`crate::saving`]).
+    pub(crate) saving: Option<crate::saving::SaveJob>,
+    /// Finished saves not yet taken by whoever started them.
+    pub(crate) saved: Vec<crate::saving::Saved>,
 }
 
 impl Default for Editor {
@@ -268,6 +272,8 @@ impl Editor {
             perf: Default::default(),
             labeler: None,
             journal: None,
+            saving: None,
+            saved: vec![],
         }
     }
 
@@ -287,7 +293,11 @@ impl Editor {
         self.revision != self.saved_revision
     }
     pub fn mark_saved(&mut self, path: Option<std::path::PathBuf>) {
-        self.saved_revision = self.revision;
+        self.mark_saved_at(self.revision, path);
+    }
+    /// Saved as it was at `revision` (a save that ran while edits went on).
+    pub fn mark_saved_at(&mut self, revision: u64, path: Option<std::path::PathBuf>) {
+        self.saved_revision = revision;
         if let Some(p) = path {
             self.events.push(Event::Saved { path: p.display().to_string() });
             self.file_path = Some(p);

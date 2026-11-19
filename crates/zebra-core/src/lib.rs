@@ -19,6 +19,7 @@ pub mod geom;
 pub mod icons;
 pub mod io;
 mod journal;
+pub mod saving;
 pub mod media;
 pub mod model;
 pub mod perf;
