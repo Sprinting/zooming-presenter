@@ -59,6 +59,10 @@ pub struct GpuRenderer {
     pub last_ms: [f32; 3],
 }
 
+/// Frames heavier than this (see [`crate::frame_cost`]) don't leave their
+/// encoding buffers behind.
+const SHRINK_AFTER_COST: usize = 200_000;
+
 fn renderer_options() -> RendererOptions {
     RendererOptions { antialiasing_support: AaSupport::area_only(), ..Default::default() }
 }
@@ -98,6 +102,12 @@ impl GpuRenderer {
         let res = self.renderer.render_to_texture(device, queue, &self.scene, view, &params);
         let t2 = std::time::Instant::now();
         let gpu_err = pollster::block_on(scope.pop());
+        // A heavy frame grows the scene's encoding buffers, and reset keeps
+        // their capacity: after one, start a fresh scene so the memory goes
+        // back instead of staying at the high-water mark.
+        if crate::clip::frame_cost(&list.items) > SHRINK_AFTER_COST {
+            self.scene = Scene::new();
+        }
         let ms = |a: std::time::Instant, b: std::time::Instant| (b - a).as_secs_f32() * 1000.0;
         self.last_ms = [ms(t0, t1), ms(t1, t2), ms(t2, std::time::Instant::now())];
         if let Some(e) = gpu_err {

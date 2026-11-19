@@ -6643,6 +6643,7 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
+ "skrifa 0.49.0",
  "unicode-script",
  "vello",
  "vello_cpu 0.4.0",

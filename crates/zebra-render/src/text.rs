@@ -259,23 +259,62 @@ impl Fonts {
     /// The font files `doc`'s text is set in (bundled, embedded or system
     /// fallbacks), each once: what a page showing the deck must carry.
     pub fn files_used(&self, editor: &zebra_core::Editor) -> Vec<Blob<u8>> {
+        let mut out: Vec<Blob<u8>> = vec![];
+        for (font, _) in self.faces_used(editor) {
+            if !out.iter().any(|b| b.id() == font.data.id()) {
+                out.push(font.data.clone());
+            }
+        }
+        out
+    }
+
+    /// True for the fonts that ship inside Zebra (open licences: a page
+    /// may carry them whole).
+    pub fn is_bundled(font: &FontData) -> bool {
+        let p = font.data.as_ref().as_ptr();
+        BUNDLED.iter().flat_map(|b| b.files.iter()).any(|f| f.as_ptr() == p)
+    }
+
+    /// The font faces `doc`'s text is set in, each with the glyphs it
+    /// shows (for cutting fonts down to what a page needs).
+    pub fn faces_used(&self, editor: &zebra_core::Editor) -> Vec<(FontData, std::collections::BTreeSet<u16>)> {
+        let mut out: Vec<(FontData, std::collections::BTreeSet<u16>)> = vec![];
+        for (_, faces) in self.faces_by_element(editor) {
+            for (font, glyphs) in faces {
+                match out.iter_mut().find(|(f, _)| f.data.id() == font.data.id() && f.index == font.index) {
+                    Some((_, g)) => g.extend(glyphs),
+                    None => out.push((font, glyphs)),
+                }
+            }
+        }
+        out
+    }
+
+    /// Per text element or connector label: the faces it is set in and the
+    /// glyphs of each.
+    pub fn faces_by_element(&self, editor: &zebra_core::Editor) -> Vec<(zebra_core::ElementId, Vec<(FontData, std::collections::BTreeSet<u16>)>)> {
         use zebra_core::ElementKind;
         self.register_doc_fonts(&editor.doc);
         let theme = editor.theme();
-        let mut out: Vec<Blob<u8>> = vec![];
-        let mut add = |l: &TextLayout| {
+        let faces = |l: &TextLayout| {
+            let mut out: Vec<(FontData, std::collections::BTreeSet<u16>)> = vec![];
             for run in &l.runs {
-                if !out.iter().any(|b| b.id() == run.font.data.id()) {
-                    out.push(run.font.data.clone());
+                let glyphs = run.glyphs.iter().filter_map(|g| u16::try_from(g.id).ok());
+                match out.iter_mut().find(|(f, _)| f.data.id() == run.font.data.id() && f.index == run.font.index) {
+                    Some((_, g)) => g.extend(glyphs),
+                    None => out.push((run.font.clone(), glyphs.collect())),
                 }
             }
+            out
         };
-        for e in editor.doc.elements.values() {
+        let mut out = vec![];
+        for id in &editor.doc.z_order {
+            let Some(e) = editor.doc.elements.get(id) else { continue };
             match &e.kind {
-                ElementKind::Text(t) if !t.text.is_empty() => add(&self.layout(t, &theme, wrap_for(t, e.size.w))),
+                ElementKind::Text(t) if !t.text.is_empty() => out.push((e.id.clone(), faces(&self.layout(t, &theme, wrap_for(t, e.size.w))))),
                 ElementKind::Connector(c) if !c.label.is_empty() => {
                     let t = TextData { text: c.label.clone(), style: zebra_core::TextStyle::Body, ..Default::default() };
-                    add(&self.layout(&t, &theme, None));
+                    out.push((e.id.clone(), faces(&self.layout(&t, &theme, None))));
                 }
                 _ => {}
             }
@@ -950,4 +989,10 @@ mod cache_tests {
         }
         assert!(fonts.cached_layouts() <= 2 * CACHE_HARD_LIMIT, "{}", fonts.cached_layouts());
     }
+}
+
+/// A bundled TrueType font's bytes (tests of font cutting).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn bundled_font_bytes_for_tests() -> &'static [u8] {
+    BUNDLED[0].files[0]
 }
