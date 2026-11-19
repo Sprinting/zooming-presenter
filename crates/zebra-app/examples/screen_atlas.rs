@@ -491,6 +491,25 @@ fn main() {
         a.run("Insert › Diagram in dark mode", true, false, |h| perform(h, Action::InsertDiagram));
     }
 
+    if want("big") {
+        a.section("Big decks");
+        a.run("Opening a big file: progress in the window", false, false, |h| {
+            h.state_mut().opening = Some(zebra_app::opening::Opening::stalled(std::path::Path::new("/tmp/A rather long deck name of 200,000 elements.zebra"), 0.4));
+        });
+        a.run("Zoomed far out: text too small to read is drawn as faint bars; the title, still big enough, as text", false, true, |h| {
+            let mut cmds = vec![serde_json::json!({"op":"add_text","text":"Quarterly review","style":"title","x":7000,"y":-1200,"width":4000})];
+            for i in 0..200 {
+                let (x, y) = ((i % 20) as f64 * 800.0, (i / 20) as f64 * 500.0);
+                cmds.push(serde_json::json!({"op":"add_text","text":"A line of body text\nand a shorter one","style":"body","x":x,"y":y}));
+            }
+            let cmds: Vec<Command> = cmds.into_iter().map(|c| serde_json::from_value(c).unwrap()).collect();
+            let app = h.state_mut();
+            app.editor.apply_batch(cmds, None, HUMAN).unwrap();
+            let _ = app.editor.view(ViewCommand::FitAll { animate: false }, HUMAN);
+            settle(h, 6);
+        });
+    }
+
     if want("present") {
         a.section("Presenting");
         a.run("Playing, step 1", false, false, |h| {
