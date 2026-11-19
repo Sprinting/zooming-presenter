@@ -9,6 +9,7 @@ pub mod files;
 pub mod i18n;
 pub mod icons;
 pub mod inspector;
+pub mod keep_awake;
 pub mod keymap;
 pub mod keys_pane;
 pub mod inspector_s3;

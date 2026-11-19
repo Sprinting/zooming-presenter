@@ -139,6 +139,10 @@ pub struct Shell {
     tab_into: Option<(String, String)>,
     /// New documents numbered so far (for "Untitled 2").
     untitled_seq: u32,
+    /// Keeps the display awake while any window presents. Dropped (so
+    /// released) with the shell when Zebra quits; macOS also drops a
+    /// process's assertions when it exits.
+    pub awake: crate::keep_awake::SystemKeepAwake,
 }
 
 /// The placeholder title a new window is created with, so its NSWindow
@@ -158,7 +162,7 @@ impl Shell {
         let reopen = std::mem::take(&mut first.reopen_untitled);
         // Lets zebractl say "AI control is off" rather than "isn't open".
         let running = if first.wgpu.is_some() { zebra_api::discovery::RunningNote::write().ok() } else { None };
-        let mut shell = Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None, untitled_seq: 0, _running: running };
+        let mut shell = Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None, untitled_seq: 0, awake: Default::default(), _running: running };
         // More untitled documents from the last run: a window each.
         for p in reopen {
             let id = format!("d{}", shell.next_id);
@@ -542,6 +546,9 @@ impl eframe::App for Shell {
         if !self.empty {
             self.handle_requests(ctx);
         }
+        // After the requests: a window closed mid-show lets go this frame.
+        let presenting = self.windows.iter().any(|w| w.editor.view.mode == zebra_core::Mode::Present);
+        self.awake.set(presenting, || crate::t!("mac-activity-presenting"));
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
