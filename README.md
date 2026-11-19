@@ -7,7 +7,7 @@ Metal for the canvas) and uses no web views.
 
 You use it like Prezi: you click, drag and type, and you never need to know a
 command. It can also be driven by AI agents, if you choose: click **AI: Off**
-in the toolbar and switch on **Let AI agents control Zebra**. Then any agent
+in the toolbar and switch on **Allow AI control**. Then any agent
 on the Mac that can run a command (Claude Code, Codex, Cursor, Gemini CLI, a
 shell script) can read and edit the same presentation while you watch, using
 the `zebractl` tool bundled inside the app (see [docs/API.md](docs/API.md)).
@@ -131,8 +131,8 @@ rewrites it).
 
 ## Working with an AI agent
 
-Click the **AI** button in the toolbar and switch on **Let AI agents control
-Zebra**. The popover gives you a sentence to paste into any agent's chat. It
+Click the **AI** button in the toolbar and switch on **Allow AI
+control**. The popover gives you a sentence to paste into any agent's chat. It
 points the agent at `zebractl --help`, by the tool's full path inside
 `Zebra.app`, so nothing has to be installed. Optional extras in the same
 popover: **Install command-line tool** (puts `zebractl` on your PATH, direct

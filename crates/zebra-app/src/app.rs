@@ -107,7 +107,7 @@ pub struct ZebraApp {
     /// Socket override from `--api-socket` (dev); used whenever AI control
     /// is switched on.
     pub api_socket: Option<PathBuf>,
-    /// AI control is on right now ("Let AI agents control Zebra").
+    /// AI control is on right now ("Allow AI control").
     pub ai_enabled: bool,
     /// The person's saved choice, restored at the next launch. Only the
     /// person's own toggle (and an agent's `disconnect`) changes it; a
@@ -438,7 +438,7 @@ impl ZebraApp {
         self.toast = Some(Toast { text: text.into(), until });
     }
 
-    /// Switch "Let AI agents control Zebra" on or off. Only the human UI
+    /// Switch "Allow AI control" on or off. Only the human UI
     /// calls this with `true`; agents can only reach the `false` side (the
     /// `disconnect` API method). Off closes the socket, disconnects every
     /// agent and removes the discovery file, so nothing can find Zebra.
