@@ -144,7 +144,8 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         let num_w = 22.0;
         let th = (tw - num_w - 6.0) * THUMB_H as f32 / THUMB_W as f32;
         let row_h = th + 26.0;
-        let pitch = row_h + 2.0 + 2.0 * ui.spacing().item_spacing.y;
+        // As the rows were spaced when each was allocated in turn.
+        let pitch = row_h + 2.0 + ui.spacing().item_spacing.y;
         let origin = ui.max_rect().min;
         rows = (0..n).map(|i| Rect::from_min_size(origin + EVec2::new(0.0, i as f32 * pitch), EVec2::new(tw, row_h))).collect();
         ui.allocate_space(EVec2::new(tw, n as f32 * pitch));
