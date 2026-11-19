@@ -208,6 +208,8 @@ pub struct Editor {
     pub perf: crate::perf::PerfStats,
     /// Translated history wording; see [`Phrase`].
     pub labeler: Option<Labeler>,
+    /// Where elements are (derived from `doc`; see [`crate::spatial`]).
+    pub(crate) index: crate::spatial::SpatialIndex,
 }
 
 impl Default for Editor {
@@ -226,6 +228,7 @@ impl Editor {
     pub fn new(doc: Document) -> Self {
         Editor {
             loads: 0,
+            index: crate::spatial::SpatialIndex::build(&doc),
             doc,
             view: ViewState::default(),
             revision: 0,
@@ -316,6 +319,7 @@ impl Editor {
         crate::check::repair(&mut doc);
         self.remeasure_all(&mut doc);
         self.doc = doc;
+        self.reindex();
         self.undo.clear();
         self.redo.clear();
         self.revision += 1;
@@ -401,6 +405,7 @@ impl Editor {
         if let Some(tx) = self.tx.take() {
             if tx.before != self.doc {
                 self.doc = tx.before;
+                self.reindex();
                 self.revision += 1;
                 let ids: Vec<ElementId> = tx.ids.into_iter().collect();
                 self.settle_view();
@@ -500,18 +505,26 @@ impl Editor {
         });
         let before = self.doc.clone();
         let mut out = Outcome::default();
+        self.index.begin_journal();
         for (i, cmd) in cmds.into_iter().enumerate() {
             if let Err(mut e) = self.apply_inner(cmd, &mut out) {
                 self.doc = before;
+                self.index.rollback(&self.doc);
                 if i > 0 {
                     e.message = format!("command #{i} failed (batch rolled back): {}", e.message);
                 }
                 return Err(e);
             }
+            // The next command sees where this one put things.
+            self.index.sync(&self.doc);
         }
         // Connectors follow whatever they are stuck to.
-        crate::connector::refresh(&mut self.doc);
+        for id in crate::connector::refresh(&mut self.doc) {
+            self.index.touch(&id);
+        }
+        self.index.sync(&self.doc);
         if self.doc == before {
+            self.index.end_journal();
             out.revision = self.revision;
             return Ok(out);
         }
@@ -520,8 +533,11 @@ impl Editor {
         // the result, so every command and every route is covered.
         if let Err(e) = self.check_result(&before, &out) {
             self.doc = before;
+            self.index.rollback(&self.doc);
             return Err(e);
         }
+        self.index.end_journal();
+        self.check_index();
         self.settle_view();
 
         // Deleted ids stay in the entry so "Delete 2 objects" says 2.
@@ -613,6 +629,7 @@ impl Editor {
             self.undo.push(h);
             return Err(ZError::new("internal", format!("undo failed: {e}")));
         }
+        self.reindex_after(h.deltas.iter().map(|d| &d.backward));
         let label = h.label.clone();
         let ids = h.ids.clone();
         self.redo.push(h);
@@ -628,11 +645,35 @@ impl Editor {
             self.redo.push(h);
             return Err(ZError::new("internal", format!("redo failed: {e}")));
         }
+        self.reindex_after(h.deltas.iter().map(|d| &d.forward));
         let label = h.label.clone();
         let ids = h.ids.clone();
         self.undo.push(h);
         self.after_history_jump(&format!("Redo {label}"), origin, ids);
         Ok(Some(label))
+    }
+
+    /// Bring the spatial index up to date after `changes` were applied.
+    fn reindex_after<'a>(&mut self, changes: impl Iterator<Item = &'a crate::delta::Change>) {
+        for c in changes {
+            match c.element_ids() {
+                Some(ids) => ids.iter().for_each(|id| self.index.touch(id)),
+                None => self.index.touch_all(),
+            }
+            if !c.z_order.is_empty() {
+                self.index.z_changed();
+            }
+        }
+        self.index.sync(&self.doc);
+        self.check_index();
+    }
+
+    /// Debug builds: the spatial index matches the document (small decks;
+    /// a big one would make every test edit slow).
+    fn check_index(&self) {
+        if cfg!(debug_assertions) && self.doc.elements.len() <= 5000 {
+            self.index.assert_matches(&self.doc);
+        }
     }
 
     /// Bytes held by undo and redo deltas (approximate, for diagnostics).
@@ -668,7 +709,15 @@ impl Editor {
         if !self.doc.elements.contains_key(id) {
             return Err(ZError::not_found(id, self.doc.elements.keys().cloned()));
         }
-        Ok(self.doc.elements.get_mut(id).unwrap())
+        Ok(self.el_mut(id))
+    }
+
+    /// The element to change; the spatial index rereads it at the next
+    /// sync. Every change to an element inside a command goes through here
+    /// (or [`Editor::element_mut`]). Panics if `id` doesn't exist.
+    fn el_mut(&mut self, id: &str) -> &mut Element {
+        self.index.touch(id);
+        self.doc.elements.get_mut(id).expect("element exists")
     }
 
     fn check_ids(&self, ids: &[ElementId]) -> ZResult<()> {
@@ -698,7 +747,7 @@ impl Editor {
                 }
             }
             if with_contents && self.doc.get(id).is_some_and(|e| e.is_frame()) {
-                for c in self.doc.frame_contents(id) {
+                for c in self.frame_contents(id) {
                     if seen.insert(c.clone()) {
                         out.push(c);
                     }
@@ -748,18 +797,10 @@ impl Editor {
         measure_text(&*self.measure, &self.theme(), &mut e);
         // Frames go behind the lowest element they enclose, so drawing a frame
         // around content keeps the content visible (Prezi behaviour).
-        let pos = if e.is_frame() {
-            let b = e.bounds();
-            self.doc
-                .z_order
-                .iter()
-                .position(|o| self.doc.get(o).is_some_and(|x| b.contains_rect(&x.bounds()) && x.bounds().area() < b.area()))
-                .unwrap_or(self.doc.z_order.len())
-        } else {
-            self.doc.z_order.len()
-        };
+        let pos = if e.is_frame() { self.frame_insert_pos(&e.bounds()) } else { self.doc.z_order.len() };
         self.doc.z_order.insert(pos, id.clone());
         self.doc.elements.insert(id.clone(), e);
+        self.index.z_inserted(&self.doc, pos);
         out.created.push(id.clone());
         Ok(id)
     }
@@ -969,6 +1010,7 @@ impl Editor {
                     for id in &ids {
                         if let Some(e) = self.doc.elements.get_mut(id) {
                             e.group = Some(g.clone());
+                            self.index.touch(id);
                         }
                     }
                 }
@@ -1036,7 +1078,9 @@ impl Editor {
                     }),
                 };
                 self.insert_element(e, out)?;
-                crate::connector::refresh(&mut self.doc);
+                for id in crate::connector::refresh(&mut self.doc) {
+                    self.index.touch(&id);
+                }
             }
             Command::AddVideo { data_base64, path, x, y, width, alt, poster_base64, autoplay, looping, muted, id } => {
                 let (key, info) = self.load_media(&data_base64, path.as_deref(), MediaKind::Video)?;
@@ -1209,19 +1253,20 @@ impl Editor {
                 self.insert_element(e, out)?;
             }
             Command::Update { id, patch } => {
-                self.element_mut(&id)?;
+                self.check_ids(std::slice::from_ref(&id))?;
                 // Text on a shape follows the shape when it moves or turns.
                 let riders = self.texts_on(&id);
                 let before = self.doc.elements[&id].transform;
                 // Changing a text's style (e.g. Body -> Title) must not push it
                 // out of the frame it sits in: remember the frame first.
-                let keep_in = if patch.style.is_some() && patch.scale.is_none() { self.doc.parent_frame(&id) } else { None };
+                let keep_in = if patch.style.is_some() && patch.scale.is_none() { self.parent_frame(&id) } else { None };
                 let frame_box = keep_in.and_then(|f| self.doc.get(&f)).map(|f| (f.world_size(), f.transform.rotation));
                 let crop_px = match (&patch.crop, &self.doc.elements[&id].kind) {
                     (Some(_), ElementKind::Image(i)) => self.doc.assets.get(&i.asset).map(|a| (a.width as f64, a.height as f64)),
                     _ => None,
                 };
-                let e = self.doc.elements.get_mut(&id).unwrap();
+                self.index.touch(&id);
+                let e = self.doc.elements.get_mut(&id).expect("element exists");
                 apply_patch(e, &patch)?;
                 if patch.text.is_some() {
                     // Typing into a placeholder makes it real content.
@@ -1249,7 +1294,7 @@ impl Editor {
                 if after != before {
                     let turn = after.rotation - before.rotation;
                     for t in riders {
-                        let r = self.doc.elements.get_mut(&t).unwrap();
+                        let r = self.el_mut(&t);
                         let off = (r.transform.center() - before.center()).rotate_deg(turn);
                         let c = after.center() + off;
                         r.transform.x = c.x;
@@ -1262,7 +1307,8 @@ impl Editor {
             Command::FormatText { id, start, end, find, format } => {
                 self.check_ids(std::slice::from_ref(&id))?;
                 self.check_unlocked(std::slice::from_ref(&id))?;
-                let e = self.doc.elements.get_mut(&id).unwrap();
+                self.index.touch(&id);
+                let e = self.doc.elements.get_mut(&id).expect("element exists");
                 let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
                 if let Some(c) = format.color.as_deref().filter(|c| !c.is_empty() && !valid_color(c)) {
                     return Err(ZError::invalid(format!("bad colour '{c}'")).values(Theme::COLOR_SLOTS.iter().map(|s| s.to_string()).collect()));
@@ -1294,7 +1340,8 @@ impl Editor {
             Command::FormatParagraphs { id, first, last, list, indent, indent_by, align } => {
                 self.check_ids(std::slice::from_ref(&id))?;
                 self.check_unlocked(std::slice::from_ref(&id))?;
-                let e = self.doc.elements.get_mut(&id).unwrap();
+                self.index.touch(&id);
+                let e = self.doc.elements.get_mut(&id).expect("element exists");
                 let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
                 let count = t.text.split('\n').count();
                 let first = first.unwrap_or(0);
@@ -1312,7 +1359,7 @@ impl Editor {
                     return Err(ZError::invalid("dx and dy must be finite"));
                 }
                 for id in self.expand(&ids, with_contents) {
-                    let e = self.doc.elements.get_mut(&id).unwrap();
+                    let e = self.el_mut(&id);
                     e.transform.x += dx;
                     e.transform.y += dy;
                     out.changed.push(id);
@@ -1326,7 +1373,7 @@ impl Editor {
                 }
                 let about = about.map(|a| Vec2::new(a[0], a[1])).unwrap_or_else(|| self.bounds_of(&ids).center());
                 for id in self.expand(&ids, with_contents) {
-                    let e = self.doc.elements.get_mut(&id).unwrap();
+                    let e = self.el_mut(&id);
                     let p = about + (e.transform.center() - about) * factor;
                     e.transform.x = p.x;
                     e.transform.y = p.y;
@@ -1342,7 +1389,8 @@ impl Editor {
                     return Err(ZError::invalid("resize needs `width` and/or `height`, each > 0 (world units)"));
                 }
                 let theme = self.theme();
-                let e = self.doc.elements.get_mut(&id).unwrap();
+                self.index.touch(&id);
+                let e = self.doc.elements.get_mut(&id).expect("element exists");
                 let s = e.transform.scale;
                 let (ww, wh) = (e.size.w * s, e.size.h * s);
                 match &mut e.kind {
@@ -1385,7 +1433,7 @@ impl Editor {
                 }
                 let about = about.map(|a| Vec2::new(a[0], a[1])).unwrap_or_else(|| self.bounds_of(&ids).center());
                 for id in self.expand(&ids, with_contents) {
-                    let e = self.doc.elements.get_mut(&id).unwrap();
+                    let e = self.el_mut(&id);
                     let p = about + (e.transform.center() - about).rotate_deg(degrees);
                     e.transform.x = p.x;
                     e.transform.y = p.y;
@@ -1403,6 +1451,7 @@ impl Editor {
                 self.doc.z_order.retain(|z| !set.contains(z));
                 for id in &ids {
                     self.doc.elements.remove(id);
+                    self.index.touch(id);
                 }
                 self.doc.path.retain(|s| !matches!(&s.target, StepTarget::Element { id } if set.contains(id)));
                 for s in &mut self.doc.path {
@@ -1412,7 +1461,7 @@ impl Editor {
                 for g in groups {
                     let left: Vec<ElementId> = self.doc.elements.values().filter(|e| e.group.as_ref() == Some(&g)).map(|e| e.id.clone()).collect();
                     if let [only] = left.as_slice() {
-                        self.doc.elements.get_mut(only).unwrap().group = None;
+                        self.el_mut(only).group = None;
                         out.changed.push(only.clone());
                     }
                 }
@@ -1461,6 +1510,7 @@ impl Editor {
                     e.id = nid.clone();
                     self.doc.z_order.push(nid.clone());
                     self.doc.elements.insert(nid.clone(), e);
+                    self.index.z_inserted(&self.doc, self.doc.z_order.len() - 1);
                     out.created.push(nid);
                 }
             }
@@ -1469,6 +1519,7 @@ impl Editor {
                 self.check_unlocked(&ids)?;
                 // The same id twice would be put in the order twice.
                 dedup(&mut ids);
+                self.index.z_changed();
                 let z = &mut self.doc.z_order;
                 match order {
                     ZOrderOp::Front => {
@@ -1558,7 +1609,7 @@ impl Editor {
                     _ => self.doc.alloc_group_id(),
                 };
                 for m in &members {
-                    self.doc.elements.get_mut(m).unwrap().group = Some(gid.clone());
+                    self.el_mut(m).group = Some(gid.clone());
                 }
                 out.changed.extend(members);
                 out.group = Some(gid);
@@ -1568,7 +1619,7 @@ impl Editor {
                 let members = self.doc.expand_groups(&ids);
                 self.check_unlocked(&members)?;
                 for m in &members {
-                    let e = self.doc.elements.get_mut(m).unwrap();
+                    let e = self.el_mut(m);
                     if e.group.take().is_some() {
                         out.changed.push(m.clone());
                     }
@@ -1735,6 +1786,7 @@ impl Editor {
                     out.deleted.extend(self.doc.elements.keys().cloned());
                     self.doc.elements.clear();
                     self.doc.z_order.clear();
+                    self.index.touch_all();
                     self.doc.path.clear();
                 }
                 if self.doc.theme != t.theme {
@@ -1774,6 +1826,8 @@ impl Editor {
         let mut d = std::mem::take(&mut self.doc);
         self.remeasure_all(&mut d);
         self.doc = d;
+        // Every text box may have a new size.
+        self.index.touch_all();
     }
 
     fn validate_theme(&self, t: &Theme) -> ZResult<()> {
@@ -2022,7 +2076,7 @@ impl Editor {
     fn outermost(&self, ids: &[ElementId]) -> Vec<ElementId> {
         let mut ids = ids.to_vec();
         dedup(&mut ids);
-        let inside: HashSet<ElementId> = ids.iter().filter(|id| self.doc.get(id).is_some_and(|e| e.is_frame())).flat_map(|id| self.doc.frame_contents(id)).collect();
+        let inside: HashSet<ElementId> = ids.iter().filter(|id| self.doc.get(id).is_some_and(|e| e.is_frame())).flat_map(|id| self.frame_contents(id)).collect();
         ids.retain(|id| !inside.contains(id));
         ids
     }
@@ -2081,7 +2135,7 @@ impl Editor {
             let b = self.doc.elements[id].bounds().center();
             let d = t - b;
             for m in self.expand(std::slice::from_ref(id), true) {
-                let e = self.doc.elements.get_mut(&m).unwrap();
+                let e = self.el_mut(&m);
                 e.transform.x += d.x;
                 e.transform.y += d.y;
                 out.changed.push(m);
