@@ -71,7 +71,7 @@ status-agent-paused = { $name }: paused
 status-agent-action = { $name }: { $action }
 status-agent-note = { $name }: { $note }
 status-hide-note = Hide
-status-activity = Activity
+status-activity = Agent Activity
 toolbar-add-step = Add Step
 toolbar-add-step-tip-view = Add the current view as a step
 toolbar-add-step-tip-selection = Add the selection as a step
@@ -81,12 +81,12 @@ toolbar-format-tip-show = Show the inspector
 toolbar-export = Export
 toolbar-export-tip = Export as PDF or PNG
 toolbar-export-pdf = PDF…
-toolbar-export-png = PNG of Current View…
+toolbar-export-png = Current View as PNG…
 toolbar-theme = Theme
 toolbar-theme-tip = Change the presentation's colours and fonts
 toolbar-view = View
-toolbar-view-tip = Show or hide the path sidebar and inspector
-toolbar-view-path-sidebar = Path Sidebar
+toolbar-view-tip = Show or hide the sidebar, inspector and agent activity
+toolbar-view-path-sidebar = Sidebar
 toolbar-view-inspector = Inspector
 toolbar-view-agent-activity = Agent Activity
 toolbar-view-edit-path = Edit Path
@@ -106,28 +106,28 @@ toolbar-play-from-current = Play from Current Step
 toolbar-presenter-view = Presenter View
 toolbar-playback-options = Playback Options…
 toolbar-text = Text
-toolbar-text-tip-detail = Or double-click anywhere on the canvas
+toolbar-text-tip-detail = Or double-click the canvas
 toolbar-frame = Frame
 toolbar-frame-tip-detail = Press { $key } again to change the style
 toolbar-frame-selection = Frame Selection
 toolbar-shape = Shape
-toolbar-shape-tip = Shapes and icons
+toolbar-shape-tip = Shapes, icons and symbols
 toolbar-shape-rectangle = Rectangle
-toolbar-shape-ellipse = Ellipse
+toolbar-shape-ellipse = Oval
 toolbar-line = Line
 toolbar-line-tip = Lines, arrows and drawing
 toolbar-line-arrow = Arrow
-toolbar-line-draw = Draw
+toolbar-line-draw = Pen
 toolbar-media = Media
 toolbar-media-tip =
-    Images, video and audio
+    Images, video and background music
     Or drop files on the canvas
 toolbar-media-image = Image…
 toolbar-media-video = Video…
-toolbar-media-audio = Audio…
+toolbar-media-audio = Background Music…
 toolbar-theme-my-themes = My Themes
-toolbar-theme-customize = Customize Theme…
-toolbar-theme-customize-tip = Colours, fonts, background picture and 3D background
+toolbar-theme-customize = Customise Theme…
+toolbar-theme-customize-tip = Colours, fonts and background images
 ai-toolbar = AI
 ai-toolbar-error = AI: Error
 ai-tip-off = Let an AI agent work in Zebra
@@ -162,10 +162,10 @@ ai-permission-edit = Edit the presentation (default)
 ai-permission-full = Full control (also your view, files, presenting)
 copy-box-copy = Copy
 copy-box-copied = Copied
-canvas-hint-title = Double-click anywhere to write
-canvas-hint-detail = Press { $key } for a frame, drop images here, or choose File › New from Sample
+canvas-hint-title = Double-click anywhere to add text
+canvas-hint-detail = Press { $key } for a frame, drop images here or choose File › New from Sample
 canvas-back-to-content = Back to Content
-canvas-back-to-content-tip = Zoom to fit everything
+canvas-back-to-content-tip = Zoom out to show everything
 recover-message = Unsaved changes from an earlier session were found.
 recover-dismiss = Dismiss
 recover-restore = Restore
@@ -847,7 +847,7 @@ menu-mac-bring-all-to-front = Bring All to Front
 
 
 ## ---- canvas.rs ----
-canvas-chip-zoom-into-frame = Zoom into Frame
+canvas-chip-zoom-into-frame = Zoom Into Frame
 canvas-chip-rename-hint = Double-click to rename
 canvas-toast-rename-failed = Couldn't rename the frame.
 canvas-undo-move-connector-end = Move Connector End
@@ -857,16 +857,16 @@ canvas-undo-move = Move
 canvas-undo-add-text = Add Text
 canvas-undo-edit-text = Edit Text
 # $step is the 1-based step number.
-canvas-toast-step-retargeted = Step { $step } now points here
+canvas-toast-step-retargeted = Step { $step } now zooms here
 canvas-toast-framed-objects = { $count ->
     [one] Framed { $count } object
    *[other] Framed { $count } objects
 }
 canvas-toast-added-step = Added step { $step }
-canvas-toast-shape-locked = This shape is locked — unlock it to type on it
-canvas-toast-text-locked = This text is locked — unlock it to edit
-canvas-toast-text-kept = Text box was removed. Your text is kept as a new one.
-canvas-text-placeholder = Type something
+canvas-toast-shape-locked = This shape is locked. Unlock it to add text.
+canvas-toast-text-locked = This text is locked. Unlock it to edit it.
+canvas-toast-text-kept = The text box was deleted, so your text is now in a new one.
+canvas-text-placeholder = Type here
 canvas-text-style-title = Title
 canvas-text-style-subtitle = Subtitle
 canvas-text-style-body = Body
@@ -902,7 +902,7 @@ canvas-link-remove = Remove
 canvas-agent-editing-here = { $name } is editing here
 canvas-locked = Locked
 # $modifier is the modifier key glyph (⇧).
-canvas-rotate-hint = Rotate  ·  { $modifier } snaps to 15°
+canvas-rotate-hint = Rotate  ·  Hold { $modifier } to snap to 15°
 # Beside the rotate handle while turning: "45°".
 canvas-rotate-angle = { $degrees }°
 canvas-menu-add-text-here = Add Text Here
