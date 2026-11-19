@@ -1379,6 +1379,8 @@ content-add-a-title = Add a title
 content-add-an-event = Add an event
 content-add-context = Add context
 content-add-text = Double-click to add text
+# The same, in boxes too narrow for the line above.
+content-add-text-short = Add text
 content-add-your-points =
     Add your points
     One point per line
