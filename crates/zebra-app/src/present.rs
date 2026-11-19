@@ -52,6 +52,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
         crate::canvas::sync_viewport(app, rect, ui.ctx().content_rect().size());
         let resp = ui.interact(rect, app.uid("zebra-canvas"), Sense::click_and_drag());
         crate::canvas::paint_content(app, ui, rect, true);
+        deck_mask(app, &ui.painter_at(rect), rect);
         crate::presenting::present_extras(app, ui, rect);
 
         crate::canvas::handle_scroll(app, ui, resp.contains_pointer());
@@ -166,4 +167,48 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
 
 fn toggle(cur: Option<Blank>, b: Blank) -> Option<Blank> {
     if cur == Some(b) { None } else { Some(b) }
+}
+
+/// The current step's imported PDF page and how strongly to hide what is
+/// around it (0..1): a page step shows only the page, like a slide deck.
+/// It fades in over the end of the flight there; off the path, in the
+/// overview and on every other step the canvas shows as usual.
+pub fn deck_page(ed: &zebra_core::Editor) -> Option<([zebra_core::Vec2; 4], f32)> {
+    let p = &ed.view.present;
+    if ed.view.mode != zebra_core::Mode::Present || p.off_path {
+        return None;
+    }
+    let step = ed.doc.path.get(p.step?)?;
+    let zebra_core::StepTarget::Element { id } = &step.target else { return None };
+    let e = ed.doc.get(id)?;
+    if !e.is_page() {
+        return None;
+    }
+    let a = match &ed.view.flight {
+        Some(f) => (((f.progress(ed.view.now) - 0.7) / 0.3).clamp(0.0, 1.0)) as f32,
+        None => 1.0,
+    };
+    let (w, h) = e.visual_size();
+    let (hw, hh) = (w / 2.0, h / 2.0);
+    let c = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].map(|(x, y)| e.transform.apply(zebra_core::Vec2::new(x, y)));
+    (a > 0.0).then_some((c, a))
+}
+
+/// Black over everything but the page (see [`deck_page`]).
+fn deck_mask(app: &ZebraApp, painter: &egui::Painter, rect: egui::Rect) {
+    let Some((corners, a)) = deck_page(&app.editor) else { return };
+    let inner = corners.map(|w| app.canvas.w2s(&app.editor, w));
+    let outer = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()];
+    let col = Color32::BLACK.gamma_multiply(a);
+    // A frame of four quads between the screen's edge and the page's.
+    let mut mesh = egui::Mesh::default();
+    for p in outer.iter().chain(inner.iter()) {
+        mesh.colored_vertex(*p, col);
+    }
+    for i in 0..4u32 {
+        let j = (i + 1) % 4;
+        mesh.add_triangle(i, j, 4 + j);
+        mesh.add_triangle(i, 4 + j, 4 + i);
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
