@@ -57,9 +57,15 @@ pub fn start(app: &mut ZebraApp, path: &Path) {
     let viewport = app.viewport;
     let spawned = std::thread::Builder::new().name("zebra-open".into()).spawn(move || {
         let wake = || ctx.request_repaint_of(viewport);
+        // A redraw for the bar ten times a second at most: each one is a
+        // frame the main thread draws while this one works.
+        let last = std::cell::Cell::new(None::<std::time::Instant>);
         let set = |f: f32| {
             p.store((f.clamp(0.0, 1.0) * 1000.0) as u32, Ordering::Relaxed);
-            wake();
+            if last.get().is_none_or(|t| t.elapsed().as_millis() >= 100) {
+                last.set(Some(std::time::Instant::now()));
+                wake();
+            }
         };
         // Reading and parsing is about a third of the time; measuring the
         // text and indexing the rest.
