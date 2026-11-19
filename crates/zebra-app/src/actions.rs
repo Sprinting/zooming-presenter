@@ -372,27 +372,28 @@ pub fn fmt_shortcut(m: Modifiers, k: Key) -> String {
 pub fn fmt_shortcut_for(mac: bool, m: Modifiers, k: Key) -> String {
     let mut s = String::new();
     if m.ctrl && (!m.command || mac) {
-        s.push_str(if mac { "⌃" } else { "Ctrl+" });
+        s.push_str(&if mac { "⌃".to_string() } else { format!("{}+", crate::t!("key-ctrl")) });
     }
     if m.alt {
-        s.push_str(if mac { "⌥" } else { "Alt+" });
+        s.push_str(&if mac { "⌥".to_string() } else { format!("{}+", crate::t!("key-alt")) });
     }
     if m.shift {
-        s.push_str(if mac { "⇧" } else { "Shift+" });
+        s.push_str(&if mac { "⇧".to_string() } else { format!("{}+", crate::t!("key-shift")) });
     }
     if m.command || m.mac_cmd {
-        s.push_str(if mac { "⌘" } else { "Ctrl+" });
+        s.push_str(&if mac { "⌘".to_string() } else { format!("{}+", crate::t!("key-ctrl")) });
     }
     let key = match k {
         Key::Enter => "↵".to_string(),
-        Key::Tab => if mac { "⇥".to_string() } else { "Tab".to_string() },
-        Key::Escape => "Esc".to_string(),
+        Key::Tab => if mac { "⇥".to_string() } else { crate::t!("key-tab") },
+        Key::Escape => crate::t!("key-escape"),
         Key::Backspace => "⌫".to_string(),
         Key::ArrowRight => "→".into(),
         Key::ArrowLeft => "←".into(),
         Key::ArrowUp => "↑".into(),
         Key::ArrowDown => "↓".into(),
-        Key::Delete => "Del".to_string(),
+        Key::Delete => crate::t!("key-delete"),
+        Key::Space => crate::t!("key-space"),
         Key::Num0 => "0".into(),
         Key::Num1 => "1".into(),
         Key::Num2 => "2".into(),

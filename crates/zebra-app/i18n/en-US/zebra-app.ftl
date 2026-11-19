@@ -645,6 +645,7 @@ theme-editor-depth = depth
 theme-editor-depth-tip = Left: far away, barely moves. Right: moves with the canvas.
 theme-editor-opacity = opacity
 theme-editor-remove-layer = Remove layer
+theme-editor-remove-layer-button = ✕
 theme-editor-add-layer = Add Layer…
 theme-editor-save-as-theme = Save as Theme…
 theme-editor-save-as-theme-tip = Keep this theme for other presentations
@@ -683,7 +684,8 @@ library-file-untitled = Untitled
 
 
 ## ---- icons.rs ----
-
+# The letter drawn on the Bold button (some languages use another, e.g. F).
+icons-bold-letter = B
 
 ## ---- end icons.rs ----
 
@@ -781,6 +783,15 @@ frame-style-bracket = Bracket
 frame-style-circle = Circle
 frame-style-rectangle = Rectangle
 frame-style-invisible = Invisible
+
+# Key names in shortcuts ("Esc", "Ctrl+S" off the Mac).
+key-escape = Esc
+key-delete = Del
+key-tab = Tab
+key-space = Space
+key-ctrl = Ctrl
+key-alt = Alt
+key-shift = Shift
 
 ## ---- end actions.rs ----
 
