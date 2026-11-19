@@ -298,6 +298,9 @@ impl<C: Connector> McpServer<C> {
 
     fn call_tool(&mut self, name: &str, args: &Value) -> Result<ToolOut, Value> {
         let text = |v: Value| ToolOut::Content(vec![json!({ "type": "text", "text": pretty(&v) })]);
+        if let Some(e) = unknown_argument(name, args) {
+            return Ok(ToolOut::Error(e));
+        }
         self.document = args.get("document").and_then(|d| d.as_str()).map(str::to_string);
         let out = match name {
             "list_documents" => self.rpc("documents", json!({})).map(text),
@@ -405,6 +408,18 @@ impl<C: Connector> McpServer<C> {
             Err(e) => ToolOut::Error(e),
         })
     }
+}
+
+/// An argument the tool doesn't take, as an error naming it, the tool and
+/// the arguments it does take. (Commands inside `commands`, `command` and
+/// `query` are checked by the app.)
+fn unknown_argument(tool: &str, args: &Value) -> Option<String> {
+    let args = args.as_object()?;
+    let tools = tools();
+    let t = tools.as_array()?.iter().find(|t| t["name"] == tool)?;
+    let accepted: Vec<&str> = t["inputSchema"]["properties"].as_object()?.keys().map(String::as_str).collect();
+    let e = crate::strict::check_keys(&format!("tool `{tool}`"), args, &accepted).err()?;
+    Some(format_rpc_error(&e))
 }
 
 fn pretty(v: &Value) -> String {
