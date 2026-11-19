@@ -6,7 +6,7 @@
 //! route itself is a pure function of the connector's data, so renderers and
 //! hit tests need no document access.
 use crate::geom::{Rect, Transform, Vec2};
-use crate::model::{ConnectorData, Document, Element, ElementKind, FrameStyle, Route, ShapeKind, Size};
+use crate::model::{ConnectorData, Document, Element, ElementId, ElementKind, FrameStyle, Route, ShapeKind, Size};
 
 /// A connector's centre line in its own local coordinates.
 #[derive(Debug, Clone, PartialEq)]
@@ -166,9 +166,11 @@ fn edge_point(e: &Element, aim: Vec2, elbow: bool) -> (Vec2, Vec2) {
 }
 
 /// Recompute every connector from the elements it is attached to. Ends
-/// whose element is gone become free where they last were.
-pub fn refresh(doc: &mut Document) {
+/// whose element is gone become free where they last were. Returns the
+/// connectors that changed.
+pub fn refresh(doc: &mut Document) -> Vec<ElementId> {
     let ids: Vec<String> = doc.elements.iter().filter(|(_, e)| matches!(e.kind, ElementKind::Connector(_))).map(|(id, _)| id.clone()).collect();
+    let mut changed = vec![];
     for id in ids {
         let e = &doc.elements[&id];
         let ElementKind::Connector(c) = &e.kind else { continue };
@@ -209,8 +211,10 @@ pub fn refresh(doc: &mut Document) {
             e.transform = transform;
             e.size = size;
             e.kind = ElementKind::Connector(n);
+            changed.push(id);
         }
     }
+    changed
 }
 
 #[cfg(test)]
