@@ -122,3 +122,30 @@ fn the_installed_pack_reads_when_present() {
         }
     }
 }
+
+/// After rebuilding a pack: every symbol of every set in the new pack
+/// equals the old format 1 pack's, byte for byte.
+///     ZEBRA_SYMBOLS_V1=<old pack> ZEBRA_SYMBOLS_V2=<new pack> \
+///         cargo test --release -p zebra-core --test symbols_pack -- --ignored
+#[test]
+#[ignore = "needs both packs; run by hand after a repack"]
+fn a_repacked_pack_matches_the_old_one() {
+    let (Some(v1), Some(v2)) = (std::env::var_os("ZEBRA_SYMBOLS_V1"), std::env::var_os("ZEBRA_SYMBOLS_V2")) else {
+        panic!("set ZEBRA_SYMBOLS_V1 and ZEBRA_SYMBOLS_V2");
+    };
+    let (v1, v2) = (PathBuf::from(v1), PathBuf::from(v2));
+    let lib = Library::open(&v2).unwrap();
+    let mut n = 0;
+    for (si, s) in lib.sets().enumerate() {
+        let raw = raw_set(&v1, &s.key);
+        let refs: Vec<_> = lib.all_in(si as u16).collect();
+        assert_eq!(refs.len(), raw.len(), "{}", s.key);
+        for (r, (name, svg)) in refs.into_iter().zip(&raw) {
+            assert_eq!(lib.name(r), name);
+            assert!(&*lib.svg(r).unwrap() == &svg[..], "{} {name}", s.key);
+            n += 1;
+        }
+        lib.clear();
+    }
+    eprintln!("{n} symbols match");
+}
