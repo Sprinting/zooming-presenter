@@ -11,14 +11,15 @@ const BOX: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 16
 fn closing_the_symbols_panel_frees_its_tiles_and_svgs() {
     let dir = std::env::temp_dir().join(format!("zebra-symbols-memory-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let (mut dat, mut idx) = (String::new(), String::new());
+    let (mut dat, mut idx) = (Vec::new(), String::new());
     for i in 0..12 {
-        idx += &format!("box {i}\tsquare\t{}\t{}\n", dat.len(), BOX.len());
-        dat += BOX;
+        let z = ruzstd::encoding::compress_to_vec(BOX.as_bytes(), ruzstd::encoding::CompressionLevel::Fastest);
+        idx += &format!("box {i}\tsquare\t{}\t{}\n", dat.len(), z.len());
+        dat.extend(z);
     }
     std::fs::write(dir.join("emoji.dat"), dat).unwrap();
     std::fs::write(dir.join("emoji.idx"), idx).unwrap();
-    std::fs::write(dir.join("sets.json"), serde_json::json!([{"id":"C1","key":"emoji","name":"Emoji","group":"emoji","tint":"","author":"A","licence":"MIT","count":12}]).to_string()).unwrap();
+    std::fs::write(dir.join("sets.json"), serde_json::json!({"format": 2, "sets": [{"id":"C1","key":"emoji","name":"Emoji","group":"emoji","tint":"","author":"A","licence":"MIT","count":12}]}).to_string()).unwrap();
     // SAFETY: the only test in this binary; set before the library is read.
     unsafe {
         std::env::set_var("ZEBRA_SYMBOLS_DIR", &dir);
@@ -47,5 +48,6 @@ fn closing_the_symbols_panel_frees_its_tiles_and_svgs() {
     h.run_steps(3);
     assert_eq!(h.state().symbols.tiles(), 0);
     assert_eq!(library().unwrap().cached(), 0);
+    assert_eq!(library().unwrap().dictionaries(), 0, "and the set dictionaries");
     let _ = std::fs::remove_dir_all(dir);
 }

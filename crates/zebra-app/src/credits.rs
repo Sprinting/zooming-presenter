@@ -45,7 +45,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
                         }
                     }
                     None => {
-                        ui.label(RichText::new(crate::t!("symbols-not-installed")).size(11.5).color(p.weak));
+                        ui.label(RichText::new(crate::symbols_ui::not_installed()).size(11.5).color(p.weak));
                     }
                 }
                 ui.add_space(6.0);

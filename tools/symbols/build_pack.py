@@ -2,26 +2,44 @@
 """Builds Zebra's clip-art pack (Insert > Symbols & Shapes) from the sources
 Kartik picked (C1-C36 in the preset catalogue).
 
-    python3 -I tools/symbols/build_pack.py --npm <node_modules> --vendor <dir> \
+    python3 -P tools/symbols/build_pack.py --npm <node_modules> --vendor <dir> \
         --tango <tango 0.8.90 dir> --openclipart <openclipart svg dir> \
         [--people <dicebear output dir>] --out assets/symbols
 
-Nothing here runs code from the sources: Iconify sets are JSON, Humaaans and
-Open Doodles are read as text (JSX / createElement calls), Tango and
-Openclipart are plain SVG files.
+    # Convert a format 1 pack (raw SVGs) to the current format:
+    python3 -P tools/symbols/build_pack.py --from-pack <old dir> --out <new dir>
 
-Output, one pair of files per set plus a list of sets:
-    sets.json          [{id, key, name, group, licence, ...}]
+Needs the zstandard module (pip install zstandard). Nothing here runs code
+from the sources: Iconify sets are JSON, Humaaans and Open Doodles are read
+as text (JSX / createElement calls), Tango and Openclipart are plain SVG
+files.
+
+Output (pack format 2), three files per set plus a list of sets:
+    sets.json          {"format": 2, "sets": [{id, key, name, group, licence, ...}]}
     <key>.idx          name \t keywords \t offset \t length   (one line per symbol)
-    <key>.dat          the SVG documents, back to back (UTF-8)
-The app keeps the .idx files in memory and reads single SVGs from .dat on
-demand.
+    <key>.dict         a zstd dictionary trained on the set's SVGs
+    <key>.dat          each SVG (UTF-8) as its own zstd frame, compressed with
+                       the set's dictionary, back to back; offset and length
+                       in the .idx are of the frame
+The app keeps the .idx files in memory and reads and decompresses single
+SVGs from .dat on demand (zebra_core::symbols). Format 1 had no .dict, raw
+SVGs in .dat and sets.json as a bare list; the app refuses it.
 """
 import argparse
 import json
 import os
 import re
 import sys
+
+import zstandard
+
+FORMAT = 2
+# zstd level for every symbol. 19 is the highest without --ultra windows;
+# symbols are small, so higher levels gain next to nothing.
+LEVEL = 19
+# Dictionary size: about 1/40 of the set, between 16 KB and 1 MB (bigger
+# dictionaries cost more than they save on small sets).
+DICT_MIN, DICT_MAX, DICT_SHARE = 16 << 10, 1 << 20, 40
 
 # id, Iconify prefix, group, tint
 # tint: "mono" = drawn in currentColor, can follow the theme;
@@ -59,29 +77,92 @@ CREDIT_NEEDED = {"CC-BY-3.0", "CC-BY-4.0"}
 
 
 class Writer:
+    """Collects a set's symbols; close() compresses and writes them."""
+
     def __init__(self, out, key):
+        self.out = out
         self.key = key
-        self.dat = open(os.path.join(out, key + ".dat"), "wb")
-        self.idx = open(os.path.join(out, key + ".idx"), "w", encoding="utf-8")
-        self.offset = 0
-        self.count = 0
+        self.items = []  # (name, keywords, svg bytes)
         self.seen = set()
+
+    @property
+    def count(self):
+        return len(self.items)
 
     def add(self, name, keywords, svg):
         name = clean(name)
         if not name or name in self.seen:
             return
         self.seen.add(name)
-        b = svg.encode("utf-8")
-        self.dat.write(b)
         kw = ",".join(dict.fromkeys(clean(k) for k in keywords if clean(k) and clean(k) != name))
-        self.idx.write(f"{name}\t{kw}\t{self.offset}\t{len(b)}\n")
-        self.offset += len(b)
-        self.count += 1
+        self.add_raw(name, kw, svg.encode("utf-8"))
+
+    def add_raw(self, name, kw, svg_bytes):
+        """An entry as it stands in an index (already cleaned)."""
+        self.items.append((name, kw, svg_bytes))
 
     def close(self):
-        self.dat.close()
-        self.idx.close()
+        write_set(self.out, self.key, self.items)
+
+
+def train(svgs):
+    """The set's zstd dictionary, or None when the set is too small to train one."""
+    total = sum(len(b) for b in svgs)
+    size = max(DICT_MIN, min(DICT_MAX, total // DICT_SHARE))
+    if len(svgs) < 8 or total < 4 * size:
+        return None
+    # Train on at most ~64 MB (every third symbol of the biggest sets).
+    step = max(1, total // (64 << 20) + 1)
+    sample = svgs[::step]
+    try:
+        return zstandard.train_dictionary(size, sample, level=LEVEL, k=0, d=0, steps=4, threads=2)
+    except zstandard.ZstdError:
+        return None
+
+
+def write_set(out, key, items):
+    """Writes <key>.idx, <key>.dict and <key>.dat for (name, keywords, svg bytes)."""
+    svgs = [b for _, _, b in items]
+    dic = train(svgs)
+    dict_path = os.path.join(out, key + ".dict")
+    if dic is not None:
+        with open(dict_path, "wb") as f:
+            f.write(dic.as_bytes())
+        c = zstandard.ZstdCompressor(level=LEVEL, dict_data=dic, write_checksum=False, write_content_size=True)
+    else:
+        if os.path.exists(dict_path):
+            os.remove(dict_path)
+        c = zstandard.ZstdCompressor(level=LEVEL, write_checksum=False, write_content_size=True)
+    offset = 0
+    with open(os.path.join(out, key + ".dat"), "wb") as dat, open(os.path.join(out, key + ".idx"), "w", encoding="utf-8") as idx:
+        for name, kw, b in items:
+            z = c.compress(b)
+            dat.write(z)
+            idx.write(f"{name}\t{kw}\t{offset}\t{len(z)}\n")
+            offset += len(z)
+    return offset
+
+
+def write_sets_json(out, sets):
+    with open(os.path.join(out, "sets.json"), "w", encoding="utf-8") as f:
+        json.dump({"format": FORMAT, "sets": sets}, f, indent=1, ensure_ascii=False)
+
+
+def repack(src, out):
+    """Converts a format 1 pack (raw SVGs, sets.json a bare list) in src."""
+    sets = json.load(open(os.path.join(src, "sets.json"), encoding="utf-8"))
+    if not isinstance(sets, list):
+        sys.exit(f"{src} is not a format 1 pack")
+    for s in sets:
+        key = s["key"]
+        raw = open(os.path.join(src, key + ".dat"), "rb").read()
+        items = []
+        for line in open(os.path.join(src, key + ".idx"), encoding="utf-8"):
+            name, kw, off, n = line.rstrip("\n").split("\t")
+            items.append((name, kw, raw[int(off): int(off) + int(n)]))
+        size = write_set(out, key, items)
+        print(s["id"], key, len(items), len(raw), "->", size, file=sys.stderr)
+    write_sets_json(out, sets)
 
 
 def clean(s):
@@ -341,14 +422,23 @@ def build_tree(root, out, key, skip_dirs=(), max_bytes=2_000_000):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--npm", required=True)
-    ap.add_argument("--vendor", required=True)
-    ap.add_argument("--tango", required=True, help="tango-icon-theme-0.8.90/scalable")
-    ap.add_argument("--openclipart", required=True, help="openclipart 0.18 svg directory")
+    ap.add_argument("--npm")
+    ap.add_argument("--vendor")
+    ap.add_argument("--tango", help="tango-icon-theme-0.8.90/scalable")
+    ap.add_argument("--openclipart", help="openclipart 0.18 svg directory")
     ap.add_argument("--people", help="DiceBear output (people.json) for C21-C23")
+    ap.add_argument("--from-pack", help="convert this format 1 pack instead of building from sources")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
+    if a.from_pack:
+        if os.path.realpath(a.from_pack) == os.path.realpath(a.out):
+            ap.error("--out must be another directory than --from-pack")
+        repack(a.from_pack, a.out)
+        return
+    for need in ("npm", "vendor", "tango", "openclipart"):
+        if not getattr(a, need):
+            ap.error(f"--{need} is required")
     sets = []
     for sid, prefix, group, tint in ICONIFY:
         sets.append(build_iconify(a.npm, a.out, sid, prefix, group, tint))
@@ -384,7 +474,7 @@ def main():
     print("openclipart skipped (over 2 MB):", skipped, file=sys.stderr)
     for s in sets:
         print(s["id"], s["key"], s["count"], file=sys.stderr)
-    json.dump(sets, open(os.path.join(a.out, "sets.json"), "w", encoding="utf-8"), indent=1, ensure_ascii=False)
+    write_sets_json(a.out, sets)
 
 
 if __name__ == "__main__":

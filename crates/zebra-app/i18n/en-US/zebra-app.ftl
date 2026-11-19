@@ -1262,6 +1262,7 @@ credits-licence-text = Licence text
 
 ## Symbols tab (Insert › Symbols & Shapes)
 symbols-not-installed = The symbol library isn't installed.
+symbols-old-pack = This version of Zebra can't read the symbol library.
 symbols-all-sets = All sets
 symbols-group-emoji = Emoji
 symbols-group-colour = Colour icons

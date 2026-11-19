@@ -953,7 +953,7 @@ impl Editor {
                 self.insert_element(e, out)?;
             }
             Command::AddSymbol { set, name, x, y, width, color, color2, sticker, id } => {
-                let lib = crate::symbols::library().ok_or_else(|| ZError::new("unavailable", "the symbol library isn't installed"))?;
+                let lib = crate::symbols::library().ok_or_else(|| ZError::new("unavailable", crate::symbols::library_error().unwrap_or("the symbol library isn't installed")))?;
                 let r = lib.find(&set, &name).ok_or_else(|| {
                     let near: Vec<String> = lib.search(&name.replace('-', " "), lib.set_index(&set).map(|s| vec![s]).as_deref(), 8).iter().map(|r| lib.name(*r).to_string()).collect();
                     ZError::new("not_found", format!("no symbol '{name}' in set '{set}'")).hint("search with the symbols query").values(near)
