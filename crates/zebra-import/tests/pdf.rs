@@ -90,7 +90,11 @@ fn each_page_comes_in_as_a_picture_drawn_from_the_pdf() {
         let page = img.page.as_ref().expect("page ref");
         assert_eq!((&page.pdf, page.index), (pdf_key, i as u32));
         let pic = &deck.assets[&img.asset];
-        assert_eq!(pic.width.max(pic.height), zebra_import::pdf::PICTURE_PX);
+        assert_eq!(pic.width.max(pic.height), zebra_import::pdf::PREVIEW_PX);
+        // No spare room kept in the picture's buffer.
+        if let zebra_core::AssetBytes::Memory(v) = &pic.bytes {
+            assert_eq!(v.len(), v.capacity());
+        }
         // The picture fills the page, which is its frame's size.
         assert_eq!((it.element.size.w, it.element.size.h), (p.w, p.h));
         assert!((p.w / p.h - pic.width as f64 / pic.height as f64).abs() < 0.01);
@@ -146,6 +150,57 @@ fn tiles_match_the_whole_page_drawn_at_that_size() {
     assert!(zebra_import::pdf::raster("other", &zebra_core::AssetBytes::from(b"%PDF-1.4 junk".to_vec()), 0, (64, 64), (0, 0, 64, 64)).is_none());
     assert!(zebra_import::pdf::raster("k", &bytes, 9, (64, 64), (0, 0, 64, 64)).is_none(), "no page 10");
     assert!(zebra_import::pdf::raster("k", &bytes, 0, (64, 64), (0, 0, 64, 64)).is_some());
+}
+
+/// `n` steps, each a title, a paragraph and a few shapes, as a PDF.
+fn many_pages_pdf(n: usize) -> Vec<u8> {
+    let r = zebra_render::Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    let mut cmds = vec![];
+    for i in 0..n {
+        let x = i as f64 * 2000.0;
+        cmds.push(cmd(serde_json::json!({"op":"add_frame","style":"invisible","x":x,"y":0,"w":800,"h":600,"add_to_path":true})));
+        cmds.push(cmd(serde_json::json!({"op":"add_text","text":format!("Slide number {i}"),"style":"title","x":x,"y":-200})));
+        cmds.push(cmd(serde_json::json!({"op":"add_text","text":"A line of body text that runs across the slide","x":x,"y":0})));
+        cmds.push(cmd(serde_json::json!({"op":"add_shape","shape":"rectangle","x":x - 200.0,"y":180,"w":200,"h":120,"fill":"#3366cc"})));
+        cmds.push(cmd(serde_json::json!({"op":"add_shape","shape":"ellipse","x":x + 200.0,"y":180,"w":150,"h":150,"fill":"#cc3333"})));
+    }
+    ed.apply_batch(cmds, Some("pages".into()), Origin::Human).unwrap();
+    r.export_pdf(&ed).unwrap()
+}
+
+#[test]
+fn page_pictures_are_small_previews() {
+    if !engine() {
+        return;
+    }
+    let pdf = many_pages_pdf(50);
+    let reader = zebra_import::open_bytes(pdf.clone(), "many".into()).unwrap();
+    let deck = reader.read(&Options::all(Editor::default().theme()), &Control::default()).unwrap();
+    assert_eq!(deck.pages.len(), 50);
+    let pics: Vec<_> = deck.assets.values().filter(|a| a.ext != "pdf").collect();
+    for a in &pics {
+        assert!(a.width.max(a.height) <= zebra_import::pdf::PREVIEW_PX);
+        if let zebra_core::AssetBytes::Memory(v) = &a.bytes {
+            assert_eq!(v.len(), v.capacity());
+        }
+    }
+    let new_total: usize = deck.assets.values().map(|a| a.bytes.len()).sum();
+    // What import kept before: a 2048 px PNG per page, in a Vec that grew
+    // as it was written, beside the PDF.
+    let bytes = zebra_core::AssetBytes::from(pdf.clone());
+    let mut old_total = pdf.len();
+    for (i, a) in pics.iter().enumerate().take(50) {
+        let (w, h) = if a.width >= a.height { (2048, (2048 * a.height).div_ceil(a.width)) } else { ((2048 * a.width).div_ceil(a.height), 2048) };
+        let px = zebra_import::pdf::raster("old", &bytes, i as u32, (w, h), (0, 0, w, h)).unwrap();
+        let rgb = image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(w, h, px).unwrap()).to_rgb8();
+        let mut png = vec![];
+        rgb.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        old_total += png.capacity();
+    }
+    eprintln!("50 pages: assets {new_total} bytes now, {old_total} before");
+    assert!(new_total * 8 < old_total, "{new_total} vs {old_total}");
 }
 
 #[test]

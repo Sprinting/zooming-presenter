@@ -2,10 +2,13 @@
 //!
 //! The PDF goes into the document once, as an asset; each page becomes a
 //! picture element pointing at its page ([`zebra_core::PageRef`]), over a
-//! picture of the page made here ([`PICTURE_PX`] on its long side). The app
-//! draws pages again from the PDF when zoomed in past that picture
-//! ([`raster`], handed to the renderer), so they stay sharp; thumbnails,
-//! exports and the web player draw the picture.
+//! small picture of the page made here ([`PREVIEW_PX`] on its long side).
+//! The renderer draws pages again from the PDF when they are seen bigger
+//! than that picture ([`raster`], handed to it by the app), so they stay
+//! sharp on screen and in exports; thumbnails and the sidebar draw the
+//! picture, and so does the page until its tiles land. The PDF is the
+//! page; the picture is only a preview, so a 300-page PDF costs a few MB
+//! of pictures, not hundreds.
 //!
 //! PDFium is a separate library, loaded at run time by full path from the
 //! app bundle and never from the system's search paths.
@@ -19,11 +22,13 @@ use zebra_core::{AssetBytes, Element, ElementKind, ImageData, PageRef, Size, Tra
 
 use crate::{Control, ImportError, Options, Reader};
 
-/// Long side of each page's picture, pixels: what thumbnails, exports and
-/// the web player show. The app draws the PDF itself past this size.
+/// Long side of each page's picture, pixels: what thumbnails, the sidebar
+/// and a page whose tiles are still being made show. Past this size the
+/// page is drawn from the PDF. (Documents imported before kept 2048 px
+/// pictures; they still work, the picture's own width decides.)
 /// (PNG; JPEG is about half the size for slides with gradients but ten
 /// times slower to make, and no smaller for plain ones.)
-pub const PICTURE_PX: u32 = 2048;
+pub const PREVIEW_PX: u32 = 512;
 /// Long side of the largest page on the canvas, world units (a default
 /// frame is 800 wide). Pages keep their sizes relative to each other.
 pub const PAGE_UNITS: f64 = 1000.0;
@@ -95,9 +100,12 @@ fn render(page: &PdfPage, w: u32, h: u32) -> Option<image::RgbImage> {
     Some(image::DynamicImage::ImageRgba8(rgba).to_rgb8())
 }
 
+/// PNG bytes, in a buffer no bigger than they are (a growing Vec has up
+/// to twice the room it uses, and import keeps one per page).
 fn encode(img: &image::RgbImage) -> Vec<u8> {
     let mut png = vec![];
-    let _ = image::DynamicImage::ImageRgb8(img.clone()).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png);
+    let _ = img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png);
+    png.shrink_to_fit();
     png
 }
 
@@ -158,7 +166,7 @@ impl Reader for PdfReader {
                 // A page PDFium can't open is left out, not the whole file.
                 let drawn = doc.pages().get(i as i32).ok().and_then(|page| {
                     let (w, h) = (page.width().value as f64, page.height().value as f64);
-                    let (pw, ph) = fit(w, h, PICTURE_PX);
+                    let (pw, ph) = fit(w, h, PREVIEW_PX);
                     Some((w, h, first_line(&page), render(&page, pw, ph)?))
                 });
                 match drawn {
