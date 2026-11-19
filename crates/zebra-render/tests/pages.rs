@@ -141,6 +141,21 @@ fn a_page_filling_a_5k_screen_is_drawn_in_bigger_tiles() {
 }
 
 #[test]
+fn zoomed_in_on_a_big_screen_the_biggest_tiles_still_come() {
+    let r = Renderer::new();
+    let ed = deck_with(&r, 512);
+    let asked = Arc::new(Mutex::new(vec![]));
+    r.set_page_raster(Some(green(asked.clone())));
+    // A 2560 x 1440 screen 4x past fitting the page: 10000 px wide, drawn
+    // 16384 wide in 2048 px tiles (whole tiles reach past the screen).
+    let l = r.build_display_list(&ed, &cam(25.0), [1280.0, 720.0], 2.0, &sync());
+    let q = asked.lock().unwrap().clone();
+    assert!(!q.is_empty(), "fell back to the preview");
+    assert!(q.iter().all(|q| q.page_px.0 == 16384 && q.rect.2 == 2048));
+    assert!(!l.images_pending);
+}
+
+#[test]
 fn pdf_export_draws_the_page_from_the_pdf_at_export_size() {
     let r = Renderer::new();
     let ed = deck_with(&r, 512);

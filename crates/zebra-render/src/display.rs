@@ -459,10 +459,11 @@ impl Ctx<'_> {
         let (tx0, ty0) = ((x0 / tile).floor() as u32, (y0 / tile).floor() as u32);
         let (tx1, ty1) = ((x1 / tile).ceil() as u32, (y1 / tile).ceil() as u32);
         // A turned page on a big screen: more than is worth making. (A
-        // page filling a 5K screen is well within this.)
+        // page filling a 5K screen is well within this.) The part seen,
+        // not whole tiles: big tiles past its edges would count double.
         let (sw, sh) = (self.screen.0 as f64, self.screen.1 as f64);
         let budget = (4.0 * sw * sh).max(MAX_TILE_PIXELS as f64);
-        if (tx1 - tx0) as f64 * (ty1 - ty0) as f64 * tile * tile > budget {
+        if (x1 - x0) * (y1 - y0) > budget {
             return out;
         }
         let key = |pw: u32, tx: u32, ty: u32| format!("{TILE_PREFIX}{}#{}@{pw}:{tx},{ty}", page.pdf, page.index);
