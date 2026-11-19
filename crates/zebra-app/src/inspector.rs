@@ -320,7 +320,7 @@ fn style_tab(insp: &mut Insp, ui: &mut Ui) {
                         insp.set(ElementPatch { name: Some(name.clone()), ..Default::default() });
                     }
                 });
-                let n = insp.app.editor.doc.frame_contents(&el.id).len();
+                let n = insp.app.editor.frame_contents(&el.id).len();
                 w::caption(ui, crate::t!("inspector-frame-contains", count = n));
             });
             w::section(ui, &crate::t!("inspector-section-colour"), |ui| {
@@ -725,7 +725,7 @@ fn path_tab(insp: &mut Insp, ui: &mut Ui, _p: &Palette) {
         let doc = &insp.app.editor.doc;
         let fade_steps: Vec<usize> = (0..doc.path.len())
             .filter(|i| match &doc.path[*i].target {
-                StepTarget::Element { id: f } => *f != id && doc.frame_contents(f).contains(&id),
+                StepTarget::Element { id: f } => *f != id && insp.app.editor.frame_contents(f).contains(&id),
                 _ => false,
             })
             .collect();

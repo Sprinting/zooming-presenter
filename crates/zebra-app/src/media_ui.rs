@@ -362,14 +362,14 @@ fn videos_on_step(app: &ZebraApp, step: usize) -> Vec<ElementId> {
     let Some(s) = d.path.get(step) else { return vec![] };
     let ids: Vec<ElementId> = match &s.target {
         StepTarget::Element { id } => {
-            let mut v = d.frame_contents(id);
+            let mut v = app.editor.frame_contents(id);
             v.push(id.clone());
             v
         }
         StepTarget::View { .. } | StepTarget::Overview => {
             let cam = app.editor.camera_for_step(step);
             let b = cam.visible_bounds(app.editor.view.viewport);
-            d.ordered().filter(|e| b.contains_rect(&e.bounds())).map(|e| e.id.clone()).collect()
+            app.editor.elements_in(b).into_iter().filter(|e| b.contains_rect(&e.bounds())).map(|e| e.id.clone()).collect()
         }
     };
     ids.into_iter().filter(|id| matches!(d.get(id).map(|e| &e.kind), Some(ElementKind::Video(_)))).collect()

@@ -63,7 +63,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
             if let Some(p) = resp.interact_pointer_pos() {
                 // A link in text opens; an object zooms (off-path); empty space = next.
                 let w = app.canvas.s2w(&app.editor, p);
-                let link = app.editor.doc.ordered().rev().filter(|e| e.bounds().contains(w)).find_map(|e| app.renderer.link_at(&app.editor, e, w));
+                let link = app.editor.elements_at(w, 0.0).into_iter().rev().filter(|e| e.bounds().contains(w)).find_map(|e| app.renderer.link_at(&app.editor, e, w));
                 if let Some(url) = link {
                     crate::app::open_url(&url);
                     app.toast(crate::t!("present-toast-opened-link", url = url.as_str()));
