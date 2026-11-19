@@ -27,6 +27,10 @@ egui = { workspace = true, optional = true }
 egui-wgpu = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 
+# Worker threads for captures; the web player (wasm32) has none.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vello_cpu = { workspace = true, features = ["multithreading"] }
+
 [dev-dependencies]
 base64.workspace = true
 pollster.workspace = true
