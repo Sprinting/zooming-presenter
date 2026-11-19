@@ -422,14 +422,26 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
     let placed = |e: &Element| !e.is_frame() && !matches!(e.kind, ElementKind::Connector(_));
     for e in d.ordered().filter(|e| placed(e)) {
         let b = ink_bounds(ed, &theme, e);
-        // The frame it mostly sits in: the most overlap, then the smallest.
-        let home = frames
+        // Which frame it belongs to is the one rule (`frame_holds`, what
+        // moves with a dragged frame); what it looks like is its ink.
+        let owner = ed.parent_frame(&e.id).and_then(|id| d.get(&id));
+        // The frame it mostly sits in, of those it doesn't move with: the
+        // most overlap, then the smallest.
+        let stray = frames
             .iter()
-            .filter(|f| f.visual_bounds().area() > b.area())
+            .filter(|f| f.visual_bounds().area() > b.area() && !frame_holds(&f.visual_bounds(), &e.bounds()))
             .map(|f| (*f, overlap(&f.visual_bounds(), &b)))
             .filter(|(_, a)| *a > 0.0)
             .max_by(|x, y| x.1.total_cmp(&y.1).then(y.0.visual_bounds().area().total_cmp(&x.0.visual_bounds().area())));
-        if let Some((f, _)) = home {
+        let home = match (owner, stray) {
+            // Its own frame, when the ink spills past it.
+            (Some(f), _) if !f.visual_bounds().contains_rect(&b) => Some((f, true)),
+            // Inside its frame but mostly in a smaller one it straddles.
+            (Some(_), Some((f, a))) if a >= 0.5 * b.area() => Some((f, false)),
+            (Some(_), _) => None,
+            (None, s) => s.map(|(f, _)| (f, false)),
+        };
+        if let Some((f, moves)) = home {
             let fb = f.visual_bounds();
             if !fb.contains_rect(&b) {
                 let sides: Vec<String> = [
@@ -442,15 +454,18 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
                 .filter(|(_, px)| *px > 0.5)
                 .map(|(s, px)| format!("{px:.0} on the {s}"))
                 .collect();
-                issues.push(json!({"kind": "outside_frame", "id": e.id, "frame": f.id,
-                    "message": format!("{} {} runs past the edge of frame {} by {}", e.kind.type_name(), e.id, f.id, sides.join(", "))}));
+                let tail = if moves { String::new() } else { format!(", so it doesn't move with {}", f.id) };
+                issues.push(json!({"kind": "outside_frame", "id": e.id, "frame": f.id, "moves_with_frame": moves,
+                    "message": format!("{} {} runs past the edge of frame {} by {}{tail}", e.kind.type_name(), e.id, f.id, sides.join(", "))}));
             }
         }
         // Text too small at the step that shows it.
         let ElementKind::Text(t) = &e.kind else { continue };
         let font_world = theme.text_style(t.style).size * e.transform.scale;
         // The tightest step that shows it: its own frame, a frame it mostly
-        // sits in, or a step that reveals it as a build.
+        // sits in, or a step that reveals it as a build. This is what the
+        // audience sees, not ownership: text spilling past a frame's edge
+        // still shows at that frame's step.
         let best = d
             .path
             .iter()
