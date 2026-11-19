@@ -357,6 +357,11 @@ impl Thumbs {
         }
     }
 
+    /// The steps last reported on screen.
+    pub fn showing(&self) -> Range<usize> {
+        self.show.clone()
+    }
+
     /// Call every frame.
     pub fn update(&mut self, ed: &Editor, now: f64) {
         while let Ok(r) = self.rx.try_recv() {
