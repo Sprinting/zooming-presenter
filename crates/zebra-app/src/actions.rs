@@ -150,7 +150,7 @@ impl Action {
             CropImage => crate::t!("action-crop-image"),
             PlayPauseVideo => crate::t!("action-play-pause-video"),
             WrapInFrame => crate::t!("action-wrap-in-frame"),
-            ShapeLibrary => crate::t!("action-shape-library"),
+            ShapeLibrary => crate::t!("action-insert-symbols"),
             InsertVideo => crate::t!("action-insert-video"),
             Bold => crate::t!("action-bold"),
             Italic => crate::t!("action-italic"),
@@ -423,4 +423,16 @@ pub fn mods_match(ev: Modifiers, pat: Modifiers) -> bool {
     }
     let mac_ctrl_ok = !mac || ev.ctrl == pat.ctrl;
     ev.shift == pat.shift && ev.alt == pat.alt && ev.command == pat.command && mac_ctrl_ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shape toolbar menu and the canvas right-click menu open the
+    /// same window as Insert › Symbols & Shapes, under the same name.
+    #[test]
+    fn the_symbols_window_has_one_name() {
+        assert_eq!(Action::ShapeLibrary.label(), Action::InsertSymbols.label());
+    }
 }

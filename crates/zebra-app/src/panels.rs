@@ -287,7 +287,7 @@ fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             }
         }
         w::menu_separator(ui);
-        if w::menu_item(ui, &crate::t!("toolbar-shape-library"), None).clicked() {
+        if w::menu_item(ui, &crate::t!("action-insert-symbols"), None).clicked() {
             app.queued.push(Action::ShapeLibrary);
         }
     });
