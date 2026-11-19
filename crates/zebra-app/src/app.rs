@@ -42,11 +42,14 @@ pub struct AppOptions {
     pub screenshot: Option<(f64, PathBuf)>,
     /// Debug: start in a demo state (sample, pathedit, present, agent, text).
     pub demo: Option<String>,
+    /// Tests: start like a launch with a window (last run's untitled
+    /// documents come back, the template chooser is offered) without a GPU.
+    pub as_launch: bool,
 }
 
 impl AppOptions {
-    /// A launch with nothing to open offers the template chooser (or brings
-    /// back last run's untitled documents). One with a file, from the
+    /// A launch with nothing to open offers the template chooser (unless
+    /// last run's untitled documents come back). One with a file, from the
     /// command line or from Finder, just opens it.
     pub fn offers_chooser(&self) -> bool {
         self.open.is_none() && self.demo.is_none() && self.screenshot.is_none()
@@ -294,6 +297,7 @@ impl ZebraApp {
     fn build(ctx: &Context, wgpu: Option<egui_wgpu::RenderState>, storage: Option<&dyn eframe::Storage>, opts: AppOptions, shared: Option<Arc<Renderer>>) -> Self {
         let is_root = shared.is_none();
         let offers_chooser = opts.offers_chooser();
+        let launch = is_root && (wgpu.is_some() || opts.as_launch) && opts.demo.is_none() && opts.screenshot.is_none();
         let renderer = match shared {
             Some(r) => r,
             None => {
@@ -445,22 +449,25 @@ impl ZebraApp {
             }
             app.set_ai_control(true);
         }
-        let launch_welcome = offers_chooser && app.wgpu.is_some();
-        if let Some(p) = opts.open {
-            app.open_path(&p);
-        }
+        let launch_welcome = launch && offers_chooser;
         // Like Keynote: untitled documents the last run left unsaved come
-        // back, still unsaved. Otherwise a fresh launch offers the
-        // template chooser.
-        if launch_welcome && is_root {
-            let mut left = crate::files::leftover_untitled();
-            if !left.is_empty() {
-                let first = left.remove(0);
-                if app.reopen_autosave(&first) {
-                    app.reopen_untitled = left;
+        // back, still unsaved, unless the Mac closes windows at quit. A
+        // file the launch was for (command line, Finder) opens beside them
+        // in a window of its own, in front: queued here, the shell gives
+        // it that window. With nothing to bring back, the file takes this
+        // window, or a fresh launch offers the template chooser.
+        if launch && crate::mac::restores_windows() {
+            let mut left = crate::files::leftover_untitled().into_iter();
+            while let Some(p) = left.next() {
+                if app.reopen_autosave(&p) {
+                    app.reopen_untitled = left.collect();
+                    app.queued.extend(opts.open.map(Action::OpenPath));
                     return app;
                 }
             }
+        }
+        if let Some(p) = opts.open {
+            app.open_path(&p);
         }
         if launch_welcome && app.recovered.is_none() && storage.and_then(|s| s.get_string("welcome_at_launch")).is_none_or(|v| v != "false") {
             app.welcome = Some(crate::welcome::Welcome::new());
@@ -1228,6 +1235,11 @@ impl ZebraApp {
                 return false;
             }
         };
+        // An empty document has nothing to bring back: no blank window.
+        if doc.elements.is_empty() {
+            let _ = std::fs::remove_file(path);
+            return false;
+        }
         self.editor.load(doc, None);
         self.after_load();
         // Unsaved work: the document shows as edited and asks before closing.
