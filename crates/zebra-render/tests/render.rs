@@ -293,3 +293,26 @@ fn ring_has_a_hole_and_icons_draw_strokes() {
     assert!(close(px(&img, 300, 100), [0, 0, 255, 255], 8), "icon stroke: {:?}", px(&img, 300, 100));
     assert!(close(px(&img, 300, 60), th.color(&th.background), 2), "icon is a stroke, not a fill");
 }
+
+/// Text a few device pixels tall is drawn as faint bars, one per line,
+/// without shaping it; big enough to read, it is text as before.
+#[test]
+fn tiny_text_is_drawn_as_bars() {
+    let r = Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    ed.doc.theme = "paper".into();
+    let t = TextData { text: "One line\nand another".into(), style: TextStyle::Body, ..Default::default() };
+    add(&mut ed, "t", 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, ElementKind::Text(t));
+    let size = Theme::resolve("paper").text_style(TextStyle::Body).size;
+    let kinds = |zoom: f64| {
+        let cam = Camera { cx: 0.0, cy: 0.0, zoom, rotation: 0.0 };
+        let list = r.build_display_list(&ed, &cam, [800.0, 600.0], 1.0, &SceneOptions::default());
+        let texts = list.items.iter().filter(|i| matches!(i, zebra_render::display::Item::Text { .. })).count();
+        let fills = list.items.iter().filter(|i| matches!(i, zebra_render::display::Item::Fill { .. })).count();
+        (texts, fills)
+    };
+    assert_eq!(kinds(1.0), (1, 0), "readable: text");
+    assert_eq!(kinds(4.0 / size), (1, 0), "4 px: still text");
+    assert_eq!(kinds(2.0 / size), (0, 2), "2 px: a bar per line");
+}

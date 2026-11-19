@@ -68,6 +68,12 @@ impl DisplayList {
 /// Elements whose on-screen size is below this (device px) are skipped.
 pub const MIN_PIXELS: f64 = 0.5;
 
+/// Text whose letters would be smaller than this on screen (font size,
+/// device px) is drawn as faint bars, one per line, without shaping: at an
+/// overview of a big deck, laying out and drawing every text was most of
+/// a frame, for letters nobody can read.
+pub const TEXT_MIN_PIXELS: f64 = 3.0;
+
 /// Local → device transform for an element.
 pub fn element_affine(e: &Element, cam: &Camera, vp: [f64; 2], ppp: f64) -> Affine {
     let dx = e.transform.x - cam.cx;
@@ -214,6 +220,19 @@ fn stroke(items: &mut Vec<Item>, shape: &impl Shape, a: &Affine, color: Rgba, mu
         st.dash_offset *= k;
     }
     items.push(Item::Stroke { path, color, stroke: st });
+}
+
+/// Text too small to read ([`TEXT_MIN_PIXELS`]): a bar per line of a
+/// `w` x `h` box (local units) of `size`-point text, the last one shorter.
+fn text_bars(items: &mut Vec<Item>, a: &Affine, w: f64, h: f64, size: f64, color: Rgba) {
+    let line = (size * 1.2).max(1e-9);
+    let lines = ((h / line).round() as usize).clamp(1, 64);
+    let step = h / lines as f64;
+    for i in 0..lines {
+        let y = -h / 2.0 + step * (i as f64 + 0.5);
+        let len = if i + 1 == lines && lines > 1 { w * 0.6 } else { w };
+        fill(items, &Rect::new(-w / 2.0, y - step * 0.22, -w / 2.0 + len, y + step * 0.22), a, color);
+    }
 }
 
 /// Darken (k < 1) a colour, keeping alpha.
@@ -438,8 +457,15 @@ impl Ctx<'_> {
                 if t.text.is_empty() {
                     return;
                 }
-                let layout = self.r.fonts.layout(t, th, wrap_for(t, e.size.w));
                 let style = th.text_style(t.style);
+                let biggest = t.spans.iter().filter_map(|s| s.format.size).fold(style.size, f64::max);
+                // (Not in a PDF, which can be zoomed into.)
+                if biggest * affine_scale(a) < TEXT_MIN_PIXELS && !self.full_res_images {
+                    let color = th.color(t.color.as_ref().unwrap_or(&style.color));
+                    text_bars(items, a, w, h, style.size, with_alpha(color, 0.35));
+                    return;
+                }
+                let layout = self.r.fonts.layout(t, th, wrap_for(t, e.size.w));
                 let color = th.color(t.color.as_ref().unwrap_or(&style.color));
                 let transform = *a * Affine::translate((-w / 2.0, -h / 2.0));
                 // Per-format colours: explicit colour, else links in the accent.
