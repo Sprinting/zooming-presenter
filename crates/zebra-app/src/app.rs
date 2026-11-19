@@ -1330,7 +1330,7 @@ impl ZebraApp {
         if self.editor.saving().is_none() && !self.after_save.is_empty() {
             let waiting = std::mem::take(&mut self.after_save);
             if !failed {
-                self.queued.extend(waiting);
+                self.queued.extend(still_for_this_document(waiting));
             }
         }
     }
@@ -1829,3 +1829,23 @@ pub fn same_file(p: &std::path::Path) -> PathBuf {
 const IMAGE_IDLE: f64 = 300.0;
 /// How often that is checked.
 const IMAGE_TRIM_EVERY: f64 = 60.0;
+
+/// What waited for a save, in order, minus saves asked for after the
+/// document is replaced or closed: they were meant for the document that
+/// was just written, not the new empty one (which would put up a Save
+/// dialog nobody asked for).
+pub fn still_for_this_document(waiting: Vec<Action>) -> Vec<Action> {
+    use Action::*;
+    let mut replaced = false;
+    let mut out = Vec::with_capacity(waiting.len());
+    for a in waiting {
+        if replaced && matches!(a, Save | SaveAs) {
+            continue;
+        }
+        if matches!(a, New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Close) {
+            replaced = true;
+        }
+        out.push(a);
+    }
+    out
+}
