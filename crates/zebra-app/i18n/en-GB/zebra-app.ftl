@@ -25,7 +25,7 @@ app-untitled = Untitled
 app-untitled-numbered = { $title } { $no }
 app-agent-default-name = Agent
 app-window-title-edited = { $name } — Edited
-app-file-filter-zebra = Zebra presentation
+app-file-filter-zebra = Zebra Presentation
 app-file-filter-image = Image
 app-file-filter-video = Video
 app-file-filter-audio = Audio
@@ -166,7 +166,7 @@ canvas-hint-title = Double-click anywhere to add text
 canvas-hint-detail = Press { $key } for a frame, drop images here or choose File › New from Sample
 canvas-back-to-content = Back to Content
 canvas-back-to-content-tip = Zoom out to show everything
-recover-message = Unsaved changes from an earlier session were found.
+recover-message = You have unsaved changes from an earlier session.
 recover-dismiss = Dismiss
 recover-restore = Restore
 activity-title = Agent Activity
@@ -355,14 +355,14 @@ sheet-clear-path-message = This removes { $count ->
    *[other] all { $count } steps
 } from the path. Frames and objects stay on the canvas. You can undo this.
 sheet-clear-path = Clear Path
-sheet-auto-path-title = Replace the path?
-sheet-auto-path-message = Steps that are not frames have speaker notes. The notes go with them. You can undo this.
+sheet-auto-path-title = Replace the path with all frames?
+sheet-auto-path-message = Some steps that will be removed have speaker notes. The notes are removed too. You can undo this.
 sheet-auto-path = Replace Path
-sheet-revert-agent-title = Revert the changes { $name } made?
-sheet-revert-agent-message = This undoes everything { $name } did since your last change. Redo ({ $shortcut }) brings it back.
+sheet-revert-agent-title = Revert the changes that { $name } made?
+sheet-revert-agent-message = This undoes everything that { $name } did since your last change. To get it back, choose Edit › Redo ({ $shortcut }).
 sheet-revert = Revert
 sheet-full-control-title = Give agents full control?
-sheet-full-control-message = Agents will also be able to move your view, open and save files, and start presenting.
+sheet-full-control-message = Agents will also be able to move your view, open and save files, and play the presentation.
 sheet-allow-full-control = Allow Full Control
 sheet-toast-nothing-to-revert = { $name } has no changes to revert.
 
@@ -381,7 +381,7 @@ export-toast-failed = Export failed: { $error }
 ## ---- cli.rs ----
 
 cli-agent-prompt = Zebra (a zooming presentation app) is open on my Mac and I've allowed AI control. Run `{ $ctl } --help` to learn how to drive it, then its `describe` command to see what's on the canvas. Pass `--agent` with your name on every command.
-cli-install-prompt = Zebra wants to install the zebractl command so AI agents can use it.
+cli-install-prompt = Zebra wants to install the zebractl command so that AI agents can use it.
 cli-error-not-bundled = zebractl isn't inside this copy of Zebra
 cli-error-cancelled = cancelled
 
