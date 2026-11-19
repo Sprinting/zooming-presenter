@@ -1,22 +1,28 @@
 //! Imported PDF pages: the page's picture up to its own size; zoomed in
 //! further, tiles drawn from the PDF through the app's page raster, made
-//! on the workers when drawing is async, never in PDF export.
+//! on the workers when drawing is async; in PDF export, the page drawn
+//! from the PDF at export size; in a web page export, a big picture.
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use zebra_core::*;
 use zebra_render::display::Item;
-use zebra_render::pages::{PageRequest, MAX_PAGE_PX, TILE};
+use zebra_render::pages::{PageRequest, EXPORT_PAGE_PX, MAX_PAGE_PX, TILE};
 use zebra_render::{CaptureTarget, Renderer, SceneOptions};
 
 const PDF: &str = "pdfkey";
 
 /// A 200x100 page whose picture is red, on the canvas at 0,0.
 fn deck(r: &Renderer) -> Editor {
+    deck_with(r, 200)
+}
+
+/// A 200x100 page whose red picture is `pic_w` pixels wide.
+fn deck_with(r: &Renderer, pic_w: u32) -> Editor {
     let mut ed = Editor::default();
     ed.measure = r.measure();
     ed.view.viewport = Vec2::new(400.0, 400.0);
-    let img = image::RgbaImage::from_pixel(200, 100, image::Rgba([230, 0, 0, 255]));
+    let img = image::RgbaImage::from_pixel(pic_w, pic_w / 2, image::Rgba([230, 0, 0, 255]));
     let mut png = vec![];
     img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     let key = ed.add_asset(png).unwrap();
@@ -88,24 +94,127 @@ fn the_picture_up_to_its_size_then_tiles_of_the_visible_part() {
 }
 
 #[test]
-fn without_a_raster_and_in_pdf_export_the_picture_is_drawn() {
+fn without_a_raster_the_picture_is_drawn() {
     let r = Renderer::new();
     let ed = deck(&r);
     let l = r.build_display_list(&ed, &cam(20.0), [400.0, 400.0], 1.0, &sync());
     assert_eq!(images(&l), vec![(200, 100)]);
-    // PDF export draws pictures at full size: the page's picture.
-    let calls = Arc::new(AtomicUsize::new(0));
-    let c = calls.clone();
-    r.set_page_raster(Some(Arc::new(move |_r: &PageRequest| {
-        c.fetch_add(1, Ordering::Relaxed);
-        None
-    })));
-    let pdf = r.export_pdf(&ed).unwrap();
-    assert!(pdf.starts_with(b"%PDF"));
-    assert_eq!(calls.load(Ordering::Relaxed), 0);
     // A raster that fails leaves the picture showing.
+    r.set_page_raster(Some(Arc::new(|_r: &PageRequest| None)));
     let l = r.build_display_list(&ed, &cam(20.0), [400.0, 400.0], 1.0, &sync());
     assert_eq!(images(&l), vec![(200, 100)]);
+}
+
+#[test]
+fn a_small_preview_gives_way_to_tiles_at_normal_sizes() {
+    let r = Renderer::new();
+    let ed = deck_with(&r, 512);
+    let asked = Arc::new(Mutex::new(vec![]));
+    r.set_page_raster(Some(green(asked.clone())));
+    // Under 512 px on screen: the preview.
+    r.build_display_list(&ed, &cam(2.0), [1200.0, 800.0], 1.0, &sync());
+    assert!(asked.lock().unwrap().is_empty());
+    // 1000 px on screen (it was the picture up to 2048 before): tiles of
+    // the page drawn 1024 wide, all of it, on top of the preview.
+    let l = r.build_display_list(&ed, &cam(5.0), [1200.0, 800.0], 1.0, &sync());
+    let q = asked.lock().unwrap().clone();
+    assert_eq!(q.len(), 2, "{:?}", q.iter().map(|q| q.rect).collect::<Vec<_>>());
+    assert!(q.iter().all(|q| q.page_px == (1024, 512)));
+    assert_eq!(images(&l)[0], (512, 256), "the preview under the tiles");
+    assert!(!l.images_pending);
+}
+
+#[test]
+fn a_page_filling_a_5k_screen_is_drawn_in_bigger_tiles() {
+    let r = Renderer::new();
+    let ed = deck_with(&r, 512);
+    let asked = Arc::new(Mutex::new(vec![]));
+    r.set_page_raster(Some(green(asked.clone())));
+    // 5120 x 2880 device pixels, the page 4900 px wide: drawn 8192 wide.
+    let l = r.build_display_list(&ed, &cam(12.25), [2560.0, 1440.0], 2.0, &sync());
+    let q = asked.lock().unwrap().clone();
+    assert!(!q.is_empty(), "the tile cap must not bite at fit-to-screen");
+    assert!(q.iter().all(|q| q.page_px == (8192, 4096) && q.rect.2 == 1024));
+    // Every tile on screen: the page is 8 x 4 tiles, all visible.
+    assert_eq!(q.len(), 32);
+    assert!(!l.images_pending);
+}
+
+#[test]
+fn zoomed_in_on_a_big_screen_the_biggest_tiles_still_come() {
+    let r = Renderer::new();
+    let ed = deck_with(&r, 512);
+    let asked = Arc::new(Mutex::new(vec![]));
+    r.set_page_raster(Some(green(asked.clone())));
+    // A 2560 x 1440 screen 4x past fitting the page: 10000 px wide, drawn
+    // 16384 wide in 2048 px tiles (whole tiles reach past the screen).
+    let l = r.build_display_list(&ed, &cam(25.0), [1280.0, 720.0], 2.0, &sync());
+    let q = asked.lock().unwrap().clone();
+    assert!(!q.is_empty(), "fell back to the preview");
+    assert!(q.iter().all(|q| q.page_px.0 == 16384 && q.rect.2 == 2048));
+    assert!(!l.images_pending);
+}
+
+#[test]
+fn pdf_export_draws_the_page_from_the_pdf_at_export_size() {
+    let r = Renderer::new();
+    let ed = deck_with(&r, 512);
+    let asked = Arc::new(Mutex::new(vec![]));
+    r.set_page_raster(Some(green(asked.clone())));
+    let pdf = r.export_pdf(&ed).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+    // Asked at once (export can't wait for workers), for the whole page,
+    // at export size: not the 512 px preview.
+    let q = asked.lock().unwrap().clone();
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0].page_px, (EXPORT_PAGE_PX, EXPORT_PAGE_PX / 2));
+    assert_eq!(q[0].rect, (0, 0, EXPORT_PAGE_PX, EXPORT_PAGE_PX / 2));
+    // The file holds that picture and not the preview.
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains(&format!("/Width {EXPORT_PAGE_PX}")), "no {EXPORT_PAGE_PX} px image");
+    assert!(!text.contains("/Width 512"));
+    // Without a raster, the picture.
+    r.set_page_raster(None);
+    let text = String::from_utf8_lossy(&r.export_pdf(&ed).unwrap()).to_string();
+    assert!(text.contains("/Width 512"));
+}
+
+#[test]
+fn old_big_pictures_still_decide() {
+    // Imported before previews were small: the 2048 picture up to its size,
+    // and in PDF export (as big as export would draw).
+    let r = Renderer::new();
+    let ed = deck_with(&r, 2048);
+    let asked = Arc::new(Mutex::new(vec![]));
+    r.set_page_raster(Some(green(asked.clone())));
+    r.build_display_list(&ed, &cam(5.0), [1200.0, 800.0], 1.0, &sync());
+    r.export_pdf(&ed).unwrap();
+    assert!(asked.lock().unwrap().is_empty());
+}
+
+#[test]
+fn web_export_pictures_are_big_and_the_open_document_keeps_its_preview() {
+    let r = Renderer::new();
+    let ed = deck_with(&r, 512);
+    assert!(zebra_render::pages::export_pictures(&r, &ed.doc).is_none(), "no raster: nothing to do");
+    let asked = Arc::new(Mutex::new(vec![]));
+    r.set_page_raster(Some(green(asked.clone())));
+    let before = ed.doc.clone();
+    let out = zebra_render::pages::export_pictures(&r, &ed.doc).expect("pictures made");
+    let page = |d: &Document| {
+        let e = d.elements.values().find(|e| matches!(&e.kind, ElementKind::Image(i) if i.page.is_some())).unwrap();
+        let ElementKind::Image(i) = &e.kind else { unreachable!() };
+        d.assets[&i.asset].clone()
+    };
+    let big = page(&out);
+    assert_eq!((big.width, big.height), (EXPORT_PAGE_PX, EXPORT_PAGE_PX / 2));
+    let px = image::load_from_memory(&big.bytes).unwrap().to_rgba8();
+    assert_eq!(px.get_pixel(10, 10).0, [0, 200, 0, 255], "drawn from the PDF");
+    assert_eq!(ed.doc, before, "the open document is unchanged");
+    assert_eq!(page(&ed.doc).width, 512);
+    // Pictures that big already: nothing to do.
+    let old = deck_with(&r, 2048);
+    assert!(zebra_render::pages::export_pictures(&r, &old.doc).is_none());
 }
 
 #[test]

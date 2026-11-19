@@ -88,17 +88,20 @@ pub fn is_pdf(bytes: &[u8]) -> bool {
 
 /// A picture asset (PNG, JPEG, WebP, GIF or SVG), or the PDF that pages
 /// are drawn from, and its content key, for [`ImportedDeck::assets`].
+/// The bytes go through [`crate::media::spill`], like other new media,
+/// so an imported file's pictures and PDF need not sit on the heap.
 pub fn asset_from(bytes: Vec<u8>) -> ZResult<(String, Asset)> {
     let key = crate::editor::content_key(&bytes);
-    if is_pdf(&bytes) {
-        return Ok((key, Asset { ext: "pdf".into(), bytes: bytes.into(), width: 0, height: 0 }));
-    }
-    if bytes.starts_with(b"<svg") {
+    let (ext, w, h) = if is_pdf(&bytes) {
+        ("pdf".to_string(), 0, 0)
+    } else if bytes.starts_with(b"<svg") {
         let (w, h) = crate::symbols::svg_pixels(&bytes);
-        return Ok((key, Asset { ext: "svg".into(), bytes: bytes.into(), width: w, height: h }));
-    }
-    let (ext, w, h) = crate::editor::image_info(&bytes)?;
-    Ok((key, Asset { ext, bytes: bytes.into(), width: w, height: h }))
+        ("svg".to_string(), w, h)
+    } else {
+        crate::editor::image_info(&bytes)?
+    };
+    let bytes = crate::media::spill(bytes, &key);
+    Ok((key, Asset { ext, bytes, width: w, height: h }))
 }
 
 /// Pages per row on the canvas for `n` pages: a block about as wide as tall.

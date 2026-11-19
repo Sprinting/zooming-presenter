@@ -37,7 +37,7 @@ fn main() {
     println!("  PDF kept once:            {:>7.1} MB", mb(pdf));
     println!(
         "  page pictures ({} px):  {:>7.1} MB  ({:.0} KB/page)",
-        zebra_import::pdf::PICTURE_PX,
+        zebra_import::pdf::PREVIEW_PX,
         mb(pics / n as f64 * pages as f64),
         pics / n as f64 / 1e3
     );

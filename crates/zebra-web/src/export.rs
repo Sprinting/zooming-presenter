@@ -121,7 +121,9 @@ pub fn build(renderer: &Renderer, editor: &Editor, labels: &Labels, inline_limit
         return Err(ZError::new("unavailable", "this build of Zebra has no web player (it was built without the wasm32 target)")
             .hint("rustup target add wasm32-unknown-unknown, then rebuild"));
     }
-    let doc = &editor.doc;
+    // PDF pages: a sharp picture each, drawn now from the PDF, in a copy.
+    let sharp = zebra_render::pages::export_pictures(renderer, &editor.doc);
+    let doc = sharp.as_ref().unwrap_or(&editor.doc);
     // Blobs: id -> base64, each in its own <script> element.
     let mut blobs: Vec<(String, String)> = vec![];
     fn add(blobs: &mut Vec<(String, String)>, data: String) -> String {

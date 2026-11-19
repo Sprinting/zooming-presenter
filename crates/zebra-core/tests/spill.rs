@@ -34,6 +34,15 @@ fn new_media_is_mapped_from_a_spill_file_that_leaves_nothing_behind() {
     zebra_core::io::save(&mut ed.doc, &file).unwrap();
     let back = zebra_core::io::load(&file).unwrap();
     assert_eq!(&back.assets.values().next().unwrap().bytes[..], &png[..]);
+    // An imported file's pictures and PDF are spilled the same way.
+    let (_, imported) = zebra_core::import::asset_from(png.clone()).unwrap();
+    assert!(imported.bytes.is_mapped());
+    assert_eq!((&imported.bytes[..], imported.width, imported.ext.as_str()), (&png[..], 256, "png"));
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    pdf.extend(std::iter::repeat_n(b'x', zebra_core::media::SPILL_MIN));
+    let (_, imported) = zebra_core::import::asset_from(pdf.clone()).unwrap();
+    assert!(imported.bytes.is_mapped());
+    assert_eq!((&imported.bytes[..], imported.ext.as_str()), (&pdf[..], "pdf"));
     // Small media stays in memory.
     let key = ed.add_svg_asset(b"<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'/>".to_vec());
     assert!(!ed.doc.assets[&key].bytes.is_mapped());
