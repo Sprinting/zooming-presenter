@@ -45,7 +45,7 @@ muda.workspace = true
 # Window-level AppKit calls only (title, edited dot, proxy icon, accent
 # colour, Reduce Motion, App Nap, screens). Never controls inside the egui UI.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSGeometry", "NSRange", "NSNotification", "NSURL"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSGeometry", "NSRange", "NSNotification", "NSURL", "NSUserDefaults"] }
 objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSApplication", "NSResponder", "NSRunningApplication", "NSSpellChecker", "NSWorkspace"] }
 raw-window-handle = "0.6"
 # Only to keep a background launch from activating the app (--background).

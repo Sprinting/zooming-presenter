@@ -345,6 +345,54 @@ pub fn take_reopen() -> bool {
     }
 }
 
+/// Whether a launch brings back last session's windows, unsaved Untitled
+/// ones included, like Keynote: yes unless System Settings › Desktop & Dock
+/// › "Close windows when quitting an application" is on
+/// (`NSQuitAlwaysKeepsWindows` = NO). Read through NSUserDefaults, so an
+/// app's own `defaults write` wins over the global one as it does for
+/// AppKit. Where it can't be read (never set, or off macOS) they come back.
+pub fn restores_windows() -> bool {
+    match RESTORE_OVERRIDE.load(std::sync::atomic::Ordering::SeqCst) {
+        1 => false,
+        2 => true,
+        _ => restores_windows_from(quit_keeps_windows()),
+    }
+}
+
+/// [`restores_windows`] from the setting's value, `None` if unset.
+pub fn restores_windows_from(keeps_windows: Option<bool>) -> bool {
+    keeps_windows.unwrap_or(true)
+}
+
+static RESTORE_OVERRIDE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Tests: answer [`restores_windows`] with `Some(value)` instead of the
+/// system setting; `None` reads the setting again.
+#[doc(hidden)]
+pub fn set_restores_windows(value: Option<bool>) {
+    let v = match value {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    };
+    RESTORE_OVERRIDE.store(v, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// `NSQuitAlwaysKeepsWindows`, if set anywhere in the defaults search list.
+fn quit_keeps_windows() -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        let defaults = objc2_foundation::NSUserDefaults::standardUserDefaults();
+        let key = objc2_foundation::NSString::from_str("NSQuitAlwaysKeepsWindows");
+        defaults.objectForKey(&key)?;
+        Some(defaults.boolForKey(&key))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod reopen {
     use std::sync::OnceLock;
@@ -517,5 +565,18 @@ mod title_row_tests {
         assert!(!new_window_is_tab(TabPref::FullScreen, false));
         assert!(new_window_is_tab(TabPref::Always, false));
         assert!(!new_window_is_tab(TabPref::Never, true));
+    }
+
+    /// Kartik, 19 Nov: like Keynote, windows come back unless "Close
+    /// windows when quitting an application" is on; unset means they do.
+    #[test]
+    fn windows_come_back_unless_the_mac_closes_them_at_quit() {
+        use super::restores_windows_from;
+        assert!(restores_windows_from(None), "never set, or not a Mac");
+        assert!(restores_windows_from(Some(true)), "setting off: windows kept");
+        assert!(!restores_windows_from(Some(false)), "setting on: windows closed");
+        if !cfg!(target_os = "macos") {
+            assert!(super::restores_windows(), "off macOS they always come back");
+        }
     }
 }
