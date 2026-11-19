@@ -8,11 +8,15 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache};
+use parley::fontique::{
+    Blob, Collection, CollectionOptions, FallbackKey, FamilyId, GenericFamily, QueryFamily, QueryFont, QueryStatus, Script,
+    SourceCache,
+};
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, IndentOptions, LayoutContext,
     LineHeight, PositionedLayoutItem, StyleProperty,
 };
+use unicode_script::{Script as UScript, UnicodeScript};
 use zebra_core::rich;
 use zebra_core::{Align, ListKind, SpanFormat, TextData, Theme};
 
@@ -190,6 +194,9 @@ struct Inner {
     swept: Option<u64>,
     /// Layouts computed (cache misses), for tests.
     misses: u64,
+    /// Per (character, preferred script): the family to fall back to when
+    /// the text's own fonts lack it. None = no font has it.
+    fallbacks: HashMap<(char, Option<UScript>), Option<String>>,
 }
 
 /// Font database + layout cache. Cheap to clone (shared).
@@ -225,6 +232,7 @@ impl Fonts {
                 used: HashMap::new(),
                 swept: None,
                 misses: 0,
+                fallbacks: HashMap::new(),
             })),
         }
     }
@@ -330,6 +338,7 @@ impl Fonts {
             // Layouts made with a fallback font are stale now.
             g.cache.clear();
             g.used.clear();
+            g.fallbacks.clear();
         }
     }
 
@@ -369,6 +378,15 @@ impl Fonts {
                 Some((std::fs::read(&p).ok()?, ext))
             })
             .collect()
+    }
+
+    /// Whether any installed or bundled font has a glyph for `c` (tests
+    /// use it to skip characters this machine can't show at all).
+    #[doc(hidden)]
+    pub fn has_glyph_somewhere(&self, c: char) -> bool {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Inner { font_cx, fallbacks, .. } = &mut *g;
+        fallback_family(font_cx, fallbacks, c, &[]).is_some()
     }
 
     /// Cached layouts (for the perf query).
@@ -442,6 +460,103 @@ fn data_of(key: &Key) -> TextData {
             .collect(),
         ..Default::default()
     }
+}
+
+fn real_script(s: UScript) -> bool {
+    !matches!(s, UScript::Common | UScript::Inherited | UScript::Unknown)
+}
+
+/// A family with a glyph for `c`, for when the text's own fonts and the
+/// fallbacks of the script parley gave its run both lack it.
+///
+/// parley picks fallback fonts by the script of the run, and a character
+/// with no script of its own (Common, e.g. the danda "।", or Inherited, a
+/// combining mark) takes the script of the text before it. So "Hello।"
+/// only tried Latin fallbacks and drew the danda as .notdef. Here the
+/// character's own Script_Extensions decide (the danda: Devanagari,
+/// Bengali...), preferring a script in `prefer` (the paragraph's), then
+/// emoji and the generic families, then every installed family.
+/// Cached per character, misses too.
+fn fallback_family(
+    font_cx: &mut FontContext,
+    cache: &mut HashMap<(char, Option<UScript>), Option<String>>,
+    c: char,
+    prefer: &[UScript],
+) -> Option<String> {
+    let mut scripts: Vec<UScript> = c
+        .script_extension()
+        .iter()
+        .filter(|s| real_script(*s))
+        .collect();
+    let preferred = prefer.iter().copied().find(|s| scripts.contains(s));
+    if let Some(f) = cache.get(&(c, preferred)) {
+        return f.clone();
+    }
+    if let Some(p) = preferred {
+        scripts.retain(|s| *s != p);
+        scripts.insert(0, p);
+    }
+    let FontContext {
+        collection,
+        source_cache,
+    } = font_cx;
+    let generic = [
+        GenericFamily::Emoji,
+        GenericFamily::SansSerif,
+        GenericFamily::SystemUi,
+        GenericFamily::Serif,
+        GenericFamily::Monospace,
+        GenericFamily::Math,
+    ];
+    let mut id = scripts
+        .iter()
+        .find_map(|s| covering(collection, source_cache, c, vec![], Some(*s)));
+    if id.is_none() {
+        id = covering(
+            collection,
+            source_cache,
+            c,
+            generic.iter().map(|g| QueryFamily::Generic(*g)).collect(),
+            None,
+        );
+    }
+    if id.is_none() {
+        let all: Vec<QueryFamily<'static>> = collection.family_ids().map(QueryFamily::Id).collect();
+        id = covering(collection, source_cache, c, all, None);
+    }
+    let name = id.and_then(|id| collection.family_name(id).map(str::to_string));
+    cache.insert((c, preferred), name.clone());
+    name
+}
+
+/// The first family in `families` (then the fallbacks of `script`) whose
+/// font has a glyph for `c`.
+fn covering(
+    collection: &mut Collection,
+    source_cache: &mut SourceCache,
+    c: char,
+    families: Vec<QueryFamily<'static>>,
+    script: Option<UScript>,
+) -> Option<FamilyId> {
+    let mut q = collection.query(source_cache);
+    q.set_families(families);
+    if let Some(s) = script {
+        let b = s.short_name().as_bytes();
+        q.set_fallbacks(FallbackKey::new(
+            Script::from_bytes([b[0], b[1], b[2], b[3]]),
+            None,
+        ));
+    }
+    let mut found: Option<FamilyId> = None;
+    q.matches_with(|f: &QueryFont| {
+        if f.charmap().and_then(|m| m.map(c)).is_some_and(|g| g != 0) {
+            found = Some(f.family.0);
+            QueryStatus::Stop
+        } else {
+            QueryStatus::Continue
+        }
+    });
+    found
 }
 
 const BULLETS: [&str; 3] = ["\u{2022}", "\u{25E6}", "\u{25AA}"];
