@@ -62,6 +62,9 @@ pub struct Toast {
     pub until: f64,
 }
 
+/// Picture types Insert › Image… offers.
+pub const IMAGE_TYPES: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];
+
 pub struct ZebraApp {
     pub editor: Editor,
     /// This document's id for agents ("d1", "d2", ...).
@@ -167,6 +170,11 @@ pub struct ZebraApp {
     /// The native sheet on screen, waiting for its answer (macOS).
     #[cfg(target_os = "macos")]
     pub open_sheet: Option<crate::sheets::OpenSheet>,
+    /// Insert › Image… asked for, at this place: the picker goes up as a
+    /// sheet on this window once the frame is drawn (see `sheets`).
+    pub want_image_picker: Option<Vec2>,
+    #[cfg(target_os = "macos")]
+    pub open_picker: Option<crate::sheets::OpenPicker>,
     pub show_settings: bool,
     /// Debug: draw the icon sheet (`--demo icons`).
     pub show_icon_sheet: bool,
@@ -394,6 +402,9 @@ impl ZebraApp {
             native_dialogs: cfg!(target_os = "macos") && has_window,
             #[cfg(target_os = "macos")]
             open_sheet: None,
+            want_image_picker: None,
+            #[cfg(target_os = "macos")]
+            open_picker: None,
             show_settings: false,
             show_icon_sheet: false,
             settings_pane: storage.and_then(|s| eframe::get_value(s, "settings_pane")).unwrap_or_default(),
@@ -788,8 +799,13 @@ impl ZebraApp {
                 }
             }
             InsertImage => {
-                if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), &["png", "jpg", "jpeg", "webp", "gif"]).pick_file() {
-                    let c = self.canvas_center_world();
+                let c = self.canvas_center_world();
+                if self.native_dialogs && cfg!(target_os = "macos") {
+                    // A sheet on this window, put up right after this frame
+                    // (a modal panel run from inside the frame came up late).
+                    self.want_image_picker = Some(c);
+                    ctx.request_repaint();
+                } else if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), IMAGE_TYPES).pick_file() {
                     self.insert_image_file(&p, c);
                 }
             }
@@ -1217,7 +1233,7 @@ impl ZebraApp {
     /// A Save Changes or other sheet is up (or waiting to go up).
     pub fn sheet_showing(&self) -> bool {
         #[cfg(target_os = "macos")]
-        if self.open_sheet.is_some() {
+        if self.open_sheet.is_some() || self.open_picker.is_some() {
             return true;
         }
         self.sheet.is_some()

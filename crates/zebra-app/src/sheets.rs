@@ -179,6 +179,9 @@ pub fn run_native(app: &mut ZebraApp, frame: Option<&eframe::Frame>) -> bool {
     if !app.native_dialogs {
         return false;
     }
+    if run_picker(app, frame) {
+        return true;
+    }
     if app.open_sheet.is_none() {
         let Some(k) = app.sheet.take() else { return false };
         let s = spec(app, &k);
@@ -315,4 +318,39 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
         app.sheet = None;
         resolve(app, k, &label);
     }
+}
+
+/// Insert › Image…'s picker, up as a sheet on its window.
+#[cfg(target_os = "macos")]
+pub struct OpenPicker {
+    at: zebra_core::Vec2,
+    answer: std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>>>>,
+}
+
+/// Put up the image picker when one was asked for, and insert the picture
+/// it gives. Like the alerts above, it is a sheet with no modal loop,
+/// polled when AppKit wakes us. True while it is open.
+#[cfg(target_os = "macos")]
+fn run_picker(app: &mut ZebraApp, frame: Option<&eframe::Frame>) -> bool {
+    if app.open_picker.is_none() {
+        let Some(at) = app.want_image_picker.take() else { return false };
+        let dialog = rfd::AsyncFileDialog::new().add_filter(crate::t!("app-file-filter-image"), crate::app::IMAGE_TYPES);
+        let dialog = match (frame, app.mac_sync.window.clone()) {
+            (Some(f), _) => dialog.set_parent(f),
+            (None, Some(w)) => dialog.set_parent(&crate::mac::NsParent(w)),
+            (None, None) => dialog,
+        };
+        app.open_picker = Some(OpenPicker { at, answer: Box::pin(dialog.pick_file()) });
+    }
+    let ctx = app.ctx.clone();
+    let waker = std::task::Waker::from(std::sync::Arc::new(Repaint(ctx)));
+    let mut cx = std::task::Context::from_waker(&waker);
+    let open = app.open_picker.as_mut().expect("picker");
+    let std::task::Poll::Ready(file) = open.answer.as_mut().poll(&mut cx) else { return true };
+    let at = open.at;
+    app.open_picker = None;
+    if let Some(f) = file {
+        app.insert_image_file(f.path(), at);
+    }
+    true
 }

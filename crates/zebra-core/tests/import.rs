@@ -102,6 +102,8 @@ fn picture_deck(pages: usize) -> ImportedDeck {
     let (key, asset) = import::asset_from(png).unwrap();
     let mut d = ImportedDeck { title: "slides".into(), ..Default::default() };
     d.assets.insert(key.clone(), asset);
+    let (pdf, asset) = import::asset_from(b"%PDF-1.4 test".to_vec()).unwrap();
+    d.assets.insert(pdf.clone(), asset);
     for i in 0..pages {
         let pic = Element {
             id: "x".into(),
@@ -111,7 +113,7 @@ fn picture_deck(pages: usize) -> ImportedDeck {
             name: String::new(),
             placeholder: false,
             group: None,
-            kind: ElementKind::Image(ImageData { asset: key.clone(), alt: String::new(), crop: None, mask: Default::default(), symbol: None, page: None }),
+            kind: ElementKind::Image(ImageData { asset: key.clone(), alt: String::new(), crop: None, mask: Default::default(), symbol: None, page: Some(PageRef { pdf: pdf.clone(), index: i as u32 }) }),
         };
         let mut p = ImportedPage { w: 960.0, h: 720.0, name: format!("Page {}", i + 1), notes: String::new(), ..Default::default() };
         p.items.push(ImportedItem { element: pic, fit: None });
@@ -155,7 +157,8 @@ fn picture_pages_are_their_own_steps_inside_one_frame_that_carries_them() {
         let (d1, r1) = rel(&ed, p);
         assert!((d1 - d0).len() < 1e-6 && (r1 - r0).abs() < 1e-9, "{p}: {d0:?} -> {d1:?}");
     }
-    // A page step nearly fills the screen, like a frame step.
+    // A page step fills the screen, like a slide.
     let e = ed.doc.get(&pages[0]).unwrap();
-    assert_eq!(e.fit_margin(), 0.04);
+    assert!(e.is_page());
+    assert_eq!(e.fit_margin(), 0.0);
 }
