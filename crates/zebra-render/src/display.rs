@@ -389,9 +389,12 @@ impl Ctx<'_> {
         let whole = *a * Affine::translate((-w / 2.0 - c.x * fw, -h / 2.0 - c.y * fh));
         let transform = whole * Affine::scale_non_uniform(fw / image.width as f64, fh / image.height as f64);
         let tiles = match page {
-            Some(p) if !self.full_res_images => self.page_tiles(p, &whole, fw, fh, c, src.width),
-            _ => vec![],
+            Some(p) => self.page_tiles(p, &whole, fw, fh, c, src.width),
+            None => vec![],
         };
+        // An export's page drawn from the PDF covers what is seen of the
+        // picture; leave the picture out of the file.
+        let covered = self.full_res_images && !tiles.is_empty();
         if self.o.ghost.as_deref() == Some(e.id.as_str()) {
             items.push(Item::PushOpacity(0.35));
             items.push(Item::Image { image: image.clone(), transform });
@@ -407,7 +410,9 @@ impl Ctx<'_> {
             p.apply_affine(*a);
             items.push(Item::PushClip(p));
         }
-        items.push(Item::Image { image, transform });
+        if !covered {
+            items.push(Item::Image { image, transform });
+        }
         items.extend(tiles);
         if clip {
             items.push(Item::PopClip);
@@ -423,7 +428,7 @@ impl Ctx<'_> {
     /// drawn if cached, else the picture already drawn shows through.
     fn page_tiles(&self, page: &PageRef, whole: &Affine, fw: f64, fh: f64, c: Crop, pic_w: u32) -> Vec<Item> {
         use crate::images::TILE_PREFIX;
-        use crate::pages::{PageRequest, MAX_PAGE_PX, TILE};
+        use crate::pages::{tile_for, PageRequest, MAX_PAGE_PX, MAX_TILE_PIXELS, TILE};
         let mut out = vec![];
         let Some(raster) = self.r.page_raster() else { return out };
         let Some(pdf) = self.editor.doc.assets.get(&page.pdf) else { return out };
@@ -431,7 +436,13 @@ impl Ctx<'_> {
             return out;
         }
         let on_screen = fw * affine_scale(whole);
-        if !on_screen.is_finite() || on_screen <= pic_w as f64 * 1.05 {
+        if !on_screen.is_finite() {
+            return out;
+        }
+        if self.full_res_images {
+            return self.page_for_export(page, pdf, &raster, whole, fw, fh, c, pic_w, on_screen);
+        }
+        if on_screen <= pic_w as f64 * 1.05 {
             return out;
         }
         let mut pw = TILE;
@@ -442,37 +453,29 @@ impl Ctx<'_> {
         let ph = height_for(pw);
         let to_device = |pw: u32, ph: u32| *whole * Affine::scale_non_uniform(fw / pw as f64, fh / ph as f64);
         let t = to_device(pw, ph);
-        // The screen, in page pixels.
-        let inv = t.inverse();
-        let (sw, sh) = (self.screen.0 as f64, self.screen.1 as f64);
-        let pts = [Point::new(0.0, 0.0), Point::new(sw, 0.0), Point::new(0.0, sh), Point::new(sw, sh)].map(|p| inv * p);
-        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-        for p in pts {
-            (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
-        }
-        // Only the shown (cropped) part of the page.
-        let (cx0, cy0) = (c.x * pw as f64, c.y * ph as f64);
-        let (cx1, cy1) = (cx0 + c.w * pw as f64, cy0 + c.h * ph as f64);
-        let (x0, y0) = (x0.max(cx0).max(0.0), y0.max(cy0).max(0.0));
-        let (x1, y1) = (x1.min(cx1).min(pw as f64), y1.min(cy1).min(ph as f64));
-        if !(x1 > x0 && y1 > y0) {
-            return out;
-        }
-        let tile = TILE as f64;
+        let Some((x0, y0, x1, y1)) = self.visible_part(&t, c, pw, ph) else { return out };
+        let ts = tile_for(pw);
+        let tile = ts as f64;
         let (tx0, ty0) = ((x0 / tile).floor() as u32, (y0 / tile).floor() as u32);
         let (tx1, ty1) = ((x1 / tile).ceil() as u32, (y1 / tile).ceil() as u32);
-        // A turned page on a big screen: more tiles than are worth making.
-        if (tx1 - tx0) as u64 * (ty1 - ty0) as u64 > 96 {
+        // A turned page on a big screen: more than is worth making. (A
+        // page filling a 5K screen is well within this.)
+        let (sw, sh) = (self.screen.0 as f64, self.screen.1 as f64);
+        let budget = (4.0 * sw * sh).max(MAX_TILE_PIXELS as f64);
+        if (tx1 - tx0) as f64 * (ty1 - ty0) as f64 * tile * tile > budget {
             return out;
         }
         let key = |pw: u32, tx: u32, ty: u32| format!("{TILE_PREFIX}{}#{}@{pw}:{tx},{ty}", page.pdf, page.index);
         let sync = !self.o.async_images;
         let mut have = vec![];
+        // Half-zoom tiles to show where a tile isn't made yet.
+        let (hw, hh) = (pw / 2, height_for(pw / 2));
+        let hts = tile_for(hw);
         let mut under = std::collections::BTreeSet::new();
         for ty in ty0..ty1 {
             for tx in tx0..tx1 {
-                let (x, y) = (tx * TILE, ty * TILE);
-                let rect = (x, y, TILE.min(pw - x), TILE.min(ph - y));
+                let (x, y) = (tx * ts, ty * ts);
+                let rect = (x, y, ts.min(pw - x), ts.min(ph - y));
                 let k = key(pw, tx, ty);
                 let req = PageRequest { pdf: page.pdf.clone(), bytes: pdf.bytes.clone(), index: page.index, page_px: (pw, ph), rect };
                 let raster = raster.clone();
@@ -486,22 +489,102 @@ impl Ctx<'_> {
                     Some(Decoded::Still(l)) => have.push(Item::Image { image: l, transform: t * Affine::translate((x as f64, y as f64)) }),
                     _ => {
                         self.pending.set(true);
-                        if pw / 2 > pic_w {
-                            under.insert((tx / 2, ty / 2));
+                        if hw > pic_w {
+                            // This tile's rect at half zoom, in half-zoom tiles.
+                            let (ax, ay) = (x / 2 / hts, y / 2 / hts);
+                            let (bx, by) = ((x + rect.2).div_ceil(2).saturating_sub(1) / hts, (y + rect.3).div_ceil(2).saturating_sub(1) / hts);
+                            for uy in ay..=by {
+                                for ux in ax..=bx {
+                                    under.insert((ux, uy));
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-        let (hw, hh) = (pw / 2, height_for(pw / 2));
         let th = to_device(hw, hh);
         for (tx, ty) in under {
             if let Some(Decoded::Still(l)) = self.r.images.peek(&key(hw, tx, ty)) {
-                out.push(Item::Image { image: l, transform: th * Affine::translate(((tx * TILE) as f64, (ty * TILE) as f64)) });
+                out.push(Item::Image { image: l, transform: th * Affine::translate(((tx * hts) as f64, (ty * hts) as f64)) });
             }
         }
         out.extend(have);
         out
+    }
+
+    /// The part of a page drawn `pw` x `ph` pixels by `t` (page pixels to
+    /// device pixels) that is on screen and inside the crop, in page
+    /// pixels: x0, y0, x1, y1.
+    fn visible_part(&self, t: &Affine, c: Crop, pw: u32, ph: u32) -> Option<(f64, f64, f64, f64)> {
+        let inv = t.inverse();
+        let (sw, sh) = (self.screen.0 as f64, self.screen.1 as f64);
+        let pts = [Point::new(0.0, 0.0), Point::new(sw, 0.0), Point::new(0.0, sh), Point::new(sw, sh)].map(|p| inv * p);
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for p in pts {
+            (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
+        }
+        let (cx0, cy0) = (c.x * pw as f64, c.y * ph as f64);
+        let (cx1, cy1) = (cx0 + c.w * pw as f64, cy0 + c.h * ph as f64);
+        let (x0, y0) = (x0.max(cx0).max(0.0), y0.max(cy0).max(0.0));
+        let (x1, y1) = (x1.min(cx1).min(pw as f64), y1.min(cy1).min(ph as f64));
+        (x1 > x0 && y1 > y0).then_some((x0, y0, x1, y1))
+    }
+
+    /// A PDF page in an export (PDF): the visible part drawn from the PDF
+    /// now, as one picture (tiles could show seams in a PDF viewer), at
+    /// least [`crate::pages::EXPORT_PAGE_PX`] across the whole page, or
+    /// the size it is seen at when that is bigger. None needed when the
+    /// page's own picture is that big already (documents imported before
+    /// pictures were small previews).
+    #[allow(clippy::too_many_arguments)]
+    fn page_for_export(
+        &self,
+        page: &PageRef,
+        pdf: &zebra_core::Asset,
+        raster: &crate::pages::PageRaster,
+        whole: &Affine,
+        fw: f64,
+        fh: f64,
+        c: Crop,
+        pic_w: u32,
+        on_screen: f64,
+    ) -> Vec<Item> {
+        use crate::images::TILE_PREFIX;
+        use crate::pages::{PageRequest, EXPORT_PAGE_PX, MAX_PAGE_PX, MAX_RECT_PX};
+        let mut pw = on_screen.max(EXPORT_PAGE_PX as f64).min(MAX_PAGE_PX as f64);
+        if pw <= pic_w as f64 * 1.05 {
+            return vec![];
+        }
+        for _ in 0..8 {
+            let (pwi, ph) = (pw.round() as u32, ((pw * fh / fw).round() as u32).clamp(1, MAX_PAGE_PX * 4));
+            let t = *whole * Affine::scale_non_uniform(fw / pwi as f64, fh / ph as f64);
+            let Some((x0, y0, x1, y1)) = self.visible_part(&t, c, pwi, ph) else { return vec![] };
+            let (x, y) = (x0.floor() as u32, y0.floor() as u32);
+            let (w, h) = ((x1.ceil() as u32).min(pwi) - x, (y1.ceil() as u32).min(ph) - y);
+            let big = w.max(h);
+            if big > MAX_RECT_PX {
+                // Too big to draw at once: draw it smaller.
+                pw *= MAX_RECT_PX as f64 / big as f64 * 0.99;
+                continue;
+            }
+            if w == 0 || h == 0 {
+                return vec![];
+            }
+            let k = format!("{TILE_PREFIX}{}#{}@{pwi}x{ph}:{x},{y},{w},{h}", page.pdf, page.index);
+            let req = PageRequest { pdf: page.pdf.clone(), bytes: pdf.bytes.clone(), index: page.index, page_px: (pwi, ph), rect: (x, y, w, h) };
+            let raster = raster.clone();
+            let name = k.clone();
+            let make: crate::images::Make = Arc::new(move || {
+                let px = raster(&req)?;
+                (px.len() == (w * h * 4) as usize).then(|| ImageLevel::from_rgba(&name, w, h, px))
+            });
+            return match self.r.images.get_made(&k, true, make) {
+                Some(Decoded::Still(l)) => vec![Item::Image { image: l, transform: t * Affine::translate((x as f64, y as f64)) }],
+                _ => vec![],
+            };
+        }
+        vec![]
     }
 
     fn element(&self, e: &Element, a: &Affine, items: &mut Vec<Item>) {
