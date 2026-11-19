@@ -1003,8 +1003,10 @@ impl Document {
         if groups.is_empty() {
             return out;
         }
+        // A set: `out.contains` for every element was O(N x k).
+        let mut seen: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
         for z in &self.z_order {
-            if !out.contains(z) && self.elements[z].group.as_deref().is_some_and(|g| groups.contains(g)) {
+            if self.elements[z].group.as_deref().is_some_and(|g| groups.contains(g)) && seen.insert(z.as_str()) {
                 out.push(z.clone());
             }
         }

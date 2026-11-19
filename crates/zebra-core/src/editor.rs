@@ -1541,27 +1541,41 @@ impl Editor {
                         s.builds.retain(|b| !set.contains(b));
                     }
                 }
-                // A group left with one member is no group.
-                for g in groups {
-                    let left: Vec<ElementId> = self.doc.elements.values().filter(|e| e.group.as_ref() == Some(&g)).map(|e| e.id.clone()).collect();
-                    if let [only] = left.as_slice() {
-                        self.el_mut(only).group = None;
-                        out.changed.push(only.clone());
+                // A group left with one member is no group. (One pass over
+                // the elements, not one per group.)
+                let mut left: HashMap<&String, Vec<ElementId>> = HashMap::new();
+                if !groups.is_empty() {
+                    for e in self.doc.elements.values() {
+                        if let Some(g) = e.group.as_ref().filter(|g| groups.contains(*g)) {
+                            left.entry(g).or_default().push(e.id.clone());
+                        }
                     }
+                }
+                let lone: Vec<ElementId> = groups.iter().filter_map(|g| match left.get(g).map(Vec::as_slice) {
+                    Some([only]) => Some(only.clone()),
+                    _ => None,
+                }).collect();
+                for only in lone {
+                    self.el_mut(&only).group = None;
+                    out.changed.push(only);
                 }
                 self.gc_assets();
                 out.deleted.extend(ids);
             }
             Command::Duplicate { ids, dx, dy } => {
                 self.check_ids(&ids)?;
-                let all = self.expand(&ids, true);
-                let ordered: Vec<ElementId> = self.doc.z_order.iter().filter(|z| all.contains(z)).cloned().collect();
+                let all: HashSet<ElementId> = self.expand(&ids, true).into_iter().collect();
+                let ordered: Vec<ElementId> = self.doc.z_order.iter().filter(|z| all.contains(*z)).cloned().collect();
                 // Copies of a group form a new group; a lone copied member
                 // leaves its group.
+                let mut copied: HashMap<String, usize> = HashMap::new();
+                for g in ordered.iter().filter_map(|o| self.doc.elements[o].group.clone()) {
+                    *copied.entry(g).or_default() += 1;
+                }
                 let mut regroup: HashMap<String, Option<String>> = HashMap::new();
                 for old in &ordered {
                     if let Some(g) = self.doc.elements[old].group.clone() {
-                        let n = ordered.iter().filter(|o| self.doc.elements[*o].group.as_ref() == Some(&g)).count();
+                        let n = copied[&g];
                         if !regroup.contains_key(&g) {
                             let new = (n >= 2).then(|| self.doc.alloc_group_id());
                             regroup.insert(g, new);
@@ -1605,28 +1619,30 @@ impl Editor {
                 // The same id twice would be put in the order twice.
                 dedup(&mut ids);
                 self.index.z_changed();
+                // A set: looking each id up in the list was O(N x k).
+                let set: HashSet<ElementId> = ids.iter().cloned().collect();
                 let z = self.z_mut();
                 match order {
                     ZOrderOp::Front => {
-                        z.retain(|x| !ids.contains(x));
+                        z.retain(|x| !set.contains(x));
                         z.extend(ids.iter().cloned());
                     }
                     ZOrderOp::Back => {
-                        z.retain(|x| !ids.contains(x));
+                        z.retain(|x| !set.contains(x));
                         let mut v = ids.clone();
                         v.extend(z.drain(..));
                         *z = v;
                     }
                     ZOrderOp::Forward => {
                         for i in (0..z.len().saturating_sub(1)).rev() {
-                            if ids.contains(&z[i]) && !ids.contains(&z[i + 1]) {
+                            if set.contains(&z[i]) && !set.contains(&z[i + 1]) {
                                 z.swap(i, i + 1);
                             }
                         }
                     }
                     ZOrderOp::Backward => {
                         for i in 1..z.len() {
-                            if ids.contains(&z[i]) && !ids.contains(&z[i - 1]) {
+                            if set.contains(&z[i]) && !set.contains(&z[i - 1]) {
                                 z.swap(i, i - 1);
                             }
                         }
