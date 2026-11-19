@@ -195,14 +195,14 @@ activity-item-tip = Click to zoom to these objects
 origin-you = You
 palette-hint = Type a command
 shortcuts-title = Keyboard Shortcuts
-shortcuts-caption = Every shortcut is also a menu item or a button.
-shortcuts-write-text = Write text
+shortcuts-caption = Every shortcut also has a menu item or a button.
+shortcuts-write-text = Add text
 shortcuts-write-text-keys = Double-click anywhere
-shortcuts-select-hand = Select tool · Hand tool
+shortcuts-select-hand = Select Tool · Hand Tool
 shortcuts-select-hand-keys = { $select } · { $hand } (or hold { $space })
-shortcuts-text-frame = Text · Frame (again to change style)
-shortcuts-shapes = Rectangle · Ellipse · Line · Arrow · Draw
-shortcuts-insert-image = Insert image
+shortcuts-text-frame = Text Tool · Frame Tool (press again to change style)
+shortcuts-shapes = Rectangle · Oval · Line · Arrow · Pen
+shortcuts-insert-image = Insert Image
 shortcuts-pan-zoom = Pan · Zoom
 shortcuts-pan-zoom-keys = Two-finger scroll · Pinch, or { $modifier }-scroll
 shortcuts-zoom = Zoom to Fit · Zoom to Selection · Actual Size
@@ -214,14 +214,14 @@ shortcuts-rotate-keys = Hold { $modifier } while rotating
 shortcuts-path = Edit Path · Add to Path
 shortcuts-play = Play · Play from Current Step
 shortcuts-while-playing = While playing
-shortcuts-while-playing-keys = { $next } or { $space } next · { $back } back · { $home } overview · { $black } or { $white } blank · { $stop } stop
+shortcuts-while-playing-keys = { $next } or { $space } next · { $back } back · { $home } overview · { $black } or { $white } blank · { $stop } exit
 shortcuts-panels = Show Inspector · Show Sidebar
 shortcuts-agent = Agent Activity · Stop Agent
 shortcuts-settings = Settings
 shortcuts-done = Done
 about-name = Zebra
 about-version = Version { $version }
-about-blurb = A zooming canvas for presentations, in the spirit of classic Prezi. Drivable by AI agents through an opt-in local API.
+about-blurb = A zooming canvas for presentations. AI agents on this Mac can work on your presentations too, once you allow AI control.
 
 ## ---- end panels.rs ----
 
