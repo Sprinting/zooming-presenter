@@ -37,9 +37,9 @@ fn pick(ed: &Editor, rng: &mut Rng) -> Option<ElementId> {
     (!z.is_empty()).then(|| z[rng.below(z.len())].clone())
 }
 
-/// The brute-force rule `insert_element` used for a new frame's place.
+/// A new frame's place, brute force: behind the lowest element it holds.
 fn brute_frame_pos(doc: &Document, b: &Rect) -> usize {
-    doc.z_order.iter().position(|o| doc.get(o).is_some_and(|x| b.contains_rect(&x.bounds()) && x.bounds().area() < b.area())).unwrap_or(doc.z_order.len())
+    doc.z_order.iter().position(|o| doc.get(o).is_some_and(|x| frame_holds(b, &x.bounds()))).unwrap_or(doc.z_order.len())
 }
 
 fn random_command(ed: &Editor, rng: &mut Rng) -> Value {
@@ -235,4 +235,24 @@ fn deep_zoom_nests_and_far_coordinates() {
     // The frames went behind what they enclose: a nest drawn biggest first.
     let pos = |id: &str| ed.doc.z_order.iter().position(|z| z == id).unwrap();
     assert!(pos("f0") < pos("f7"));
+}
+
+/// The ownership rule's edge tolerance reaches the index too: an element
+/// a hair wider than its frame (rounding on a rotated frame) is still
+/// found there, as brute force finds it.
+#[test]
+fn edge_tolerance_matches_brute_force() {
+    let mut ed = Editor::default();
+    ed.apply(cmd(json!({"op":"add_frame","id":"f","x":0,"y":0,"w":1024,"h":2048})), H).unwrap();
+    // As wide as the frame plus a rounding error, much less tall.
+    let w = 1024.0 * (1.0 + 1e-10);
+    ed.apply(cmd(json!({"op":"add_shape","id":"s","shape":"rectangle","x":0,"y":0,"w":w,"h":100})), H).unwrap();
+    ed.apply(cmd(json!({"op":"add_shape","id":"out","shape":"rectangle","x":0,"y":0,"w":1024.5,"h":100})), H).unwrap();
+    assert_eq!(ed.doc.parent_frame("s").as_deref(), Some("f"));
+    assert_eq!(ed.parent_frame("s").as_deref(), Some("f"));
+    assert_eq!(ed.parent_frames().get("s").copied(), Some("f"));
+    assert_eq!(ed.doc.parent_frame("out"), None);
+    assert_eq!(ed.parent_frame("out"), None);
+    assert_eq!(ed.frame_contents("f"), vec!["s".to_string()]);
+    assert_eq!(ed.frame_contents("f"), ed.doc.frame_contents("f"));
 }

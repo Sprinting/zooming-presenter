@@ -959,25 +959,24 @@ impl Document {
     pub fn bounds(&self) -> Option<Rect> {
         self.ordered().map(|e| e.bounds()).reduce(|a, b| a.union(&b))
     }
-    /// Classic Prezi semantics: a frame "contains" every element whose bounds lie
-    /// inside the frame's bounds and that is smaller than the frame. Computed
-    /// geometrically, so dragging something into a frame makes it a child.
+    /// Everything a frame carries when the person drags it: every element
+    /// it holds ([`frame_holds`]), nested frames and their contents
+    /// included, back to front.
     pub fn frame_contents(&self, frame_id: &str) -> Vec<ElementId> {
         let Some(f) = self.elements.get(frame_id) else { return vec![] };
         let fb = f.visual_bounds();
-        let fa = fb.area();
-        self.ordered()
-            .filter(|e| e.id != f.id && e.bounds().area() < fa && fb.contains_rect(&e.bounds()))
-            .map(|e| e.id.clone())
-            .collect()
+        self.ordered().filter(|e| e.id != f.id && frame_holds(&fb, &e.bounds())).map(|e| e.id.clone()).collect()
     }
-    /// Smallest frame that contains this element.
+    /// The frame an element belongs to: the smallest frame that holds it
+    /// ([`frame_holds`]), then the lowest in the draw order. Dragging that
+    /// frame (or any other that holds it) moves the element. Brute force;
+    /// [`crate::Editor::parent_frame`] answers the same from its index.
     pub fn parent_frame(&self, id: &str) -> Option<ElementId> {
         let e = self.elements.get(id)?;
         let b = e.bounds();
         self.ordered()
             .filter(|f| f.is_frame() && f.id != id)
-            .filter(|f| f.visual_bounds().contains_rect(&b) && f.visual_bounds().area() > b.area())
+            .filter(|f| frame_holds(&f.visual_bounds(), &b))
             .min_by(|a, b| a.visual_bounds().area().total_cmp(&b.visual_bounds().area()))
             .map(|f| f.id.clone())
     }
@@ -1062,4 +1061,23 @@ impl Document {
             .map(|(i, _)| i)
             .collect()
     }
+}
+
+
+/// How far (as a fraction of the frame's width plus height) an element may
+/// poke past a frame's edge and still be held by it: rounding when an
+/// element is snapped to the edge of a rotated or scaled frame.
+pub const FRAME_EDGE_TOLERANCE: f64 = 1e-9;
+
+/// THE frame-ownership rule, the one every part of Zebra uses (moving a
+/// frame, describe, the elements query, lint, builds, the spatial index):
+/// a frame with visual bounds `frame` (see [`Element::visual_bounds`])
+/// holds an element with bounds `b` when `b` lies inside `frame` (an
+/// element exactly on the edge is inside) and is smaller in area. Both are
+/// axis-aligned bounding boxes, so a rotated frame holds what lies in the
+/// box around it. An element that straddles a frame's edge is not held by
+/// it and doesn't move with it.
+pub fn frame_holds(frame: &Rect, b: &Rect) -> bool {
+    let eps = FRAME_EDGE_TOLERANCE * (frame.width() + frame.height());
+    b.area() < frame.area() && b.x0 >= frame.x0 - eps && b.x1 <= frame.x1 + eps && b.y0 >= frame.y0 - eps && b.y1 <= frame.y1 + eps
 }
