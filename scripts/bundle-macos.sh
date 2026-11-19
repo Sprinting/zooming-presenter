@@ -107,7 +107,11 @@ if [ "${APPSTORE:-0}" = 1 ]; then
     --entitlements packaging/macos/Zebra.entitlements "$APP"
 else
   codesign --force --options runtime --sign "$ID" "$APP/Contents/MacOS/zebractl"
-  codesign --force --options runtime --sign "$ID" "$APP"
+  case "$ID" in
+    "Developer ID Application:"*) codesign --force --options runtime --timestamp --sign "$ID" "$APP" ;;
+    # Ad-hoc or self-signed: no team, so let the app load its own PDFium.
+    *) codesign --force --options runtime --sign "$ID" --entitlements packaging/macos/Local.entitlements "$APP" ;;
+  esac
 fi
 codesign --verify --deep --strict "$APP"
 echo "Built $APP ($VERSION)"
