@@ -584,7 +584,7 @@ fn status_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     if connected && app.editor.view.agent_status.get(&name).is_some_and(|s| !s.dismissed) {
         let r = Rect::from_center_size(Pos2::new(rect.right() - 10.0, rect.center().y), EVec2::splat(14.0));
         let mut close = ui.new_child(egui::UiBuilder::new().max_rect(r));
-        if w::icon_button(&mut close, Icon::Close, 14.0, true, false).on_hover_text(crate::t!("status-hide-note")).clicked() {
+        if w::icon_button(&mut close, Icon::Close, 14.0, true, false, &crate::t!("status-hide-note")).on_hover_text(crate::t!("status-hide-note")).clicked() {
             if let Some(s) = app.editor.view.agent_status.get_mut(&name) {
                 s.dismissed = true;
             }
@@ -688,7 +688,7 @@ fn activity_panel(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(&crate::t!("activity-title")).font(style::semibold(13.0)));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if w::icon_button(ui, Icon::Close, 20.0, true, false).on_hover_text(crate::i18n::with_shortcut(crate::t!("activity-close"), &Action::ToggleActivity)).clicked() {
+            if w::icon_button(ui, Icon::Close, 20.0, true, false, &crate::t!("activity-close")).on_hover_text(crate::i18n::with_shortcut(crate::t!("activity-close"), &Action::ToggleActivity)).clicked() {
                 app.show_activity = false;
             }
         });

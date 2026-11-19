@@ -21,6 +21,8 @@
 language-name = English
 
 app-untitled = Untitled
+# The second and later new documents of a run: "Untitled 2".
+app-untitled-numbered = { $title } { $no }
 app-agent-default-name = Agent
 app-window-title-edited = { $name } — Edited
 app-file-filter-zebra = Zebra presentation

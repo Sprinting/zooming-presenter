@@ -216,7 +216,7 @@ pub struct ZebraApp {
 /// A title the person typed is left alone.
 pub fn untitled_name(title: &str, untitled: &str, no: u32) -> String {
     let title = if title.is_empty() { untitled } else { title };
-    if no > 1 && title == untitled { format!("{title} {no}") } else { title.to_string() }
+    if no > 1 && title == untitled { crate::t!("app-untitled-numbered", title = title, no = no.to_string()) } else { title.to_string() }
 }
 
 /// The size a window made from this one opens at: the same, unless this one

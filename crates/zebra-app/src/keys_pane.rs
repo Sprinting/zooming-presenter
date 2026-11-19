@@ -391,7 +391,7 @@ fn command_row(
     if has && row_hovered && !recording {
         let resp = ui
             .put(x_rect, |ui: &mut Ui| {
-                w::icon_button(ui, Icon::Close, 16.0, true, false)
+                w::icon_button(ui, Icon::Close, 16.0, true, false, &crate::t!("settings-keys-remove"))
             })
             .on_hover_text(crate::t!("settings-keys-remove"));
         if resp.clicked() {
