@@ -40,6 +40,7 @@ pub const METHOD_PARAMS: &[(&str, &[&str])] = &[
     ("apply", &["command", "label", "if_revision"]),
     ("batch", &["commands", "label", "if_revision"]),
     ("copy_to", &["ids", "to", "at", "dx", "dy"]),
+    ("import", &["path", "from", "to"]),
     ("begin", &["label"]),
     ("commit", &[]),
     ("abort", &[]),

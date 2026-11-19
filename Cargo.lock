@@ -6528,6 +6528,7 @@ dependencies = [
  "serde",
  "serde_json",
  "zebra-core",
+ "zebra-import",
  "zebra-render",
  "zebra-web",
 ]
