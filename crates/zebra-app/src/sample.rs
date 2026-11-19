@@ -489,7 +489,7 @@ mod tests {
         let f1 = frame(&mut ed, FrameStyle::Bracket, "Why zoom?", -1150.0, 250.0, 900.0, 620.0, 0.0);
         let t1 = text(&mut ed, "Why zoom?", -1150.0, 40.0, TextStyle::Title, 1.0, 0.0, false);
         let b1 = text(&mut ed, "Show the big picture first", -1150.0, 200.0, TextStyle::Body, 1.4, 0.0, true);
-        let b2 = text(&mut ed, "Then dive into the details", -1150.0, 290.0, TextStyle::Body, 1.4, 0.0, true);
+        let b2 = text(&mut ed, "Then zoom into the details", -1150.0, 290.0, TextStyle::Body, 1.4, 0.0, true);
         let b3 = text(&mut ed, "Zoom out again to connect them", -1150.0, 380.0, TextStyle::Body, 1.4, 0.0, true);
 
         // Title and bullets share one left edge (critique 28).
@@ -507,7 +507,7 @@ mod tests {
         // 3. Rotated rectangle frame
         let f3 = frame(&mut ed, FrameStyle::Rectangle, "A new angle", 1150.0, 260.0, 860.0, 560.0, -12.0);
         text(&mut ed, "A new angle", 1150.0 + 13.0, 120.0, TextStyle::Title, 0.9, -12.0, false);
-        text(&mut ed, "Rotate a frame and the camera\nrolls to meet it when presenting.", 1150.0 - 10.0, 330.0, TextStyle::Body, 1.2, -12.0, false);
+        text(&mut ed, "Rotate a frame, and the view\nturns to match it when you play.", 1150.0 - 10.0, 330.0, TextStyle::Body, 1.2, -12.0, false);
 
         // Arrows linking the ideas
         shape(&mut ed, ShapeKind::Arrow, -560.0, 280.0, 140.0, 40.0, 0.0, None, Some("theme:shape2"));
