@@ -56,7 +56,8 @@ impl Control {
     pub fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
-    pub(crate) fn page_done(&self) {
+    /// Count a page done (readers call this; so can tests).
+    pub fn page_done(&self) {
         self.done.fetch_add(1, Ordering::Relaxed);
     }
 }

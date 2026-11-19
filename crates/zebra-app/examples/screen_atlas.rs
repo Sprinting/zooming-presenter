@@ -231,6 +231,98 @@ impl Atlas {
     }
 }
 
+/// Step until the import sheet leaves `Reading` (or the import is over).
+fn until_read(h: &mut H) {
+    for _ in 0..200 {
+        settle(h, 1);
+        if !matches!(h.state().import, Some(zebra_app::import_ui::Flow::Reading { .. })) {
+            break;
+        }
+    }
+}
+
+/// Import pages `from`..=`to` of `pdf` through the sheet, and wait.
+fn import_range(h: &mut H, pdf: &std::path::Path, from: f64, to: f64) {
+    zebra_app::import_ui::start(h.state_mut(), pdf.to_path_buf());
+    until_read(h);
+    if let Some(zebra_app::import_ui::Flow::Choose { all, from: f, to: t, .. }) = &mut h.state_mut().import {
+        (*all, *f, *t) = (false, from, to);
+    }
+    settle(h, 2);
+    click_label(h, &zebra_app::t!("sheet-import"));
+    for _ in 0..400 {
+        settle(h, 1);
+        if h.state().import.is_none() {
+            break;
+        }
+    }
+    wait(h, 1.5);
+}
+
+fn import_pages(a: &mut Atlas, pdf: PathBuf) {
+    use zebra_app::import_ui::Flow;
+    a.section("File › Import…");
+    let p = pdf.clone();
+    a.run("Import sheet: which pages", false, false, move |h| {
+        zebra_app::import_ui::start(h.state_mut(), p);
+        until_read(h);
+    });
+    let p = pdf.clone();
+    a.run("Import sheet: a range of pages, dark mode", true, false, move |h| {
+        zebra_app::import_ui::start(h.state_mut(), p);
+        until_read(h);
+        if let Some(Flow::Choose { all, from, to, .. }) = &mut h.state_mut().import {
+            (*all, *from, *to) = (false, 2.0, 5.0);
+        }
+    });
+    let p = pdf.clone();
+    a.run("Importing: progress and Cancel", false, false, move |h| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Never answers: the sheet stays on its progress.
+        std::mem::forget(tx);
+        let ctl = zebra_import::Control::default();
+        for _ in 0..7 {
+            ctl.page_done();
+        }
+        h.state_mut().import = Some(Flow::Running { path: p, rx, ctl, total: 27 });
+    });
+    a.run("After an import that left a page out", false, false, |h| {
+        let notes = std::collections::BTreeMap::from([(zebra_core::import::ImportNote::PageSkipped, 1usize)]);
+        let message = zebra_app::import_ui::note_lines(&notes).join("\n");
+        let title = zebra_app::t!("import-done-title", count = 26);
+        zebra_app::sheets::request(h.state_mut(), zebra_app::sheets::SheetKind::ImportNotes { title, message });
+    });
+    a.run("A file that can't be imported", false, false, |h| {
+        let txt = std::env::temp_dir().join("Notes for the talk.txt");
+        std::fs::write(&txt, "not a PDF").unwrap();
+        zebra_app::import_ui::start(h.state_mut(), txt);
+        until_read(h);
+    });
+    let p = pdf.clone();
+    a.run("Pages 1–6 imported: frames and path steps right of the deck", false, false, move |h| {
+        import_range(h, &p, 1.0, 6.0);
+        wait(h, 3.0);
+    });
+    for (raster, cap) in [(true, "Zoomed in on an imported page: drawn from the PDF"), (false, "The same view from the page's picture only (as without PDFium)")] {
+        let p = pdf.clone();
+        a.run(cap, false, false, move |h| {
+            import_range(h, &p, 1.0, 2.0);
+            let app = h.state_mut();
+            if !raster {
+                app.renderer.set_page_raster(None);
+                app.renderer.images().clear();
+            }
+            // The first page's top-left part at about 3x.
+            let page = app.editor.doc.ordered().find(|e| e.is_frame() && e.name == zebra_app::t!("import-page-name", n = 1)).map(|e| e.bounds());
+            if let Some(b) = page {
+                let (w, hh) = (b.x1 - b.x0, b.y1 - b.y0);
+                app.editor.view.camera = zebra_core::Camera { cx: b.x0 + w * 0.32, cy: b.y0 + hh * 0.28, zoom: 3.0 * 1100.0 / w.max(1.0), rotation: 0.0 };
+            }
+            wait(h, 2.0);
+        });
+    }
+}
+
 fn main() {
     let dir = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "atlas".into()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -563,6 +655,15 @@ fn main() {
             zebra_app::sample::demo(h.state_mut(), &ctx, "embed,empty,diagram=process");
             settle(h, 6);
         });
+    }
+
+    // File › Import…: needs PDFium (ZEBRA_PDFIUM) and a PDF (ZEBRA_ATLAS_PDF).
+    if want("import") {
+        if let Some(pdf) = std::env::var_os("ZEBRA_ATLAS_PDF").map(PathBuf::from) {
+            import_pages(&mut a, pdf);
+        } else {
+            eprintln!("import: set ZEBRA_ATLAS_PDF to a PDF");
+        }
     }
 
     std::fs::write(dir.join("pages.tsv"), a.rows.join("\n") + "\n").unwrap();
