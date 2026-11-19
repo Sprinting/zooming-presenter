@@ -625,3 +625,30 @@ fn clearing_the_path_keeps_speaker_notes_unless_told() {
     ed.apply(cmd(serde_json::json!({"op":"clear_path","discard_notes":true})), h).unwrap();
     assert!(ed.doc.path.is_empty());
 }
+
+/// Spec 14: the canvas width handle is a `resize` (+ a move keeping one
+/// corner) in one transaction. Agents reading the element see whether it
+/// wraps (`fixed_width`), and Undo gives back the box that grows.
+#[test]
+fn a_text_width_change_reads_back_as_fixed_and_undoes_to_auto() {
+    let mut ed = Editor::default();
+    let h = Origin::Human;
+    let out = ed.apply(cmd(serde_json::json!({"op":"add_text","text":"The quick brown fox jumps over the lazy dog","x":0,"y":0})), h.clone()).unwrap();
+    let id = out.created[0].to_string();
+    let fixed = |ed: &Editor| ed.query(cmd_query(serde_json::json!({"q":"element","id":id}))).unwrap()["kind"]["fixed_width"].clone();
+    assert_eq!(fixed(&ed), serde_json::json!(false), "a new text grows with its words");
+    let w0 = ed.doc.get(&id).unwrap().size.w;
+    ed.begin("Change text width", h.clone()).unwrap();
+    ed.apply(Command::Resize { id: id.clone(), width: Some(w0 / 3.0), height: None }, h.clone()).unwrap();
+    ed.apply(Command::Update { id: id.clone(), patch: ElementPatch { x: Some(5.0), ..Default::default() } }, h.clone()).unwrap();
+    ed.commit();
+    assert_eq!(fixed(&ed), serde_json::json!(true));
+    assert_eq!(ed.history().len(), 2, "one undo step");
+    ed.undo(h).unwrap();
+    assert_eq!(fixed(&ed), serde_json::json!(false));
+    assert_eq!(ed.doc.get(&id).unwrap().size.w, w0);
+}
+
+fn cmd_query(j: serde_json::Value) -> Query {
+    serde_json::from_value(j).unwrap()
+}

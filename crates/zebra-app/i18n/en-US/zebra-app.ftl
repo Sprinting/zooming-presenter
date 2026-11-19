@@ -880,6 +880,7 @@ canvas-undo-move-connector-end = Move connector end
 canvas-undo-rotate = Rotate
 canvas-undo-resize = Resize
 canvas-undo-move = Move
+canvas-undo-text-width = Change text width
 canvas-undo-add-text = Add text
 canvas-undo-edit-text = Edit text
 # $step is the 1-based step number.
