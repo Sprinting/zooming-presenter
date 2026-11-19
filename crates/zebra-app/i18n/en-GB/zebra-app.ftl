@@ -229,7 +229,7 @@ about-blurb = A zooming canvas for presentations, in the spirit of classic Prezi
 ## ---- sidebar.rs ----
 
 sidebar-untitled-frame = Untitled Frame
-sidebar-missing-step = (missing)
+sidebar-missing-step = Missing
 sidebar-step-view = View
 sidebar-step-overview = Overview
 sidebar-path = Path
@@ -242,18 +242,18 @@ sidebar-edit-path = Edit Path
 sidebar-done-tip = Finish editing the path
 sidebar-edit-path-tip = Click objects on the canvas to add them as steps, in order
 sidebar-no-steps = No Steps
-sidebar-no-steps-caption = Select a frame and click Add Step in the toolbar, or click Edit Path and then click frames in order.
+sidebar-no-steps-caption = Select a frame and click Add Step in the toolbar. Or click Edit Path, then click the frames in order.
 sidebar-build-count = { $count ->
-    [one] { $count } build
-   *[other] { $count } builds
+    [one] { $count } fade-in
+   *[other] { $count } fade-ins
 }
 sidebar-step-tip =
     Step { $number }: { $label }
-    Click to go there. Drag to reorder. Right-click for more.
+    Click to go to this step. Drag to reorder. Right-click for more options.
 sidebar-go-to-step = Go to Step
 sidebar-play-from-here = Play from Here
 sidebar-select-on-canvas = Select on Canvas
-sidebar-show-fade-ins-dimmed = Show Later Fade-ins Dimmed
+sidebar-show-fade-ins-dimmed = Show Later Fade-Ins Dimmed
 sidebar-duplicate-step = Duplicate Step
 sidebar-move-to-start = Move to Start
 sidebar-move-to-end = Move to End
@@ -263,7 +263,7 @@ sidebar-add-tip-selection = Add the selection as a step
 sidebar-remove-tip = Remove the selected step
 sidebar-undo-remove-step = Remove Step
 sidebar-more-tip = More path actions
-sidebar-path-from-frames = Path from Frames
+sidebar-path-from-frames = Create Path from Frames
 sidebar-add-current-view = Add Current View
 sidebar-clear-path = Clear Path…
 
