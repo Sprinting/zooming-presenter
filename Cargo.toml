@@ -23,6 +23,9 @@ anyhow = "1"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 base64 = "0.22"
+# Clip-art pack: per-symbol zstd frames with a per-set dictionary. Pure
+# Rust decoder (no C build); the app never compresses.
+ruzstd = { version = "0.9", default-features = false, features = ["std"] }
 
 # rendering
 kurbo = "0.13"

@@ -19,3 +19,4 @@ zip.workspace = true
 image.workspace = true
 base64.workspace = true
 dirs.workspace = true
+ruzstd.workspace = true

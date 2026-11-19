@@ -1,0 +1,19 @@
+{
+ "format": 2,
+ "sets": [
+  {
+   "id": "C29",
+   "key": "tabler",
+   "name": "Tabler Icons",
+   "group": "mono",
+   "tint": "mono",
+   "author": "Paweł Kuna",
+   "author_url": "https://github.com/tabler/tabler-icons",
+   "licence": "MIT",
+   "licence_spdx": "MIT",
+   "licence_url": "https://github.com/tabler/tabler-icons/blob/master/LICENSE",
+   "credit": false,
+   "count": 219
+  }
+ ]
+}

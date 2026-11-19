@@ -3,11 +3,15 @@
 //! one-colour glyphs, classic clip art), built by
 //! `tools/symbols/build_pack.py`.
 //!
-//! On disk each set is an index (`<key>.idx`: name, keywords, offset,
-//! length) and the SVGs back to back (`<key>.dat`). The indexes stay in
-//! memory for search; a symbol's SVG is read from disk when it is first
-//! drawn or inserted, kept while it is used and dropped after
-//! [`IDLE`] without use.
+//! On disk (pack format [`FORMAT`]): `sets.json` (`{"format": 2, "sets":
+//! [...]}`), and per set an index (`<key>.idx`: name, keywords, offset,
+//! length), a zstd dictionary (`<key>.dict`) and the SVGs back to back
+//! (`<key>.dat`), each one its own zstd frame compressed with the set's
+//! dictionary, so one symbol is still one read. The indexes stay in memory
+//! for search; a symbol's SVG is read from disk and decompressed when it
+//! is first drawn or inserted, kept while it is used and dropped after
+//! [`IDLE`] without use. A set's dictionary is loaded with its first
+//! symbol and dropped the same way.
 //!
 //! An inserted symbol is an image whose asset is the SVG itself, so a deck
 //! draws the same on a Mac without the library.
@@ -15,6 +19,8 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+
+use ruzstd::decoding::{BlockDecodingStrategy, Dictionary, FrameDecoder};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -26,6 +32,13 @@ pub const IDLE: Duration = Duration::from_secs(10 * 60);
 /// from mip levels of this size, so a symbol stays sharp until it is about
 /// this many pixels across on screen.
 pub const SVG_PX: f64 = 4096.0;
+
+/// The pack format this build reads. Format 1 (raw SVGs, `sets.json` a
+/// bare list) is refused: rebuild the pack with `tools/symbols/build_pack.py`.
+pub const FORMAT: u32 = 2;
+
+/// Largest SVG a frame may unpack to (the builder skips files over 2 MB).
+const MAX_SVG: u64 = 64 << 20;
 
 /// How a set's colours can change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -76,6 +89,14 @@ struct Set {
     info: SetInfo,
     entries: Vec<Entry>,
     by_name: HashMap<Box<str>, u32>,
+    /// The set's decoder with its dictionary, while symbols are being read.
+    decoder: Mutex<Option<(FrameDecoder, Instant)>>,
+}
+
+/// `sets.json` (its `format` is checked before this is read).
+#[derive(Deserialize)]
+struct Pack {
+    sets: Vec<SetInfo>,
 }
 
 /// A symbol found by [`Library::search`].
@@ -92,9 +113,21 @@ pub struct Library {
 }
 
 impl Library {
-    /// Read `sets.json` and every set's index from `dir`.
+    /// Read `sets.json` and every set's index from `dir`. A pack in another
+    /// format than [`FORMAT`] is refused with an error that says so.
     pub fn open(dir: &Path) -> std::io::Result<Library> {
-        let infos: Vec<SetInfo> = serde_json::from_slice(&std::fs::read(dir.join("sets.json"))?).map_err(std::io::Error::other)?;
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("sets.json"))?).map_err(std::io::Error::other)?;
+        let format = match &json {
+            serde_json::Value::Array(_) => 1,
+            v => v.get("format").and_then(|f| f.as_u64()).unwrap_or(0),
+        };
+        if format != FORMAT as u64 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("the clip-art pack in {} is format {format}; this Zebra reads format {FORMAT} (rebuild it with tools/symbols/build_pack.py)", dir.display()),
+            ));
+        }
+        let infos = serde_json::from_value::<Pack>(json).map_err(std::io::Error::other)?.sets;
         let mut sets = Vec::with_capacity(infos.len());
         for info in infos {
             let idx = match std::fs::read_to_string(dir.join(format!("{}.idx", info.key))) {
@@ -109,7 +142,7 @@ impl Library {
                 entries.push(Entry { name: name.into(), keywords: kw.into(), offset, len });
             }
             let by_name = entries.iter().enumerate().map(|(i, e)| (e.name.clone(), i as u32)).collect();
-            sets.push(Set { info, entries, by_name });
+            sets.push(Set { info, entries, by_name, decoder: Mutex::new(None) });
         }
         Ok(Library { dir: dir.to_path_buf(), sets, cache: Mutex::new(HashMap::new()) })
     }
@@ -190,9 +223,9 @@ impl Library {
     /// The SVG of a symbol, from memory when it was used lately.
     pub fn svg(&self, r: SymbolRef) -> std::io::Result<Arc<[u8]>> {
         let now = Instant::now();
+        self.trim();
         {
             let mut c = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-            c.retain(|_, (_, used)| now.duration_since(*used) < IDLE);
             if let Some((b, used)) = c.get_mut(&r) {
                 *used = now;
                 return Ok(b.clone());
@@ -204,21 +237,77 @@ impl Library {
         f.seek(SeekFrom::Start(e.offset))?;
         let mut buf = vec![0u8; e.len as usize];
         f.read_exact(&mut buf)?;
-        let b: Arc<[u8]> = buf.into();
+        let b: Arc<[u8]> = self.unpack(s, &buf)?.into();
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).insert(r, (b.clone(), now));
         Ok(b)
     }
 
-    /// Drop SVGs not used for [`IDLE`]. Called on every read too.
+    /// Decompress one symbol's frame with its set's dictionary.
+    fn unpack(&self, s: &Set, frame: &[u8]) -> std::io::Result<Vec<u8>> {
+        let bad = |e: &dyn std::fmt::Display| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("clip-art set {}: {e}", s.info.key));
+        let mut slot = s.decoder.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.is_none() {
+            let mut dec = FrameDecoder::new();
+            match std::fs::read(self.dir.join(format!("{}.dict", s.info.key))) {
+                Ok(raw) => dec.add_dict(Dictionary::decode_dict(&raw).map_err(|e| bad(&e))?).map_err(|e| bad(&e))?,
+                // A set may be stored without a dictionary.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+            *slot = Some((dec, Instant::now()));
+        }
+        let (dec, used) = slot.as_mut().expect("set above");
+        *used = Instant::now();
+        let mut src = frame;
+        dec.reset(&mut src).map_err(|e| bad(&e))?;
+        // The builder records each SVG's length in its frame; 0 is unknown.
+        let n = dec.content_size();
+        if n > MAX_SVG {
+            return Err(bad(&format_args!("a symbol frame says it holds {n} bytes")));
+        }
+        let mut out = Vec::with_capacity(n as usize);
+        loop {
+            dec.decode_blocks(&mut src, BlockDecodingStrategy::UptoBytes(1 << 20)).map_err(|e| bad(&e))?;
+            dec.collect_to_writer(&mut out)?;
+            if out.len() as u64 > MAX_SVG {
+                return Err(bad(&"a symbol is too large"));
+            }
+            if dec.is_finished() {
+                break;
+            }
+        }
+        dec.collect_to_writer(&mut out)?;
+        if (n != 0 && out.len() as u64 != n) || !src.is_empty() {
+            return Err(bad(&"a symbol frame doesn't match its index"));
+        }
+        Ok(out)
+    }
+
+    /// Drop SVGs and set dictionaries not used for [`IDLE`]. Called on
+    /// every read too.
     pub fn trim(&self) {
         let now = Instant::now();
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, (_, used)| now.duration_since(*used) < IDLE);
+        for s in &self.sets {
+            let mut d = s.decoder.lock().unwrap_or_else(|e| e.into_inner());
+            if d.as_ref().is_some_and(|(_, used)| now.duration_since(*used) >= IDLE) {
+                *d = None;
+            }
+        }
     }
 
-    /// Drop every cached SVG (the panel that showed them has closed).
-    /// They are read from disk again when next drawn or inserted.
+    /// Drop every cached SVG and set dictionary (the panel that showed
+    /// them has closed). They are read from disk again when next needed.
     pub fn clear(&self) {
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        for s in &self.sets {
+            *s.decoder.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+
+    /// Set dictionaries held in memory now.
+    pub fn dictionaries(&self) -> usize {
+        self.sets.iter().filter(|s| s.decoder.lock().unwrap_or_else(|e| e.into_inner()).is_some()).count()
     }
 
     /// SVGs held in memory now.
@@ -252,11 +341,31 @@ pub fn find_dir() -> Option<PathBuf> {
     None
 }
 
+static LIB: OnceLock<Result<Library, String>> = OnceLock::new();
+
 /// The library, opened on first use (indexes take a moment: call this on
-/// a background thread at startup). None when it isn't installed.
+/// a background thread at startup). None when it isn't installed or can't
+/// be read ([`library_error`] says why).
 pub fn library() -> Option<&'static Library> {
-    static LIB: OnceLock<Option<Library>> = OnceLock::new();
-    LIB.get_or_init(|| Library::open(&find_dir()?).ok()).as_ref()
+    LIB.get_or_init(|| {
+        let dir = find_dir().ok_or_else(|| "the clip-art pack isn't installed".to_string())?;
+        Library::open(&dir).map_err(|e| {
+            eprintln!("zebra: symbols: {e}");
+            e.to_string()
+        })
+    })
+    .as_ref()
+    .ok()
+}
+
+/// Why [`library`] is None: a pack was found but can't be read (for
+/// example an older pack format). None when it is fine or not installed.
+pub fn library_error() -> Option<&'static str> {
+    library();
+    match LIB.get()? {
+        Err(e) if find_dir().is_some() => Some(e),
+        _ => None,
+    }
 }
 
 /// Width and height an SVG asks for: its viewBox, else its width and

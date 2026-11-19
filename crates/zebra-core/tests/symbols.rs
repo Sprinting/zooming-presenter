@@ -15,11 +15,14 @@ fn pack() {
     ONCE.call_once(|| {
         let dir = std::env::temp_dir().join(format!("zebra-symbols-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        // Pack format 2, each SVG its own zstd frame (no dictionary here;
+        // tests/symbols_pack.rs reads a pack the real builder wrote).
         let set = |key: &str, items: &[(&str, &str, &str)]| {
-            let (mut dat, mut idx) = (String::new(), String::new());
+            let (mut dat, mut idx) = (Vec::new(), String::new());
             for (name, kw, svg) in items {
-                idx += &format!("{name}\t{kw}\t{}\t{}\n", dat.len(), svg.len());
-                dat += svg;
+                let z = ruzstd::encoding::compress_to_vec(svg.as_bytes(), ruzstd::encoding::CompressionLevel::Fastest);
+                idx += &format!("{name}\t{kw}\t{}\t{}\n", dat.len(), z.len());
+                dat.extend(z);
             }
             std::fs::write(dir.join(format!("{key}.dat")), dat).unwrap();
             std::fs::write(dir.join(format!("{key}.idx")), idx).unwrap();
@@ -27,11 +30,11 @@ fn pack() {
         set("emoji", &[("rocket", "space,launch", ROCKET), ("red box", "square", ROCKET)]);
         set("glyphs", &[("lightbulb", "idea", BULB), ("rocket-launch", "space", BULB)]);
         set("park", &[("rocket", "space", PARK)]);
-        let sets = serde_json::json!([
+        let sets = serde_json::json!({"format": 2, "sets": [
             {"id":"C1","key":"emoji","name":"Emoji","group":"emoji","tint":"","author":"A","licence":"MIT","count":2},
             {"id":"C2","key":"glyphs","name":"Glyphs","group":"mono","tint":"mono","author":"B","licence":"CC BY 4.0","credit":true,"count":2},
             {"id":"C3","key":"park","name":"Park","group":"colour","tint":"two","author":"C","licence":"Apache 2.0","count":1},
-        ]);
+        ]});
         std::fs::write(dir.join("sets.json"), sets.to_string()).unwrap();
         // SAFETY: set once, before any thread reads the library.
         unsafe { std::env::set_var("ZEBRA_SYMBOLS_DIR", &dir) };
