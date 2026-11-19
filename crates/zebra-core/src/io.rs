@@ -68,6 +68,7 @@ fn read_zip(bytes: &[u8], map: Option<&Arc<memmap2::Mmap>>) -> ZResult<Document>
     Ok(doc)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The assets in a `.zebra` zip (mapped when `map` is the file and they
 /// are stored uncompressed). Assets are only read as far as their headers.
 fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc<memmap2::Mmap>>) -> ZResult<std::collections::BTreeMap<String, Asset>> {
@@ -152,6 +153,7 @@ pub fn save(doc: &mut Document, path: &Path) -> ZResult<()> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Write `doc` to `path` (as [`write_file`]) and map the assets back out
 /// of the new file: the part of [`save`] that can run on a worker thread
 /// with a copy of the document. Hand the result to [`adopt_mapped`].
@@ -159,6 +161,12 @@ pub fn write_and_map(doc: &Document, path: &Path) -> ZResult<Vec<(String, AssetB
     write_file(doc, path)?;
     // Failure here is harmless: the old bytes stay valid.
     Ok(mapped_assets(path).unwrap_or_default())
+}
+
+/// The web player has no file system: saving is never offered there.
+#[cfg(target_arch = "wasm32")]
+pub fn write_and_map(_doc: &Document, _path: &Path) -> ZResult<Vec<(String, AssetBytes)>> {
+    Err(ZError::new("unavailable", "saving needs a file system"))
 }
 
 /// Point `doc`'s assets at the saved file (from [`write_and_map`]), so
@@ -172,6 +180,7 @@ pub fn adopt_mapped(doc: &mut Document, saved: Vec<(String, AssetBytes)>) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The assets of a saved `.zebra` that are mapped straight from the file.
 /// Reads the zip's directory only, not the document.
 fn mapped_assets(path: &Path) -> ZResult<Vec<(String, AssetBytes)>> {
@@ -183,6 +192,7 @@ fn mapped_assets(path: &Path) -> ZResult<Vec<(String, AssetBytes)>> {
     Ok(read_assets(&mut z, Some(&map))?.into_iter().filter(|(_, a)| a.bytes.is_mapped()).map(|(k, a)| (k, a.bytes)).collect())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Size of the document (its `document.json`, uncompressed) in a
 /// `.zebra` file, from the zip's directory: how long opening it will take.
 pub fn document_size(path: &Path) -> Option<u64> {
