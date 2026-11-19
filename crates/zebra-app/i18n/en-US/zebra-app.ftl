@@ -29,6 +29,8 @@ app-file-filter-zebra = Zebra presentation
 app-file-filter-image = Image
 app-file-filter-video = Video
 app-file-filter-audio = Audio
+app-file-filter-pdf = PDF
+app-file-filter-png = PNG
 app-ai-start-failed = Couldn't start AI control: { $error }
 # When something a person did can't be done (details go to the log).
 app-error-locked = It's locked. Unlock it first.
@@ -820,6 +822,15 @@ menu-no-recent-documents = No Recent Documents
 ## ---- menu_mac.rs ----
 menu-mac-app = Zebra
 menu-mac-window = Window
+# The standard macOS items (AppKit does what they do; these are their names).
+menu-mac-services = Services
+menu-mac-hide = Hide Zebra
+menu-mac-hide-others = Hide Others
+menu-mac-show-all = Show All
+menu-mac-minimize = Minimize
+menu-mac-zoom = Zoom
+menu-mac-full-screen = Toggle Full Screen
+menu-mac-bring-all-to-front = Bring All to Front
 
 ## ---- end menu_mac.rs ----
 

@@ -255,11 +255,11 @@ impl Bar {
             &PredefinedMenuItem::separator(),
             &settings,
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::services(None),
+            &PredefinedMenuItem::services(Some(&native(&crate::t!("menu-mac-services")))),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::hide(None),
-            &PredefinedMenuItem::hide_others(None),
-            &PredefinedMenuItem::show_all(None),
+            &PredefinedMenuItem::hide(Some(&native(&crate::t!("menu-mac-hide")))),
+            &PredefinedMenuItem::hide_others(Some(&native(&crate::t!("menu-mac-hide-others")))),
+            &PredefinedMenuItem::show_all(Some(&native(&crate::t!("menu-mac-show-all")))),
             &PredefinedMenuItem::separator(),
             &quit,
         ]);
@@ -277,11 +277,11 @@ impl Bar {
                 // Window menu goes before Help, macOS convention.
                 let win = Submenu::new(crate::t!("menu-mac-window"), true);
                 let _ = win.append_items(&[
-                    &PredefinedMenuItem::minimize(None),
-                    &PredefinedMenuItem::maximize(None),
-                    &PredefinedMenuItem::fullscreen(None),
+                    &PredefinedMenuItem::minimize(Some(&native(&crate::t!("menu-mac-minimize")))),
+                    &PredefinedMenuItem::maximize(Some(&native(&crate::t!("menu-mac-zoom")))),
+                    &PredefinedMenuItem::fullscreen(Some(&native(&crate::t!("menu-mac-full-screen")))),
                     &PredefinedMenuItem::separator(),
-                    &PredefinedMenuItem::bring_all_to_front(None),
+                    &PredefinedMenuItem::bring_all_to_front(Some(&native(&crate::t!("menu-mac-bring-all-to-front")))),
                 ]);
                 let _ = m._menu.append(&win);
                 window = Some(win);
