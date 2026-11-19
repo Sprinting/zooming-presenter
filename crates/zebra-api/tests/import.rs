@@ -1,4 +1,4 @@
-//! The `import` method: a PDF's pages as frames and path steps, one undo
+//! The `import` method: a PDF's pages in one frame with a path step each, one undo
 //! step, read off the dispatcher's thread. Needs PDFium (see
 //! crates/zebra-import/tests/pdf.rs); without it the PDF parts are skipped.
 use std::path::PathBuf;
@@ -80,11 +80,12 @@ fn import_adds_pages_as_one_undo_step() {
     let out = c.call("import", json!({"path": pdf, "from": 1, "to": 2})).unwrap();
     assert_eq!(out["pages"], 2, "{out}");
     let frames: Vec<String> = out["frames"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect();
-    assert_eq!(frames.len(), 2);
+    // One frame around both pages; each page is its own step.
+    assert_eq!(frames.len(), 1);
     let path = c.call("query", json!({"query":{"q":"path"}})).unwrap();
     let steps = path["steps"].as_array().unwrap();
     assert_eq!(steps.len(), 5, "{path}");
-    // The new frames sit right of everything that was there.
+    // The new frame sits right of everything that was there.
     for f in &frames {
         let e = c.call("query", json!({"query":{"q":"element","id":f}})).unwrap();
         let x0 = e["bounds"][0].as_f64().unwrap_or_else(|| panic!("{e}"));
