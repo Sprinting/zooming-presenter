@@ -82,7 +82,7 @@ fn main() -> anyhow::Result<()> {
     if cli.api && !granted {
         eprintln!("zebra: {NOT_GRANTED}");
     }
-    let opts = AppOptions { open: cli.file, api: (cli.api && granted).then_some(api_opts), screenshot, demo: cli.demo };
+    let opts = AppOptions { open: cli.file, api: (cli.api && granted).then_some(api_opts), screenshot, demo: cli.demo, as_launch: false };
 
     let background = cli.background || std::env::var_os("ZEBRA_BACKGROUND").is_some_and(|v| v != "0");
     let native = eframe::NativeOptions {
