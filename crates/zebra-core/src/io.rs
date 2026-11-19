@@ -58,6 +58,15 @@ fn read_zip(bytes: &[u8], map: Option<&Arc<memmap2::Mmap>>) -> ZResult<Document>
     let mut json = String::new();
     z.by_name("document.json").map_err(|e| bad(e.to_string()))?.read_to_string(&mut json).map_err(|e| bad(e.to_string()))?;
     let mut doc = from_json(&json)?;
+    doc.assets = read_assets(&mut z, map)?;
+    Ok(doc)
+}
+
+/// The assets in a `.zebra` zip (mapped when `map` is the file and they
+/// are stored uncompressed). Assets are only read as far as their headers.
+fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc<memmap2::Mmap>>) -> ZResult<std::collections::BTreeMap<String, Asset>> {
+    let bad = |m: String| ZError::new("bad_file", m);
+    let mut assets = std::collections::BTreeMap::new();
     for i in 0..z.len() {
         let mut f = z.by_index(i).map_err(|e| bad(e.to_string()))?;
         let name = f.name().map(|n| n.to_string()).unwrap_or_default();
@@ -100,9 +109,9 @@ fn read_zip(bytes: &[u8], map: Option<&Arc<memmap2::Mmap>>) -> ZResult<Document>
                 Err(_) => continue,
             },
         };
-        doc.assets.insert(key.to_string(), Asset { ext, bytes: data, width: w, height: h });
+        assets.insert(key.to_string(), Asset { ext, bytes: data, width: w, height: h });
     }
-    Ok(doc)
+    Ok(assets)
 }
 
 pub fn from_json(json: &str) -> ZResult<Document> {
@@ -131,19 +140,49 @@ fn migrate(v: serde_json::Value, _from: u32) -> serde_json::Value {
 /// document's assets point into the new file, so freshly added media
 /// leaves RAM after the first save.
 pub fn save(doc: &mut Document, path: &Path) -> ZResult<()> {
+    let saved = write_and_map(doc, path)?;
+    adopt_mapped(doc, saved);
+    Ok(())
+}
+
+/// Write `doc` to `path` (as [`write_file`]) and map the assets back out
+/// of the new file: the part of [`save`] that can run on a worker thread
+/// with a copy of the document. Hand the result to [`adopt_mapped`].
+pub fn write_and_map(doc: &Document, path: &Path) -> ZResult<Vec<(String, AssetBytes)>> {
     write_file(doc, path)?;
-    // Re-point assets at the new file. Failure here is harmless: the old
-    // bytes stay valid.
-    if let Ok(saved) = load(path) {
-        for (k, a) in saved.assets {
-            if a.bytes.is_mapped() {
-                if let Some(mine) = doc.assets.get_mut(&k) {
-                    mine.bytes = a.bytes;
-                }
-            }
+    // Failure here is harmless: the old bytes stay valid.
+    Ok(mapped_assets(path).unwrap_or_default())
+}
+
+/// Point `doc`'s assets at the saved file (from [`write_and_map`]), so
+/// freshly added media leaves memory. Assets are content addressed: the
+/// same key is the same bytes, wherever they live.
+pub fn adopt_mapped(doc: &mut Document, saved: Vec<(String, AssetBytes)>) {
+    for (k, bytes) in saved {
+        if let Some(mine) = doc.assets.get_mut(&k) {
+            mine.bytes = bytes;
         }
     }
-    Ok(())
+}
+
+/// The assets of a saved `.zebra` that are mapped straight from the file.
+/// Reads the zip's directory only, not the document.
+fn mapped_assets(path: &Path) -> ZResult<Vec<(String, AssetBytes)>> {
+    let ioe = |e: std::io::Error| ZError::new("io", format!("{}: {e}", path.display()));
+    let file = std::fs::File::open(path).map_err(ioe)?;
+    // SAFETY: as in `load`.
+    let map = Arc::new(unsafe { memmap2::Mmap::map(&file) }.map_err(ioe)?);
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&map[..])).map_err(|e| ZError::new("bad_file", e.to_string()))?;
+    Ok(read_assets(&mut z, Some(&map))?.into_iter().filter(|(_, a)| a.bytes.is_mapped()).map(|(k, a)| (k, a.bytes)).collect())
+}
+
+/// Size of the document (its `document.json`, uncompressed) in a
+/// `.zebra` file, from the zip's directory: how long opening it will take.
+pub fn document_size(path: &Path) -> Option<u64> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut z = zip::ZipArchive::new(std::io::BufReader::new(file)).ok()?;
+    let f = z.by_name("document.json").ok()?;
+    Some(f.size())
 }
 
 /// Write a `.zebra` atomically without touching `doc` (autosave, copies).
