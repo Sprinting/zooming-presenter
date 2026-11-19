@@ -26,10 +26,11 @@ if [[ -z "${TARGETS:-}" ]]; then
   fi
 fi
 # The release profile strips symbols. DSYM=1 builds with line tables
-# instead, saves them as dSYM bundles (for crash reports) and strips the
-# copies that go into the app.
+# instead; rustc writes a dSYM per architecture at link time (it can see
+# the LTO object then), which is kept in target/Zebra.app.dSYM for crash
+# reports, and the copies that go into the app are stripped.
 if [ "${DSYM:-0}" = 1 ]; then
-  export CARGO_PROFILE_RELEASE_STRIP=false CARGO_PROFILE_RELEASE_DEBUG=line-tables-only
+  export CARGO_PROFILE_RELEASE_STRIP=false CARGO_PROFILE_RELEASE_DEBUG=line-tables-only CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed
 fi
 for t in $TARGETS; do cargo build --release --target "$t" -p zebra-app -p zebra-ctl; done
 
@@ -39,9 +40,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 for bin in zebra zebractl; do
   lipo -create $(for t in $TARGETS; do echo "target/$t/release/$bin"; done) -output "$APP/Contents/MacOS/$bin"
   if [ "${DSYM:-0}" = 1 ]; then
-    rm -rf "target/Zebra.app.dSYM/$bin.dSYM"
-    mkdir -p target/Zebra.app.dSYM
-    dsymutil "$APP/Contents/MacOS/$bin" -o "target/Zebra.app.dSYM/$bin.dSYM"
+    for t in $TARGETS; do
+      rm -rf "target/Zebra.app.dSYM/$t/$bin.dSYM"
+      mkdir -p "target/Zebra.app.dSYM/$t"
+      cp -R "target/$t/release/$bin.dSYM" "target/Zebra.app.dSYM/$t/"
+    done
     strip -x "$APP/Contents/MacOS/$bin"
   fi
 done
