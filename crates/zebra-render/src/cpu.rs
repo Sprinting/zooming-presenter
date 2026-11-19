@@ -136,6 +136,18 @@ pub(crate) fn camera_for_step(editor: &Editor, i: usize, vp: [f64; 2]) -> Camera
     }
 }
 
+/// The camera and logical viewport a capture of path step `index` at
+/// `w`x`h` pixels frames it with (as [`crate::Renderer::capture`] does), or
+/// `None` when there is no such step. Lets a cache of step pictures tell
+/// whether a step is still framed the same way.
+pub fn step_view(editor: &Editor, index: usize, w: u32, h: u32) -> Option<(Camera, [f64; 2])> {
+    if index >= editor.doc.path.len() {
+        return None;
+    }
+    let (vp, _) = fit_viewport([editor.view.viewport.x, editor.view.viewport.y], w, h);
+    Some((camera_for_step(editor, index, vp), vp))
+}
+
 pub(crate) fn capture_view(editor: &Editor, target: &CaptureTarget, w: u32, h: u32) -> Result<CaptureView, ZError> {
     let base = [editor.view.viewport.x, editor.view.viewport.y];
     let (vp, ppp) = fit_viewport(base, w, h);
