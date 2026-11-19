@@ -38,7 +38,7 @@
     {
       "h": 0.125,
       "kind": "frame",
-      "name": "content-frame-detail",
+      "name": "content-frame-detail-1",
       "path": true,
       "style": "rectangle",
       "w": 0.2,
@@ -51,7 +51,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "content-detail-to-zoom-into",
+      "text": "content-add-a-detail-to-zoom-into",
       "w": 0.16,
       "x": 0.36,
       "y": -0.18
@@ -59,7 +59,7 @@
     {
       "h": 0.125,
       "kind": "frame",
-      "name": "content-frame-detail",
+      "name": "content-frame-detail-2",
       "path": true,
       "style": "rectangle",
       "w": 0.2,
@@ -72,7 +72,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "content-detail-to-zoom-into",
+      "text": "content-add-a-detail-to-zoom-into",
       "w": 0.16,
       "x": 0.36,
       "y": 0
@@ -80,7 +80,7 @@
     {
       "h": 0.125,
       "kind": "frame",
-      "name": "content-frame-detail",
+      "name": "content-frame-detail-3",
       "path": true,
       "style": "rectangle",
       "w": 0.2,
@@ -93,7 +93,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "content-detail-to-zoom-into",
+      "text": "content-add-a-detail-to-zoom-into",
       "w": 0.16,
       "x": 0.36,
       "y": 0.18

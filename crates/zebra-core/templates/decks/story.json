@@ -33,7 +33,7 @@
       "h": 0.04,
       "kind": "text",
       "style": "subtitle",
-      "text": "content-once-upon-a-time",
+      "text": "content-how-it-started",
       "w": 0.4,
       "x": -0.22,
       "y": -0.1
@@ -64,7 +64,7 @@
       "h": 0.03,
       "kind": "text",
       "style": "subtitle",
-      "text": "content-then-something-changed",
+      "text": "content-what-changed",
       "w": 0.22,
       "x": 0.2,
       "y": 0
@@ -75,7 +75,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "content-what-happened-next",
+      "text": "content-describe-the-turning-point",
       "w": 0.2,
       "x": 0.2,
       "y": 0.05
@@ -94,7 +94,7 @@
       "h": 0.012,
       "kind": "text",
       "style": "subtitle",
-      "text": "content-and-in-the-end",
+      "text": "content-how-it-ended",
       "w": 0.08,
       "x": 0.39,
       "y": 0.095
@@ -105,7 +105,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "content-how-it-turned-out",
+      "text": "content-describe-the-result",
       "w": 0.07,
       "x": 0.39,
       "y": 0.11

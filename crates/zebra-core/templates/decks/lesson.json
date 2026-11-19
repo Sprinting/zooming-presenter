@@ -40,7 +40,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "content-course-or-class",
+      "text": "content-course-name",
       "w": 0.2,
       "x": -0.33,
       "y": -0.12
@@ -110,7 +110,7 @@
     {
       "h": 0.12,
       "kind": "frame",
-      "name": "content-frame-detail",
+      "name": "content-frame-detail-1",
       "style": "circle",
       "w": 0.12,
       "x": 0.32,
@@ -122,7 +122,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "content-a-detail-to-zoom-into",
+      "text": "content-add-a-detail-to-zoom-into",
       "w": 0.08,
       "x": 0.32,
       "y": -0.2
@@ -161,7 +161,7 @@
     {
       "h": 0.12,
       "kind": "frame",
-      "name": "content-frame-detail",
+      "name": "content-frame-detail-2",
       "style": "circle",
       "w": 0.12,
       "x": 0.32,
@@ -173,7 +173,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "content-a-detail-to-zoom-into",
+      "text": "content-add-a-detail-to-zoom-into",
       "w": 0.08,
       "x": 0.32,
       "y": 0
@@ -212,7 +212,7 @@
     {
       "h": 0.12,
       "kind": "frame",
-      "name": "content-frame-detail",
+      "name": "content-frame-detail-3",
       "style": "circle",
       "w": 0.12,
       "x": 0.32,
@@ -224,7 +224,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "content-a-detail-to-zoom-into",
+      "text": "content-add-a-detail-to-zoom-into",
       "w": 0.08,
       "x": 0.32,
       "y": 0.2
@@ -254,7 +254,7 @@
       "kind": "text",
       "ph": true,
       "style": "body",
-      "text": "content-the-three-things-to-remember",
+      "text": "content-list-three-things",
       "w": 0.24,
       "x": -0.33,
       "y": 0.31

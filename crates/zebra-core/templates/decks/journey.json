@@ -15,7 +15,7 @@
     {
       "h": 0.5,
       "kind": "frame",
-      "name": "content-frame-the-road-ahead",
+      "name": "content-frame-overview",
       "style": "invisible",
       "w": 1,
       "x": 0,
@@ -86,7 +86,7 @@
       "h": 0.0288,
       "kind": "text",
       "style": "subtitle",
-      "text": "content-where-we-start",
+      "text": "content-start",
       "w": 0.192,
       "x": -0.36,
       "y": 0.1208
@@ -117,7 +117,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "content-first-stop",
+      "text": "content-stop-1",
       "w": 0.16,
       "x": -0.13,
       "y": -0.086
@@ -148,7 +148,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "content-second-stop",
+      "text": "content-stop-2",
       "w": 0.136,
       "x": 0.07,
       "y": 0.1064
@@ -179,7 +179,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "content-third-stop",
+      "text": "content-stop-3",
       "w": 0.112,
       "x": 0.23,
       "y": -0.0912
@@ -210,7 +210,7 @@
       "kind": "text",
       "ph": true,
       "style": "subtitle",
-      "text": "content-almost-there",
+      "text": "content-stop-4",
       "w": 0.088,
       "x": 0.35,
       "y": 0.0812
@@ -240,7 +240,7 @@
       "h": 0.0096,
       "kind": "text",
       "style": "subtitle",
-      "text": "content-where-we-arrive",
+      "text": "content-destination",
       "w": 0.064,
       "x": 0.44,
       "y": -0.0764
