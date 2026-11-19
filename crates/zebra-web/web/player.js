@@ -354,7 +354,7 @@ function bind() {
   function local(e) { var r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
   stage.addEventListener('pointerdown', function (e) {
     if (e.button === 2) return;
-    stage.setPointerCapture(e.pointerId);
+    try { stage.setPointerCapture(e.pointerId); } catch (_) {}
     pts[e.pointerId] = local(e);
     var ids = Object.keys(pts);
     if (ids.length === 1) { moved = false; downAt = performance.now(); start = pts[e.pointerId]; }
