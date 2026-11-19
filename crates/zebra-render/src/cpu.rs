@@ -108,7 +108,7 @@ fn fit_viewport(base: [f64; 2], w: u32, h: u32) -> ([f64; 2], f64) {
 
 fn fit_element(e: &zebra_core::Element, vp: [f64; 2]) -> Camera {
     let (w, h) = e.world_size();
-    let margin = if e.is_frame() { 0.04 } else { 0.12 };
+    let margin = e.fit_margin();
     Camera::fit(
         &zebra_core::ViewRect { cx: e.transform.x, cy: e.transform.y, width: w, height: h, rotation: e.transform.rotation },
         zebra_core::Vec2::new(vp[0], vp[1]),

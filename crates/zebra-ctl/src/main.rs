@@ -237,9 +237,8 @@ enum Cmd {
         #[arg(long, requires = "x")]
         y: Option<f64>,
     },
-    /// File › Import…: a PDF's pages as frames with a path step each, right
-    /// of what is on the canvas, as one undo step. Prints what came in as
-    /// pictures (equations, gradients, effects).
+    /// File › Import…: a PDF's pages as pictures inside one frame, with a
+    /// path step each, right of what is on the canvas, as one undo step.
     Import {
         /// The .pdf file.
         file: PathBuf,

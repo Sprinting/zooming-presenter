@@ -137,8 +137,9 @@ pub enum Call {
     /// Copy elements (with their groups, frame contents and pictures) into
     /// another open document, moved by `offset` or centred on `at`.
     CopyTo { ids: Vec<String>, to: String, at: Option<(f64, f64)>, offset: (f64, f64) },
-    /// File › Import…: a PDF's pages (1-based `first`..=`last`) as frames
-    /// with a path step each, right of the content, as one undo step.
+    /// File › Import…: a PDF's pages (1-based `first`..=`last`) as pictures
+    /// in one frame, with a path step each, right of the content, as one
+    /// undo step.
     Import { path: PathBuf, first: Option<usize>, last: Option<usize> },
     Capture(CaptureReq),
     Undo,

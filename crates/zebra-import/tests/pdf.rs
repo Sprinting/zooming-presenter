@@ -5,7 +5,7 @@
 //! Needs PDFium: `scripts/fetch-pdfium.sh linux-x64` (or mac-arm64) puts
 //! it in target/pdfium/, or set ZEBRA_PDFIUM. Without it these tests say
 //! so and pass.
-use zebra_core::{Editor, ElementKind, Origin};
+use zebra_core::{Editor, Element, ElementKind, Origin, StepTarget};
 use zebra_import::{Control, ImportError, ImportNote, Options};
 
 fn engine() -> bool {
@@ -104,12 +104,21 @@ fn each_page_comes_in_as_a_picture_drawn_from_the_pdf() {
     let ElementKind::Image(img0) = &deck.pages[0].items[0].element.kind else { unreachable!() };
     assert_eq!(img0.alt, "Hello Import");
 
-    // On the canvas: three frames, three steps, one undo.
+    // On the canvas: one frame around the three pages, a step per page
+    // (the page's picture, named after it), one undo.
     let before = ed.doc.clone();
     let out = ed.import_deck(&deck, "Import sample".into(), Origin::Human).unwrap();
     assert!(!out.created.is_empty());
-    assert_eq!(ed.doc.ordered().filter(|e| e.is_frame()).count(), 3);
+    let frames: Vec<&Element> = ed.doc.ordered().filter(|e| e.is_frame()).collect();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(ed.doc.frame_contents(&frames[0].id).len(), 3);
     assert_eq!(ed.doc.path.len(), 3);
+    for (i, s) in ed.doc.path.iter().enumerate() {
+        let StepTarget::Element { id } = &s.target else { panic!("{s:?}") };
+        let e = ed.doc.get(id).unwrap();
+        assert!(matches!(e.kind, ElementKind::Image(_)));
+        assert_eq!(e.name, deck.pages[i].name);
+    }
     // Saved and opened again, the PDF is still there for the pages.
     let back = zebra_core::io::load_bytes(&zebra_core::io::save_bytes(&ed.doc).unwrap()).unwrap();
     assert_eq!(back.assets[pdf_key].ext, "pdf");

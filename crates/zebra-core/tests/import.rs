@@ -34,9 +34,15 @@ fn import_is_one_undo_step_with_a_frame_and_step_per_page() {
     let before = ed.doc.clone();
     let out = ed.import_deck(&deck(5), "Import t.pdf".into(), Origin::Human).unwrap();
     assert_eq!(ed.undo_label().as_deref(), Some("Import t.pdf (You)"));
-    let frames: Vec<&Element> = ed.doc.ordered().filter(|e| e.is_frame() && e.id != "f1").collect();
-    assert_eq!(frames.len(), 5);
-    assert_eq!(out.created.len(), 15);
+    // One frame around the file (named after it, behind the pages), then
+    // a frame per page, since these pages are several objects each.
+    let all: Vec<&Element> = ed.doc.ordered().filter(|e| e.is_frame() && e.id != "f1").collect();
+    assert_eq!(all.len(), 6);
+    let outer = all[0];
+    assert_eq!(outer.name, "t");
+    assert_eq!(ed.doc.frame_contents(&outer.id).len(), 15);
+    let frames = &all[1..];
+    assert_eq!(out.created.len(), 16);
     assert_eq!(ed.doc.path.len(), 6);
     assert_eq!(ed.doc.path[1].notes, "notes 0");
     assert_eq!(ed.doc.path[5].notes, "notes 4");
@@ -63,7 +69,7 @@ fn import_is_one_undo_step_with_a_frame_and_step_per_page() {
 fn imported_text_keeps_its_source_edge() {
     let mut ed = Editor::default();
     ed.import_deck(&deck(1), "Import".into(), Origin::Human).unwrap();
-    let f = ed.doc.ordered().find(|e| e.is_frame()).unwrap().bounds();
+    let f = ed.doc.ordered().filter(|e| e.is_frame()).nth(1).unwrap().bounds();
     let texts: Vec<&Element> = ed.doc.ordered().filter(|e| matches!(e.kind, ElementKind::Text(_))).collect();
     let left = texts[0].bounds();
     assert!((left.x0 - (f.x0 + 100.0)).abs() < 0.01, "left edge kept: {left:?} in {f:?}");
@@ -84,4 +90,72 @@ fn an_empty_canvas_gets_the_pages_around_the_origin_and_empty_decks_are_refused(
     assert!(b.x0 < 0.0 && b.x1 > 0.0 && b.y0 < 0.0 && b.y1 > 0.0, "{b:?}");
     assert_eq!(import::columns(4), 2);
     assert_eq!(import::columns(27), 6);
+}
+
+/// A PDF page: one picture filling it.
+fn picture_deck(pages: usize) -> ImportedDeck {
+    let png = {
+        let mut v = vec![];
+        image::RgbaImage::new(4, 3).write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Png).unwrap();
+        v
+    };
+    let (key, asset) = import::asset_from(png).unwrap();
+    let mut d = ImportedDeck { title: "slides".into(), ..Default::default() };
+    d.assets.insert(key.clone(), asset);
+    for i in 0..pages {
+        let pic = Element {
+            id: "x".into(),
+            transform: Transform { x: 480.0, y: 360.0, scale: 1.0, rotation: 0.0 },
+            size: Size { w: 960.0, h: 720.0 },
+            locked: false,
+            name: String::new(),
+            placeholder: false,
+            group: None,
+            kind: ElementKind::Image(ImageData { asset: key.clone(), alt: String::new(), crop: None, mask: Default::default(), symbol: None, page: None }),
+        };
+        let mut p = ImportedPage { w: 960.0, h: 720.0, name: format!("Page {}", i + 1), notes: String::new(), ..Default::default() };
+        p.items.push(ImportedItem { element: pic, fit: None });
+        d.pages.push(p);
+    }
+    d
+}
+
+#[test]
+fn picture_pages_are_their_own_steps_inside_one_frame_that_carries_them() {
+    let mut ed = Editor::default();
+    ed.import_deck(&picture_deck(4), "Import slides.pdf".into(), Origin::Human).unwrap();
+    let frames: Vec<&Element> = ed.doc.ordered().filter(|e| e.is_frame()).collect();
+    assert_eq!(frames.len(), 1, "one frame for the whole file");
+    let outer = frames[0].id.clone();
+    assert_eq!(frames[0].name, "slides");
+    assert_eq!(ed.doc.path.len(), 4);
+    let pages: Vec<String> = ed.doc.path.iter().map(|s| match &s.target {
+        StepTarget::Element { id } => id.clone(),
+        t => panic!("{t:?}"),
+    }).collect();
+    for (i, id) in pages.iter().enumerate() {
+        let e = ed.doc.get(id).unwrap();
+        assert!(matches!(e.kind, ElementKind::Image(_)));
+        assert_eq!(e.name, format!("Page {}", i + 1));
+        assert_eq!(ed.doc.parent_frame(id).as_deref(), Some(outer.as_str()));
+        assert_eq!(ed.parent_frame(id).as_deref(), Some(outer.as_str()));
+    }
+    // Turning the frame with its contents turns the pages with it: each
+    // page keeps its place relative to the frame.
+    let rel = |ed: &Editor, id: &str| {
+        let (f, p) = (ed.doc.get(&outer).unwrap().transform, ed.doc.get(id).unwrap().transform);
+        (Vec2::new(p.x - f.x, p.y - f.y).rotate_deg(-f.rotation), p.rotation - f.rotation)
+    };
+    let before: Vec<_> = pages.iter().map(|p| rel(&ed, p)).collect();
+    let ids = ed.expand(&[outer.clone()], true);
+    assert_eq!(ids.len(), 5);
+    let c = ed.doc.get(&outer).unwrap().transform;
+    ed.apply(Command::Rotate { ids, degrees: 30.0, about: Some([c.x, c.y]), with_contents: false }, Origin::Human).unwrap();
+    for (p, (d0, r0)) in pages.iter().zip(before) {
+        let (d1, r1) = rel(&ed, p);
+        assert!((d1 - d0).len() < 1e-6 && (r1 - r0).abs() < 1e-9, "{p}: {d0:?} -> {d1:?}");
+    }
+    // A page step nearly fills the screen, like a frame step.
+    let e = ed.doc.get(&pages[0]).unwrap();
+    assert_eq!(e.fit_margin(), 0.04);
 }
