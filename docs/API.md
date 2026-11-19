@@ -235,7 +235,7 @@ Errors are JSON-RPC errors whose `data` explains how to fix the problem:
 | -32700 | `parse_error` | The line is not valid JSON. |
 | -32600 | `invalid_request` | The `method` is missing, or the message was a batch array. Send one request per line. |
 | -32601 | `method_not_found` | `valid_values` lists the methods. The hint tells you when you sent a command op as a method name. |
-| -32602 | `invalid_params` | Bad params or a bad command. The message contains the serde error and the hint has an example. |
+| -32602 | `invalid_params` | Bad params or a bad command. The message contains the serde error and the hint has an example. A field the method, command, view command, query or a nested object doesn't take is refused, never ignored: the message names it and the command, `data.field` holds it and `valid_values` lists the fields accepted there. |
 | -32001 | `unauthenticated` | Call `hello` with the token from the discovery file. |
 | -32000 | `not_found` | Unknown element id. `valid_values` holds the nearest ids. |
 | -32000 | `busy` | The person was mid-gesture for more than 5 s, or another client has a transaction open. Retry. |

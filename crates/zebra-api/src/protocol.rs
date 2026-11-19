@@ -218,6 +218,18 @@ fn obj(params: &Value) -> Value {
 /// happens here, off the UI thread.
 pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
     let p = obj(params);
+    if let (Some(o), Some(accepted)) = (p.as_object(), crate::strict::method_params(method)) {
+        // `apply`/`view`/`query` also take the command itself, flat; its
+        // fields are checked with the command below.
+        let flat = match method {
+            "apply" | "view" => !o.contains_key("command") && o.contains_key("op"),
+            "query" => !o.contains_key("query") && o.contains_key("q"),
+            _ => false,
+        };
+        if !flat {
+            crate::strict::check_keys(&format!("method `{method}`"), o, accepted)?;
+        }
+    }
     let call = match method {
         "hello" => {
             #[derive(Deserialize)]
@@ -258,7 +270,15 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
         "apply" => {
             let cmd_v = match p.get("command") {
                 Some(c) => c.clone(),
-                None if p.get("op").is_some() => p.clone(),
+                None if p.get("op").is_some() => {
+                    // Flat form: the method's own params sit beside the op.
+                    let mut c = p.clone();
+                    if let Some(o) = c.as_object_mut() {
+                        o.remove("label");
+                        o.remove("if_revision");
+                    }
+                    c
+                }
                 None => {
                     return Err(RpcError::invalid("`apply` needs {\"command\": {\"op\": ...}}")
                         .hint(r#"example: {"command":{"op":"add_text","text":"Hello","x":0,"y":0,"style":"title"}}; for several commands use `batch`"#));
@@ -302,6 +322,7 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
                 None if p.get("op").is_some() => p.clone(),
                 None => return Err(RpcError::invalid("`view` needs {\"command\": {\"op\": ...}}").hint(r#"example: {"command":{"op":"zoom_to","id":"f1"}}"#)),
             };
+            crate::strict::check_rpc(crate::catalogue::Kind::View, &v)?;
             Call::View(serde_json::from_value(v).map_err(|e| {
                 RpcError::invalid(format!("bad view command: {e}"))
                     .hint("call `commands` for every view op with an example")
@@ -315,6 +336,7 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
                 None if p.get("q").is_some() => p.clone(),
                 None => return Err(RpcError::invalid("`query` needs {\"query\": {\"q\": ...}}").hint(r#"example: {"query":{"q":"elements","kind":"frame"}}"#)),
             };
+            crate::strict::check_rpc(crate::catalogue::Kind::Query, &v)?;
             Call::Query(serde_json::from_value(v).map_err(|e| {
                 RpcError::invalid(format!("bad query: {e}"))
                     .hint("call `commands` for every query with an example")
@@ -342,10 +364,15 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
             let num = |v: &Value, k: &str| v.get(k).and_then(|n| n.as_f64());
             let at = match p.get("at") {
                 None | Some(Value::Null) => None,
-                Some(v) => match (num(v, "x"), num(v, "y")) {
-                    (Some(x), Some(y)) => Some((x, y)),
-                    _ => return Err(RpcError::invalid("`at` needs {\"x\": number, \"y\": number}").hint(EX)),
-                },
+                Some(v) => {
+                    if let Some(o) = v.as_object() {
+                        crate::strict::check_keys("`at` of method `copy_to`", o, &["x", "y"])?;
+                    }
+                    match (num(v, "x"), num(v, "y")) {
+                        (Some(x), Some(y)) => Some((x, y)),
+                        _ => return Err(RpcError::invalid("`at` needs {\"x\": number, \"y\": number}").hint(EX)),
+                    }
+                }
             };
             let offset = (p.get("dx").and_then(|n| n.as_f64()).unwrap_or(0.0), p.get("dy").and_then(|n| n.as_f64()).unwrap_or(0.0));
             Call::CopyTo { ids, to, at, offset }
@@ -457,6 +484,7 @@ pub fn parse_command(mut v: Value) -> Result<Command, RpcError> {
         }
     }
     let op = o.get("op").and_then(|x| x.as_str()).map(str::to_string);
+    crate::strict::check_rpc(crate::catalogue::Kind::Command, &v)?;
     serde_json::from_value::<Command>(v).map_err(|e| {
         let ops = crate::catalogue::op_names(crate::catalogue::Kind::Command);
         let mut err = RpcError::invalid(format!("bad command: {e}"));
@@ -525,6 +553,23 @@ pub fn parse_target(t: &Value) -> Result<CaptureTarget, RpcError> {
         },
         Value::Number(n) => Ok(CaptureTarget::Step { index: n.as_u64().unwrap_or(0) as usize, build: None }),
         Value::Object(o) => {
+            let accepted: &[&str] = match o.get("kind").and_then(|k| k.as_str()) {
+                Some("step") => &["kind", "index", "build"],
+                Some("element") => &["kind", "id"],
+                Some("camera") => &["kind", "camera"],
+                Some(_) => &["kind"],
+                None if o.contains_key("step") => &["step", "build"],
+                None if o.contains_key("element") => &["element"],
+                None if o.contains_key("id") => &["id"],
+                None if o.contains_key("camera") => &["camera"],
+                None => &[],
+            };
+            if !accepted.is_empty() {
+                crate::strict::check_keys("the capture target", o, accepted).map_err(|e| e.hint(TARGET_HELP))?;
+            }
+            if let Some(c) = o.get("camera").and_then(|c| c.as_object()) {
+                crate::strict::check_keys("the capture camera", c, &["cx", "cy", "zoom", "rotation"]).map_err(|e| e.hint(TARGET_HELP))?;
+            }
             if o.contains_key("kind") {
                 return serde_json::from_value(t.clone()).map_err(|e| bad(format!("bad capture target: {e}")));
             }
@@ -555,6 +600,12 @@ pub fn parse_until(u: &Value) -> Result<WaitUntil, RpcError> {
     match u {
         Value::String(s) if s == "idle" => Ok(WaitUntil::Idle),
         Value::Object(o) => {
+            if o.len() > 1 {
+                return Err(bad().hint(r#"`until` takes one condition: "idle", {"step":2}, {"revision":17} or {"mode":"present"}"#));
+            }
+            if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "idle" | "step" | "revision" | "mode")) {
+                return Err(crate::strict::unknown_error("`until` of method `wait`", k, vec!["idle".into(), "mode".into(), "revision".into(), "step".into()]));
+            }
             if o.get("idle").is_some() {
                 return Ok(WaitUntil::Idle);
             }

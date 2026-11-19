@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::editor::Editor;
 use crate::geom::{Rect, Vec2};
-use crate::model::{Document, Element, ElementId, ElementKind};
+use crate::model::{Document, Element, ElementId, ElementKind, FRAME_EDGE_TOLERANCE, frame_holds};
 
 /// How far an element may draw past its box (strokes, arrowheads, a
 /// connector's label), in world units. The renderer culls with it.
@@ -424,12 +424,15 @@ impl SpatialIndex {
         hs.into_iter().map(|h| self.slot(h)).filter(move |s| s.rank != NOT_DRAWN && s.vbounds.intersects(&q))
     }
 
-    /// Smallest frame (then lowest in the draw order) that contains `b`,
-    /// skipping `id` itself. Same rule as [`Document::parent_frame`].
+    /// Smallest frame (then lowest in the draw order) that holds `b`
+    /// ([`frame_holds`]), skipping `id` itself. Same answer as
+    /// [`Document::parent_frame`].
     fn parent_of(&self, id: &str, b: &Rect) -> Option<&Slot> {
-        // A frame holding `b` is at least as wide and as tall.
-        self.frames_near(b, b.width().max(b.height()))
-            .filter(|f| f.id != id && f.vbounds.contains_rect(b) && f.vbounds.area() > b.area())
+        // A frame holding `b` is at least as wide and as tall, less the
+        // edge tolerance (a few parts in 10^9 of its size).
+        let min = b.width().max(b.height()) * (1.0 - 1e3 * FRAME_EDGE_TOLERANCE);
+        self.frames_near(b, min)
+            .filter(|f| f.id != id && frame_holds(&f.vbounds, b))
             .min_by(|x, y| x.vbounds.area().total_cmp(&y.vbounds.area()).then(x.rank.cmp(&y.rank)))
     }
 
@@ -475,10 +478,9 @@ impl Editor {
         let Some(ix) = self.spatial() else { return self.doc.frame_contents(frame_id) };
         let Some(f) = self.doc.elements.get(frame_id) else { return vec![] };
         let fb = f.visual_bounds();
-        let fa = fb.area();
         let mut v: Vec<(u64, &str)> = ix
             .near(&fb)
-            .filter(|s| s.id != f.id && s.bounds.area() < fa && fb.contains_rect(&s.bounds))
+            .filter(|s| s.id != f.id && frame_holds(&fb, &s.bounds))
             .map(|s| (s.rank, s.id.as_str()))
             .collect();
         v.sort_unstable_by_key(|x| x.0);
@@ -513,7 +515,7 @@ impl Editor {
             .values()
             .filter_map(|e| {
                 let b = e.bounds();
-                let f = frames.iter().find(|(a, _, f, vb)| f.id != e.id && vb.contains_rect(&b) && *a > b.area())?;
+                let f = frames.iter().find(|(_, _, f, vb)| f.id != e.id && frame_holds(vb, &b))?;
                 Some((e.id.as_str(), f.2.id.as_str()))
             })
             .collect()
@@ -558,13 +560,13 @@ impl Editor {
     }
 
     /// Where a new frame `b` goes in the draw order: behind the lowest
-    /// element it encloses, else on top. Same rule as before the index.
+    /// element it will hold ([`frame_holds`]), else on top.
     pub(crate) fn frame_insert_pos(&self, b: &Rect) -> usize {
         let len = self.doc.z_order.len();
         let Some(ix) = self.spatial() else {
-            return self.doc.z_order.iter().position(|o| self.doc.get(o).is_some_and(|x| b.contains_rect(&x.bounds()) && x.bounds().area() < b.area())).unwrap_or(len);
+            return self.doc.z_order.iter().position(|o| self.doc.get(o).is_some_and(|x| frame_holds(b, &x.bounds()))).unwrap_or(len);
         };
-        let Some(lowest) = ix.near(b).filter(|s| b.contains_rect(&s.bounds) && s.bounds.area() < b.area()).map(|s| s.rank).min() else {
+        let Some(lowest) = ix.near(b).filter(|s| frame_holds(b, &s.bounds)).map(|s| s.rank).min() else {
             return len;
         };
         // z_order rises in rank: binary search for it.
