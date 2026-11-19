@@ -178,6 +178,31 @@ fn old_big_pictures_still_decide() {
 }
 
 #[test]
+fn web_export_pictures_are_big_and_the_open_document_keeps_its_preview() {
+    let r = Renderer::new();
+    let ed = deck_with(&r, 512);
+    assert!(zebra_render::pages::export_pictures(&r, &ed.doc).is_none(), "no raster: nothing to do");
+    let asked = Arc::new(Mutex::new(vec![]));
+    r.set_page_raster(Some(green(asked.clone())));
+    let before = ed.doc.clone();
+    let out = zebra_render::pages::export_pictures(&r, &ed.doc).expect("pictures made");
+    let page = |d: &Document| {
+        let e = d.elements.values().find(|e| matches!(&e.kind, ElementKind::Image(i) if i.page.is_some())).unwrap();
+        let ElementKind::Image(i) = &e.kind else { unreachable!() };
+        d.assets[&i.asset].clone()
+    };
+    let big = page(&out);
+    assert_eq!((big.width, big.height), (EXPORT_PAGE_PX, EXPORT_PAGE_PX / 2));
+    let px = image::load_from_memory(&big.bytes).unwrap().to_rgba8();
+    assert_eq!(px.get_pixel(10, 10).0, [0, 200, 0, 255], "drawn from the PDF");
+    assert_eq!(ed.doc, before, "the open document is unchanged");
+    assert_eq!(page(&ed.doc).width, 512);
+    // Pictures that big already: nothing to do.
+    let old = deck_with(&r, 2048);
+    assert!(zebra_render::pages::export_pictures(&r, &old.doc).is_none());
+}
+
+#[test]
 fn tiles_are_made_on_the_workers_and_the_half_zoom_ones_fill_in() {
     let r = Renderer::new();
     let ed = deck(&r);

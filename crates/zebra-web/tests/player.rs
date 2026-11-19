@@ -210,4 +210,20 @@ fn an_imported_pdf_page_plays_from_its_picture_without_the_pdf() {
     p.resize(640.0, 400.0, 1.0);
     let mut t = 0.0;
     settle(&mut p, &mut t);
+    // Where the app can draw PDF pages, the page gets a sharp picture made
+    // for the export (the document keeps a small preview); the open
+    // document is left as it is.
+    r.set_page_raster(Some(std::sync::Arc::new(|q: &zebra_render::pages::PageRequest| Some([0u8, 90, 200, 255].repeat((q.rect.2 * q.rect.3) as usize)))));
+    let before = ed.doc.clone();
+    let page = export::build(&r, &ed, &Labels::default(), export::INLINE_LIMIT).unwrap();
+    let html = &page.html;
+    let start = html.find("id=\"zw-manifest\">").unwrap() + "id=\"zw-manifest\">".len();
+    let end = start + html[start..].find("</script>").unwrap();
+    let m: serde_json::Value = serde_json::from_str(&html[start..end]).unwrap();
+    let pics: Vec<(&str, u64, u64)> = m["assets"].as_array().unwrap().iter().filter(|a| a["kind"] == "image").map(|a| (a["key"].as_str().unwrap(), a["w"].as_u64().unwrap(), a["h"].as_u64().unwrap())).collect();
+    assert_eq!(pics.len(), 1, "{pics:?}");
+    assert_eq!((pics[0].1, pics[0].2), (2048, 1280));
+    assert_ne!(pics[0].0, pic_key);
+    assert_eq!(ed.doc, before);
+    assert_eq!(ed.doc.assets[&pic_key].width, 64);
 }

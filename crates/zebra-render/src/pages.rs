@@ -57,3 +57,79 @@ pub struct PageRequest {
 /// bytes, or None when the page can't be drawn.
 pub type PageRaster = Arc<dyn Fn(&PageRequest) -> Option<Vec<u8>> + Send + Sync>;
 
+/// For a web page export (the player has no PDF engine and draws each
+/// page's picture): a copy of `doc` whose PDF pages show a picture
+/// [`EXPORT_PAGE_PX`] on its long side drawn now from the PDF, in place
+/// of the small preview kept in the document. None when nothing changes
+/// (no PDF pages, no page raster, or pictures that big already, as in
+/// documents imported before previews were small). The open document is
+/// left as it is.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn export_pictures(r: &crate::Renderer, doc: &zebra_core::Document) -> Option<zebra_core::Document> {
+    use std::collections::BTreeMap;
+    use zebra_core::ElementKind;
+    let raster = r.page_raster()?;
+    // Each page once, however often it is on the canvas: (pdf, index) ->
+    // pixel size.
+    let mut wanted: BTreeMap<(String, u32), (u32, u32)> = BTreeMap::new();
+    for e in doc.elements.values() {
+        let ElementKind::Image(img) = &e.kind else { continue };
+        let (Some(p), Some(pic)) = (&img.page, doc.assets.get(&img.asset)) else { continue };
+        if pic.width.max(pic.height) >= EXPORT_PAGE_PX || pic.width == 0 || pic.height == 0 || !doc.assets.contains_key(&p.pdf) {
+            continue;
+        }
+        let k = EXPORT_PAGE_PX as f64 / pic.width.max(pic.height) as f64;
+        let size = (((pic.width as f64 * k).round() as u32).max(1), ((pic.height as f64 * k).round() as u32).max(1));
+        wanted.insert((p.pdf.clone(), p.index), size);
+    }
+    if wanted.is_empty() {
+        return None;
+    }
+    // Drawn one at a time (PDFium is single-threaded), encoded on two
+    // workers meanwhile.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<((String, u32), u32, u32, Vec<u8>)>(2);
+    let rx = std::sync::Mutex::new(rx);
+    let made = std::sync::Mutex::new(BTreeMap::new());
+    std::thread::scope(|s| {
+        for _ in 0..2 {
+            s.spawn(|| loop {
+                let Ok((page, w, h, px)) = rx.lock().unwrap_or_else(|e| e.into_inner()).recv() else { return };
+                let Some(rgba) = image::RgbaImage::from_raw(w, h, px) else { continue };
+                let rgb = image::DynamicImage::ImageRgba8(rgba).to_rgb8();
+                let mut png = vec![];
+                if rgb.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).is_ok() {
+                    png.shrink_to_fit();
+                    made.lock().unwrap_or_else(|e| e.into_inner()).insert(page, png);
+                }
+            });
+        }
+        for ((pdf, index), (w, h)) in &wanted {
+            let req = PageRequest { pdf: pdf.clone(), bytes: doc.assets[pdf].bytes.clone(), index: *index, page_px: (*w, *h), rect: (0, 0, *w, *h) };
+            // A page that can't be drawn keeps its preview.
+            let Some(px) = raster(&req).filter(|px| px.len() == (*w * *h * 4) as usize) else { continue };
+            if tx.send(((pdf.clone(), *index), *w, *h, px)).is_err() {
+                break;
+            }
+        }
+        drop(tx);
+    });
+    let made = made.into_inner().unwrap_or_else(|e| e.into_inner());
+    if made.is_empty() {
+        return None;
+    }
+    let mut out = doc.clone();
+    let mut keys = BTreeMap::new();
+    for (page, png) in made {
+        let Ok((key, asset)) = zebra_core::import::asset_from(png) else { continue };
+        out.assets.insert(key.clone(), asset);
+        keys.insert(page, key);
+    }
+    for e in out.elements.values_mut() {
+        let ElementKind::Image(img) = &mut e.kind else { continue };
+        let Some(p) = &img.page else { continue };
+        if let Some(k) = keys.get(&(p.pdf.clone(), p.index)) {
+            img.asset = k.clone();
+        }
+    }
+    Some(out)
+}
