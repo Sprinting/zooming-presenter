@@ -94,9 +94,15 @@ fn line(x1: f64, y1: f64, x2: f64, y2: f64, arrow: bool) -> Piece {
     turned(p, dy.atan2(dx).to_degrees())
 }
 
+/// Boxes narrower than this (in diagram widths) get the short "Add text".
+const NARROW: f64 = 0.3;
+
 /// Placeholder text fitted into a w x h box centred on (x, y). `key` is a
 /// [`crate::content`] key, never English: the app fills in the words.
 fn ph(style: TextStyle, key: &str, x: f64, y: f64, w: f64, h: f64, on: Option<&str>) -> Piece {
+    // The double-click hint is too long for a narrow box: it would shrink
+    // to a size nobody can read, so narrow boxes say "Add text".
+    let key = if key == "content-add-text" && w < NARROW { "content-add-text-short" } else { key };
     Piece::Text { style, text: key.into(), x, y, w, h, bullets: false, align: Align::Center, ph: true, on: on.map(String::from) }
 }
 
