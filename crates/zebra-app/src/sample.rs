@@ -524,6 +524,33 @@ mod tests {
         ed.doc
     }
 
+    /// The sample's words live in the .ftl: the data file only has keys.
+    #[test]
+    fn the_data_file_has_keys_not_words() {
+        fn walk(v: &serde_json::Value, bad: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Object(o) => {
+                    for (k, v) in o {
+                        match v {
+                            serde_json::Value::String(s) if ["text", "title", "name", "notes", "label", "alt"].contains(&k.as_str()) => {
+                                if !(s.starts_with("sample-") && crate::i18n::LOADER.has(s)) {
+                                    bad.push(format!("{k}: {s:?}"));
+                                }
+                            }
+                            v => walk(v, bad),
+                        }
+                    }
+                }
+                serde_json::Value::Array(a) => a.iter().for_each(|v| walk(v, bad)),
+                _ => {}
+            }
+        }
+        let v: serde_json::Value = serde_json::from_str(include_str!("../data/sample.json")).unwrap();
+        let mut bad = vec![];
+        walk(&v["commands"], &mut bad);
+        assert!(bad.is_empty(), "words in data/sample.json: use sample-* keys from zebra-app.ftl\n{}", bad.join("\n"));
+    }
+
     #[test]
     fn the_data_file_builds_the_same_sample() {
         let (a, b) = (build_old(), build_with(Box::new(zebra_core::editor::EstimateMeasure)));

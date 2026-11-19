@@ -9,8 +9,9 @@
 //! 2. Anywhere in the file, a literal that reads like an English phrase
 //!    ("Two words", capitalised), outside log lines and error plumbing.
 //!
-//! Files that hold sample content (the sample deck and media demo, which
-//! will move to data files) are listed in `SAMPLE_CONTENT`.
+//! The sample deck's words are `sample-*` keys in `data/sample.json`
+//! (checked in sample.rs); `sample.rs` itself only holds the debug demos
+//! for the screen atlas, listed in `SAMPLE_CONTENT`.
 
 use std::path::Path;
 
@@ -43,6 +44,12 @@ const UI_CALLS: &[&str] = &[
     "with_shortcut",
     "with_key",
     "hint_text",
+    "text",
+    "section",
+    "row",
+    "selected_text",
+    "set_title",
+    "set_file_name",
 ];
 
 /// Lines that are for the terminal or for code, not for people.
@@ -59,6 +66,9 @@ const SAMPLE_CONTENT: &[&str] = &["sample.rs"];
 const NAMES: &[&str] = &["Zebra", "JetBrains Mono", "The Inter Project Authors", "The Lora Project Authors", "The Caveat Project Authors", "The JetBrains Mono Project Authors", "Lucide Contributors"];
 
 const KEY_SYMBOLS: &[char] = &['⌘', '⇧', '⌥', '⌃', '⌫', '↵', '⇥'];
+/// Units and signs some languages write differently ("50 %"), and the
+/// close glyphs: from the ftl too.
+const UNIT_SYMBOLS: &[char] = &['%', '°', '×', '✕'];
 
 struct Lit {
     start: usize,
@@ -183,7 +193,12 @@ fn without_placeholders(s: &str) -> String {
 }
 
 fn shown_text(s: &str) -> bool {
-    without_placeholders(s).chars().any(|c| c.is_alphabetic() || KEY_SYMBOLS.contains(&c))
+    let bare = without_placeholders(s);
+    // A file extension after a name ("{}.zebra") is not a word.
+    if bare.strip_prefix('.').is_some_and(|e| !e.is_empty() && e.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())) {
+        return false;
+    }
+    bare.chars().any(|c| c.is_alphabetic() || KEY_SYMBOLS.contains(&c) || UNIT_SYMBOLS.contains(&c))
 }
 
 fn english_phrase(s: &str) -> bool {
@@ -264,4 +279,10 @@ fn the_check_catches_what_it_should() {
     assert!(!bad(r#"_ if e.message.contains("No such file") => x,"#));
     assert!(!bad(r#"d.add_filter(crate::t!("f"), &["zebra"])"#));
     assert!(bad(r#"d.add_filter("Video", &["mp4"])"#));
+    assert!(bad(r#"w::menu_check(ui, on, "50%", None)"#), "units");
+    assert!(bad(r#"ui.small_button("×")"#), "close glyphs");
+    assert!(bad(r#"painter.text(m, egui::Align2::CENTER_CENTER, "B", font, c);"#), "drawn words");
+    assert!(bad(r#"egui::Window::new("x").set_title("Export")"#));
+    assert!(!bad(r#"ui.small_button(crate::t!("media-clear-button"))"#));
+    assert!(!bad(r#"d.set_file_name(format!("{}.zebra", name))"#), "file extensions");
 }
