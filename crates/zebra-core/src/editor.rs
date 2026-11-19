@@ -2047,7 +2047,10 @@ impl Editor {
             let mut keys = vec![];
             for (bytes, ext) in files {
                 let key = content_key(&bytes);
-                self.doc.assets.entry(key.clone()).or_insert(Asset { ext, bytes: bytes.into(), width: 0, height: 0 });
+                if !self.doc.assets.contains_key(&key) {
+                    let bytes = crate::media::spill(bytes, &key);
+                    self.doc.assets.insert(key.clone(), Asset { ext, bytes, width: 0, height: 0 });
+                }
                 keys.push(key);
             }
             t.fonts.insert(fam, keys);
@@ -2341,7 +2344,7 @@ impl Editor {
             let key = content_key(&map);
             if !self.doc.assets.contains_key(&key) {
                 let bytes: AssetBytes = if want == MediaKind::Image {
-                    map.to_vec().into()
+                    crate::media::spill(map.to_vec(), &key)
                 } else {
                     let m = crate::media::import_file(p, &key, &info.ext).map_err(ioe)?;
                     let len = m.len();
@@ -2360,10 +2363,10 @@ impl Editor {
         let info = crate::media::info(&bytes)?;
         check(&info)?;
         let key = content_key(&bytes);
-        self.doc
-            .assets
-            .entry(key.clone())
-            .or_insert(Asset { ext: info.ext.clone(), bytes: bytes.into(), width: info.width, height: info.height });
+        if !self.doc.assets.contains_key(&key) {
+            let bytes = crate::media::spill(bytes, &key);
+            self.doc.assets.insert(key.clone(), Asset { ext: info.ext.clone(), bytes, width: info.width, height: info.height });
+        }
         Ok((key, info))
     }
 
@@ -2371,7 +2374,10 @@ impl Editor {
     pub fn add_svg_asset(&mut self, bytes: Vec<u8>) -> String {
         let (w, h) = crate::symbols::svg_pixels(&bytes);
         let key = content_key(&bytes);
-        self.doc.assets.entry(key.clone()).or_insert(Asset { ext: "svg".into(), bytes: bytes.into(), width: w, height: h });
+        if !self.doc.assets.contains_key(&key) {
+            let bytes = crate::media::spill(bytes, &key);
+            self.doc.assets.insert(key.clone(), Asset { ext: "svg".into(), bytes, width: w, height: h });
+        }
         key
     }
 
@@ -2379,7 +2385,10 @@ impl Editor {
     pub fn add_asset(&mut self, bytes: Vec<u8>) -> ZResult<String> {
         let (ext, w, h) = image_info(&bytes)?;
         let key = content_key(&bytes);
-        self.doc.assets.entry(key.clone()).or_insert(Asset { ext, bytes: bytes.into(), width: w, height: h });
+        if !self.doc.assets.contains_key(&key) {
+            let bytes = crate::media::spill(bytes, &key);
+            self.doc.assets.insert(key.clone(), Asset { ext, bytes, width: w, height: h });
+        }
         Ok(key)
     }
 
