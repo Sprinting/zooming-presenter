@@ -3,7 +3,7 @@
 use egui::{Event, Key, Modifiers, PointerButton, Pos2};
 use egui_kittest::Harness;
 use zebra_app::{AppOptions, ZebraApp};
-use zebra_core::{Command, ElementKind, Origin, TextData, Vec2};
+use zebra_core::{Command, ElementKind, ListKind, Origin, ParaFormat, TextData, Vec2};
 
 const H: Origin = Origin::Human;
 
@@ -255,4 +255,84 @@ fn the_width_handle_works_while_editing_a_text() {
     h.run_steps(3);
     let (_, t2) = text(&h, &id);
     assert!(t2.fixed_width && t2.text.ends_with('!'));
+}
+
+/// A text with paragraphs `paras`, being edited, the caret at the end.
+fn editing(h: &mut Harness<'static, ZebraApp>, body: &str, paras: Vec<ParaFormat>) -> String {
+    let id = text_box(h, 1.0, 0.0);
+    let patch = zebra_core::ElementPatch { text: Some(body.into()), paras: Some(paras), ..Default::default() };
+    h.state_mut().editor.apply(Command::Update { id: id.clone().into(), patch }, H).unwrap();
+    zebra_app::canvas::begin_edit_existing(h.state_mut(), id.clone().into());
+    h.run_steps(3);
+    id
+}
+
+fn key(h: &mut Harness<'static, ZebraApp>, k: Key) {
+    h.key_press(k);
+    h.run_steps(2);
+}
+
+fn para(h: &Harness<'static, ZebraApp>, n: usize) -> (ListKind, u8) {
+    let t = h.state().canvas.text.as_ref().unwrap();
+    let mut r = t.rich.clone();
+    zebra_core::rich::edit_text(&mut r, &t.buf);
+    let (l, i, _) = zebra_core::rich::para(&r, n);
+    (l, i)
+}
+
+fn buf(h: &Harness<'static, ZebraApp>) -> String {
+    h.state().canvas.text.as_ref().unwrap().buf.clone()
+}
+
+/// Backspace at the start of a list item drops the marker first, then
+/// outdents a level at a time, and only at level 0 joins the paragraph to
+/// the one before. Committed, the whole edit is one undo step.
+#[test]
+fn backspace_at_the_start_of_a_list_item_outdents() {
+    let mut h = harness();
+    let id = editing(&mut h, "first\nsecond", vec![ParaFormat::default(), ParaFormat { indent: 1, list: Some(ListKind::Bullet), align: None }]);
+    // To the start of "second".
+    key(&mut h, Key::Home);
+    assert_eq!(para(&h, 1), (ListKind::Bullet, 1));
+    key(&mut h, Key::Backspace);
+    assert_eq!(buf(&h), "first\nsecond", "the text is kept");
+    assert_eq!(para(&h, 1), (ListKind::None, 1), "the marker goes first");
+    key(&mut h, Key::Backspace);
+    assert_eq!(para(&h, 1), (ListKind::None, 0), "then one level out");
+    assert_eq!(buf(&h), "first\nsecond");
+    key(&mut h, Key::Backspace);
+    assert_eq!(buf(&h), "firstsecond", "at level 0 it joins");
+    let undo = h.state().editor.history().len();
+    key(&mut h, Key::Escape);
+    assert_eq!(text(&h, &id).1.text, "firstsecond");
+    assert_eq!(h.state().editor.history().len(), undo + 1, "one undo step");
+}
+
+/// Backspace in the middle of an indented paragraph deletes a letter as
+/// usual; Shift-Tab outdents.
+#[test]
+fn backspace_mid_paragraph_deletes_and_shift_tab_outdents() {
+    let mut h = harness();
+    editing(&mut h, "first\nsecond", vec![ParaFormat::default(), ParaFormat { indent: 2, list: None, align: None }]);
+    key(&mut h, Key::Backspace);
+    assert_eq!(buf(&h), "first\nsecon");
+    assert_eq!(para(&h, 1), (ListKind::None, 2));
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Tab);
+    h.run_steps(2);
+    assert_eq!(para(&h, 1), (ListKind::None, 1));
+}
+
+/// Tab in the middle of a plain paragraph: zebra-render (parley) has no
+/// tab stops, so a tab character would lay out differently on the canvas
+/// than in the editor; Tab indents the paragraph, as before.
+#[test]
+fn tab_mid_paragraph_indents() {
+    let mut h = harness();
+    editing(&mut h, "first\nsecond", vec![]);
+    key(&mut h, Key::ArrowLeft);
+    key(&mut h, Key::ArrowLeft);
+    key(&mut h, Key::Tab);
+    assert_eq!(buf(&h), "first\nsecond", "no tab character");
+    assert_eq!(para(&h, 1), (ListKind::None, 1));
+    assert_eq!(para(&h, 0), (ListKind::None, 0));
 }

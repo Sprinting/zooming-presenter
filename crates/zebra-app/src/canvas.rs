@@ -1723,11 +1723,28 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         Color(String),
         List(ListKind),
         Indent(i32),
+        /// Backspace at the start of paragraph `n`, a list item or
+        /// indented: drop its marker, else outdent it one level.
+        Outdent(usize),
         Link,
     }
     let mut fx: Vec<Fx> = vec![];
+    // The caret, with nothing selected, at the very start of a list item
+    // or an indented paragraph: that paragraph's number.
+    let caret = egui::TextEdit::load_state(ctx, edit_id).and_then(|s| s.cursor.char_range()).filter(|c| c.primary.index == c.secondary.index).map(|c| usize::from(c.primary.index));
+    let outdent_at = caret
+        .filter(|&c| c == 0 || t.buf.chars().nth(c - 1) == Some('\n'))
+        .map(|c| rich::paragraph_of(&t.rich, c))
+        .filter(|&n| matches!(rich::para(&t.rich, n), (l, i, _) if l != ListKind::None || i > 0));
     if focused {
         ctx.input_mut(|i| {
+            // Backspace there outdents, as in TextEdit and Pages, instead of
+            // joining the paragraph to the one before.
+            if let Some(n) = outdent_at {
+                if i.consume_key(egui::Modifiers::NONE, Key::Backspace) {
+                    fx.push(Fx::Outdent(n));
+                }
+            }
             if i.consume_key(egui::Modifiers::COMMAND, Key::B) {
                 fx.push(Fx::Bold);
             }
@@ -2111,6 +2128,14 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
             }
             Fx::Indent(d) => {
                 rich::format_paragraphs(&mut t.rich, pa, pb, None, None, d, None);
+                None
+            }
+            Fx::Outdent(n) => {
+                if rich::para(&t.rich, n).0 != ListKind::None {
+                    rich::format_paragraphs(&mut t.rich, n, n, Some(ListKind::None), None, 0, None);
+                } else {
+                    rich::format_paragraphs(&mut t.rich, n, n, None, None, -1, None);
+                }
                 None
             }
         };
