@@ -88,6 +88,8 @@ toolbar-view-agent-activity = Agent Activity
 toolbar-view-edit-path = Edit Path
 toolbar-zoom = Zoom
 toolbar-zoom-level = Zoom { $level }
+# The zoom level: "100%".
+toolbar-zoom-percent = { $percent }%
 toolbar-zoom-to-fit = Zoom to Fit
 toolbar-zoom-to-selection = Zoom to Selection
 toolbar-zoom-in = Zoom In
@@ -657,6 +659,8 @@ widgets-colour-well = Colour
 # Units after numbers in number fields.
 widgets-unit-pt = pt
 widgets-unit-seconds = s
+widgets-unit-percent = %
+widgets-unit-degrees = °
 
 ## ---- end widgets.rs ----
 
@@ -875,6 +879,8 @@ canvas-agent-editing-here = { $name } is editing here
 canvas-locked = Locked
 # $modifier is the modifier key glyph (⇧).
 canvas-rotate-hint = Rotate  ·  { $modifier } snaps to 15°
+# Beside the rotate handle while turning: "45°".
+canvas-rotate-angle = { $degrees }°
 canvas-menu-add-text-here = Add Text Here
 canvas-menu-add-text = Add Text
 canvas-menu-edit-text = Edit Text
@@ -1000,6 +1006,8 @@ media-trim-start = Start
 media-trim-end = End
 media-seconds-unit = s
 media-trim-clear-end-tip = Play to the end
+# Small button that clears a trim end or removes the poster.
+media-clear-button = ×
 media-poster = Poster
 media-poster-use-frame = Use This Frame
 media-poster-use-frame-tip = Show this frame until the video plays

@@ -198,7 +198,8 @@ fn view_item(app: &mut ZebraApp, ui: &mut Ui) {
 /// Zoom: a small pop-up showing the zoom level, labelled &crate::t!("toolbar-zoom").
 fn zoom_item(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let zoom = app.editor.view.camera.zoom;
-    let txt = if zoom >= 100.0 || zoom < 0.01 { format!("{:.0e}%", zoom * 100.0) } else { format!("{:.0}%", zoom * 100.0) };
+    let pct = if zoom >= 100.0 || zoom < 0.01 { format!("{:.0e}", zoom * 100.0) } else { format!("{:.0}", zoom * 100.0) };
+    let txt = crate::t!("toolbar-zoom-percent", percent = pct);
     let (rect, resp) = ui.allocate_exact_size(EVec2::new(64.0, 44.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, crate::t!("toolbar-zoom-level", level = txt.as_str())));
     let bez = Rect::from_center_size(Pos2::new(rect.center().x, rect.top() + 14.0), EVec2::new(58.0, 21.0));
@@ -219,8 +220,9 @@ fn zoom_item(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         }
         w::menu_separator(ui);
         let reset_key = Action::ZoomReset.shortcut_text();
-        for (z, l) in [(0.5, "50%"), (1.0, "100%"), (2.0, "200%")] {
-            if w::menu_check(ui, (zoom - z).abs() < 0.005, l, if z == 1.0 { reset_key.as_deref() } else { None }).clicked() {
+        for z in [0.5, 1.0, 2.0] {
+            let l = crate::t!("toolbar-zoom-percent", percent = format!("{:.0}", z * 100.0));
+            if w::menu_check(ui, (zoom - z).abs() < 0.005, &l, if z == 1.0 { reset_key.as_deref() } else { None }).clicked() {
                 let mut c = app.editor.view.target_camera();
                 c.zoom = z;
                 app.view_cmd(zebra_core::ViewCommand::SetCamera { camera: c, animate: true });

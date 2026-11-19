@@ -987,7 +987,7 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
             if r.changed() && e > v.start {
                 patch = Some(ElementPatch { end: Some(e), ..Default::default() });
             }
-            if v.end.is_some() && ui.small_button("×").on_hover_text(crate::t!("media-trim-clear-end-tip")).clicked() {
+            if v.end.is_some() && ui.small_button(crate::t!("media-clear-button")).on_hover_text(crate::t!("media-trim-clear-end-tip")).clicked() {
                 patch = Some(ElementPatch { end: Some(-1.0), ..Default::default() });
             }
         });
@@ -1007,7 +1007,7 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
                 app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: Some(p.to_string_lossy().to_string()) });
             }
         }
-        if v.poster.is_some() && ui.small_button("×").on_hover_text(crate::t!("media-poster-remove-tip")).clicked() {
+        if v.poster.is_some() && ui.small_button(crate::t!("media-clear-button")).on_hover_text(crate::t!("media-poster-remove-tip")).clicked() {
             app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: None });
         }
     });

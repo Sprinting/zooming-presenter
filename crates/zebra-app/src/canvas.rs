@@ -2371,7 +2371,7 @@ fn draw_transform_tool(app: &ZebraApp, painter: &Painter, sb: &SelBox) {
         Gesture::Rotate { base_rot, applied, .. } => {
             let a = (base_rot + applied).rem_euclid(360.0);
             let a = if a > 180.0 { a - 360.0 } else { a };
-            Some(format!("{:.0}°", a + 0.0))
+            Some(crate::t!("canvas-rotate-angle", degrees = format!("{:.0}", a + 0.0)))
         }
         Gesture::None => {
             let hover = painter.ctx().pointer_hover_pos();

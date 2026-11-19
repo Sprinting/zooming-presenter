@@ -660,11 +660,13 @@ impl Num {
 }
 
 /// The unit after a number, translated: " pt" and " s" are words in some
-/// languages; symbols such as "°" and "%" stay as they are.
+/// languages, and some put a space before "%".
 fn unit_text(suffix: &str) -> String {
     match suffix {
         " pt" => format!(" {}", crate::t!("widgets-unit-pt")),
         " s" => format!(" {}", crate::t!("widgets-unit-seconds")),
+        "%" => crate::t!("widgets-unit-percent"),
+        "°" => crate::t!("widgets-unit-degrees"),
         s => s.to_string(),
     }
 }
