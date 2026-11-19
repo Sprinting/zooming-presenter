@@ -139,8 +139,12 @@ fn command(c: &Command) -> String {
         Command::SaveTheme { .. } => t!("history-edit-theme"),
         Command::DeleteTheme { .. } => t!("history-delete-theme"),
         Command::AddAsset { .. } => t!("history-add-picture"),
-        Command::ApplyTemplate { template, .. } => t!("history-template", template = template.as_str()),
-        Command::AddLayout { layout, .. } => t!("history-insert-layout", layout = layout.as_str()),
+        Command::ApplyTemplate { template, .. } => {
+            t!("history-template", template = zebra_core::templates::TEMPLATES.iter().find(|i| i.id == *template).map(template_name).unwrap_or_else(|| template.clone()))
+        }
+        Command::AddLayout { layout, .. } => {
+            t!("history-insert-layout", layout = zebra_core::templates::LAYOUTS.iter().find(|i| i.id == *layout).map(layout_name).unwrap_or_else(|| layout.clone()))
+        }
         Command::AddSymbol { name, .. } => t!("history-insert-symbol", name = name.as_str()),
         Command::AddDiagram { diagram, .. } => t!("history-insert-diagram", diagram = zebra_core::diagrams::get(diagram).map(diagram_name).unwrap_or_else(|| diagram.clone())),
     }
@@ -170,6 +174,16 @@ mod tests {
         for t in ["frame", "text", "shape", "image", "video", "ink", "icon", "connector"] {
             assert!(crate::i18n::LOADER.has(&format!("element-{t}")), "missing element-{t}");
         }
+    }
+
+    /// The undo name shows the layout's and template's name, not its id.
+    #[test]
+    fn layout_and_template_undo_names_are_names() {
+        let l = command(&Command::AddLayout { layout: "title_bullets".into(), x: 0.0, y: 0.0, width: None, add_to_path: true });
+        assert_eq!(l, format!("Insert layout: {}", tr("layout-name-title-bullets")));
+        assert!(!l.contains("title_bullets"), "{l}");
+        let t = command(&Command::ApplyTemplate { template: "big_picture".into(), replace: false });
+        assert_eq!(t, format!("Template: {}", tr("template-name-big-picture")));
     }
 
     /// Built-in content gets its words from this .ftl, and core's English
