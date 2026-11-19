@@ -1433,7 +1433,7 @@ impl ZebraApp {
         for (k, v) in self.renderer.cache_stats() {
             caches.insert(k.into(), v);
         }
-        caches.insert("thumbnails".into(), self.thumbs.textures.iter().flatten().count() as u64);
+        caches.insert("thumbnails".into(), self.thumbs.len() as u64);
         caches.insert("presenter_kb".into(), self.stage.slides.texture_bytes() / 1024);
         caches.insert("previews".into(), self.previews.as_ref().map(|p| p.textures.len() as u64).unwrap_or(0));
     }

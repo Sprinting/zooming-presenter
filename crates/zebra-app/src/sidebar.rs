@@ -139,6 +139,8 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         let num_w = 22.0;
         let th = (tw - num_w - 6.0) * THUMB_H as f32 / THUMB_W as f32;
         let bg = style::c32(app.editor.theme().color(&"theme:background".into()));
+        // Every row is laid out, so every thumbnail is wanted.
+        app.thumbs.show(0..n);
         for i in 0..n {
             // A row's menu can remove or add steps: the rows after it wait
             // for the next frame instead of reading steps that moved.
@@ -176,8 +178,8 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 // Thumbnail.
                 let img_r = Rect::from_min_size(r.min + EVec2::new(num_w, 5.0), EVec2::new(tw - num_w - 6.0, th));
                 painter.rect_filled(img_r, 3.0, bg);
-                if let Some(tex) = app.thumbs.get(i) {
-                    let tint = if app.thumbs.stale(app.editor.revision) { Color32::from_white_alpha(200) } else { Color32::WHITE };
+                if let Some((tex, fresh)) = app.thumbs.get(i) {
+                    let tint = if fresh && !app.thumbs.stale(app.editor.revision) { Color32::WHITE } else { Color32::from_white_alpha(200) };
                     painter.image(tex.id(), img_r.shrink(0.5), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
                 }
                 painter.rect_stroke(img_r, 3.0, Stroke::new(1.0, if is_sel { Color32::from_white_alpha(160) } else { p.border }), egui::StrokeKind::Outside);
