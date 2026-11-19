@@ -9,6 +9,17 @@ use crate::app::ZebraApp;
 
 const H: Origin = Origin::Human;
 
+/// The sample's words are `sample-*` keys in the .ftl: fill them in, in
+/// the person's language, before the commands run.
+fn fill_words(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::String(s) if s.starts_with("sample-") && crate::i18n::LOADER.has(s) => *s = crate::i18n::tr(s),
+        serde_json::Value::Array(a) => a.iter_mut().for_each(fill_words),
+        serde_json::Value::Object(o) => o.values_mut().for_each(fill_words),
+        _ => {}
+    }
+}
+
 /// The sample presentation, from `data/sample.json`: the same commands an
 /// agent could send.
 pub fn build(renderer: &zebra_render::Renderer) -> Document {
@@ -20,7 +31,9 @@ pub fn build_with(measure: Box<dyn zebra_core::TextMeasure>) -> Document {
     struct File {
         commands: Vec<Command>,
     }
-    let f: File = serde_json::from_str(include_str!("../data/sample.json")).expect("data/sample.json is valid");
+    let mut v: serde_json::Value = serde_json::from_str(include_str!("../data/sample.json")).expect("data/sample.json is valid");
+    fill_words(&mut v);
+    let f: File = serde_json::from_value(v).expect("data/sample.json is valid");
     let mut ed = Editor::default();
     ed.measure = measure;
     for c in f.commands {
@@ -101,7 +114,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 let agent = Origin::agent("Claude");
                 app.demo_agent = Some("Claude".into());
                 let _ = app.editor.apply(Command::AddText { text: "Added by the agent".into(), x: 0.0, y: -250.0, style: TextStyle::Subtitle, scale: Some(1.2), place: None, id: None, markdown: false, on: None, color: None }, agent.clone());
-                let found = app.editor.doc.ordered().find(|e| e.name == "Why zoom?").map(|e| e.id.clone());
+                let found = app.editor.doc.ordered().find(|e| e.id == "why").map(|e| e.id.clone());
                 if let Some(c) = found {
                     let _ = app.editor.apply(Command::Update { id: c.clone(), patch: zebra_core::ElementPatch { frame_style: Some(FrameStyle::Bracket), ..Default::default() } }, agent.clone());
                     let _ = app.editor.view(ViewCommand::Select { ids: vec![c] }, agent.clone());

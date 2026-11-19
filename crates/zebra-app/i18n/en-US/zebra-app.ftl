@@ -1035,8 +1035,27 @@ mac-activity-presenting = Presenting
 
 
 ## ---- sample.rs ----
-
-
+# File › New from Sample: the sample presentation (data/sample.json).
+# Frame names (sample-frame-*) show in the path sidebar.
+sample-a-new-angle = A new angle
+sample-a-tiny-tour-of-a = a tiny tour of a zooming canvas
+sample-brackets-circles-rectangles-invisible = brackets · circles · rectangles · invisible
+sample-frame-a-new-angle = A new angle
+sample-frame-a-secret = A secret
+sample-frame-circles = Circles
+sample-frame-why-zoom = Why zoom?
+sample-frames-come-in-four-styles = Frames come in four styles
+sample-hidden-in-plain-sight = hidden in plain sight!
+sample-look-closer = Look closer…
+sample-notes-click-to-reveal-each-point = Click to reveal each point.
+sample-rotate-a-frame-and-the =
+    Rotate a frame and the camera
+    rolls to meet it when presenting.
+sample-show-the-big-picture-first = Show the big picture first
+sample-then-dive-into-the-details = Then dive into the details
+sample-thinking-in-zoom = Thinking in Zoom
+sample-why-zoom = Why zoom?
+sample-zoom-out-again-to-connect = Zoom out again to connect them
 ## ---- end sample.rs ----
 
 
