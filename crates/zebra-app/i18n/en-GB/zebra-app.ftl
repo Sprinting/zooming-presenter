@@ -914,20 +914,20 @@ canvas-menu-replace-icon = Replace Icon…
 
 
 ## ---- presenting.rs ----
-present-notes-hint = Speaker notes: what to say at this step
+present-notes-hint = Speaker notes for this step
 # $step is the 1-based step number.
-present-notes-step = Notes · step { $step }
-present-path-step = Path step { $step }
+present-notes-step = Notes · Step { $step }
+present-path-step = Step { $step }
 present-transition = Transition
-present-transition-auto = Auto
-present-transition-auto-tip = Zebra picks a time from the distance flown
+present-transition-auto = Automatic
+present-transition-auto-tip = The time depends on how far the view moves
 present-autoplay = Autoplay
 # $time is a duration such as "10 s".
 present-dwell-default-time = Default ({ $time })
 present-dwell-default-off = Default (off)
-present-dwell-own = Own time
-present-dwell-presentation-default = Presentation default
-present-dwell-own-for-step = Own time for this step
+present-dwell-own = Custom
+present-dwell-presentation-default = Presentation Default
+present-dwell-own-for-step = Custom Time for This Step
 present-undo-change-step-timing = Change Step Timing
 # A number of seconds, $secs already formatted ("10", "1.5").
 present-seconds = { $secs } s
@@ -935,18 +935,18 @@ present-seconds = { $secs } s
 present-seconds-unit = s
 present-autoplay-off = Off
 # $key is the pause key.
-present-autoplay-help = Steps with their own time keep it. Press { $key } while presenting to pause.
-present-loop = Loop: start again after the last step
+present-autoplay-help = Steps with a custom time keep it. To pause, press { $key } while playing.
+present-loop = Start again after the last step
 present-presenting = Presenting
 present-show-presenter-view = Show presenter view
-present-show-presenter-view-tip = Notes, the next step and a timer in a second window, on another display
+present-show-presenter-view-tip = Shows notes, the next step and a timer on another display
 present-this-display = This window's display
 present-play-on = Play on
-present-connect-second-display = Connect a second display to present on one and see the presenter view on the other.
-present-playback-window = Playback
-present-built-in-display = Built-in display
+present-connect-second-display = To use presenter view, connect a second display.
+present-playback-window = Playback Options
+present-built-in-display = Built-in Display
 present-display-n = Display { $n }
-present-toast-autoplay-paused = Autoplay paused ({ $key } to resume)
+present-toast-autoplay-paused = Autoplay paused. Press { $key } to resume.
 present-toast-autoplay-resumed = Autoplay resumed
 present-presenter-window-title = Presenter View
 present-presenter-step-of = Step { $step } of { $count }
@@ -970,9 +970,9 @@ present-back-to-start = Back to step 1
 present-end-of-presentation = End of presentation
 present-no-notes = No notes for this step.
 present-previous = Previous
-present-notes-smaller = Smaller notes
-present-notes-larger = Larger notes
-present-end-show = End Show
+present-notes-smaller = Make notes smaller
+present-notes-larger = Make notes larger
+present-end-show = Exit
 present-rendering = Rendering…
 
 ## ---- end presenting.rs ----
@@ -981,14 +981,14 @@ present-rendering = Rendering…
 ## ---- present.rs ----
 present-toast-opened-link = Opened { $url }
 # Presentation HUD. $key is the key glyph that returns to the path (→).
-present-hud-off-path = { $step } of { $count }  ·  { $key } returns to the path
+present-hud-off-path = { $step } of { $count }  ·  Press { $key } to return to the path
 present-hud-step-of = { $step } of { $count }
 present-hud-overview = Overview  ·  { $count ->
     [one] 1 step
    *[other] { $count } steps
 }
 # $key is the exit key name (Esc).
-present-hud-exit = { $key } to exit
+present-hud-exit = Press { $key } to exit
 present-hud-previous-step = Previous Step
 present-hud-next-step = Next Step
 
@@ -1043,18 +1043,18 @@ media-poster-use-frame = Use This Frame
 media-poster-use-frame-tip = Show this frame until the video plays
 media-poster-choose = Choose…
 media-poster-remove-tip = Remove the poster
-media-soundtrack-heading = SOUNDTRACK
-media-add-music = Add Music…
-media-add-music-tip = Background music that plays while presenting
-media-music = Music
+media-soundtrack-heading = Background Music
+media-add-music = Add Background Music…
+media-add-music-tip = Music that plays during the whole presentation
+media-music = Untitled
 media-music-name = Music: { $name }
 media-remove = Remove
 media-volume = Volume
 media-undo-change-soundtrack = Change Background Music
-media-voiceover-heading = STEP { $step } VOICE-OVER
-media-add-recording = Add Recording…
-media-add-recording-tip = Audio that plays when this step is reached
-media-recorded = Recorded
+media-voiceover-heading = Step { $step } Voice-Over
+media-add-recording = Add Voice-Over…
+media-add-recording-tip = Audio that plays when the presentation reaches this step
+media-recorded = Voice-over added
 
 ## ---- end media_ui.rs ----
 

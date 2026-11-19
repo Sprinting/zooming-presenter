@@ -51,7 +51,7 @@ fn playback_options_set_autoplay_and_loop() {
     perform(&mut h, Action::PlaybackOptions);
     h.get_by_label("10 s").click();
     h.run_steps(2);
-    h.get_by_label("Loop: start again after the last step").click();
+    h.get_by_label("Start again after the last step").click();
     h.run_steps(2);
     let play = h.state().editor.doc.play;
     assert_eq!(play.autoplay, Some(10.0));
@@ -76,7 +76,7 @@ fn presenter_view_shows_notes_and_drives_the_show() {
     h.get_by_label("Next  ▶").click();
     h.run_steps(2);
     assert_eq!(h.state().editor.view.present.build, 1, "Next reveals the first fade-in");
-    h.get_by_label("End Show").click();
+    h.get_by_label("Exit").click();
     h.run_steps(3);
     assert_eq!(h.state().editor.view.mode, Mode::Edit);
 }
