@@ -6410,6 +6410,7 @@ dependencies = [
  "serde_json",
  "zebra-core",
  "zebra-render",
+ "zebra-web",
 ]
 
 [[package]]

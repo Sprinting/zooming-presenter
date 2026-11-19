@@ -175,7 +175,7 @@ than one document open, events carry the `document` id they come from.
 | Method | Params | Result |
 |---|---|---|
 | `capture` | `{"target"?, "width"?, "height"?, "path"?}` (size: default the person's window, up to 1600 wide; one side keeps the window's shape) | `{"format":"png","width","height","target","data_base64"}`, or `{"path","bytes",…}` when `path` is given |
-| `export` | `{"format": "pdf"\|"png"\|"json"\|"zebra", "path"?, "target"?, "width"?, "height"?}` | `{"path","bytes","mime"}`, or the data inline when no `path` is given (`json` returns `{"document": …}`) |
+| `export` | `{"format": "pdf"\|"png"\|"json"\|"zebra"\|"html", "path"?, "target"?, "width"?, "height"?}` | `{"path","bytes","mime"}`, or the data inline when no `path` is given (`json` returns `{"document": …}`). `html` writes a web page that presents the deck in any current browser (File > Export > Web Page); with `path` the result adds `"folder"`: true when its video and audio passed 50 MB, and `path` is then `<path without .html>/index.html` with the media in `media/` beside it |
 | `open` | `{"path": "/abs/deck.zebra", "force"?: false}` | needs `full`; fails with `unsaved_changes` unless `force` is set |
 | `save` | `{"path"?: "/abs/deck.zebra"}` | needs `full`; with no `path` it saves to the current file |
 | `disconnect` | – | switches AI control off in the app (the person must switch it back on); in headless mode it quits |
@@ -277,7 +277,7 @@ zebractl move f1 --dx 200 --dy 0 | delete t3 s1 | select t1 | set-text t1 "New"
 zebractl undo | redo
 zebractl present [step] | next | prev | stop   # or present --step N
 zebractl screenshot --step 2 -o step2.png   # the person's window shape; or --width/--height; --build K; --element f1 | --overview | --viewport
-zebractl export pdf -o deck.pdf        # png | json | zebra
+zebractl export pdf -o deck.pdf        # png | json | zebra | html
 zebractl open deck.zebra [--force] | save [path]
 zebractl events --follow [--filter document_changed,step_changed]   # JSON lines
 zebractl wait idle | step 3 | revision 12 | mode present  [--timeout-ms 10000]
