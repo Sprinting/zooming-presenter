@@ -659,6 +659,30 @@ fn a_long_path_lays_out_only_the_rows_in_view() {
     assert_eq!((&path[250], &path[251]), (&start[251], &start[250]), "dragged one place down");
 }
 
+/// Spec 04: the step whose notes the sidebar shows (nearest the camera,
+/// worked out once per camera and revision) follows the camera and edits.
+#[test]
+fn the_current_step_follows_the_camera() {
+    let mut h = harness();
+    for i in 0..3 {
+        frame(h.state_mut(), i as f64 * 1000.0, true);
+    }
+    h.run_steps(2);
+    let go = |h: &mut Harness<'static, ZebraApp>, i: usize| {
+        let cam = h.state().editor.camera_for_step(i);
+        h.state_mut().editor.view.camera = cam;
+        h.run_steps(2);
+    };
+    go(&mut h, 2);
+    assert_eq!(h.state().current_step(), Some(2));
+    go(&mut h, 0);
+    assert_eq!(h.state().current_step(), Some(0));
+    // Same camera, different path: step 0 now frames what step 2 did.
+    h.state_mut().editor.apply(Command::MoveStep { from: 0, to: 2 }, H).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().current_step(), Some(2));
+}
+
 /// Mac round, 18 Nov: on a fresh document, Edit › Undo was greyed out while
 /// typing in a new text box, though ⌘Z would undo the typing.
 #[test]

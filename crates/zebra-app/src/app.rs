@@ -166,6 +166,10 @@ pub struct ZebraApp {
     pub mac_sync: crate::mac::WindowSync,
     /// Step that was just added: its sidebar row highlights briefly.
     pub flash_step: Option<(usize, f64)>,
+    /// The step nearest the camera, with what it was worked out for
+    /// (revision, loads, camera and viewport bits): the sidebar asks for it
+    /// a few times a frame, and every frame while idle.
+    nearest_step: std::cell::Cell<Option<((u64, u64, [u64; 6]), Option<usize>)>>,
     pub queued: Vec<Action>,
     pub scroll_mode: ScrollMode,
     /// Reduce Motion chosen in Settings; `None` follows the system.
@@ -361,6 +365,7 @@ impl ZebraApp {
             snapping: storage.and_then(|s| eframe::get_value(s, "snapping")).unwrap_or(true),
             mac_sync: Default::default(),
             flash_step: None,
+            nearest_step: Default::default(),
             queued: vec![],
             scroll_mode,
             motion_override,
@@ -1046,15 +1051,33 @@ impl ZebraApp {
         if let Some(s) = crate::sidebar::selected_steps(self).first() {
             return Some(*s);
         }
-        let cam = self.editor.view.camera;
-        (0..self.editor.doc.path.len()).min_by(|a, b| {
-            let d = |i: usize| {
-                let c = self.editor.camera_for_step(i);
-                let dist = (c.center() - cam.center()).len() * cam.zoom / self.editor.view.viewport.x;
-                dist + (c.zoom / cam.zoom).ln().abs()
-            };
-            d(*a).total_cmp(&d(*b))
-        })
+        let ed = &self.editor;
+        let (cam, vp) = (ed.view.camera, ed.view.viewport);
+        let key = (ed.revision, ed.loads, [cam.cx, cam.cy, cam.zoom, cam.rotation, vp.x, vp.y].map(f64::to_bits));
+        if let Some((k, s)) = self.nearest_step.get() {
+            if k == key {
+                return s;
+            }
+        }
+        // Each step's distance once (a long path is thousands), and the
+        // whole-deck framing (a walk of every element) at most once.
+        let all = std::cell::OnceCell::new();
+        let fit_all = || *all.get_or_init(|| ed.fit_all_camera());
+        let s = ed
+            .doc
+            .path
+            .iter()
+            .map(|st| match &st.target {
+                StepTarget::Overview => fit_all(),
+                StepTarget::Element { id } if ed.doc.get(id).is_none() => fit_all(),
+                t => ed.camera_for_target(t),
+            })
+            .map(|c| (c.center() - cam.center()).len() * cam.zoom / vp.x + (c.zoom / cam.zoom).ln().abs())
+            .enumerate()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i);
+        self.nearest_step.set(Some((key, s)));
+        s
     }
 
     /// Settings › General › Language. Every string is looked up each
