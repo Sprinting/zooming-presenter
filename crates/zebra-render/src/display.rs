@@ -86,17 +86,10 @@ pub fn affine_scale(a: &Affine) -> f64 {
     a.determinant().abs().sqrt()
 }
 
-/// Extra world-space margin an element draws outside its box.
+/// Extra world-space margin an element draws outside its box. Lives in
+/// core: the spatial index culls with it too.
 fn overhang(e: &Element) -> f64 {
-    let local = match &e.kind {
-        ElementKind::Ink(i) => i.width,
-        ElementKind::Shape(s) => s.stroke_width,
-        ElementKind::Icon(i) => i.stroke_width * e.size.w.min(e.size.h) / 24.0,
-        // Arrowheads and the label reach past the route's box.
-        ElementKind::Connector(c) => (c.width * 4.0).max(10.0) + if c.label.is_empty() { 0.0 } else { 200.0 },
-        _ => 0.0,
-    };
-    local * e.transform.scale
+    zebra_core::spatial::draw_overhang(e)
 }
 
 pub(crate) fn build(r: &Renderer, editor: &Editor, cam: &Camera, vp: [f64; 2], ppp: f64, o: &SceneOptions) -> DisplayList {
@@ -131,7 +124,8 @@ pub(crate) fn build_with(
     let ctx = Ctx { r, editor, theme: &theme, presenting: o.presenting, full_res_images, ppp, o, anim: &anim, pending: &pending };
     ctx.backdrop(cam, vp, &mut list.items);
 
-    for e in editor.doc.ordered() {
+    // Only what may reach into view (from the spatial index), back to front.
+    for e in editor.elements_in(view) {
         if o.skip.as_deref() == Some(e.id.as_str()) || (o.presenting && o.hidden.contains(&e.id)) {
             continue;
         }

@@ -22,7 +22,7 @@ pub fn step_label(app: &ZebraApp, i: usize) -> String {
     match &doc.path[i].target {
         StepTarget::Element { id } => doc
             .get(id)
-            .map(|e| match e.own_label(doc) {
+            .map(|e| match app.editor.own_label(e) {
                 Some(l) => l,
                 None if e.is_frame() => crate::t!("sidebar-untitled-frame"),
                 None => crate::words::type_name(&e.kind),

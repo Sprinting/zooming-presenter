@@ -79,8 +79,8 @@ pub fn connector_ends(app: &ZebraApp, id: &str) -> Option<[Vec2; 2]> {
 pub fn attach_target(app: &ZebraApp, w: Vec2, exclude: Option<&str>) -> Option<ElementId> {
     let ed = &app.editor;
     let tol = 5.0 / ed.view.camera.zoom;
-    ed.doc
-        .ordered()
+    ed.elements_at(w, tol)
+        .into_iter()
         .rev()
         .filter(|e| Some(e.id.as_str()) != exclude && !matches!(e.kind, ElementKind::Connector(_)))
         .find(|e| e.hit(w, tol, false))
@@ -283,9 +283,9 @@ pub fn hit(app: &ZebraApp, p: Pos2, frames_inside: bool) -> Option<ElementId> {
     let tol = 5.0 / ed.view.camera.zoom;
     let hidden = ed.hidden_builds();
     let presenting = ed.view.mode == Mode::Present;
-    let found = ed
-        .doc
-        .ordered()
+    let under = ed.elements_at(w, tol);
+    let found = under
+        .iter()
         .rev()
         .filter(|e| !hidden.contains(&e.id))
         .filter(|e| !(presenting && matches!(&e.kind, ElementKind::Frame(f) if f.style == FrameStyle::Invisible)))
@@ -294,8 +294,8 @@ pub fn hit(app: &ZebraApp, p: Pos2, frames_inside: bool) -> Option<ElementId> {
     if found.is_some() || !frames_inside {
         return found;
     }
-    ed.doc
-        .ordered()
+    under
+        .into_iter()
         .filter(|e| e.is_frame() && e.hit(w, tol, true))
         .filter(|e| !(presenting && matches!(&e.kind, ElementKind::Frame(f) if f.style == FrameStyle::Invisible)))
         .min_by(|a, b| a.bounds().area().total_cmp(&b.bounds().area()))
@@ -911,8 +911,8 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
             let r = Rect::from_points([a, world]).unwrap();
             let hidden: Vec<ElementId> = app
                 .editor
-                .doc
-                .ordered()
+                .elements_in(r)
+                .into_iter()
                 .filter(|e| r.contains_rect(&e.bounds()))
                 .map(|e| e.id.clone())
                 .collect();
@@ -1072,7 +1072,7 @@ fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
     if let Some(out) = app.apply(Command::AddElement { element: el }) {
         app.select(out.created.clone());
         if is_frame {
-            let n = out.created.first().map(|id| app.editor.doc.frame_contents(id).len()).unwrap_or(0);
+            let n = out.created.first().map(|id| app.editor.frame_contents(id).len()).unwrap_or(0);
             if n > 0 {
                 app.toast(crate::t!("canvas-toast-framed-objects", count = n));
             }

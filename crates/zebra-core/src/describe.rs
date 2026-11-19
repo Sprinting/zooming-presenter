@@ -15,20 +15,44 @@ fn r(v: f64) -> f64 {
 }
 
 pub fn element_json(ed: &Editor, e: &Element) -> Value {
+    element_json_in(ed, e, ed.parent_frame(&e.id).as_deref(), &ed.doc.steps_using(&e.id))
+}
+
+/// [`element_json`] with the parent frame and path steps worked out by
+/// the caller (once for a whole list, not per element).
+fn element_json_in(ed: &Editor, e: &Element, parent: Option<&str>, steps: &[usize]) -> Value {
     let b = e.bounds();
     let mut v = serde_json::to_value(e).unwrap();
     let o = v.as_object_mut().unwrap();
-    o.insert("label".into(), json!(e.label(&ed.doc)));
+    o.insert("label".into(), json!(ed.label(e)));
     o.insert("bounds".into(), json!([r(b.x0), r(b.y0), r(b.x1), r(b.y1)]));
-    o.insert("parent_frame".into(), json!(ed.doc.parent_frame(&e.id)));
-    o.insert("path_steps".into(), json!(ed.doc.steps_using(&e.id)));
+    o.insert("parent_frame".into(), json!(parent));
+    o.insert("path_steps".into(), json!(steps));
     if e.is_frame() {
-        o.insert("contents".into(), json!(ed.doc.frame_contents(&e.id)));
+        o.insert("contents".into(), json!(ed.frame_contents(&e.id)));
     }
     v
 }
 
-fn one_line(ed: &Editor, e: &Element) -> String {
+/// Every element's path steps ([`Document::steps_using`]) in one pass.
+fn steps_by_element(d: &Document) -> std::collections::HashMap<&str, Vec<usize>> {
+    let mut m: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    for (i, s) in d.path.iter().enumerate() {
+        let target = match &s.target {
+            StepTarget::Element { id } => Some(id.as_str()),
+            _ => None,
+        };
+        for id in target.into_iter().chain(s.builds.iter().map(|b| b.as_str())) {
+            let v = m.entry(id).or_default();
+            if v.last() != Some(&i) {
+                v.push(i);
+            }
+        }
+    }
+    m
+}
+
+fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
     let t = &e.transform;
     let (w, h) = e.world_size();
     let mut s = format!("{} {}", e.id, e.kind.type_name());
@@ -106,7 +130,6 @@ fn one_line(ed: &Editor, e: &Element) -> String {
     if let Some(g) = &e.group {
         let _ = write!(s, " group={g}");
     }
-    let steps = ed.doc.steps_using(&e.id);
     if !steps.is_empty() {
         let st: Vec<String> = steps.iter().map(|i| (i + 1).to_string()).collect();
         let _ = write!(s, " [step {}]", st.join(","));
@@ -139,7 +162,7 @@ pub fn describe(ed: &Editor) -> String {
         out.push_str("Path:\n");
         for (i, s) in d.path.iter().enumerate() {
             let tgt = match &s.target {
-                StepTarget::Element { id } => format!("{id} \"{}\"", d.get(id).map(|e| e.label(d)).unwrap_or_default()),
+                StepTarget::Element { id } => format!("{id} \"{}\"", d.get(id).map(|e| ed.label(e)).unwrap_or_default()),
                 StepTarget::View { view } => format!("view @({},{}) {}x{}", r(view.cx), r(view.cy), r(view.width), r(view.height)),
                 StepTarget::Overview => "overview".into(),
             };
@@ -160,21 +183,25 @@ pub fn describe(ed: &Editor) -> String {
         out.push_str("Canvas is empty.\n");
     } else {
         out.push_str("Canvas (back to front, children indented under their frame):\n");
-        // Build a tree by smallest enclosing frame.
-        let parents: std::collections::HashMap<&str, Option<String>> =
-            d.z_order.iter().map(|id| (id.as_str(), d.parent_frame(id))).collect();
-        fn walk(ed: &Editor, parents: &std::collections::HashMap<&str, Option<String>>, parent: Option<&str>, depth: usize, out: &mut String) {
-            for id in &ed.doc.z_order {
-                if parents.get(id.as_str()).map(|p| p.as_deref()) == Some(parent) {
-                    let e = &ed.doc.elements[id];
-                    let _ = writeln!(out, "{}{}", "  ".repeat(depth + 1), one_line(ed, e));
-                    if e.is_frame() {
-                        walk(ed, parents, Some(id), depth + 1, out);
-                    }
+        // Build a tree by smallest enclosing frame: every parent worked
+        // out once, children listed back to front.
+        let parents = ed.parent_frames();
+        let mut children: std::collections::HashMap<Option<&str>, Vec<&str>> = std::collections::HashMap::new();
+        for id in &d.z_order {
+            children.entry(parents.get(id.as_str()).copied()).or_default().push(id);
+        }
+        let steps = steps_by_element(d);
+        type Tree<'a> = std::collections::HashMap<Option<&'a str>, Vec<&'a str>>;
+        fn walk(ed: &Editor, children: &Tree, steps: &std::collections::HashMap<&str, Vec<usize>>, parent: Option<&str>, depth: usize, out: &mut String) {
+            for &id in children.get(&parent).map(|v| v.as_slice()).unwrap_or_default() {
+                let e = &ed.doc.elements[id];
+                let _ = writeln!(out, "{}{}", "  ".repeat(depth + 1), one_line(ed, e, steps.get(id).map(|v| v.as_slice()).unwrap_or_default()));
+                if e.is_frame() {
+                    walk(ed, children, steps, Some(id), depth + 1, out);
                 }
             }
         }
-        walk(ed, &parents, None, 0, &mut out);
+        walk(ed, &children, &steps, None, 0, &mut out);
     }
     let c = ed.view.camera;
     let _ = writeln!(
@@ -239,10 +266,12 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                     if d.get(f).is_none() {
                         return Err(ZError::not_found(f, d.elements.keys().cloned()));
                     }
-                    Some(d.frame_contents(f))
+                    Some(ed.frame_contents(f).into_iter().collect::<std::collections::HashSet<_>>())
                 }
                 None => None,
             };
+            let parents = ed.parent_frames();
+            let steps = steps_by_element(d);
             let vb = ed.view.camera.visible_bounds(ed.view.viewport);
             let needle = text.map(|t| t.to_lowercase());
             let list: Vec<Value> = d
@@ -261,18 +290,18 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                         hay.contains(n.as_str()) || e.name.to_lowercase().contains(n.as_str())
                     })
                 })
-                .map(|e| element_json(ed, e))
+                .map(|e| element_json_in(ed, e, parents.get(e.id.as_str()).copied(), steps.get(e.id.as_str()).map(|v| v.as_slice()).unwrap_or_default()))
                 .collect();
             json!({ "elements": list })
         }
         Query::HitTest { x, y } => {
             let tol = 4.0 / ed.view.camera.zoom;
-            json!({ "id": d.hit_test(Vec2::new(x, y), tol).map(|e| e.id.clone()) })
+            json!({ "id": ed.hit_test(Vec2::new(x, y), tol).map(|e| e.id.clone()) })
         }
         Query::HitTestScreen { x, y } => {
             let w = ed.view.camera.screen_to_world(Vec2::new(x, y), ed.view.viewport);
             let tol = 4.0 / ed.view.camera.zoom;
-            json!({ "id": d.hit_test(w, tol).map(|e| e.id.clone()), "world": [w.x, w.y] })
+            json!({ "id": ed.hit_test(w, tol).map(|e| e.id.clone()), "world": [w.x, w.y] })
         }
         Query::Path => {
             let steps: Vec<Value> = d
@@ -281,7 +310,7 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                 .enumerate()
                 .map(|(i, s)| {
                     let label = match &s.target {
-                        StepTarget::Element { id } => d.get(id).map(|e| e.label(d)).unwrap_or_default(),
+                        StepTarget::Element { id } => d.get(id).map(|e| ed.label(e)).unwrap_or_default(),
                         StepTarget::View { .. } => "view".into(),
                         StepTarget::Overview => "overview".into(),
                     };
@@ -505,7 +534,7 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
     // Steps pointing at empty frames.
     for (i, s) in d.path.iter().enumerate() {
         if let StepTarget::Element { id } = &s.target {
-            if d.get(id).is_some_and(|e| e.is_frame()) && d.frame_contents(id).is_empty() {
+            if d.get(id).is_some_and(|e| e.is_frame()) && ed.frame_contents(id).is_empty() {
                 issues.push(json!({"kind": "empty_step", "step": i, "id": id, "message": format!("step {} shows an empty frame", i + 1)}));
             }
         }

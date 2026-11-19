@@ -942,8 +942,9 @@ impl ZebraApp {
     /// Only ids whose parent frame is not also in the list (for selecting
     /// duplicates/pastes as the user sees them).
     pub fn top_level(&self, ids: &[ElementId]) -> Vec<ElementId> {
+        let set: std::collections::HashSet<&ElementId> = ids.iter().collect();
         ids.iter()
-            .filter(|id| !self.editor.doc.parent_frame(id).is_some_and(|p| ids.contains(&p)))
+            .filter(|id| !self.editor.parent_frame(id).is_some_and(|p| set.contains(&p)))
             .cloned()
             .collect()
     }

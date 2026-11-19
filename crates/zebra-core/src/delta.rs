@@ -74,6 +74,26 @@ impl Change {
         }
         self.patch.0.len() + n(&self.z_order) + n(&self.path)
     }
+    /// Ids of the elements this change adds, removes or edits; `None`
+    /// when it rewrites the element map as a whole.
+    pub fn element_ids(&self) -> Option<BTreeSet<String>> {
+        let mut ids = BTreeSet::new();
+        for op in &self.patch.0 {
+            let path = match op {
+                PatchOperation::Add(o) => &o.path,
+                PatchOperation::Remove(o) => &o.path,
+                PatchOperation::Replace(o) => &o.path,
+                PatchOperation::Test(o) => &o.path,
+                PatchOperation::Move(o) => &o.path,
+                PatchOperation::Copy(o) => &o.path,
+            };
+            let mut t = path.tokens();
+            if t.next().is_some_and(|f| f.decoded() == "elements") {
+                ids.insert(t.next()?.decoded().into_owned());
+            }
+        }
+        Some(ids)
+    }
     fn approx_bytes(&self) -> usize {
         let ops: usize = self.patch.0.iter().map(|op| serde_json::to_string(op).map(|s| s.len()).unwrap_or(0)).sum();
         let z: usize = self.z_order.iter().map(|s| 24 + s.insert.iter().map(|i| i.len() + 24).sum::<usize>()).sum();
