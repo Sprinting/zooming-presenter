@@ -6,6 +6,7 @@
 #   scripts/bundle-macos.sh                 # unsigned/ad-hoc, direct download
 #   SIGN_ID="Developer ID Application: …" scripts/bundle-macos.sh
 #   APPSTORE=1 SIGN_ID="Apple Distribution: …" scripts/bundle-macos.sh
+#   DSYM=1 scripts/bundle-macos.sh          # also target/Zebra.app.dSYM
 #
 # APPSTORE=1 signs both binaries with the sandbox + App Group entitlements.
 # Needs a Mac (lipo, codesign). Output: target/Zebra.app
@@ -24,6 +25,12 @@ if [[ -z "${TARGETS:-}" ]]; then
     echo "Building for $HOST only (add x86_64-apple-darwin with rustup for a universal app)."
   fi
 fi
+# The release profile strips symbols. DSYM=1 builds with line tables
+# instead, saves them as dSYM bundles (for crash reports) and strips the
+# copies that go into the app.
+if [ "${DSYM:-0}" = 1 ]; then
+  export CARGO_PROFILE_RELEASE_STRIP=false CARGO_PROFILE_RELEASE_DEBUG=line-tables-only
+fi
 for t in $TARGETS; do cargo build --release --target "$t" -p zebra-app -p zebra-ctl; done
 
 APP=target/Zebra.app
@@ -31,16 +38,30 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 for bin in zebra zebractl; do
   lipo -create $(for t in $TARGETS; do echo "target/$t/release/$bin"; done) -output "$APP/Contents/MacOS/$bin"
+  if [ "${DSYM:-0}" = 1 ]; then
+    rm -rf "target/Zebra.app.dSYM/$bin.dSYM"
+    mkdir -p target/Zebra.app.dSYM
+    dsymutil "$APP/Contents/MacOS/$bin" -o "target/Zebra.app.dSYM/$bin.dSYM"
+    strip -x "$APP/Contents/MacOS/$bin"
+  fi
 done
 sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
 [ -f packaging/macos/Zebra.icns ] && cp packaging/macos/Zebra.icns "$APP/Contents/Resources/"
 cp assets/icons/LICENSE-lucide.txt "$APP/Contents/Resources/"
 # The clip-art library (Insert > Symbols & Shapes). Not in git: unzip
-# zebra-symbols.zip into assets/symbols, or rebuild it with
+# zebra-symbols-v2.zip into assets/symbols, or rebuild it with
 # tools/symbols/build_pack.py. Without it the Symbols tab says so.
 if [ -f assets/symbols/sets.json ]; then
+  # The app reads pack format 2 (compressed, one .dict per set) only.
+  if ! grep -q '"format": *2' assets/symbols/sets.json; then
+    echo "error: assets/symbols is an old pack; unzip zebra-symbols-v2.zip there or run" >&2
+    echo "  python3 -P tools/symbols/build_pack.py --from-pack <old pack> --out assets/symbols" >&2
+    exit 1
+  fi
   mkdir -p "$APP/Contents/Resources/Symbols"
   cp -L assets/symbols/sets.json assets/symbols/*.idx assets/symbols/*.dat "$APP/Contents/Resources/Symbols/"
+  # A set too small to train a dictionary has none.
+  for f in assets/symbols/*.dict; do [ -e "$f" ] && cp -L "$f" "$APP/Contents/Resources/Symbols/"; done
 else
   echo "warning: assets/symbols is missing; the app will have no symbols"
 fi
