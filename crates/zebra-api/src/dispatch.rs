@@ -265,20 +265,21 @@ impl Dispatcher {
             }
         }
         let heavy = matches!(&p.call, Call::Capture(_))
-            || matches!(&p.call, Call::Export { format: ExportFormat::Png | ExportFormat::Pdf, .. });
+            || matches!(&p.call, Call::Export { format: ExportFormat::Png | ExportFormat::Pdf | ExportFormat::Html, .. });
         if heavy && !self.headless {
             let limited = editor.view.agent_permission != Permission::Full;
             let mut snap = Editor::new(editor.doc.clone());
             snap.view = editor.view.clone();
             snap.measure = self.renderer.measure();
             let renderer = self.renderer.clone();
+            let labels = self.web_labels.clone();
             let call = p.call;
             let (tx, rx) = std::sync::mpsc::channel();
             let waker = server.inner.shared.waker.clone();
             let spawned = std::thread::Builder::new().name("zebra-capture".into()).spawn(move || {
                 let r = match call {
                     Call::Capture(req) => Self::capture(&renderer, &snap, &req, limited),
-                    Call::Export { format, path, capture } => Self::export(&renderer, &snap, format, path, &capture, limited),
+                    Call::Export { format, path, capture } => Self::export(&renderer, &snap, format, path, &capture, limited, &labels),
                     _ => unreachable!(),
                 };
                 let _ = tx.send(r);
@@ -471,7 +472,7 @@ impl Dispatcher {
                 editor.mark_saved(Some(path.clone()));
                 json!({ "ok": true, "path": path })
             }
-            Call::Export { format, path, capture } => Self::export(&self.renderer, editor, format, path, &capture, limited)?,
+            Call::Export { format, path, capture } => Self::export(&self.renderer, editor, format, path, &capture, limited, &self.web_labels)?,
             Call::Wait { .. } | Call::Documents | Call::NewDocument | Call::CloseDocument { .. } | Call::CopyTo { .. } => unreachable!("handled in run"),
             Call::Disconnect => {
                 // Any agent may switch AI control off; only the human can turn
@@ -534,8 +535,20 @@ impl Dispatcher {
         }
     }
 
-    fn export(r: &zebra_render::Renderer, editor: &Editor, format: ExportFormat, path: Option<std::path::PathBuf>, cap: &CaptureReq, limited: bool) -> Result<Value, RpcError> {
+    fn export(r: &zebra_render::Renderer, editor: &Editor, format: ExportFormat, path: Option<std::path::PathBuf>, cap: &CaptureReq, limited: bool, labels: &zebra_web::export::Labels) -> Result<Value, RpcError> {
         let (bytes, mime) = match format {
+            ExportFormat::Html => {
+                let Some(p) = path else {
+                    let page = zebra_web::export::build(r, editor, labels, zebra_web::export::INLINE_LIMIT)?;
+                    if page.is_folder() {
+                        return Err(RpcError::app("too_big", "this page keeps its video and audio in files beside it").hint("give a `path`; a folder is written there"));
+                    }
+                    return Ok(json!({ "mime": "text/html", "bytes": page.html.len(),
+                                      "data_base64": base64::engine::general_purpose::STANDARD.encode(page.html.as_bytes()) }));
+                };
+                let w = zebra_web::export::export(r, editor, labels, &p)?;
+                return Ok(json!({ "path": w.page, "folder": w.folder, "bytes": w.bytes, "mime": "text/html" }));
+            }
             ExportFormat::Png => {
                 let mut cap = cap.clone();
                 if cap.target.is_none() {

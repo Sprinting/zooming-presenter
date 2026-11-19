@@ -34,7 +34,7 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
                 A(SaveAs),
                 A(SaveAsTemplate),
                 Sep,
-                Sub(crate::t!("menu-export-to"), vec![A(ExportPdf), A(ExportPng)]),
+                Sub(crate::t!("menu-export-to"), vec![A(ExportPdf), A(ExportPng), A(ExportHtml)]),
             ],
         ),
         (
@@ -175,7 +175,7 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
         // (a picture, files, text): Paste takes those too.
         Paste => !app.clipboard.is_empty() || crate::media_ui::system_clipboard_has_content(),
         Deselect => has_sel,
-        SelectAll | FitAll | ExportPdf | ExportPng | PresentStart | AutoPath | AddCurrentView | AddToPath => has_doc,
+        SelectAll | FitAll | ExportPdf | ExportPng | ExportHtml | PresentStart | AutoPath | AddCurrentView | AddToPath => has_doc,
         PresentCurrent => has_doc && !app.editor.doc.path.is_empty(),
         ClearPath => !app.editor.doc.path.is_empty(),
         ToggleLock => {

@@ -1,0 +1,28 @@
+[package]
+name = "zebra-web"
+description = "Zebra's web player: the renderer built for wasm32, driven by a small page script (File > Export > Web Page)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+# cdylib: the player .wasm; rlib: native tests of the player logic.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+zebra-core.workspace = true
+zebra-render = { path = "../zebra-render", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+kurbo.workspace = true
+
+# The exporter (native only; the wasm player needs none of it).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+base64.workspace = true
+flate2 = "1"
+
+[build-dependencies]
+flate2 = "1"
+
+[dev-dependencies]
+image.workspace = true

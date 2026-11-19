@@ -148,7 +148,7 @@ enum Cmd {
         #[arg(long)]
         height: Option<u32>,
     },
-    /// Export pdf | png | json | zebra.
+    /// Export pdf | png | json | zebra | html (a web page; a folder when its media is big).
     Export {
         format: String,
         #[arg(short, long)]

@@ -175,6 +175,9 @@ pub fn doc_info(id: &str, editor: &zebra_core::Editor, front: bool) -> DocInfo {
 
 pub struct Dispatcher {
     pub renderer: Arc<zebra_render::Renderer>,
+    /// Words of an exported web page's control bar; the app sets them in
+    /// the person's language.
+    pub web_labels: zebra_web::export::Labels,
     /// Set by [`run_headless`]: enables the `quit` method.
     pub headless: bool,
     /// Set when a client called `quit` (headless only).
@@ -219,6 +222,7 @@ impl Dispatcher {
     pub fn new(renderer: Arc<zebra_render::Renderer>) -> Self {
         Dispatcher {
             renderer,
+            web_labels: Default::default(),
             headless: false,
             quit_requested: false,
             disconnect_requested: false,

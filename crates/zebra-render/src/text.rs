@@ -25,17 +25,25 @@ pub use parley::FontData;
 /// Line height as a multiple of the font size.
 pub const LINE_HEIGHT: f32 = 1.25;
 
+#[allow(dead_code)]
 struct Bundled {
     family: &'static str,
     files: &'static [&'static [u8]],
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 macro_rules! font {
     ($p:literal) => {
         include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/", $p)) as &'static [u8]
     };
 }
 
+/// The web player (wasm32) bundles no fonts: an exported page carries the
+/// files its deck uses and registers them with [`Fonts::add_font`].
+#[cfg(target_arch = "wasm32")]
+const BUNDLED: &[Bundled] = &[];
+
+#[cfg(not(target_arch = "wasm32"))]
 const BUNDLED: &[Bundled] = &[
     Bundled {
         family: "Inter",
@@ -235,6 +243,44 @@ impl Fonts {
                 fallbacks: HashMap::new(),
             })),
         }
+    }
+
+    /// Register a font file (TTF, OTF or a collection). Layouts made
+    /// before it was added are dropped, as with a theme's embedded fonts.
+    pub fn add_font(&self, bytes: Vec<u8>) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let blob: Blob<u8> = Blob::new(Arc::new(bytes));
+        g.font_cx.collection.register_fonts(blob, None);
+        g.cache.clear();
+        g.used.clear();
+        g.fallbacks.clear();
+    }
+
+    /// The font files `doc`'s text is set in (bundled, embedded or system
+    /// fallbacks), each once: what a page showing the deck must carry.
+    pub fn files_used(&self, editor: &zebra_core::Editor) -> Vec<Blob<u8>> {
+        use zebra_core::ElementKind;
+        self.register_doc_fonts(&editor.doc);
+        let theme = editor.theme();
+        let mut out: Vec<Blob<u8>> = vec![];
+        let mut add = |l: &TextLayout| {
+            for run in &l.runs {
+                if !out.iter().any(|b| b.id() == run.font.data.id()) {
+                    out.push(run.font.data.clone());
+                }
+            }
+        };
+        for e in editor.doc.elements.values() {
+            match &e.kind {
+                ElementKind::Text(t) if !t.text.is_empty() => add(&self.layout(t, &theme, wrap_for(t, e.size.w))),
+                ElementKind::Connector(c) if !c.label.is_empty() => {
+                    let t = TextData { text: c.label.clone(), style: zebra_core::TextStyle::Body, ..Default::default() };
+                    add(&self.layout(&t, &theme, None));
+                }
+                _ => {}
+            }
+        }
+        out
     }
 
     pub fn measurer(&self) -> Box<dyn zebra_core::TextMeasure> {

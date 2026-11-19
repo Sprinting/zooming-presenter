@@ -173,6 +173,8 @@ pub enum ExportFormat {
     Png,
     Json,
     Zebra,
+    /// A web page (or a folder, when its video and audio are big).
+    Html,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -391,9 +393,10 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
                 Some("png") => ExportFormat::Png,
                 Some("json") => ExportFormat::Json,
                 Some("zebra") => ExportFormat::Zebra,
+                Some("html") => ExportFormat::Html,
                 other => {
                     return Err(RpcError::invalid(format!("unknown export format {other:?}"))
-                        .values(vec!["pdf".into(), "png".into(), "json".into(), "zebra".into()]));
+                        .values(vec!["pdf".into(), "png".into(), "json".into(), "zebra".into(), "html".into()]));
                 }
             };
             Call::Export { format, path: abs_path(p.get("path"), "export")?, capture: parse_capture(&p)? }

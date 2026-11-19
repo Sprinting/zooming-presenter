@@ -176,6 +176,15 @@ fn full_session() {
     let jp = dir.join("deck.json");
     c.call("export", json!({"format":"json","path": jp})).unwrap();
     assert!(std::fs::read_to_string(&jp).unwrap().contains("Hello Zebra"));
+    // A web page, to a file and inline.
+    let hp = dir.join("deck.html");
+    let page = c.call("export", json!({"format":"html","path": hp})).unwrap();
+    assert_eq!((page["folder"].as_bool(), page["mime"].as_str()), (Some(false), Some("text/html")), "{page}");
+    assert!(std::fs::read_to_string(&hp).unwrap().starts_with("<!doctype html>"));
+    let page = c.call("export", json!({"format":"html"})).unwrap();
+    assert!(page["data_base64"].as_str().unwrap().len() > 100_000, "player and document inline");
+    let e = rpc_err(c.call("export", json!({"format":"html","path": hp, "folder": true})));
+    assert!(e.message.contains("unknown field `folder`"), "{e}");
 
     // Images by path.
     let img = dir.join("dot.png");

@@ -103,6 +103,17 @@ impl Renderer {
         layout.link_at(x as f32, y as f32).map(str::to_string)
     }
 
+    /// Register a font file for text layout (the web player's fonts).
+    pub fn add_font(&self, bytes: Vec<u8>) {
+        self.fonts.add_font(bytes)
+    }
+
+    /// The font files the document's text uses, each once (bundled,
+    /// embedded in a theme, or a system fallback for other scripts).
+    pub fn font_files_used(&self, editor: &Editor) -> Vec<Vec<u8>> {
+        self.fonts.files_used(editor).iter().map(|b| b.as_ref().to_vec()).collect()
+    }
+
     /// Text measurer to install in `Editor::measure`.
     pub fn measure(&self) -> Box<dyn zebra_core::TextMeasure> {
         self.fonts.measurer()

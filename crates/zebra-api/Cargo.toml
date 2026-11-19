@@ -14,6 +14,8 @@ dev-overrides = []
 zebra-core.workspace = true
 # CPU-only rendering: headless must not need a GPU.
 zebra-render = { path = "../zebra-render", default-features = false }
+# File > Export > Web Page (the player is built and embedded by its build.rs).
+zebra-web = { path = "../zebra-web" }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true

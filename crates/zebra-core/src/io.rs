@@ -1,4 +1,5 @@
 //! `.zebra` file format: a zip holding `document.json` and `assets/<key>.<ext>`.
+#![cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -12,18 +13,21 @@ pub fn to_json(doc: &Document) -> String {
     serde_json::to_string_pretty(doc).expect("document serialises")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn save_bytes(doc: &Document) -> ZResult<Vec<u8>> {
     let mut buf = std::io::Cursor::new(Vec::new());
     write_zip(doc, &mut buf)?;
     Ok(buf.into_inner())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Assets the document's elements use. History may hold others; they
 /// stay in memory/mapped but aren't written to the file.
 fn used_assets(doc: &Document) -> std::collections::BTreeSet<&str> {
     doc.used_assets()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn write_zip<W: Write + std::io::Seek>(doc: &Document, w: W) -> ZResult<()> {
     let io = |e: zip::result::ZipError| ZError::new("io", e.to_string());
     let ioe = |e: std::io::Error| ZError::new("io", e.to_string());
@@ -46,10 +50,12 @@ fn write_zip<W: Write + std::io::Seek>(doc: &Document, w: W) -> ZResult<()> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load_bytes(bytes: &[u8]) -> ZResult<Document> {
     read_zip(bytes, None)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Parse a `.zebra` zip. With `map`, uncompressed assets become slices of
 /// it instead of copies.
 fn read_zip(bytes: &[u8], map: Option<&Arc<memmap2::Mmap>>) -> ZResult<Document> {
@@ -126,6 +132,7 @@ fn migrate(v: serde_json::Value, _from: u32) -> serde_json::Value {
     v
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Save atomically (temp file + rename), streaming assets from wherever
 /// they live instead of building the whole zip in memory. Afterwards the
 /// document's assets point into the new file, so freshly added media
@@ -146,6 +153,7 @@ pub fn save(doc: &mut Document, path: &Path) -> ZResult<()> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Write a `.zebra` atomically without touching `doc` (autosave, copies).
 pub fn write_file(doc: &Document, path: &Path) -> ZResult<()> {
     let tmp = path.with_extension("zebra.tmp");
@@ -161,6 +169,7 @@ pub fn write_file(doc: &Document, path: &Path) -> ZResult<()> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load(path: &Path) -> ZResult<Document> {
     let ioe = |e: std::io::Error| ZError::new("io", format!("{}: {e}", path.display()));
     if path.extension().is_some_and(|e| e == "json") {

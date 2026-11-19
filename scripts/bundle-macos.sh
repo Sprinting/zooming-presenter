@@ -32,6 +32,13 @@ fi
 if [ "${DSYM:-0}" = 1 ]; then
   export CARGO_PROFILE_RELEASE_STRIP=false CARGO_PROFILE_RELEASE_DEBUG=line-tables-only CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed
 fi
+# File > Export > Web Page embeds the web player (crates/zebra-web, built
+# for wasm32 by its build.rs). A shipped app must have it.
+if ! rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then
+  echo "The web player needs the wasm32 target: rustup target add wasm32-unknown-unknown" >&2
+  exit 1
+fi
+export ZEBRA_REQUIRE_WEB_PLAYER=1
 for t in $TARGETS; do cargo build --release --target "$t" -p zebra-app -p zebra-ctl; done
 
 APP=target/Zebra.app

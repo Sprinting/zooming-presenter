@@ -6410,6 +6410,7 @@ dependencies = [
  "serde_json",
  "zebra-core",
  "zebra-render",
+ "zebra-web",
 ]
 
 [[package]]
@@ -6445,6 +6446,7 @@ dependencies = [
  "zebra-core",
  "zebra-media",
  "zebra-render",
+ "zebra-web",
 ]
 
 [[package]]
@@ -6512,6 +6514,20 @@ dependencies = [
  "vello",
  "vello_cpu 0.4.0",
  "zebra-core",
+]
+
+[[package]]
+name = "zebra-web"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "flate2",
+ "image",
+ "kurbo",
+ "serde",
+ "serde_json",
+ "zebra-core",
+ "zebra-render",
 ]
 
 [[package]]

@@ -471,7 +471,9 @@ impl ZebraApp {
             Ok(s) => {
                 // Hosted windows are answered by the shell's dispatcher.
                 if !self.hosted {
-                    self.dispatcher = Some(zebra_api::Dispatcher::new(self.renderer.clone()));
+                    let mut d = zebra_api::Dispatcher::new(self.renderer.clone());
+                    d.web_labels = crate::files::web_labels();
+                    self.dispatcher = Some(d);
                 }
                 self.api = Some(Arc::new(s));
                 self.api_error = None;
@@ -639,6 +641,7 @@ impl ZebraApp {
             }
             ExportPdf => crate::files::export_pdf(self),
             ExportPng => crate::files::export_png(self),
+            ExportHtml => crate::files::export_html(self),
             Quit => {
                 self.force_quit = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);

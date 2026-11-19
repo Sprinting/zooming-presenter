@@ -31,7 +31,8 @@ ruzstd = { version = "0.9", default-features = false, features = ["std"] }
 kurbo = "0.13"
 peniko = "*"
 vello = "0.12"
-vello_cpu = { version = "0.4", features = ["multithreading"] }
+# multithreading is turned on per target in zebra-render (none on wasm32).
+vello_cpu = "0.4"
 parley = "0.13"
 # Script_Extensions of a character, to pick a fallback font for script-neutral text.
 unicode-script = "0.5"

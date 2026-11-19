@@ -21,6 +21,23 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+/// std's Instant panics on wasm32-unknown-unknown (the web player). There
+/// the cache only evicts by budget, so the idle clock stands still.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy)]
+struct Instant;
+#[cfg(target_arch = "wasm32")]
+impl Instant {
+    fn now() -> Self {
+        Instant
+    }
+    fn duration_since(&self, _: Instant) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
+
 use zebra_core::AssetBytes;
 
 /// One decoded mip level of an image (premultiplied RGBA8). Also used for
@@ -183,7 +200,7 @@ struct Entry {
     img: Decoded,
     used: u64,
     /// When it was last drawn, for the idle trim.
-    at: std::time::Instant,
+    at: Instant,
 }
 
 #[derive(Default)]
@@ -278,7 +295,7 @@ impl ImageCache {
     /// screen at once (soft, then sharp) when it is drawn again. Returns
     /// (bytes freed, whether anything that could go later is still held).
     pub fn trim_idle(&self, idle: std::time::Duration) -> (usize, bool) {
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         let mut i = lock(&self.shared.inner);
         let mut smallest: HashMap<String, u8> = HashMap::new();
         for (k, _) in i.map.iter() {
@@ -325,7 +342,7 @@ impl ImageCache {
             }
             if let Some(e) = i.map.get_mut(&key) {
                 e.used = g;
-                e.at = std::time::Instant::now();
+                e.at = Instant::now();
                 return Some(e.img.clone());
             }
             if !sync {
@@ -343,7 +360,7 @@ impl ImageCache {
                     .min_by_key(|((_, l), _)| if *l < level { (0, level - *l) } else { (1, *l - level) });
                 return best.map(|(_, e)| {
                     e.used = g;
-                    e.at = std::time::Instant::now();
+                    e.at = Instant::now();
                     e.img.clone()
                 });
             }
@@ -399,7 +416,7 @@ fn insert(shared: &Shared, key: Key, out: Vec<(u8, Decoded)>, g: u64) -> Option<
         }
         if !i.map.contains_key(&k) {
             i.bytes += img.bytes();
-            i.map.insert(k, Entry { img, used: g, at: std::time::Instant::now() });
+            i.map.insert(k, Entry { img, used: g, at: Instant::now() });
         }
     }
     evict(&mut i, shared.budget.load(Ordering::Relaxed), shared.generation.load(Ordering::Relaxed));

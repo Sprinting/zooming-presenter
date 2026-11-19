@@ -1,0 +1,4 @@
+# The web player (crates/zebra-web): SIMD for the CPU rasteriser. Every
+# current browser has wasm SIMD (Safari 16.4+, Chrome 91+, Firefox 89+).
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]
