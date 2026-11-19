@@ -412,6 +412,7 @@ fn r9_opening_an_open_file_shows_its_window() {
     let file = data_dir().join("r9.zebra");
     frame(&mut h.state_mut().windows[0], 0.0, false);
     assert!(h.state_mut().windows[0].save_to(&file));
+    h.state_mut().windows[0].wait_save();
     // From a second window with work in it, and from an untouched one.
     h.state_mut().windows[0].queued.push(Action::New);
     h.run_steps(4);
@@ -492,11 +493,13 @@ fn r12_autosave_does_not_outlive_a_save() {
     let app = h.state_mut();
     let saved = data_dir().join("r12.zebra");
     assert!(app.save_to(&saved));
+    app.wait_save();
     frame(app, 2000.0, false);
     app.last_autosave = app.now() - 1000.0;
     zebra_app::files::autosave_tick(app);
     // Saved while (or just after) the autosave is written.
     assert!(app.save_to(&saved));
+    app.wait_save();
     let t0 = std::time::Instant::now();
     while app.autosave_job.busy() && t0.elapsed().as_secs() < 10 {
         std::thread::sleep(std::time::Duration::from_millis(5));

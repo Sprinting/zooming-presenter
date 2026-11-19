@@ -200,6 +200,8 @@ pub struct SpatialIndex {
     full_epoch: u64,
     /// Ids touched since `begin_journal`, with the epochs then.
     journal: Option<(Vec<ElementId>, u64, u64)>,
+    /// Every connector, so a change refreshes those and not every element.
+    connectors: std::collections::BTreeSet<ElementId>,
 }
 
 impl SpatialIndex {
@@ -327,6 +329,11 @@ impl SpatialIndex {
         self.sync(doc);
     }
 
+    /// Every connector, when the index can be trusted for `doc`.
+    pub(crate) fn connectors(&self, doc: &Document) -> Option<&std::collections::BTreeSet<ElementId>> {
+        self.usable(doc).then_some(&self.connectors)
+    }
+
     /// Can answers be trusted for `doc`? Cheap; catches a host adding or
     /// removing elements without telling the editor.
     pub fn usable(&self, doc: &Document) -> bool {
@@ -334,6 +341,16 @@ impl SpatialIndex {
     }
 
     fn refresh(&mut self, doc: &Document, id: &str) {
+        match doc.elements.get(id) {
+            Some(e) if matches!(e.kind, ElementKind::Connector(_)) => {
+                if !self.connectors.contains(id) {
+                    self.connectors.insert(id.to_string());
+                }
+            }
+            _ => {
+                self.connectors.remove(id);
+            }
+        }
         let Some(e) = doc.elements.get(id) else {
             if let Some(h) = self.by_id.remove(id) {
                 let s = self.slots[h as usize].take().expect("indexed");
@@ -441,6 +458,7 @@ impl SpatialIndex {
     pub fn assert_matches(&self, doc: &Document) {
         assert!(self.usable(doc), "spatial index has pending changes or is missing elements");
         let fresh = SpatialIndex::build(doc);
+        assert_eq!(self.connectors, fresh.connectors, "spatial index's connectors");
         for (id, &h) in &fresh.by_id {
             let a = fresh.slot(h);
             let Some(&mine) = self.by_id.get(id) else { panic!("spatial index lacks {id}") };

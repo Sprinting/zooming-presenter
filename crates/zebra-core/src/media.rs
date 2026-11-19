@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{ZError, ZResult};
-use crate::model::MediaKind;
+use crate::model::{AssetBytes, MediaKind};
 
 /// What a media file is, from its first bytes and headers.
 #[derive(Debug, Clone, PartialEq)]
@@ -187,6 +187,73 @@ pub fn cache_dir() -> PathBuf {
     }
     let base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
     base.join("Zebra").join("media")
+}
+
+/// Where new media bytes are spilled (see [`spill`]); `None`: kept in
+/// memory. The app sets it to a folder beside its autosaves.
+static SPILL_DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// Media smaller than this stays in memory.
+pub const SPILL_MIN: usize = 64 * 1024;
+
+pub fn set_spill_dir(dir: Option<PathBuf>) {
+    *SPILL_DIR.lock().unwrap_or_else(|e| e.into_inner()) = dir;
+}
+
+pub fn spill_dir() -> Option<PathBuf> {
+    SPILL_DIR.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// New media bytes (an agent's picture, a dropped photo, a theme font) as
+/// an asset. Kept on the heap they stayed there until the document was
+/// saved: 400 photos an agent added were 515 MB of heap. With a spill
+/// folder set, bytes of [`SPILL_MIN`] or more are written to a file there
+/// and memory-mapped, like the media of an opened file, so the system can
+/// page them out. The file's name is removed as soon as it is mapped: the
+/// mapping keeps the data for as long as an asset (or an undo step) uses
+/// it, nothing is left to clean up after a save, a close or a crash, and
+/// recovery reads the bytes from the autosave, which copies them in.
+/// Any failure keeps the bytes in memory.
+pub fn spill(bytes: Vec<u8>, key: &str) -> AssetBytes {
+    if bytes.len() < SPILL_MIN || !cfg!(unix) || !crate::check::safe_asset_key(key) {
+        return bytes.into();
+    }
+    let Some(dir) = spill_dir() else { return bytes.into() };
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = dir.join(format!("{}-{n}-{key}.spill", std::process::id()));
+    let mapped = (|| -> std::io::Result<memmap2::Mmap> {
+        use std::io::Write;
+        std::fs::create_dir_all(&dir)?;
+        let mut f = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
+        let r = f.write_all(&bytes).and_then(|()| {
+            // SAFETY: read-only map of a file only this process knows
+            // (its name goes below) and never writes again.
+            unsafe { memmap2::Mmap::map(&f) }
+        });
+        let _ = std::fs::remove_file(&path);
+        r
+    })();
+    match mapped {
+        Ok(m) if m.len() == bytes.len() => {
+            let len = m.len();
+            AssetBytes::Mapped { map: std::sync::Arc::new(m), start: 0, len }
+        }
+        _ => bytes.into(),
+    }
+}
+
+/// Spill files a crashed run left (between writing and mapping one):
+/// those of processes that aren't running. `alive` says whether a pid is.
+pub fn sweep_spill(alive: impl Fn(u32) -> bool) {
+    let Some(dir) = spill_dir() else { return };
+    for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let pid = name.strip_suffix(".spill").and_then(|n| n.split('-').next()).and_then(|p| p.parse::<u32>().ok());
+        if pid.is_some_and(|p| !alive(p)) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 /// A temp name next to `path` that no other writer uses, in this process

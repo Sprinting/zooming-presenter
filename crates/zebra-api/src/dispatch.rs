@@ -160,6 +160,9 @@ impl Dispatcher {
             }
         }
 
+        // 3b. Saves.
+        self.pump_saves(server, docs);
+
         // 4. Waits.
         let now = Instant::now();
         let mut i = 0;
@@ -185,7 +188,7 @@ impl Dispatcher {
         // 5. Events nobody has drained yet (e.g. human edits).
         self.flush_events(server, docs);
 
-        inner.shared.poll.store(!self.waits.is_empty() || !self.deferred.is_empty() || !self.jobs.is_empty(), std::sync::atomic::Ordering::SeqCst);
+        inner.shared.poll.store(!self.waits.is_empty() || !self.deferred.is_empty() || !self.jobs.is_empty() || !self.saves.is_empty(), std::sync::atomic::Ordering::SeqCst);
         handled || self.disconnect_requested || self.quit_requested || shown(docs) != before
     }
 
@@ -263,6 +266,19 @@ impl Dispatcher {
             if let Err(e) = need_edit(editor.view.agent_permission, "capture or export to a file") {
                 return reply(server, p.client, &p.id, Err(e.hint("leave `path` out to get the data in the reply")));
             }
+        }
+        // A save writes a snapshot on a worker (the window stays
+        // responsive); the reply goes when it is done. One at a time per
+        // document: a save while another runs waits for it.
+        if let Call::Save { path } = &p.call {
+            match save_path(editor, path.clone()) {
+                Ok(path) => {
+                    self.saves.push(SaveWait { client: p.client, id: p.id, doc, origin: p.origin, path, started: false });
+                    self.pump_saves(server, docs);
+                }
+                Err(e) => reply(server, p.client, &p.id, Err(e)),
+            }
+            return;
         }
         let heavy = matches!(&p.call, Call::Capture(_))
             || matches!(&p.call, Call::Export { format: ExportFormat::Png | ExportFormat::Pdf | ExportFormat::Html, .. });
@@ -458,16 +474,9 @@ impl Dispatcher {
                 json!({ "ok": true, "path": path, "revision": editor.revision })
             }
             Call::Save { path } => {
-                need_full(perm, "save")?;
-                let path = path.or_else(|| editor.file_path.clone()).ok_or_else(|| {
-                    RpcError::app("no_path", "the document has never been saved").hint("pass {\"path\": \"/abs/name.zebra\"}")
-                })?;
-                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) {
-                    // JSON has no pictures or video in it: writing it is
-                    // an export, and the document is not saved by it.
-                    return Err(RpcError::invalid("`save` writes a .zebra file; a .json file would leave the images and media out")
-                        .hint("use export {\"format\": \"json\", \"path\": ...} for the JSON, and save to a .zebra path"));
-                }
+                // (Saves are run by `run`, on a worker; this is the direct
+                // route for hosts that call `execute` themselves.)
+                let path = save_path(editor, path)?;
                 zebra_core::io::save(&mut editor.doc, &path)?;
                 editor.mark_saved(Some(path.clone()));
                 json!({ "ok": true, "path": path })
@@ -585,6 +594,55 @@ pub(crate) struct Job {
     rx: std::sync::mpsc::Receiver<Result<Value, RpcError>>,
 }
 
+/// An agent's save: waiting for another save of the document to finish,
+/// or running.
+pub(crate) struct SaveWait {
+    client: u64,
+    id: Option<Value>,
+    doc: String,
+    origin: Origin,
+    path: std::path::PathBuf,
+    started: bool,
+}
+
+impl Dispatcher {
+    /// Start saves that can start; reply to those that finished.
+    fn pump_saves(&mut self, server: &ApiServer, docs: &mut dyn Documents) {
+        let mut i = 0;
+        while i < self.saves.len() {
+            let w = &mut self.saves[i];
+            let r: Option<Result<Value, RpcError>> = match docs.editor(&w.doc) {
+                None => Some(Err(RpcError::app("not_found", "the document was closed while saving"))),
+                Some(editor) => {
+                    editor.poll_save();
+                    let mut r = None;
+                    if !w.started {
+                        let waker = server.inner.shared.waker.clone();
+                        match editor.start_save(w.path.clone(), w.origin.clone(), Box::new(move || waker())) {
+                            Ok(()) => w.started = true,
+                            // Another save of the document is running.
+                            Err(e) if e.code == "busy" => {}
+                            Err(e) => r = Some(Err(e.into())),
+                        }
+                    }
+                    if w.started {
+                        let (origin, path) = (&w.origin, &w.path);
+                        r = editor.take_saved(|s| s.by == *origin && s.path == *path).pop().map(|s| s.result.map(|()| json!({ "ok": true, "path": path })).map_err(RpcError::from));
+                    }
+                    r
+                }
+            };
+            match r {
+                Some(r) => {
+                    let w = self.saves.remove(i);
+                    reply(server, w.client, &w.id, r);
+                }
+                None => i += 1,
+            }
+        }
+    }
+}
+
 pub(crate) struct Wait {
     client: u64,
     id: Option<Value>,
@@ -643,6 +701,21 @@ fn check_read(editor: &Editor, seen: Option<u64>) -> Result<(), RpcError> {
     let by = if who.is_empty() { String::new() } else { format!(" by {}", who.join(", ")) };
     Err(RpcError::app("stale_revision", format!("the document changed{by} since you last read it (you read revision {seen}; it is now at {now})"))
         .hint("read it again (`describe`, or `query` for the parts you are changing), then retry"))
+}
+
+/// Where `save` writes: the path given, else the document's own file.
+fn save_path(editor: &Editor, path: Option<std::path::PathBuf>) -> Result<std::path::PathBuf, RpcError> {
+    need_full(editor.view.agent_permission, "save")?;
+    let path = path.or_else(|| editor.file_path.clone()).ok_or_else(|| {
+        RpcError::app("no_path", "the document has never been saved").hint("pass {\"path\": \"/abs/name.zebra\"}")
+    })?;
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) {
+        // JSON has no pictures or video in it: writing it is an export,
+        // and the document is not saved by it.
+        return Err(RpcError::invalid("`save` writes a .zebra file; a .json file would leave the images and media out")
+            .hint("use export {\"format\": \"json\", \"path\": ...} for the JSON, and save to a .zebra path"));
+    }
+    Ok(path)
 }
 
 fn need_full(perm: Permission, what: &str) -> Result<(), RpcError> {

@@ -88,6 +88,8 @@ fn run_loop(
         }
         *woken = false;
     }
+    // A save still being written finishes before the process ends.
+    editor.wait_save();
     // Give the quit reply a moment to flush before the socket closes.
     std::thread::sleep(Duration::from_millis(50));
     drop(server);

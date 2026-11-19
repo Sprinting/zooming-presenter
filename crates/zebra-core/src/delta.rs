@@ -23,6 +23,15 @@
 //! to the `Vec` in one pass. Undo of a change in a 100,000-element deck
 //! used to serialise and re-parse the whole draw order and path.
 //!
+//! An element whose `kind` didn't change (a move, a resize, a rename) is
+//! diffed and patched without its `kind`, which holds most of its bytes
+//! (a text's runs, an ink stroke's points): moving 100,000 elements and
+//! undoing it no longer serialises every text twice.
+//!
+//! The editor doesn't copy the document to make a delta: it keeps the old
+//! values of what a command touched (a [`Before`]) and
+//! [`Delta::from_before`] diffs those against the document as it is now.
+//!
 //! Image/media assets are not part of the patch: they are content
 //! addressed and only ever added during a session, so every history step
 //! can refer to them by key.
@@ -102,10 +111,62 @@ impl Change {
     }
 }
 
+/// What a change touched, as it was before: the editor's record of a
+/// command, instead of a copy of the whole document.
+#[derive(Debug, Clone, Copy)]
+pub struct Before<'a> {
+    /// Every field but `elements`, `z_order` and `path`, which are ignored.
+    pub meta: &'a Document,
+    /// Every element that may have changed, as it was (`None`: it didn't
+    /// exist). Elements not listed are the same before and after.
+    pub elements: &'a BTreeMap<ElementId, Option<Element>>,
+    /// The draw order as it was, or `None` when it is unchanged.
+    pub z_order: Option<&'a [ElementId]>,
+    /// The path as it was, or `None` when it is unchanged.
+    pub path: Option<&'a [PathStep]>,
+}
+
+/// One side of a diff.
+struct Side<'a> {
+    meta: &'a Document,
+    z_order: &'a [ElementId],
+    path: &'a [PathStep],
+    elements: Elements<'a>,
+}
+
+enum Elements<'a> {
+    All(&'a BTreeMap<ElementId, Element>),
+    Touched(&'a BTreeMap<ElementId, Option<Element>>),
+}
+
+impl<'a> Side<'a> {
+    fn of(doc: &'a Document) -> Side<'a> {
+        Side { meta: doc, z_order: &doc.z_order, path: &doc.path, elements: Elements::All(&doc.elements) }
+    }
+    fn element(&self, id: &str) -> Option<&'a Element> {
+        match self.elements {
+            Elements::All(m) => m.get(id),
+            Elements::Touched(m) => m.get(id).and_then(|e| e.as_ref()),
+        }
+    }
+}
+
 impl Delta {
     pub fn between(before: &Document, after: &Document) -> Delta {
         let ids = changed_ids(before, after);
-        Delta { forward: diff_with(before, after, &ids), backward: diff_with(after, before, &ids) }
+        let (a, b) = (Side::of(before), Side::of(after));
+        Delta { forward: diff_sides(&a, &b, &ids, true), backward: diff_sides(&b, &a, &ids, true) }
+    }
+
+    /// The change from `before` (what was touched, as it was) to `after`.
+    /// The same as [`Delta::between`] the whole old document and `after`,
+    /// at a cost that follows the change, not the document.
+    pub fn from_before(before: &Before, after: &Document) -> Delta {
+        let ids: Vec<&ElementId> = before.elements.iter().filter(|(id, old)| old.as_ref() != after.elements.get(*id)).map(|(id, _)| id).collect();
+        let a = Side { meta: before.meta, z_order: before.z_order.unwrap_or(&after.z_order), path: before.path.unwrap_or(&after.path), elements: Elements::Touched(before.elements) };
+        let b = Side::of(after);
+        let lists = before.z_order.is_some() || before.path.is_some();
+        Delta { forward: diff_sides(&a, &b, &ids, lists), backward: diff_sides(&b, &a, &ids, lists) }
     }
     pub fn is_empty(&self) -> bool {
         self.forward.is_empty()
@@ -165,33 +226,165 @@ pub fn visual_changes(a: &Document, b: &Document) -> Vec<ElementId> {
 
 /// A change that turns `a` into `b`.
 pub fn diff(a: &Document, b: &Document) -> Change {
-    diff_with(a, b, &changed_ids(a, b))
+    diff_sides(&Side::of(a), &Side::of(b), &changed_ids(a, b), true)
 }
 
-fn diff_with(a: &Document, b: &Document, ids: &[&ElementId]) -> Change {
+/// An element without its `kind`, read as [`Element`] reads it.
+#[derive(serde::Deserialize)]
+struct Head {
+    id: ElementId,
+    transform: crate::geom::Transform,
+    size: crate::model::Size,
+    #[serde(default)]
+    locked: bool,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    placeholder: bool,
+    #[serde(default)]
+    group: Option<String>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn head_value(e: &Element) -> Value {
+    #[derive(Serialize)]
+    struct HeadRef<'a> {
+        id: &'a ElementId,
+        transform: &'a crate::geom::Transform,
+        size: &'a crate::model::Size,
+        locked: bool,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        name: &'a String,
+        #[serde(skip_serializing_if = "is_false")]
+        placeholder: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        group: &'a Option<String>,
+    }
+    to_value(&HeadRef { id: &e.id, transform: &e.transform, size: &e.size, locked: e.locked, name: &e.name, placeholder: e.placeholder, group: &e.group })
+}
+
+/// Set `e`'s head fields (everything but `kind`).
+fn set_head(e: &mut Element, h: Head) {
+    (e.id, e.transform, e.size, e.locked, e.name, e.placeholder, e.group) = (h.id, h.transform, h.size, h.locked, h.name, h.placeholder, h.group);
+}
+
+/// Two numbers that differ (as JSON would see them: NaN serialises as
+/// null, the same as another NaN).
+fn differ(a: f64, b: f64) -> bool {
+    a != b && !(a.is_nan() && b.is_nan())
+}
+
+/// The ops a JSON diff of `x`'s and `y`'s heads would give (same kind),
+/// without serialising either: a move of 100,000 elements is 200,000 small
+/// ops, not 200,000 elements turned into JSON and compared.
+fn head_ops(id: &str, x: &Element, y: &Element, ops: &mut Vec<PatchOperation>) {
+    let at = |f: &[&str]| PointerBuf::from_tokens(["elements", id].iter().chain(f).copied());
+    let replace = |ops: &mut Vec<PatchOperation>, f: &[&str], value: Value| ops.push(PatchOperation::Replace(ReplaceOperation { path: at(f), value }));
+    // A field left out of the JSON when it has its default.
+    let optional = |ops: &mut Vec<PatchOperation>, f: &str, a: Option<Value>, b: Option<Value>| match (a, b) {
+        (None, Some(v)) => ops.push(PatchOperation::Add(AddOperation { path: at(&[f]), value: v })),
+        (Some(_), None) => ops.push(PatchOperation::Remove(RemoveOperation { path: at(&[f]) })),
+        (Some(a), Some(b)) if a != b => replace(ops, &[f], b),
+        _ => {}
+    };
+    if x.id != y.id {
+        replace(ops, &["id"], to_value(&y.id));
+    }
+    let (tx, ty) = (&x.transform, &y.transform);
+    for (f, a, b) in [("rotation", tx.rotation, ty.rotation), ("scale", tx.scale, ty.scale), ("x", tx.x, ty.x), ("y", tx.y, ty.y)] {
+        if differ(a, b) {
+            replace(ops, &["transform", f], to_value(&b));
+        }
+    }
+    for (f, a, b) in [("h", x.size.h, y.size.h), ("w", x.size.w, y.size.w)] {
+        if differ(a, b) {
+            replace(ops, &["size", f], to_value(&b));
+        }
+    }
+    if x.locked != y.locked {
+        replace(ops, &["locked"], to_value(&y.locked));
+    }
+    let name = |e: &Element| (!e.name.is_empty()).then(|| to_value(&e.name));
+    optional(ops, "name", name(x), name(y));
+    let placeholder = |e: &Element| e.placeholder.then(|| to_value(&true));
+    optional(ops, "placeholder", placeholder(x), placeholder(y));
+    optional(ops, "group", x.group.as_ref().map(to_value), y.group.as_ref().map(to_value));
+}
+
+/// Apply one op made by [`head_ops`] (`field` is the path after
+/// `/elements/<id>`) straight to `e`. `None`: not one of those ops.
+fn head_op(e: &mut Element, field: &[String], op: &PatchOperation) -> Option<Result<(), String>> {
+    fn get<T: serde::de::DeserializeOwned>(v: &Value) -> Result<T, String> {
+        T::deserialize(v).map_err(|err| format!("elements: {err}"))
+    }
+    let f: Vec<&str> = field.iter().map(String::as_str).collect();
+    let r = match (op, f.as_slice()) {
+        (PatchOperation::Replace(o), ["id"]) => get(&o.value).map(|v| e.id = v),
+        (PatchOperation::Replace(o), ["transform", k]) => get(&o.value).and_then(|v| match *k {
+            "x" => Ok(e.transform.x = v),
+            "y" => Ok(e.transform.y = v),
+            "scale" => Ok(e.transform.scale = v),
+            "rotation" => Ok(e.transform.rotation = v),
+            _ => Err(format!("elements: no transform field '{k}'")),
+        }),
+        (PatchOperation::Replace(o), ["size", k]) => get(&o.value).and_then(|v| match *k {
+            "w" => Ok(e.size.w = v),
+            "h" => Ok(e.size.h = v),
+            _ => Err(format!("elements: no size field '{k}'")),
+        }),
+        (PatchOperation::Replace(o), ["locked"]) => get(&o.value).map(|v| e.locked = v),
+        (PatchOperation::Add(o), ["name"]) => get(&o.value).map(|v| e.name = v),
+        (PatchOperation::Replace(o), ["name"]) => get(&o.value).map(|v| e.name = v),
+        (PatchOperation::Remove(_), ["name"]) => Ok(e.name.clear()),
+        (PatchOperation::Add(o), ["placeholder"]) => get(&o.value).map(|v| e.placeholder = v),
+        (PatchOperation::Replace(o), ["placeholder"]) => get(&o.value).map(|v| e.placeholder = v),
+        (PatchOperation::Remove(_), ["placeholder"]) => Ok(e.placeholder = false),
+        (PatchOperation::Add(o), ["group"]) => get(&o.value).map(|v| e.group = Some(v)),
+        (PatchOperation::Replace(o), ["group"]) => get(&o.value).map(|v| e.group = Some(v)),
+        (PatchOperation::Remove(_), ["group"]) => Ok(e.group = None),
+        _ => return None,
+    };
+    Some(r)
+}
+
+fn diff_sides(a: &Side, b: &Side, ids: &[&ElementId], lists: bool) -> Change {
+    let sides = (a, b);
+    let (a_doc, b_doc) = (a.meta, b.meta);
     let mut ops = vec![];
     let mut scalar = |name: &str, x: Value, y: Value| {
         if x != y {
             ops.push(PatchOperation::Replace(ReplaceOperation { path: ptr(&[name]), value: y }));
         }
     };
+    let (a, b) = (a_doc, b_doc);
     scalar("format_version", to_value(&a.format_version), to_value(&b.format_version));
     scalar("title", to_value(&a.title), to_value(&b.title));
     scalar("theme", to_value(&a.theme), to_value(&b.theme));
     scalar("next_id", to_value(&a.next_id), to_value(&b.next_id));
-    scalar("themes", to_value(&a.themes), to_value(&b.themes));
+    if a.themes != b.themes {
+        scalar("themes", to_value(&a.themes), to_value(&b.themes));
+    }
     scalar("play", to_value(&a.play), to_value(&b.play));
+    let (a, b) = (sides.0, sides.1);
 
-    // Elements: diff only the ones that differ.
+    // Elements: diff only the ones that differ, and only their heads when
+    // their kinds are the same.
     let (mut left, mut right) = (Map::new(), Map::new());
     for &id in ids {
-        let (x, y) = (a.elements.get(id), b.elements.get(id));
-        if x != y {
-            if let Some(x) = x {
-                left.insert(id.clone(), to_value(x));
-            }
-            if let Some(y) = y {
-                right.insert(id.clone(), to_value(y));
+        let (x, y) = (a.element(id), b.element(id));
+        match (x, y) {
+            (Some(x), Some(y)) if x == y => {}
+            (Some(x), Some(y)) if x.kind == y.kind => head_ops(id, x, y, &mut ops),
+            (x, y) => {
+                if let Some(x) = x {
+                    left.insert(id.clone(), to_value(x));
+                }
+                if let Some(y) = y {
+                    right.insert(id.clone(), to_value(y));
+                }
             }
         }
     }
@@ -203,15 +396,15 @@ fn diff_with(a: &Document, b: &Document, ids: &[&ElementId]) -> Change {
         ops.extend(json_patch::diff(&Value::Object(l), &Value::Object(r)).0);
     }
 
-    if a.soundtrack != b.soundtrack {
+    if a_doc.soundtrack != b_doc.soundtrack {
         // Absent when None, so add/remove rather than replace.
-        match &b.soundtrack {
+        match &b_doc.soundtrack {
             Some(t) => ops.push(PatchOperation::Add(AddOperation { path: ptr(&["soundtrack"]), value: to_value(t) })),
             None => ops.push(PatchOperation::Remove(RemoveOperation { path: ptr(&["soundtrack"]) })),
         }
     }
-    let z_order = if a.z_order != b.z_order { splices(&a.z_order, &b.z_order, |s| s.as_str()) } else { vec![] };
-    let path = if a.path != b.path { splices(&a.path, &b.path, |s: &PathStep| serde_json::to_string(s).unwrap_or_default()) } else { vec![] };
+    let z_order = if lists && a.z_order != b.z_order { splices(a.z_order, b.z_order, |s| s.as_str()) } else { vec![] };
+    let path = if lists && a.path != b.path { splices(a.path, b.path, |s: &PathStep| serde_json::to_string(s).unwrap_or_default()) } else { vec![] };
     Change { patch: Patch(ops), z_order, path }
 }
 
@@ -241,36 +434,58 @@ fn splices<'a, T: Clone, K: Eq + std::hash::Hash + Ord>(a: &'a [T], b: &'a [T], 
     out
 }
 
-/// `list` with `splices` applied, in one pass. `None` when they don't fit
-/// the list (it isn't the one they were made from).
-fn spliced<T: Clone>(list: &[T], splices: &[Splice<T>]) -> Option<Vec<T>> {
-    let grow: usize = splices.iter().map(|s| s.insert.len()).sum();
-    let mut out = Vec::with_capacity(list.len() + grow);
+/// Do `splices` fit `list` (in order, inside it, not overlapping)? When
+/// they don't, it isn't the list they were made from.
+fn splices_fit<T>(list: &[T], splices: &[Splice<T>]) -> bool {
     let mut cur = 0;
     for s in splices {
-        let end = s.at.checked_add(s.remove)?;
-        if s.at < cur || end > list.len() {
-            return None;
+        match s.at.checked_add(s.remove) {
+            Some(end) if s.at >= cur && end <= list.len() => cur = end,
+            _ => return false,
         }
-        out.extend_from_slice(&list[cur..s.at]);
-        out.extend(s.insert.iter().cloned());
-        cur = end;
     }
-    out.extend_from_slice(&list[cur..]);
-    Some(out)
+    true
+}
+
+/// Apply `splices` (which must fit, see [`splices_fit`]) to `list` in
+/// place. Kept items are moved, not copied: undoing an edit in a
+/// 200,000-element deck clones only what the splices insert.
+fn splice_in_place<T: Clone>(list: &mut Vec<T>, splices: &[Splice<T>]) {
+    if let [s] = splices {
+        // The usual case: one run (an add, a delete, bring to front).
+        list.splice(s.at..s.at + s.remove, s.insert.iter().cloned());
+        return;
+    }
+    let grow: usize = splices.iter().map(|s| s.insert.len()).sum();
+    let old = std::mem::take(list);
+    let mut out = Vec::with_capacity(old.len() + grow);
+    let mut it = old.into_iter();
+    let mut cur = 0;
+    for s in splices {
+        out.extend(it.by_ref().take(s.at - cur));
+        it.by_ref().take(s.remove).for_each(drop);
+        out.extend(s.insert.iter().cloned());
+        cur = s.at + s.remove;
+    }
+    out.extend(it);
+    *list = out;
 }
 
 /// Apply a change made by [`diff`] to `doc`. On error `doc` is unchanged.
 pub fn apply(doc: &mut Document, change: &Change) -> Result<(), String> {
-    // The lists first, into new Vecs: nothing is written until all of it fits.
-    let z_order = if change.z_order.is_empty() { None } else { Some(spliced(&doc.z_order, &change.z_order).ok_or("the draw order isn't the one this step was made from")?) };
-    let path = if change.path.is_empty() { None } else { Some(spliced(&doc.path, &change.path).ok_or("the path isn't the one this step was made from")?) };
-    apply_patch(doc, &change.patch)?;
-    if let Some(v) = z_order {
-        doc.z_order = v;
+    // Check that everything fits before anything is written.
+    if !splices_fit(&doc.z_order, &change.z_order) {
+        return Err("the draw order isn't the one this step was made from".into());
     }
-    if let Some(v) = path {
-        doc.path = v;
+    if !splices_fit(&doc.path, &change.path) {
+        return Err("the path isn't the one this step was made from".into());
+    }
+    apply_patch(doc, &change.patch)?;
+    if !change.z_order.is_empty() {
+        splice_in_place(&mut doc.z_order, &change.z_order);
+    }
+    if !change.path.is_empty() {
+        splice_in_place(&mut doc.path, &change.path);
     }
     Ok(())
 }
@@ -279,9 +494,11 @@ fn apply_patch(doc: &mut Document, patch: &Patch) -> Result<(), String> {
     if patch.0.is_empty() {
         return Ok(());
     }
-    // Which parts of the document the patch touches.
-    let mut fields = BTreeSet::new();
-    let mut ids = BTreeSet::new();
+    // Each op's path, split: (field, element id, the rest).
+    let mut split = Vec::with_capacity(patch.0.len());
+    // Elements a patch replaces or changes the kind of; for the others only
+    // the head (everything but `kind`) is patched.
+    let mut whole = BTreeSet::new();
     for op in &patch.0 {
         let path = match op {
             PatchOperation::Add(o) => &o.path,
@@ -292,13 +509,64 @@ fn apply_patch(doc: &mut Document, patch: &Patch) -> Result<(), String> {
         };
         let mut t = path.tokens();
         let field = t.next().map(|t| t.decoded().into_owned()).ok_or("empty path")?;
+        let mut id = None;
+        let mut rest: Vec<String> = vec![];
         if field == "elements" {
-            if let Some(id) = t.next() {
-                ids.insert(id.decoded().into_owned());
+            if let Some(i) = t.next() {
+                let i = i.decoded().into_owned();
+                rest = t.map(|t| t.decoded().into_owned()).collect();
+                if rest.first().is_none_or(|f| f == "kind") {
+                    whole.insert(i.clone());
+                }
+                id = Some(i);
             }
         }
-        fields.insert(field);
+        split.push((field, id, rest));
     }
+
+    // Head changes made by `head_ops` are applied straight to copies of
+    // the heads (most of an undo of a big move); anything else goes
+    // through a JSON view.
+    let mut heads: BTreeMap<ElementId, Element> = BTreeMap::new();
+    let mut by_json: BTreeSet<ElementId> = BTreeSet::new();
+    for (op, (_, id, rest)) in patch.0.iter().zip(&split) {
+        let Some(id) = id.as_ref().filter(|i| !whole.contains(*i) && !by_json.contains(*i)) else { continue };
+        if !heads.contains_key(id) {
+            let Some(e) = doc.elements.get(id) else { return Err(format!("elements: no element '{id}' to change")) };
+            let head = Element {
+                id: e.id.clone(),
+                transform: e.transform,
+                size: e.size,
+                locked: e.locked,
+                name: e.name.clone(),
+                placeholder: e.placeholder,
+                group: e.group.clone(),
+                kind: crate::model::ElementKind::Frame(Default::default()),
+            };
+            heads.insert(id.clone(), head);
+        }
+        match head_op(heads.get_mut(id).expect("just added"), rest, op) {
+            Some(r) => r?,
+            None => {
+                heads.remove(id);
+                by_json.insert(id.clone());
+            }
+        }
+    }
+    let mut fields = BTreeSet::new();
+    let mut ids = BTreeSet::new();
+    let mut json_ops = vec![];
+    for (op, (field, id, _)) in patch.0.iter().zip(&split) {
+        if id.as_ref().is_some_and(|i| heads.contains_key(i)) {
+            continue;
+        }
+        if let Some(i) = id {
+            ids.insert(i.clone());
+        }
+        fields.insert(field.clone());
+        json_ops.push(op.clone());
+    }
+    let patch = &Patch(json_ops);
 
     // Pruned JSON view: just those fields and elements.
     let mut view = Map::new();
@@ -319,13 +587,17 @@ fn apply_patch(doc: &mut Document, patch: &Patch) -> Result<(), String> {
             "play" => to_value(&doc.play),
             "z_order" => to_value(&doc.z_order),
             "path" => to_value(&doc.path),
-            "elements" => Value::Object(ids.iter().filter_map(|id| doc.elements.get(id).map(|e| (id.clone(), to_value(e)))).collect()),
+            "elements" => Value::Object(
+                ids.iter().filter_map(|id| doc.elements.get(id).map(|e| (id.clone(), if whole.contains(id) { to_value(e) } else { head_value(e) }))).collect(),
+            ),
             other => return Err(format!("unknown document field '{other}'")),
         };
         view.insert(f.clone(), v);
     }
     let mut view = Value::Object(view);
-    json_patch::patch(&mut view, patch).map_err(|e| e.to_string())?;
+    if !patch.0.is_empty() {
+        json_patch::patch(&mut view, patch).map_err(|e| e.to_string())?;
+    }
 
     // Decode everything before touching `doc`, so a failure changes nothing.
     let mut view = match view {
@@ -343,7 +615,24 @@ fn apply_patch(doc: &mut Document, patch: &Patch) -> Result<(), String> {
     let play: Option<crate::model::PlaySettings> = take(&mut view, "play")?;
     let z_order: Option<Vec<ElementId>> = take(&mut view, "z_order")?;
     let path: Option<Vec<PathStep>> = take(&mut view, "path")?;
-    let elements: Option<BTreeMap<ElementId, Element>> = take(&mut view, "elements")?;
+    // Whole elements, and patched heads to put on the elements as they are.
+    let mut elements: Option<BTreeMap<ElementId, Element>> = None;
+    let mut json_heads: Vec<(ElementId, Head)> = vec![];
+    if let Some(v) = view.remove("elements") {
+        let Value::Object(m) = v else { return Err("elements: not an object".into()) };
+        let mut els = BTreeMap::new();
+        for (id, v) in m {
+            if whole.contains(&id) {
+                els.insert(id, serde_json::from_value(v).map_err(|e| format!("elements: {e}"))?);
+            } else {
+                if !doc.elements.contains_key(&id) {
+                    return Err(format!("elements: no element '{id}' to change"));
+                }
+                json_heads.push((id, serde_json::from_value(v).map_err(|e| format!("elements: {e}"))?));
+            }
+        }
+        elements = Some(els);
+    }
     let soundtrack: Option<crate::model::Soundtrack> = take(&mut view, "soundtrack")?;
     if fields.contains("soundtrack") {
         doc.soundtrack = soundtrack;
@@ -373,8 +662,18 @@ fn apply_patch(doc: &mut Document, patch: &Patch) -> Result<(), String> {
     if let Some(v) = path {
         doc.path = v;
     }
+    for (id, h) in json_heads {
+        if let Some(e) = doc.elements.get_mut(&id) {
+            set_head(e, h);
+        }
+    }
+    for (id, h) in heads {
+        if let Some(e) = doc.elements.get_mut(&id) {
+            (e.id, e.transform, e.size, e.locked, e.name, e.placeholder, e.group) = (h.id, h.transform, h.size, h.locked, h.name, h.placeholder, h.group);
+        }
+    }
     if let Some(mut els) = elements {
-        for id in ids {
+        for id in whole {
             match els.remove(&id) {
                 Some(e) => {
                     doc.elements.insert(id, e);
@@ -503,6 +802,40 @@ mod tests {
         assert_eq!(d.forward.op_count(), 1);
         assert_eq!(d.forward.patch.0[0].to_string().contains("/elements/e7/transform/x"), true);
         let mut c = b.clone();
+        apply(&mut c, &d.backward).unwrap();
+        assert_eq!(c, a);
+    }
+
+    /// The head of an element is the element's JSON without `kind`, so a
+    /// field added to `Element` and not to the head fails here.
+    #[test]
+    fn head_is_the_element_without_its_kind() {
+        let mut e = deck().elements["e1"].clone();
+        (e.locked, e.name, e.placeholder, e.group) = (true, "Intro".into(), true, Some("g1".into()));
+        e.transform.rotation = 30.0;
+        let mut whole = to_value(&e);
+        whole.as_object_mut().unwrap().remove("kind");
+        assert_eq!(head_value(&e), whole);
+        let mut back = deck().elements["e2"].clone();
+        set_head(&mut back, serde_json::from_value(head_value(&e)).unwrap());
+        assert_eq!(Element { kind: e.kind.clone(), ..back }, e);
+    }
+
+    /// A move of an element with a long text stores and patches only its
+    /// coordinates, and a change of kind still goes there and back.
+    #[test]
+    fn head_and_kind_changes_round_trip() {
+        let a = deck();
+        let mut b = a.clone();
+        b.elements.get_mut("e1").unwrap().transform.x = 5.0;
+        b.elements.get_mut("e2").unwrap().name = "Two".into();
+        b.elements.get_mut("e3").unwrap().kind = crate::model::ElementKind::Frame(Default::default());
+        b.elements.get_mut("e4").unwrap().group = Some("g".into());
+        let d = Delta::between(&a, &b);
+        assert!(d.forward.patch.0.iter().all(|op| !op.to_string().contains("/elements/e1/kind")), "{:?}", d.forward);
+        let mut c = a.clone();
+        apply(&mut c, &d.forward).unwrap();
+        assert_eq!(c, b);
         apply(&mut c, &d.backward).unwrap();
         assert_eq!(c, a);
     }

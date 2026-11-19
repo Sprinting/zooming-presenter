@@ -259,3 +259,26 @@ fn r28_no_file_is_touched_before_hello() {
     let e = rpc_err(anon.call("no_such_method", json!({})));
     assert_eq!(e.kind(), "unauthenticated", "{e}");
 }
+
+/// Saves run on a worker: two agents saving at once both get their
+/// reply (the second waits for the first), and a save that fails says so
+/// to the agent that asked.
+#[test]
+fn saves_run_aside_one_at_a_time() {
+    let dir = scratch();
+    let h = start(Permission::Full);
+    let mut a = connect(&h, "saver-a");
+    let mut b = connect(&h, "saver-b");
+    a.call("describe", json!({})).unwrap();
+    a.call("apply", json!({"command":{"op":"add_text","text":"x"}})).unwrap();
+    let (pa, pb) = (dir.join("both-a.zebra"), dir.join("both-b.zebra"));
+    let pb2 = pb.clone();
+    let t = std::thread::spawn(move || b.call("save", json!({"path": pb2})).map(|v| v["ok"].clone()));
+    assert_eq!(a.call("save", json!({"path": pa})).unwrap()["ok"], true);
+    assert_eq!(t.join().unwrap().unwrap(), true);
+    assert!(pa.exists() && pb.exists());
+    assert_eq!(a.call("state", json!({})).unwrap()["dirty"], false);
+    let e = rpc_err(a.call("save", json!({"path": "/nonexistent-dir-for-zebra/x.zebra"})));
+    assert_eq!(e.kind(), "io", "{e:?}");
+    h.stop().unwrap();
+}

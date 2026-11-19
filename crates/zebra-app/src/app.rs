@@ -171,6 +171,12 @@ pub struct ZebraApp {
     /// a few times a frame, and every frame while idle.
     nearest_step: std::cell::Cell<Option<((u64, u64, [u64; 6]), Option<usize>)>>,
     pub queued: Vec<Action>,
+    /// Actions held while the document is being saved (Close, Quit, Open,
+    /// another Save, and what a Save Changes sheet's Save goes on to do).
+    /// They run when the save is done, and are dropped if it failed.
+    pub after_save: Vec<Action>,
+    /// A big file being opened on a worker thread.
+    pub opening: Option<crate::opening::Opening>,
     pub scroll_mode: ScrollMode,
     /// Reduce Motion chosen in Settings; `None` follows the system.
     pub motion_override: Option<bool>,
@@ -367,6 +373,8 @@ impl ZebraApp {
             flash_step: None,
             nearest_step: Default::default(),
             queued: vec![],
+            after_save: vec![],
+            opening: None,
             scroll_mode,
             motion_override,
             last_autosave: 0.0,
@@ -585,6 +593,11 @@ impl ZebraApp {
                 self.spawn.push(a);
             }
             Quit if self.hosted => self.quit_all = true,
+            // The document is being written: closing it, replacing it or
+            // saving it again waits for that save, then asks afresh.
+            New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close | Save | SaveAs if self.editor.saving().is_some() => {
+                self.after_save.push(a);
+            }
             New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close if self.editor.dirty() && self.sheet.is_none() && !self.force_quit => {
                 crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(a));
             }
@@ -1117,10 +1130,27 @@ impl ZebraApp {
     // ------------------------------------------------------------------
     // Files
 
+    /// Open `p` in this window: a big file on a worker thread, with
+    /// progress in the window; a small one at once.
     pub fn open_path(&mut self, p: &std::path::Path) {
-        match zebra_core::io::load(p) {
-            Ok(doc) => {
-                self.editor.load(doc, Some(p.to_path_buf()));
+        if crate::opening::is_big(p) {
+            crate::opening::start(self, p);
+            return;
+        }
+        let r = zebra_core::io::load(p).map(|doc| zebra_core::Editor::prepare(doc, &*self.editor.measure, &|_| {}));
+        self.finish_open(p, r);
+    }
+
+    /// The file being opened, or the one this window has open.
+    pub fn shown_file(&self) -> Option<&std::path::Path> {
+        self.opening.as_ref().map(|o| o.path.as_path()).or(self.editor.file_path.as_deref())
+    }
+
+    /// Load `p`, read and prepared, or say why it couldn't be opened.
+    pub fn finish_open(&mut self, p: &std::path::Path, r: zebra_core::ZResult<zebra_core::Prepared>) {
+        match r {
+            Ok(prepared) => {
+                self.editor.load_prepared(prepared, Some(p.to_path_buf()));
                 self.after_load();
                 self.push_recent(p.to_path_buf());
                 self.recovered = crate::files::autosave_newer(p);
@@ -1214,22 +1244,54 @@ impl ZebraApp {
         self.save_to(&path)
     }
 
+    /// Start saving to `path` on a worker thread (the window stays
+    /// responsive); [`ZebraApp::poll_save`] finishes it. False if it
+    /// couldn't start (the person has been told why).
     pub fn save_to(&mut self, path: &std::path::Path) -> bool {
-        match zebra_core::io::save(&mut self.editor.doc, path) {
-            Ok(()) => {
-                self.editor.mark_saved(Some(path.to_path_buf()));
-                crate::files::remove_autosave(path);
-                crate::files::remove_autosave_untitled(self);
-                self.push_recent(path.to_path_buf());
-                true
-            }
+        let ctx = self.ctx.clone();
+        let viewport = self.viewport;
+        match self.editor.start_save(path.to_path_buf(), H, Box::new(move || ctx.request_repaint_of(viewport))) {
+            Ok(()) => true,
             Err(e) => {
-                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                crate::sheets::request(
-                    self,
-                    crate::sheets::SheetKind::Alert { title: crate::t!("app-save-failed-title", name = name.as_str()), message: e.message.clone() },
-                );
+                self.save_failed(path, &e);
                 false
+            }
+        }
+    }
+
+    fn save_failed(&mut self, path: &std::path::Path, e: &zebra_core::ZError) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        crate::sheets::request(self, crate::sheets::SheetKind::Alert { title: crate::t!("app-save-failed-title", name = name.as_str()), message: e.message.clone() });
+    }
+
+    /// Wait for the save in flight, then finish it (tests, scripts).
+    pub fn wait_save(&mut self) {
+        self.editor.wait_save();
+        self.poll_save();
+    }
+
+    /// Finish a save that is done (the person's or an agent's), and run
+    /// what waited for it.
+    pub fn poll_save(&mut self) {
+        self.editor.poll_save();
+        let mut failed = false;
+        for s in self.editor.take_saved(|s| s.by == H) {
+            match s.result {
+                Ok(()) => {
+                    crate::files::remove_autosave(&s.path);
+                    crate::files::remove_autosave_untitled(self);
+                    self.push_recent(s.path);
+                }
+                Err(e) => {
+                    failed = true;
+                    self.save_failed(&s.path, &e);
+                }
+            }
+        }
+        if self.editor.saving().is_none() && !self.after_save.is_empty() {
+            let waiting = std::mem::take(&mut self.after_save);
+            if !failed {
+                self.queued.extend(waiting);
             }
         }
     }
@@ -1312,6 +1374,8 @@ impl ZebraApp {
     /// may be editing a minimised window), and the menu and queued actions
     /// of a window that is out of sight (Quit, Close, Save).
     fn background_work(&mut self, ctx: &egui::Context) {
+        self.poll_save();
+        crate::opening::poll(self);
         crate::files::autosave_tick(self);
         if let Some(wait) = crate::files::autosave_due_in(self) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
@@ -1588,6 +1652,14 @@ impl ZebraApp {
                 if !self.close_me && self.sheet.is_none() {
                     self.queued.push(Action::Close);
                 }
+            }
+            return;
+        }
+        if ctx.input(|i| i.viewport().close_requested()) && self.editor.saving().is_some() {
+            // Quitting waits for the save in flight.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if !self.after_save.contains(&Action::Quit) {
+                self.after_save.push(Action::Quit);
             }
             return;
         }

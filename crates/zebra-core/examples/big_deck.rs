@@ -57,6 +57,39 @@ fn main() {
     time("add frame", &mut || {
         ed.apply(cmd(json!({"op":"add_frame","x":-5000,"y":-5000,"w":1000,"h":700})), h.clone()).unwrap();
     });
-    let doc = ed.doc.clone();
-    time("load", &mut || ed.load(doc.clone(), None));
+    // Single edits are a few ms on a shared machine: the median of 7.
+    let (mut add, mut undo, mut redo) = (vec![], vec![], vec![]);
+    for i in 0..7 {
+        let t = Instant::now();
+        ed.apply(cmd(json!({"op":"add_text","text":"hello","x":i * 10,"y":0})), Origin::Human).unwrap();
+        add.push(t.elapsed().as_secs_f64());
+        let t = Instant::now();
+        ed.undo(Origin::Human).unwrap();
+        undo.push(t.elapsed().as_secs_f64());
+        let t = Instant::now();
+        ed.redo(Origin::Human).unwrap();
+        redo.push(t.elapsed().as_secs_f64());
+    }
+    for (label, mut v) in [("add text", add), ("undo add text", undo), ("redo add text", redo)] {
+        v.sort_by(f64::total_cmp);
+        println!("{label}: {:.1} ms (median of 7)", v[3] * 1e3);
+    }
+    let first = ed.doc.z_order[0].clone();
+    time("bring one to front", &mut || {
+        ed.apply(cmd(json!({"op":"z_order","ids":[first],"order":"front"})), h.clone()).unwrap();
+    });
+    time("undo bring to front", &mut || {
+        ed.undo(h.clone()).unwrap();
+    });
+    // `--keep <path>`: save there and leave the file (for the app harness).
+    let keep = std::env::args().skip_while(|a| a != "--keep").nth(1);
+    let file = keep.clone().map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join(format!("big_deck_{}.zebra", std::process::id())));
+    time("save", &mut || zebra_core::io::save(&mut ed.doc, &file).unwrap());
+    let mut doc = None;
+    time("open (parse)", &mut || doc = Some(zebra_core::io::load(&file).unwrap()));
+    let doc = doc.unwrap();
+    time("open (load into editor)", &mut || ed.load(doc.clone(), None));
+    if keep.is_none() {
+        let _ = std::fs::remove_file(&file);
+    }
 }
