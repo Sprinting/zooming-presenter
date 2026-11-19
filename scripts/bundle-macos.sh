@@ -3,7 +3,8 @@
 # agent can always run it by full path and the app can offer
 # "Install command-line tool".
 #
-#   scripts/bundle-macos.sh                 # unsigned/ad-hoc, direct download
+#   scripts/bundle-macos.sh                 # signed "Zebra Dev" (test builds)
+#   ADHOC=1 scripts/bundle-macos.sh         # ad-hoc (no certificate)
 #   SIGN_ID="Developer ID Application: …" scripts/bundle-macos.sh
 #   APPSTORE=1 SIGN_ID="Apple Distribution: …" scripts/bundle-macos.sh
 #   DSYM=1 scripts/bundle-macos.sh          # also target/Zebra.app.dSYM
@@ -97,7 +98,18 @@ install_name_tool -id @rpath/libpdfium.dylib "$APP/Contents/Frameworks/libpdfium
 cp "$PDFIUM_DIR/LICENSE" "$APP/Contents/Resources/Licenses/PDFium/pdfium-binaries.txt"
 cp "$PDFIUM_DIR"/licenses/* "$APP/Contents/Resources/Licenses/PDFium/"
 
-ID=${SIGN_ID:--}
+# Test builds are always signed with the "Zebra Dev" certificate in the
+# login keychain, so macOS permissions survive rebuilds (Kartik, 19 Nov).
+# Ad-hoc signing only when asked for: ADHOC=1.
+if [ "${ADHOC:-0}" = 1 ]; then
+  ID=-
+else
+  ID=${SIGN_ID:-Zebra Dev}
+  if ! security find-identity -p codesigning | grep -qF "\"$ID\""; then
+    echo "No code-signing identity \"$ID\" in the keychain. Set SIGN_ID, or ADHOC=1 for an ad-hoc build." >&2
+    exit 1
+  fi
+fi
 # Nested code is signed first, with the same identity (library validation).
 codesign --force --options runtime ${SIGN_ID:+--timestamp} --sign "$ID" "$APP/Contents/Frameworks/libpdfium.dylib"
 if [ "${APPSTORE:-0}" = 1 ]; then
