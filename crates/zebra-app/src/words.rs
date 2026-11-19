@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn layout_and_template_undo_names_are_names() {
         let l = command(&Command::AddLayout { layout: "title_bullets".into(), x: 0.0, y: 0.0, width: None, add_to_path: true });
-        assert_eq!(l, format!("Insert layout: {}", tr("layout-name-title-bullets")));
+        assert_eq!(l, format!("Insert Layout: {}", tr("layout-name-title-bullets")));
         assert!(!l.contains("title_bullets"), "{l}");
         let t = command(&Command::ApplyTemplate { template: "big_picture".into(), replace: false });
         assert_eq!(t, format!("Template: {}", tr("template-name-big-picture")));
@@ -209,7 +209,7 @@ mod tests {
     fn delete_counts_its_objects() {
         let one = command(&Command::Delete { ids: vec!["a".into()] });
         let two = command(&Command::Delete { ids: vec!["a".into(), "b".into()] });
-        assert_eq!(one, "Delete 1 object");
-        assert_eq!(two, "Delete 2 objects");
+        assert_eq!(one, "Delete 1 Object");
+        assert_eq!(two, "Delete 2 Objects");
     }
 }

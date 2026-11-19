@@ -56,8 +56,8 @@ app-save-failed-title = The document “{ $name }” could not be saved.
 app-undo-lock = Lock
 app-undo-unlock = Unlock
 app-undo-paste = Paste
-app-undo-add-to-path = Add to path
-app-undo-add-current-view = Add current view
+app-undo-add-to-path = Add to Path
+app-undo-add-current-view = Add Current View
 app-undo-nudge = Nudge
 
 ## ---- end app.rs ----
@@ -462,7 +462,7 @@ inspector-align-right = Align Right
 inspector-bullets = Bullets
 inspector-bullets-none = None
 inspector-bullets-on = Bullets
-inspector-undo-format-paragraphs = Format paragraphs
+inspector-undo-format-paragraphs = Format Paragraphs
 inspector-edit-text = Edit Text
 # $key is the Return key glyph.
 inspector-edit-text-tip = Edit the text in place  { $key } or double-click
@@ -599,7 +599,7 @@ library-icons-count = { $count ->
 # Name of a built-in theme copied for editing.
 theme-editor-custom-name = { $name } (custom)
 theme-editor-window-title = Theme
-theme-editor-undo-edit = Edit theme
+theme-editor-undo-edit = Edit Theme
 theme-editor-name = Name
 theme-editor-start-from = Start from
 theme-editor-choose-theme = Choose a theme…
@@ -850,12 +850,12 @@ menu-mac-bring-all-to-front = Bring All to Front
 canvas-chip-zoom-into-frame = Zoom into Frame
 canvas-chip-rename-hint = Double-click to rename
 canvas-toast-rename-failed = Couldn't rename the frame.
-canvas-undo-move-connector-end = Move connector end
+canvas-undo-move-connector-end = Move Connector End
 canvas-undo-rotate = Rotate
 canvas-undo-resize = Resize
 canvas-undo-move = Move
-canvas-undo-add-text = Add text
-canvas-undo-edit-text = Edit text
+canvas-undo-add-text = Add Text
+canvas-undo-edit-text = Edit Text
 # $step is the 1-based step number.
 canvas-toast-step-retargeted = Step { $step } now points here
 canvas-toast-framed-objects = { $count ->
@@ -928,7 +928,7 @@ present-dwell-default-off = Default (off)
 present-dwell-own = Own time
 present-dwell-presentation-default = Presentation default
 present-dwell-own-for-step = Own time for this step
-present-undo-change-step-timing = Change step timing
+present-undo-change-step-timing = Change Step Timing
 # A number of seconds, $secs already formatted ("10", "1.5").
 present-seconds = { $secs } s
 # Unit after a seconds field.
@@ -950,7 +950,10 @@ present-toast-autoplay-paused = Autoplay paused ({ $key } to resume)
 present-toast-autoplay-resumed = Autoplay resumed
 present-presenter-window-title = Presenter View
 present-presenter-step-of = Step { $step } of { $count }
-present-presenter-overview = Overview · { $count } steps
+present-presenter-overview = Overview · { $count ->
+    [one] 1 step
+   *[other] { $count } steps
+}
 present-presenter-autoplay-paused = Autoplay paused
 present-presenter-autoplay = Autoplay { $time }
 present-timer-reset = Reset
@@ -980,7 +983,10 @@ present-toast-opened-link = Opened { $url }
 # Presentation HUD. $key is the key glyph that returns to the path (→).
 present-hud-off-path = { $step } of { $count }  ·  { $key } returns to the path
 present-hud-step-of = { $step } of { $count }
-present-hud-overview = Overview  ·  { $count } steps
+present-hud-overview = Overview  ·  { $count ->
+    [one] 1 step
+   *[other] { $count } steps
+}
 # $key is the exit key name (Esc).
 present-hud-exit = { $key } to exit
 present-hud-previous-step = Previous Step
@@ -1044,7 +1050,7 @@ media-music = Music
 media-music-name = Music: { $name }
 media-remove = Remove
 media-volume = Volume
-media-undo-change-soundtrack = Change soundtrack
+media-undo-change-soundtrack = Change Soundtrack
 media-voiceover-heading = STEP { $step } VOICE-OVER
 media-add-recording = Add Recording…
 media-add-recording-tip = Audio that plays when this step is reached
@@ -1138,70 +1144,73 @@ shape-arrow = Arrow
 shape-double-arrow = Double Arrow
 
 ## Object types, where an object has no name or text of its own
-element-frame = frame
-element-text = text
-element-shape = shape
-element-image = image
-element-video = video
-element-ink = drawing
-element-icon = icon
-element-connector = connector
+element-frame = Frame
+element-text = Text
+element-shape = Shape
+element-image = Image
+element-video = Video
+element-ink = Drawing
+element-icon = Icon
+element-connector = Connector
 
 ## History: the Edit menu's Undo/Redo, the Activity panel, the status bar
 history-add-element = Add { $kind }
-history-add-text = Add text "{ $text }"
-history-add-frame = Add frame
+history-add-text = Add Text “{ $text }”
+history-add-frame = Add Frame
 history-add-shape = Add { $shape }
-history-insert-image = Insert image
-history-add-icon = Add icon { $name }
-history-add-connector = Add connector
-history-insert-video = Insert video
-history-replace-image = Replace image
-history-replace-video = Replace video
-history-set-poster = Set poster frame
-history-add-soundtrack = Add soundtrack
-history-change-soundtrack = Change soundtrack
-history-remove-soundtrack = Remove soundtrack
-history-remove-voiceover = Remove voice-over
-history-add-voiceover = Add voice-over
+history-insert-image = Insert Image
+history-add-icon = Add Icon { $name }
+history-add-connector = Add Connector
+history-insert-video = Insert Video
+history-replace-image = Replace Image
+history-replace-video = Replace Video
+history-set-poster = Set Poster Frame
+history-add-soundtrack = Add Soundtrack
+history-change-soundtrack = Change Soundtrack
+history-remove-soundtrack = Remove Soundtrack
+history-remove-voiceover = Remove Voice-Over
+history-add-voiceover = Add Voice-Over
 history-crop = Crop
 history-highlight = Highlight
 history-draw = Draw
-history-edit-text = Edit text
-history-format-text = Format text
-history-format-paragraphs = Format paragraphs
-history-change-properties = Change properties
+history-edit-text = Edit Text
+history-format-text = Format Text
+history-format-paragraphs = Format Paragraphs
+history-change-properties = Change Properties
 history-move = Move
 history-resize = Resize
 history-rotate = Rotate
 history-delete = Delete { $count ->
-        [one] 1 object
-       *[other] { $count } objects
+        [one] 1 Object
+       *[other] { $count } Objects
     }
 history-duplicate = Duplicate
-history-change-order = Change order
-history-frame-selection = Frame selection
+history-change-order = Change Order
+history-frame-selection = Frame Selection
 history-arrange = Arrange
 history-align = Align
 history-group = Group
 history-ungroup = Ungroup
-history-add-step = Add path step
-history-remove-step = Remove path step
-history-reorder-path = Reorder path
-history-edit-step = Edit path step
-history-clear-path = Clear path
-history-path-from-frames = Path from frames
+history-add-step = Add Path Step
+history-remove-step = Remove Path Step
+history-reorder-path = Reorder Path
+history-edit-step = Edit Path Step
+history-clear-path = Clear Path
+history-path-from-frames = Path from Frames
 history-theme = Theme: { $theme }
 history-rename = Rename
-history-change-autoplay = Change autoplay
-history-edit-theme = Edit theme
-history-delete-theme = Delete theme
-history-add-picture = Add picture
+history-change-autoplay = Change Autoplay
+history-edit-theme = Edit Theme
+history-delete-theme = Delete Theme
+history-add-picture = Add Picture
 history-template = Template: { $template }
-history-insert-layout = Insert layout: { $layout }
-history-insert-symbol = Insert symbol { $name }
-history-insert-diagram = Insert diagram: { $diagram }
-history-changes = { $count } changes
+history-insert-layout = Insert Layout: { $layout }
+history-insert-symbol = Insert Symbol { $name }
+history-insert-diagram = Insert Diagram: { $diagram }
+history-changes = { $count ->
+    [one] 1 Change
+   *[other] { $count } Changes
+}
 
 ## Built-in themes, layouts and templates (names and descriptions)
 theme-name-classic = Classic
