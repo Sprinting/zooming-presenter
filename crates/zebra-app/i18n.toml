@@ -1,7 +1,7 @@
 # Project Fluent (https://projectfluent.org) via i18n-embed.
 # Every string a person sees in the app lives in i18n/<lang>/zebra_app.ftl;
-# English (en-US) is the source and the fallback.
-fallback_language = "en-US"
+# British English (en-GB) is the source and the fallback.
+fallback_language = "en-GB"
 
 [fluent]
 assets_dir = "i18n"

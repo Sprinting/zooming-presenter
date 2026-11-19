@@ -1,5 +1,5 @@
 //! Every word a person reads comes from the Fluent file
-//! (`i18n/en-US/zebra-app.ftl`), and every shortcut shown comes from the
+//! (`i18n/en-GB/zebra-app.ftl`), and every shortcut shown comes from the
 //! keymap. This test reads the app's source and fails on a string literal
 //! that reaches the screen any other way.
 //!
@@ -260,7 +260,7 @@ fn no_interface_text_outside_the_fluent_file() {
         let rel = f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
         bad.extend(scan(&rel, &std::fs::read_to_string(f).unwrap()));
     }
-    assert!(bad.is_empty(), "Interface text written into the code. Add a key to i18n/en-US/zebra-app.ftl and use crate::t!, or Action::shortcut_text / i18n::key_text for keys:\n{}", bad.join("\n"));
+    assert!(bad.is_empty(), "Interface text written into the code. Add a key to i18n/en-GB/zebra-app.ftl and use crate::t!, or Action::shortcut_text / i18n::key_text for keys:\n{}", bad.join("\n"));
 }
 
 #[test]

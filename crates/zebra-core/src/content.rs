@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// The app's English strings (the source language).
-const ENGLISH_FTL: &str = include_str!("../../zebra-app/i18n/en-US/zebra-app.ftl");
+const ENGLISH_FTL: &str = include_str!("../../zebra-app/i18n/en-GB/zebra-app.ftl");
 
 /// Every key built-in content may use starts with this.
 pub const PREFIX: &str = "content-";
