@@ -15,8 +15,9 @@
 //! the keys back. The step selection is by step number, apart from the
 //! canvas selection: a frame used by two steps lights only the one picked.
 //!
-//! Insert between steps: hovering the gap between two rows shows an
-//! insertion line with a +. It inserts an empty row that waits for a frame:
+//! Insert between steps: hovering the gap between two rows (or above the
+//! first) shows an insertion line with a +. It inserts an empty row that
+//! waits for a frame:
 //! the next frame clicked or drawn on the canvas fills it, as one undo step.
 //! Escape, a click on empty canvas or elsewhere in the sidebar cancels it.
 //! The empty row is never part of the document.
@@ -427,13 +428,15 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         let row_h = th + 26.0;
         // As the rows were spaced when each was allocated in turn.
         let pitch = row_h + 2.0 + ui.spacing().item_spacing.y;
-        let origin = ui.max_rect().min;
+        // Room above step 1 as between two rows, for the gap's + there.
+        let top = pitch - row_h;
+        let origin = ui.max_rect().min + EVec2::new(0.0, top);
         let slot_rect = |k: usize| Rect::from_min_size(origin + EVec2::new(0.0, k as f32 * pitch), EVec2::new(tw, row_h));
         // Step i's place in the list, after the empty row if there is one.
         let slot = |i: usize| i + gap_at.is_some_and(|g| i >= g) as usize;
         rows = (0..n).map(|i| slot_rect(slot(i))).collect();
         empty_row = gap_at.map(slot_rect);
-        ui.allocate_space(EVec2::new(tw, slots as f32 * pitch));
+        ui.allocate_space(EVec2::new(tw, top + slots as f32 * pitch));
         if let Some(pk) = app.step_pick.as_mut().filter(|pk| !pk.shown) {
             pk.shown = true;
             if let Some(r) = empty_row {
@@ -442,8 +445,8 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         } else if let Some(i) = scroll_to.filter(|i| *i < n) {
             ui.scroll_to_rect(rows[i], None);
         }
-        let first = ((view.min.y / pitch).floor().max(0.0) as usize).min(slots);
-        let last = ((view.max.y / pitch).ceil().max(0.0) as usize).min(slots);
+        let first = (((view.min.y - top) / pitch).floor().max(0.0) as usize).min(slots);
+        let last = (((view.max.y - top) / pitch).ceil().max(0.0) as usize).min(slots);
         // The steps in those places.
         let step_of = |k: usize| match gap_at {
             Some(g) if k > g => k - 1,
@@ -478,14 +481,14 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
                 empty_step_row(ui, app.uid("path-empty-step"), p, r, num_w, th, g + 1);
             }
         }
-        // Insert between steps: the gap nearest the pointer shows an
-        // insertion line with a + (Keynote's navigator).
-        let idle = dragging.is_none() && gap_at.is_none() && app.editor.doc.path.len() == n && n >= 2;
+        // Insert between steps, or above step 1: the gap nearest the
+        // pointer shows an insertion line with a + (Keynote's navigator).
+        let idle = dragging.is_none() && gap_at.is_none() && app.editor.doc.path.len() == n && n >= 1;
         if let Some(pp) = pointer.filter(|pp| idle && ui.clip_rect().contains(*pp) && pp.x >= origin.x && pp.x <= origin.x + tw) {
             let k = ((pp.y - origin.y) / pitch).round();
-            if k >= 1.0 && (k as usize) < n {
+            if k >= 0.0 && (k as usize) < n {
                 let k = k as usize;
-                let y = (rows[k - 1].max.y + rows[k].min.y) / 2.0;
+                let y = if k == 0 { rows[0].min.y - top / 2.0 } else { (rows[k - 1].max.y + rows[k].min.y) / 2.0 };
                 if (pp.y - y).abs() <= 7.0 {
                     let c = Pos2::new(origin.x + num_w / 2.0 + 1.0, y);
                     let tip = crate::t!("sidebar-insert-step-tip");

@@ -453,3 +453,64 @@ fn a_canvas_selection_takes_the_keys_from_the_list() {
     assert_eq!(h.state().selected_step, Some(1), "Down pans; the step stays");
     assert_eq!(h.state().editor.doc.elements.len(), n);
 }
+
+/// Spec 14 item 4: the gap above step 1 offers the + too. It inserts an
+/// empty row before step 1 that a clicked frame fills, as one undo step;
+/// cancelled, it leaves nothing.
+#[test]
+fn the_gap_above_step_one_inserts_a_first_step() {
+    let mut h = harness();
+    long_path(&mut h, 3);
+    let extra = frame(h.state_mut(), 1000.0, false);
+    h.state_mut().editor.apply(Command::Move { ids: vec![extra.clone().into()], dx: 0.0, dy: 2000.0, with_contents: false }, H).unwrap();
+    settle(&mut h);
+    let rows = h.state().step_rows.clone();
+    let between = rows[1].min.y - rows[0].max.y;
+    let plus = Pos2::new(rows[0].min.x + h.state().step_number_w / 2.0 + 1.0, rows[0].min.y - between / 2.0);
+    let tip = zebra_app::i18n::tr("sidebar-insert-step-tip");
+    let open = |h: &mut Harness<'static, ZebraApp>| {
+        h.input_mut().events.push(Event::PointerMoved(plus));
+        h.run_steps(2);
+        h.get_by_label(&tip).click();
+        h.run_steps(3);
+    };
+    // Cancelled: no step, no undo step.
+    let before = h.state().editor.doc.clone();
+    let undo = h.state().editor.history().len();
+    open(&mut h);
+    assert_eq!(h.state().step_pick.as_ref().map(|p| p.index), Some(0), "an empty step waits before step 1");
+    if let Some(dir) = std::env::var_os("ZEBRA_SHOTS") {
+        h.input_mut().events.push(Event::PointerMoved(plus));
+        h.run_steps(2);
+        h.render().unwrap().save(std::path::Path::new(&dir).join("sidebar-gap-above-step-1-picking.png")).unwrap();
+    }
+    key(&mut h, Key::Escape);
+    assert!(h.state().step_pick.is_none());
+    assert_eq!(h.state().editor.doc, before);
+    assert_eq!(h.state().editor.history().len(), undo, "a cancelled insert leaves no undo step");
+    // Filled by a frame clicked on the canvas.
+    open(&mut h);
+    let at = screen(&h, 1000.0, 2000.0);
+    click_at(&mut h, at, Modifiers::NONE);
+    assert!(h.state().step_pick.is_none());
+    assert_eq!(h.state().editor.doc.path.len(), 4);
+    assert_eq!(target(&h, 0), StepTarget::Element { id: extra.clone().into() }, "the new step is step 1");
+    assert_eq!(h.state().editor.history().len(), undo + 1, "one undo step");
+    key_mods(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(h.state().editor.doc.path.len(), 3);
+}
+
+/// The + above step 1, as the pointer finds it (screenshot for review).
+#[test]
+fn the_gap_above_step_one_shows_its_plus() {
+    let Some(dir) = std::env::var_os("ZEBRA_SHOTS") else { return };
+    let mut h = harness();
+    long_path(&mut h, 3);
+    settle(&mut h);
+    let rows = h.state().step_rows.clone();
+    let between = rows[1].min.y - rows[0].max.y;
+    let plus = Pos2::new(rows[0].min.x + h.state().step_number_w / 2.0 + 1.0, rows[0].min.y - between / 2.0);
+    h.input_mut().events.push(Event::PointerMoved(plus));
+    h.run_steps(3);
+    h.render().unwrap().save(std::path::Path::new(&dir).join("sidebar-gap-above-step-1.png")).unwrap();
+}
