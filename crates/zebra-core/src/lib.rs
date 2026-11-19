@@ -18,6 +18,7 @@ pub mod error;
 pub mod geom;
 pub mod icons;
 pub mod io;
+mod journal;
 pub mod media;
 pub mod model;
 pub mod perf;

@@ -9,6 +9,7 @@ use serde_json::json;
 use crate::camera::Camera;
 use crate::command::*;
 use crate::error::{ZError, ZResult};
+use crate::journal::Journal;
 use crate::geom::{rotated_extent, Rect, Transform, Vec2};
 use crate::model::*;
 use crate::theme::{valid_color, Theme};
@@ -183,7 +184,8 @@ pub struct Activity {
 struct Tx {
     label: String,
     origin: Origin,
-    before: Document,
+    /// Everything the transaction changed so far, as it was at `begin`.
+    journal: Journal,
     ids: BTreeSet<ElementId>,
 }
 
@@ -216,6 +218,8 @@ pub struct Editor {
     pub labeler: Option<Labeler>,
     /// Where elements are (derived from `doc`; see [`crate::spatial`]).
     pub(crate) index: crate::spatial::SpatialIndex,
+    /// The batch being applied: old values of what it touched.
+    journal: Option<Journal>,
 }
 
 impl Default for Editor {
@@ -251,6 +255,7 @@ impl Editor {
             events: vec![],
             perf: Default::default(),
             labeler: None,
+            journal: None,
         }
     }
 
@@ -367,7 +372,7 @@ impl Editor {
             return Err(busy());
         }
         self.check_agent(&origin)?;
-        self.tx = Some(Tx { label: label.into(), origin, before: self.doc.clone(), ids: BTreeSet::new() });
+        self.tx = Some(Tx { label: label.into(), origin, journal: Journal::start(&self.doc), ids: BTreeSet::new() });
         Ok(())
     }
 
@@ -375,11 +380,11 @@ impl Editor {
     /// changed. Callers acting for one party use [`Editor::commit_as`].
     pub fn commit(&mut self) {
         let Some(tx) = self.tx.take() else { return };
-        if tx.before == self.doc {
+        if tx.journal.unchanged(&self.doc) {
             return;
         }
         let ids: Vec<_> = tx.ids.into_iter().collect();
-        self.record(tx.label, tx.origin, tx.before, ids, false, 1);
+        self.record(tx.label, tx.origin, tx.journal, ids, false, 1);
     }
 
     /// Who opened the transaction in progress.
@@ -410,9 +415,16 @@ impl Editor {
     /// Abort: restore the document as it was at `begin`.
     pub fn abort(&mut self) {
         if let Some(tx) = self.tx.take() {
-            if tx.before != self.doc {
-                self.doc = tx.before;
-                self.reindex();
+            if !tx.journal.unchanged(&self.doc) {
+                let z = tx.journal.z_touched();
+                for id in tx.journal.restore(&mut self.doc) {
+                    self.index.touch(&id);
+                }
+                if z {
+                    self.index.z_changed();
+                }
+                self.index.sync(&self.doc);
+                self.check_index();
                 self.revision += 1;
                 let ids: Vec<ElementId> = tx.ids.into_iter().collect();
                 self.settle_view();
@@ -510,13 +522,13 @@ impl Editor {
             [c] => self.phrase(Phrase::Command(c)),
             _ => self.phrase(Phrase::Changes(steps)),
         });
-        let before = self.doc.clone();
+        debug_assert!(self.journal.is_none(), "batches don't nest");
+        self.journal = Some(Journal::start(&self.doc));
         let mut out = Outcome::default();
         self.index.begin_journal();
         for (i, cmd) in cmds.into_iter().enumerate() {
             if let Err(mut e) = self.apply_inner(cmd, &mut out) {
-                self.doc = before;
-                self.index.rollback(&self.doc);
+                self.rollback();
                 if i > 0 {
                     e.message = format!("command #{i} failed (batch rolled back): {}", e.message);
                 }
@@ -526,11 +538,10 @@ impl Editor {
             self.index.sync(&self.doc);
         }
         // Connectors follow whatever they are stuck to.
-        for id in crate::connector::refresh(&mut self.doc) {
-            self.index.touch(&id);
-        }
+        self.refresh_connectors();
         self.index.sync(&self.doc);
-        if self.doc == before {
+        if self.journal.as_ref().is_some_and(|j| j.unchanged(&self.doc)) {
+            self.journal = None;
             self.index.end_journal();
             out.revision = self.revision;
             return Ok(out);
@@ -538,11 +549,11 @@ impl Editor {
         // Nothing unusable gets in: a result with a number that overflowed
         // (or a text range outside its text) is refused whole. Checked on
         // the result, so every command and every route is covered.
-        if let Err(e) = self.check_result(&before, &out) {
-            self.doc = before;
-            self.index.rollback(&self.doc);
+        if let Err(e) = self.check_result(&out) {
+            self.rollback();
             return Err(e);
         }
+        let journal = self.journal.take().expect("journal started above");
         self.index.end_journal();
         self.check_index();
         self.settle_view();
@@ -551,10 +562,11 @@ impl Editor {
         let ids = out.affected();
         if let Some(tx) = &mut self.tx {
             tx.ids.extend(ids.iter().cloned());
+            tx.journal.absorb(journal);
             self.revision += 1;
             self.events.push(Event::DocumentChanged { revision: self.revision, origin: origin.clone(), label, ids });
         } else {
-            self.record(label, origin.clone(), before, ids, mergeable, steps);
+            self.record(label, origin.clone(), journal, ids, mergeable, steps);
         }
         if origin.is_agent() {
             let now = self.view.now;
@@ -571,12 +583,12 @@ impl Editor {
         Ok(out)
     }
 
-    fn record(&mut self, label: String, origin: Origin, before: Document, ids: Vec<ElementId>, allow_merge: bool, steps: usize) {
+    fn record(&mut self, label: String, origin: Origin, journal: Journal, ids: Vec<ElementId>, allow_merge: bool, steps: usize) {
         self.revision += 1;
         let now = self.view.now;
         self.redo.clear();
-        let delta = crate::delta::Delta::between(&before, &self.doc);
-        drop(before);
+        let delta = journal.delta(&self.doc);
+        drop(journal);
         let merged = allow_merge
             && origin.is_agent()
             && self.undo.last().is_some_and(|h| h.mergeable && h.origin == origin && now - h.time < AGENT_GROUP_SECS);
@@ -605,7 +617,8 @@ impl Editor {
     }
 
     /// What a batch left behind must hold the invariants in [`crate::check`].
-    fn check_result(&self, before: &Document, out: &Outcome) -> ZResult<()> {
+    fn check_result(&self, out: &Outcome) -> ZResult<()> {
+        let Some(j) = &self.journal else { return Ok(()) };
         let mut seen = HashSet::new();
         for id in out.created.iter().chain(&out.changed) {
             if !seen.insert(id) {
@@ -617,15 +630,79 @@ impl Editor {
         }
         // Connectors moved by `refresh`, and anything a command touched
         // without listing it.
-        for (id, e) in &self.doc.elements {
-            if !seen.contains(id) && before.elements.get(id) != Some(e) {
+        for (id, _) in j.changed(&self.doc) {
+            if let (false, Some(e)) = (seen.contains(id), self.doc.elements.get(id)) {
                 crate::check::element(e)?;
             }
         }
-        if self.doc.path != before.path || self.doc.play != before.play || self.doc.soundtrack != before.soundtrack {
+        if j.steps_changed(&self.doc) {
             crate::check::steps(&self.doc)?;
         }
         Ok(())
+    }
+
+    /// A batch failed: put the document back as it was before it.
+    fn rollback(&mut self) {
+        if let Some(j) = self.journal.take() {
+            j.restore(&mut self.doc);
+        }
+        self.index.rollback(&self.doc);
+    }
+
+    /// Connectors follow whatever they are stuck to.
+    fn refresh_connectors(&mut self) {
+        self.index.sync(&self.doc);
+        let journal = &mut self.journal;
+        let note = |id: &ElementId, old: &Element| {
+            if let Some(j) = journal {
+                j.element_value(id, old);
+            }
+        };
+        // The index knows the connectors; scanning every element for them
+        // cost a few ms per edit in a 100,000-element deck.
+        let changed = match self.index.connectors(&self.doc) {
+            Some(c) if c.is_empty() => vec![],
+            Some(c) => crate::connector::refresh_these(&mut self.doc, c.iter().cloned().collect::<Vec<_>>(), note),
+            None => crate::connector::refresh(&mut self.doc, note),
+        };
+        for id in changed {
+            self.index.touch(&id);
+        }
+    }
+
+    /// `id` is about to change, be added or be removed: the spatial index
+    /// rereads it at the next sync, and the batch's journal keeps its old
+    /// value. Every change to an element goes through here (or
+    /// [`Editor::el_mut`], which calls it).
+    fn note(&mut self, id: &str) {
+        self.index.touch(id);
+        if let Some(j) = &mut self.journal {
+            j.element(&self.doc, id);
+        }
+    }
+
+    /// Every element may be about to change.
+    fn note_all(&mut self) {
+        self.index.touch_all();
+        if let Some(j) = &mut self.journal {
+            j.all_elements(&self.doc);
+        }
+    }
+
+    /// The draw order, to change (its old order goes in the journal).
+    fn z_mut(&mut self) -> &mut Vec<ElementId> {
+        if let Some(j) = &mut self.journal {
+            j.z_order(&self.doc);
+        }
+        &mut self.doc.z_order
+    }
+
+    /// The path, to change (its old steps go in the journal).
+    fn path_mut(&mut self) -> &mut Vec<PathStep> {
+        if let Some(j) = &mut self.journal {
+            j.path(&self.doc);
+        }
+        &mut self.doc.path
     }
 
     pub fn undo(&mut self, origin: Origin) -> ZResult<Option<String>> {
@@ -719,11 +796,10 @@ impl Editor {
         Ok(self.el_mut(id))
     }
 
-    /// The element to change; the spatial index rereads it at the next
-    /// sync. Every change to an element inside a command goes through here
-    /// (or [`Editor::element_mut`]). Panics if `id` doesn't exist.
+    /// The element to change (see [`Editor::note`]). Panics if `id`
+    /// doesn't exist.
     fn el_mut(&mut self, id: &str) -> &mut Element {
-        self.index.touch(id);
+        self.note(id);
         self.doc.elements.get_mut(id).expect("element exists")
     }
 
@@ -805,7 +881,8 @@ impl Editor {
         // Frames go behind the lowest element they enclose, so drawing a frame
         // around content keeps the content visible (Prezi behaviour).
         let pos = if e.is_frame() { self.frame_insert_pos(&e.bounds()) } else { self.doc.z_order.len() };
-        self.doc.z_order.insert(pos, id.clone());
+        self.note(&id);
+        self.z_mut().insert(pos, id.clone());
         self.doc.elements.insert(id.clone(), e);
         self.index.z_inserted(&self.doc, pos);
         out.created.push(id.clone());
@@ -906,7 +983,7 @@ impl Editor {
                 };
                 let id = self.insert_element(e, out)?;
                 if add_to_path {
-                    self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
+                    self.path_mut().push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
                 }
             }
             Command::AddShape { shape, x, y, w, h, rotation, fill, stroke, id } => {
@@ -1015,16 +1092,15 @@ impl Editor {
                 if ids.len() > 1 && !has_frame {
                     let g = self.doc.alloc_group_id();
                     for id in &ids {
-                        if let Some(e) = self.doc.elements.get_mut(id) {
-                            e.group = Some(g.clone());
-                            self.index.touch(id);
+                        if self.doc.elements.contains_key(id) {
+                            self.el_mut(id).group = Some(g.clone());
                         }
                     }
                 }
                 if d.path {
                     for (p, id) in pieces.iter().zip(&ids) {
                         if let crate::templates::Piece::Frame { path: true, .. } = p {
-                            self.doc.path.push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
+                            self.path_mut().push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
                         }
                     }
                 }
@@ -1085,9 +1161,7 @@ impl Editor {
                     }),
                 };
                 self.insert_element(e, out)?;
-                for id in crate::connector::refresh(&mut self.doc) {
-                    self.index.touch(&id);
-                }
+                self.refresh_connectors();
             }
             Command::AddVideo { data_base64, path, x, y, width, alt, poster_base64, autoplay, looping, muted, id } => {
                 let (key, info) = self.load_media(&data_base64, path.as_deref(), MediaKind::Video)?;
@@ -1235,7 +1309,7 @@ impl Editor {
                 } else {
                     Some(self.load_media(&data_base64, path.as_deref(), MediaKind::Audio)?.0)
                 };
-                self.doc.path[index].voiceover = v;
+                self.path_mut()[index].voiceover = v;
             }
             Command::AddInk { points, color, width, highlighter, id } => {
                 if points.len() < 2 {
@@ -1272,7 +1346,7 @@ impl Editor {
                     (Some(_), ElementKind::Image(i)) => self.doc.assets.get(&i.asset).map(|a| (a.width as f64, a.height as f64)),
                     _ => None,
                 };
-                self.index.touch(&id);
+                self.note(&id);
                 let e = self.doc.elements.get_mut(&id).expect("element exists");
                 apply_patch(e, &patch)?;
                 if patch.text.is_some() {
@@ -1314,7 +1388,7 @@ impl Editor {
             Command::FormatText { id, start, end, find, format } => {
                 self.check_ids(std::slice::from_ref(&id))?;
                 self.check_unlocked(std::slice::from_ref(&id))?;
-                self.index.touch(&id);
+                self.note(&id);
                 let e = self.doc.elements.get_mut(&id).expect("element exists");
                 let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
                 if let Some(c) = format.color.as_deref().filter(|c| !c.is_empty() && !valid_color(c)) {
@@ -1347,7 +1421,7 @@ impl Editor {
             Command::FormatParagraphs { id, first, last, list, indent, indent_by, align } => {
                 self.check_ids(std::slice::from_ref(&id))?;
                 self.check_unlocked(std::slice::from_ref(&id))?;
-                self.index.touch(&id);
+                self.note(&id);
                 let e = self.doc.elements.get_mut(&id).expect("element exists");
                 let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
                 let count = t.text.split('\n').count();
@@ -1396,7 +1470,7 @@ impl Editor {
                     return Err(ZError::invalid("resize needs `width` and/or `height`, each > 0 (world units)"));
                 }
                 let theme = self.theme();
-                self.index.touch(&id);
+                self.note(&id);
                 let e = self.doc.elements.get_mut(&id).expect("element exists");
                 let s = e.transform.scale;
                 let (ww, wh) = (e.size.w * s, e.size.h * s);
@@ -1455,14 +1529,17 @@ impl Editor {
                 let ids = self.expand(&ids, false);
                 let groups: BTreeSet<String> = ids.iter().filter_map(|id| self.doc.elements[id].group.clone()).collect();
                 let set: HashSet<&ElementId> = ids.iter().collect();
-                self.doc.z_order.retain(|z| !set.contains(z));
+                self.z_mut().retain(|z| !set.contains(z));
                 for id in &ids {
+                    self.note(id);
                     self.doc.elements.remove(id);
-                    self.index.touch(id);
                 }
-                self.doc.path.retain(|s| !matches!(&s.target, StepTarget::Element { id } if set.contains(id)));
-                for s in &mut self.doc.path {
-                    s.builds.retain(|b| !set.contains(b));
+                if self.doc.path.iter().any(|s| matches!(&s.target, StepTarget::Element { id } if set.contains(id)) || s.builds.iter().any(|b| set.contains(b))) {
+                    let path = self.path_mut();
+                    path.retain(|s| !matches!(&s.target, StepTarget::Element { id } if set.contains(id)));
+                    for s in path {
+                        s.builds.retain(|b| !set.contains(b));
+                    }
                 }
                 // A group left with one member is no group.
                 for g in groups {
@@ -1515,7 +1592,8 @@ impl Editor {
                     }
                     let nid = new_id[&old].clone();
                     e.id = nid.clone();
-                    self.doc.z_order.push(nid.clone());
+                    self.note(&nid);
+                    self.z_mut().push(nid.clone());
                     self.doc.elements.insert(nid.clone(), e);
                     self.index.z_inserted(&self.doc, self.doc.z_order.len() - 1);
                     out.created.push(nid);
@@ -1527,7 +1605,7 @@ impl Editor {
                 // The same id twice would be put in the order twice.
                 dedup(&mut ids);
                 self.index.z_changed();
-                let z = &mut self.doc.z_order;
+                let z = self.z_mut();
                 match order {
                     ZOrderOp::Front => {
                         z.retain(|x| !ids.contains(x));
@@ -1641,17 +1719,18 @@ impl Editor {
                 if i > self.doc.path.len() {
                     return Err(ZError::invalid(format!("index {i} > path length {}", self.doc.path.len())));
                 }
-                self.doc.path.insert(i, PathStep { target, builds, notes, duration: None, dwell: None, hide_builds: false, voiceover: None });
+                self.path_mut().insert(i, PathStep { target, builds, notes, duration: None, dwell: None, hide_builds: false, voiceover: None });
             }
             Command::RemoveStep { index } => {
                 self.check_step(index)?;
-                self.doc.path.remove(index);
+                self.path_mut().remove(index);
             }
             Command::MoveStep { from, to } => {
                 self.check_step(from)?;
                 self.check_step(to)?;
-                let s = self.doc.path.remove(from);
-                self.doc.path.insert(to, s);
+                let path = self.path_mut();
+                let s = path.remove(from);
+                path.insert(to, s);
             }
             Command::UpdateStep { index, target, builds, notes, duration, dwell, hide_builds } => {
                 self.check_step(index)?;
@@ -1663,7 +1742,7 @@ impl Editor {
                         self.check_ids(std::slice::from_ref(id))?;
                     }
                 }
-                let s = &mut self.doc.path[index];
+                let s = &mut self.path_mut()[index];
                 if let Some(t) = target {
                     s.target = t;
                 }
@@ -1689,7 +1768,7 @@ impl Editor {
                     return Err(ZError::invalid(format!("steps {} have speaker notes that clearing the path would lose", noted.join(", ")))
                         .hint("pass \"discard_notes\": true to clear anyway, or remove the steps you don't want with remove_step"));
                 }
-                self.doc.path.clear();
+                self.path_mut().clear();
             }
             Command::AutoPath { discard_notes } => {
                 let mut frames: Vec<&Element> = self.doc.ordered().filter(|e| e.is_frame()).collect();
@@ -1721,7 +1800,7 @@ impl Editor {
                     return Err(ZError::new("notes_lost", format!("steps {} aren't frames and have speaker notes that the new path would lose", lost.join(", ")))
                         .hint("pass \"discard_notes\": true to go ahead, or move the notes first with update_step"));
                 }
-                let mut old: Vec<PathStep> = std::mem::take(&mut self.doc.path);
+                let mut old: Vec<PathStep> = std::mem::take(self.path_mut());
                 self.doc.path = ids
                     .into_iter()
                     .map(|id| {
@@ -1791,10 +1870,10 @@ impl Editor {
                             .hint("pass \"replace\": true to clear it, or use add_layout to add to it"));
                     }
                     out.deleted.extend(self.doc.elements.keys().cloned());
+                    self.note_all();
                     self.doc.elements.clear();
-                    self.doc.z_order.clear();
-                    self.index.touch_all();
-                    self.doc.path.clear();
+                    self.z_mut().clear();
+                    self.path_mut().clear();
                 }
                 if self.doc.theme != t.theme {
                     self.set_theme_id(t.theme.into());
@@ -1802,7 +1881,7 @@ impl Editor {
                 let ids = self.add_pieces(&t.pieces, Vec2::new(0.0, 0.0), TEMPLATE_WIDTH, out)?;
                 for i in t.path {
                     if let Some(Some(id)) = ids.get(i) {
-                        self.doc.path.push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
+                        self.path_mut().push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
                     }
                 }
             }
@@ -1819,7 +1898,7 @@ impl Editor {
                 if add_to_path {
                     for (p, id) in pieces.iter().zip(ids) {
                         if let (crate::templates::Piece::Frame { path: true, .. }, Some(id)) = (p, id) {
-                            self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
+                            self.path_mut().push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
                         }
                     }
                 }
@@ -1830,11 +1909,11 @@ impl Editor {
 
     fn set_theme_id(&mut self, id: String) {
         self.doc.theme = id;
+        // Every text box may have a new size.
+        self.note_all();
         let mut d = std::mem::take(&mut self.doc);
         self.remeasure_all(&mut d);
         self.doc = d;
-        // Every text box may have a new size.
-        self.index.touch_all();
     }
 
     fn validate_theme(&self, t: &Theme) -> ZResult<()> {

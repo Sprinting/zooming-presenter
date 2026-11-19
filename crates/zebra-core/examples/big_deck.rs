@@ -57,15 +57,23 @@ fn main() {
     time("add frame", &mut || {
         ed.apply(cmd(json!({"op":"add_frame","x":-5000,"y":-5000,"w":1000,"h":700})), h.clone()).unwrap();
     });
-    time("add text", &mut || {
-        ed.apply(cmd(json!({"op":"add_text","text":"hello","x":0,"y":0})), h.clone()).unwrap();
-    });
-    time("undo add text", &mut || {
-        ed.undo(h.clone()).unwrap();
-    });
-    time("redo add text", &mut || {
-        ed.redo(h.clone()).unwrap();
-    });
+    // Single edits are a few ms on a shared machine: the median of 7.
+    let (mut add, mut undo, mut redo) = (vec![], vec![], vec![]);
+    for i in 0..7 {
+        let t = Instant::now();
+        ed.apply(cmd(json!({"op":"add_text","text":"hello","x":i * 10,"y":0})), Origin::Human).unwrap();
+        add.push(t.elapsed().as_secs_f64());
+        let t = Instant::now();
+        ed.undo(Origin::Human).unwrap();
+        undo.push(t.elapsed().as_secs_f64());
+        let t = Instant::now();
+        ed.redo(Origin::Human).unwrap();
+        redo.push(t.elapsed().as_secs_f64());
+    }
+    for (label, mut v) in [("add text", add), ("undo add text", undo), ("redo add text", redo)] {
+        v.sort_by(f64::total_cmp);
+        println!("{label}: {:.1} ms (median of 7)", v[3] * 1e3);
+    }
     let first = ed.doc.z_order[0].clone();
     time("bring one to front", &mut || {
         ed.apply(cmd(json!({"op":"z_order","ids":[first],"order":"front"})), h.clone()).unwrap();
