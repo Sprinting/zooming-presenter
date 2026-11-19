@@ -285,6 +285,11 @@ impl ZebraApp {
                 // Pictures decode on worker threads; repaint when one lands.
                 let waker_ctx = ctx.clone();
                 renderer.images().set_waker(Some(Arc::new(move || waker_ctx.request_repaint())));
+                // Imported PDF pages are drawn again from the PDF when
+                // zoomed in past their pictures.
+                renderer.set_page_raster(Some(Arc::new(|r: &zebra_render::pages::PageRequest| {
+                    zebra_import::pdf::raster(&r.pdf, &r.bytes, r.index, r.page_px, r.rect)
+                })));
                 renderer
             }
         };

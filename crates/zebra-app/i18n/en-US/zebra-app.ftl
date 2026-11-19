@@ -1478,33 +1478,9 @@ import-done-title = { $count ->
     [one] Imported 1 page
    *[other] Imported { $count } pages
 }
-import-note-equations = { $count ->
-    [one] 1 equation came in as a picture.
-   *[other] { $count } equations came in as pictures.
-}
-import-note-gradients = { $count ->
-    [one] 1 gradient came in as a picture.
-   *[other] { $count } gradients came in as pictures.
-}
-import-note-effects = { $count ->
-    [one] 1 transparency effect came in as a picture.
-   *[other] { $count } transparency effects came in as pictures.
-}
-import-note-clipped = { $count ->
-    [one] 1 cropped object came in as a picture.
-   *[other] { $count } cropped objects came in as pictures.
-}
-import-note-other = { $count ->
-    [one] 1 other object came in as a picture.
-   *[other] { $count } other objects came in as pictures.
-}
-import-note-invisible-text = { $count ->
-    [one] 1 piece of invisible text was left out.
-   *[other] { $count } pieces of invisible text were left out.
-}
 import-note-skipped = { $count ->
-    [one] 1 unreadable object was left out.
-   *[other] { $count } unreadable objects were left out.
+    [one] 1 page couldn't be read and was left out.
+   *[other] { $count } pages couldn't be read and were left out.
 }
 import-failed-title = “{ $name }” can't be imported
 import-error-unsupported = Zebra can import PDF files.

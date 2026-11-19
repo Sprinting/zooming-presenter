@@ -82,13 +82,7 @@ pub fn note_lines(notes: &std::collections::BTreeMap<ImportNote, usize>) -> Vec<
         .map(|(n, c)| {
             let c = *c as i64;
             match n {
-                ImportNote::EquationAsPicture => crate::t!("import-note-equations", count = c),
-                ImportNote::GradientAsPicture => crate::t!("import-note-gradients", count = c),
-                ImportNote::EffectAsPicture => crate::t!("import-note-effects", count = c),
-                ImportNote::ClippedAsPicture => crate::t!("import-note-clipped", count = c),
-                ImportNote::OtherAsPicture => crate::t!("import-note-other", count = c),
-                ImportNote::InvisibleTextSkipped => crate::t!("import-note-invisible-text", count = c),
-                ImportNote::ObjectSkipped => crate::t!("import-note-skipped", count = c),
+                ImportNote::PageSkipped => crate::t!("import-note-skipped", count = c),
             }
         })
         .collect()
