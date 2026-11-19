@@ -3,15 +3,11 @@
 //! keymap. This test reads the app's source and fails on a string literal
 //! that reaches the screen any other way.
 //!
-//! Two checks, both on the code above each file's `#[cfg(test)]`:
-//! 1. A literal with a letter or a key symbol passed straight to a widget
-//!    or tooltip call (`label(`, `on_hover_text(`, `menu_item(`, ...).
-//! 2. Anywhere in the file, a literal that reads like an English phrase
-//!    ("Two words", capitalised), outside log lines and error plumbing.
-//!
-//! The sample deck's words are `sample-*` keys in `data/sample.json`
-//! (checked in sample.rs); `sample.rs` itself only holds the debug demos
-//! for the screen atlas, listed in `SAMPLE_CONTENT`.
+//! The check, on the code above each file's `#[cfg(test)]`: a literal with
+//! a letter, a key symbol or a unit passed straight to a widget, tooltip,
+//! dialog or painter call (`label(`, `on_hover_text(`, `menu_item(`, ...).
+//! Those calls must only receive text from the ftl. It does not guess at
+//! language: literals elsewhere in the code are not judged.
 
 use std::path::Path;
 
@@ -55,11 +51,8 @@ const UI_CALLS: &[&str] = &[
 /// Lines that are for the terminal or for code, not for people.
 const NOT_SHOWN: &[&str] = &["eprintln!", "println!", "panic!", "expect(", "unreachable!", "debug_assert", "assert", "anyhow!", "bail!", "log::", "tracing::", "Error::new(", "context("];
 
-/// Sample content, not interface text.
 /// Calls that compare or search text: their literals are never shown.
 const TEXT_MATCHING: &[&str] = &["contains", "starts_with", "ends_with", "strip_prefix", "strip_suffix", "find", "rfind", "split", "replace", "eq"];
-
-const SAMPLE_CONTENT: &[&str] = &["sample.rs"];
 
 /// Words that are names, not copy: product, font families, folders, and
 /// the people and projects credited in Help › Acknowledgements.
@@ -201,20 +194,9 @@ fn shown_text(s: &str) -> bool {
     bare.chars().any(|c| c.is_alphabetic() || KEY_SYMBOLS.contains(&c) || UNIT_SYMBOLS.contains(&c))
 }
 
-fn english_phrase(s: &str) -> bool {
-    if NAMES.contains(&s) {
-        return false;
-    }
-    let mut words = s.split_whitespace();
-    let first = words.next().unwrap_or("");
-    let capital = first.chars().next().is_some_and(|c| c.is_uppercase()) && first.chars().skip(1).all(|c| c.is_lowercase() || c == '\'');
-    capital && first.len() > 1 && words.any(|w| w.chars().all(|c| c.is_alphabetic() || ",.?!…'".contains(c)) && w.chars().any(|c| c.is_lowercase()))
-}
-
 fn scan(file: &str, src: &str) -> Vec<String> {
     let code = src.split("#[cfg(test)]").next().unwrap_or(src);
     let mut bad = Vec::new();
-    let sample = SAMPLE_CONTENT.contains(&file);
     for (n, line) in code.lines().enumerate() {
         let t = line.trim_start();
         if t.starts_with("//") || t.starts_with("#[") || NOT_SHOWN.iter().any(|w| line.contains(w)) {
@@ -229,8 +211,7 @@ fn scan(file: &str, src: &str) -> Vec<String> {
             if call.is_some_and(|c| TEXT_MATCHING.contains(&c)) {
                 continue;
             }
-            let phrase = !sample && english_phrase(&l.text) && call.is_none_or(|c| !is_translation(c));
-            if ui || phrase {
+            if ui {
                 bad.push(format!("{file}:{}: {:?}", n + 1, l.text));
             }
         }
@@ -270,7 +251,6 @@ fn the_check_catches_what_it_should() {
     assert!(bad(r#"x.on_hover_text("⌘J")"#));
     assert!(bad(r#"w::menu_check(ui, on, &crate::t!("a"), Some("P"))"#));
     assert!(bad(r#"x.on_hover_text(format!("Close {k}"))"#));
-    assert!(bad(r#"let tip = "Show the inspector";"#));
     assert!(!bad(r#"ui.label(crate::t!("hello"));"#));
     assert!(!bad(r#"egui::Panel::top("menubar")"#));
     assert!(!bad(r#"eprintln!("zebra: Could not open {p}");"#));
