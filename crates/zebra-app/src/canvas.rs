@@ -1729,6 +1729,8 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         Link,
     }
     let mut fx: Vec<Fx> = vec![];
+    /// What Tab types inside a line: the canvas text has no tab stops.
+    const TAB_SPACES: &str = "    ";
     // The caret, with nothing selected, at the very start of a list item
     // or an indented paragraph: that paragraph's number.
     let caret = egui::TextEdit::load_state(ctx, edit_id).and_then(|s| s.cursor.char_range()).filter(|c| c.primary.index == c.secondary.index).map(|c| usize::from(c.primary.index));
@@ -1736,6 +1738,10 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         .filter(|&c| c == 0 || t.buf.chars().nth(c - 1) == Some('\n'))
         .map(|c| rich::paragraph_of(&t.rich, c))
         .filter(|&n| matches!(rich::para(&t.rich, n), (l, i, _) if l != ListKind::None || i > 0));
+    // Tab with the caret inside a line of a plain paragraph types spaces
+    // (Kartik, 20 Nov); at a paragraph's start, in a list or over a
+    // selection it indents.
+    let mid_line = caret.is_some_and(|c| c > 0 && t.buf.chars().nth(c - 1) != Some('\n') && rich::para(&t.rich, rich::paragraph_of(&t.rich, c)).0 == ListKind::None);
     if focused {
         ctx.input_mut(|i| {
             // Backspace there outdents, as in TextEdit and Pages, instead of
@@ -1760,7 +1766,13 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
             if i.consume_key(egui::Modifiers::SHIFT, Key::Tab) {
                 fx.push(Fx::Indent(-1));
             } else if i.consume_key(egui::Modifiers::NONE, Key::Tab) {
-                fx.push(Fx::Indent(1));
+                if mid_line {
+                    // Typed like any other text, so the editor's own undo
+                    // and span bookkeeping see it.
+                    i.events.push(egui::Event::Text(TAB_SPACES.into()));
+                } else {
+                    fx.push(Fx::Indent(1));
+                }
             }
         });
     }
