@@ -20,7 +20,7 @@
 //! the next frame clicked or drawn on the canvas fills it, as one undo step.
 //! Escape, a click on empty canvas or elsewhere in the sidebar cancels it.
 //! The empty row is never part of the document.
-use egui::{Align2, Color32, Modifiers, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2 as EVec2};
+use egui::{Align2, Color32, CursorIcon, Modifiers, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2 as EVec2};
 use zebra_core::{Command, ElementId, Mode, Origin, StepTarget, ViewCommand};
 
 use crate::actions::Action;
@@ -519,6 +519,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
 
     // Drag to reorder: an accent insertion line between rows.
     if let Some(from) = dragging {
+        ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         let mut drop_to: Option<usize> = None;
         if let Some(pp) = pointer {
             let mut to = rows.len().saturating_sub(1);
@@ -659,6 +660,10 @@ impl StepRow<'_> {
             let label = step_label(app, i);
             let clip = Rect::from_min_max(Pos2::new(img_r.min.x, ly - 8.0), Pos2::new(right, ly + 8.0));
             painter.with_clip_rect(clip).text(Pos2::new(img_r.min.x, ly), Align2::LEFT_CENTER, &label, style::ui_font(11.0), tc);
+        }
+        // Rows drag to reorder: an open hand says so (Kartik, 18 Nov).
+        if resp.hovered() && dragging.is_none() && !self.picking {
+            ui.ctx().set_cursor_icon(CursorIcon::Grab);
         }
         if resp.clicked() {
             let m = ui.input(|i| i.modifiers);
