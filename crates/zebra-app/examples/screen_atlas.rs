@@ -444,6 +444,98 @@ fn main() {
         });
     }
 
+    if want("sidebar") {
+        a.section("The path sidebar (spec 08)");
+        // A third step uses the first frame again: its rows light alone.
+        fn three(h: &mut H) {
+            let _ = h.state_mut().editor.apply(serde_json::from_value(serde_json::json!({"op":"add_step","target":{"kind":"element","id":"one"}})).unwrap(), HUMAN);
+            let _ = h.state_mut().editor.view(ViewCommand::FitAll { animate: false }, HUMAN);
+            settle(h, 6);
+        }
+        fn row(h: &H, i: usize) -> Pos2 {
+            h.state().step_rows[i].center()
+        }
+        fn gap(h: &H, k: usize) -> Pos2 {
+            let rows = &h.state().step_rows;
+            Pos2::new(rows[k].min.x + h.state().step_number_w / 2.0 + 1.0, (rows[k - 1].max.y + rows[k].min.y) / 2.0)
+        }
+        fn empty(h: &H) -> Pos2 {
+            let r = h.state().canvas.rect;
+            Pos2::new(r.center().x, r.max.y - 40.0)
+        }
+        for dark in [false, true] {
+            let mode = if dark { ", dark" } else { "" };
+            a.run(&format!("Step 3 clicked: the list has the keys, its row in the accent (step 1 uses the same frame and stays plain){mode}"), dark, false, |h| {
+                three(h);
+                let r = row(h, 2);
+                click_at(h, r, PointerButton::Primary);
+                wait(h, 1.2);
+            });
+            a.run(&format!("Then empty canvas clicked: the keys go back to the canvas, the row turns grey{mode}"), dark, false, |h| {
+                three(h);
+                let r = row(h, 2);
+                click_at(h, r, PointerButton::Primary);
+                wait(h, 1.2);
+                let _ = h.state_mut().editor.view(ViewCommand::FitAll { animate: false }, HUMAN);
+                settle(h, 4);
+                let e = empty(h);
+                click_at(h, e, PointerButton::Primary);
+            });
+            a.run(&format!("Frame One selected on the canvas: both its steps show, grey (the canvas has the keys){mode}"), dark, false, |h| {
+                three(h);
+                select(h, &["one"]);
+            });
+            a.run(&format!("Hovering the gap between steps 1 and 2: an insertion line with a +{mode}"), dark, false, |h| {
+                three(h);
+                let g = gap(h, 1);
+                h.event(Event::PointerMoved(g));
+                settle(h, 4);
+            });
+            a.run(&format!("After the +: an empty step waits for a frame{mode}"), dark, false, |h| {
+                three(h);
+                let g = gap(h, 1);
+                click_at(h, g, PointerButton::Primary);
+                let e = empty(h);
+                h.event(Event::PointerMoved(e));
+                settle(h, 4);
+            });
+            a.run(&format!("Waiting for a frame, the pointer on frame Two: outlined, pointing hand{mode}"), dark, false, |h| {
+                three(h);
+                let g = gap(h, 1);
+                click_at(h, g, PointerButton::Primary);
+                let t = screen_of(h, "two");
+                h.event(Event::PointerMoved(t));
+                settle(h, 4);
+            });
+        }
+        a.run("Right-click on a step: Add Step After This One", false, false, |h| {
+            three(h);
+            let r = row(h, 0);
+            click_at(h, r, PointerButton::Secondary);
+        });
+        a.run("Steps 1 to 3 selected with ⇧-click", false, false, |h| {
+            three(h);
+            let r = row(h, 0);
+            click_at(h, r, PointerButton::Primary);
+            let r = row(h, 2);
+            h.event(Event::ModifiersChanged(Modifiers::SHIFT));
+            click_at(h, r, PointerButton::Primary);
+            h.event(Event::ModifiersChanged(Modifiers::NONE));
+            settle(h, 4);
+        });
+        a.run("A path of 1,200 steps, at its end: four-digit numbers fit their column", false, true, |h| {
+            let cmds: Vec<Command> = (0..1200)
+                .map(|i| serde_json::from_value(serde_json::json!({"op":"add_frame","x": (i % 40) as f64 * 1000.0,"y": (i / 40) as f64 * 800.0,"w":800,"h":600,"add_to_path":true})).unwrap())
+                .collect();
+            let _ = h.state_mut().editor.apply_batch(cmds, None, HUMAN);
+            settle(h, 4);
+            let ctx = h.ctx.clone();
+            h.state_mut().perform(&ctx, Action::Deselect);
+            zebra_app::sidebar::select_step(h.state_mut(), 1197);
+            wait(h, 1.5);
+        });
+    }
+
     if want("windows") {
         a.section("Windows and panels");
         let wins: Vec<(&str, Action)> = vec![

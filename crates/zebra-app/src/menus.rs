@@ -169,12 +169,14 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
             }
             app.editor.can_redo()
         }
-        Cut | Delete => editable,
+        Cut => editable,
+        // With the path list focused, Delete takes out the selected steps.
+        Delete => editable || crate::sidebar::list_focused(app) || app.step_pick.is_some(),
         Copy | Duplicate | WrapInFrame | BringForward | BringToFront | SendBackward | SendToBack | ZoomToSelection | Group | Ungroup => has_sel,
         // Zebra's own copy, or anything another app put on the clipboard
         // (a picture, files, text): Paste takes those too.
         Paste => !app.clipboard.is_empty() || crate::media_ui::system_clipboard_has_content(),
-        Deselect => has_sel,
+        Deselect => has_sel || crate::sidebar::list_focused(app) || app.step_pick.is_some(),
         SelectAll | FitAll | ExportPdf | ExportPng | ExportHtml | PresentStart | AutoPath | AddCurrentView | AddToPath => has_doc,
         PresentCurrent => has_doc && !app.editor.doc.path.is_empty(),
         ClearPath => !app.editor.doc.path.is_empty(),

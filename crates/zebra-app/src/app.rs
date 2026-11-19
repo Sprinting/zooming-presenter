@@ -130,10 +130,20 @@ pub struct ZebraApp {
     pub palette: Option<(String, usize)>,
     /// Where the sidebar drew each step's row in the last frame.
     pub step_rows: Vec<egui::Rect>,
+    /// How wide the sidebar drew the step number column in the last frame.
+    pub step_number_w: f32,
     pub show_shortcuts: bool,
     pub library: crate::shape_library::Library,
     pub show_about: bool,
     pub selected_step: Option<usize>,
+    /// The path list has the keys (it was clicked last, not the canvas):
+    /// Keynote's navigator model, spec 08. See `sidebar::list_focused`.
+    pub path_focus: bool,
+    /// Several steps selected in the path list (⇧/⌘-click, Select All).
+    pub step_multi: Option<crate::sidebar::StepMulti>,
+    /// An empty step waiting for a frame (insert between steps). Interface
+    /// state only: never saved, never seen by agents.
+    pub step_pick: Option<crate::sidebar::Pick>,
     /// Objects copied in any window (shared by all of them).
     pub clipboard: Arc<zebra_core::clip::Clip>,
     /// The text Copy put on the system clipboard: while it's still there,
@@ -170,6 +180,9 @@ pub struct ZebraApp {
     /// (revision, loads, camera and viewport bits): the sidebar asks for it
     /// a few times a frame, and every frame while idle.
     nearest_step: std::cell::Cell<Option<((u64, u64, [u64; 6]), Option<usize>)>>,
+    /// Every step's camera for the revision, loads and viewport it was
+    /// built for: `nearest_step` searches it.
+    step_index: std::cell::RefCell<Option<((u64, u64, [u64; 2]), zebra_core::step_index::StepIndex)>>,
     pub queued: Vec<Action>,
     /// Actions held while the document is being saved (Close, Quit, Open,
     /// another Save, and what a Save Changes sheet's Save goes on to do).
@@ -338,6 +351,7 @@ impl ZebraApp {
             stage: crate::presenting::Stage::new(ctx, renderer.clone(), storage),
             theme_ed: None,
             step_rows: vec![],
+            step_number_w: 0.0,
             welcome: None,
             previews: None,
             show_layouts: false,
@@ -353,6 +367,9 @@ impl ZebraApp {
             library: Default::default(),
             show_about: false,
             selected_step: None,
+            path_focus: false,
+            step_multi: None,
+            step_pick: None,
             clipboard: Default::default(),
             clipboard_marker: None,
             paste_count: 0,
@@ -372,6 +389,7 @@ impl ZebraApp {
             mac_sync: Default::default(),
             flash_step: None,
             nearest_step: Default::default(),
+            step_index: Default::default(),
             queued: vec![],
             after_save: vec![],
             opening: None,
@@ -697,13 +715,19 @@ impl ZebraApp {
                     }
                 }
             }
+            // Keys and menus go to the pane clicked last (spec 08).
+            Delete if self.step_pick.is_some() && self.path_focus => crate::sidebar::cancel_pick(self),
+            Delete if crate::sidebar::list_focused(self) => crate::sidebar::delete_selected(self),
             Delete => {
                 let ids = self.editable_selection();
                 if !ids.is_empty() {
                     self.apply(Command::Delete { ids });
                 }
             }
+            SelectAll if crate::sidebar::list_focused(self) => crate::sidebar::select_all_steps(self),
             SelectAll => self.view_cmd(ViewCommand::SelectAll),
+            Deselect if self.step_pick.is_some() => crate::sidebar::cancel_pick(self),
+            Deselect if crate::sidebar::list_focused(self) => self.path_focus = false,
             Deselect => {
                 if self.editor.view.mode == Mode::PathEdit {
                     self.view_cmd(ViewCommand::SetMode { mode: Mode::Edit });
@@ -1075,23 +1099,14 @@ impl ZebraApp {
                 return s;
             }
         }
-        // Each step's distance once (a long path is thousands), and the
-        // whole-deck framing (a walk of every element) at most once.
-        let all = std::cell::OnceCell::new();
-        let fit_all = || *all.get_or_init(|| ed.fit_all_camera());
-        let s = ed
-            .doc
-            .path
-            .iter()
-            .map(|st| match &st.target {
-                StepTarget::Overview => fit_all(),
-                StepTarget::Element { id } if ed.doc.get(id).is_none() => fit_all(),
-                t => ed.camera_for_target(t),
-            })
-            .map(|c| (c.center() - cam.center()).len() * cam.zoom / vp.x + (c.zoom / cam.zoom).ln().abs())
-            .enumerate()
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(i, _)| i);
+        // Step cameras once per revision and viewport (a long path is
+        // thousands); each camera change then searches them sub-linearly.
+        let ix_key = (ed.revision, ed.loads, [vp.x, vp.y].map(f64::to_bits));
+        let mut ix = self.step_index.borrow_mut();
+        if ix.as_ref().is_none_or(|(k, _)| *k != ix_key) {
+            *ix = Some((ix_key, zebra_core::step_index::StepIndex::build(ed)));
+        }
+        let s = ix.as_ref().and_then(|(_, ix)| ix.nearest(&cam, vp.x));
         self.nearest_step.set(Some((key, s)));
         s
     }
@@ -1217,6 +1232,9 @@ impl ZebraApp {
     pub fn after_load(&mut self) {
         self.media.stop_all();
         self.selected_step = None;
+        self.path_focus = false;
+        self.step_multi = None;
+        self.step_pick = None;
         self.canvas = CanvasState::default();
         self.thumbs.clear();
         self.recovered = None;
@@ -1447,6 +1465,7 @@ impl ZebraApp {
         crate::media_ui::tick(self);
         self.handle_close(&ctx);
         self.sync_present_mode(&ctx);
+        crate::sidebar::check_focus(self);
 
         if self.editor.view.mode == Mode::Present {
             crate::present::ui(self, ui);
@@ -1537,6 +1556,11 @@ impl ZebraApp {
         let events = ctx.input(|i| i.events.clone());
         for ev in events {
             let egui::Event::Key { key, pressed: true, modifiers, .. } = ev else { continue };
+            // The path list has the keys: Up/Down/Home/End move through the
+            // steps (Delete and Escape reach it as actions, below).
+            if !text_focus && self.palette.is_none() && self.step_pick.is_none() && crate::sidebar::list_focused(self) && crate::sidebar::key(self, key, modifiers) {
+                continue;
+            }
             // Arrow keys: nudge selection (screen-relative), else pan.
             if !text_focus && self.palette.is_none() {
                 let arrow = match key {

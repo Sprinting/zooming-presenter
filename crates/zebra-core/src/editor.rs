@@ -236,6 +236,10 @@ pub struct Editor {
     pub(crate) saving: Option<crate::saving::SaveJob>,
     /// Finished saves not yet taken by whoever started them.
     pub(crate) saved: Vec<crate::saving::Saved>,
+    /// The step the editor camera was last sent to by `goto_step`, from
+    /// anyone (an agent too), with a count of such trips: a host scrolls
+    /// its step list to it when the count changes.
+    pub went_to_step: (u64, usize),
 }
 
 impl Default for Editor {
@@ -265,6 +269,7 @@ impl Editor {
             measure: Box::new(EstimateMeasure),
             activity: VecDeque::new(),
             flashes: vec![],
+            went_to_step: (0, 0),
             agent_cursor: None,
             agent_cursor_time: 0.0,
             file_path: None,
@@ -2557,6 +2562,7 @@ impl Editor {
                 self.check_step(step)?;
                 if self.view.mode != Mode::Present {
                     // In the editor this just flies the camera to the step.
+                    self.went_to_step = (self.went_to_step.0 + 1, step);
                     let c = self.camera_for_step(step);
                     cam_set!(c, true)
                 } else {

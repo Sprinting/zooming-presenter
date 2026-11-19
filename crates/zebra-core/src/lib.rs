@@ -25,6 +25,7 @@ pub mod model;
 pub mod perf;
 pub mod rich;
 pub mod spatial;
+pub mod step_index;
 pub mod symbols;
 pub mod diagrams;
 pub mod templates;

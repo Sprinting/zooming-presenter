@@ -263,7 +263,15 @@ sidebar-remove-from-path = Remove from Path
 sidebar-add-tip-view = Add the current view as a step
 sidebar-add-tip-selection = Add the selection as a step
 sidebar-remove-tip = Remove the selected step
-sidebar-undo-remove-step = Remove Step
+sidebar-undo-remove-step = { $count ->
+    [one] Remove Step
+   *[other] Remove Steps
+}
+sidebar-add-step-after = Add Step After This One
+sidebar-insert-step-tip = Insert a step here
+sidebar-pick-a-frame = Pick a frame
+sidebar-pick-a-frame-tip = Click a frame on the canvas or draw one. Esc cancels.
+sidebar-undo-insert-step = Insert Step
 sidebar-more-tip = More path actions
 sidebar-path-from-frames = Path from Frames
 sidebar-add-current-view = Add Current View
