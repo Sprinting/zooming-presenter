@@ -144,6 +144,7 @@ than one document open, events carry the `document` id they come from.
 | `commit` / `abort` | – | ends the transaction; `abort` restores the document to how it was at `begin` |
 | `undo` / `redo` | – | `{"undone": "label" \| null, "revision"}` |
 | `copy_to` | `{"ids": [ … ], "to": "<document>", "at"?: {"x", "y"}, "dx"?, "dy"?}`, from `document` (default: the front one) | `{"revision", "created", "document"}`: copies into `to` as one undo step there, with fresh ids. Brings along their groups, everything inside a copied frame, and the pictures and videos they show; a connector stays stuck to an end copied with it. Same position unless `at` (centre of the copies) or `dx`/`dy`. Doesn't touch the clipboard. Read-before-write applies to `to`. |
+| `import` | `{"path": "/abs/deck.pdf", "from"?: n, "to"?: n}` (pages, 1-based, default all) | `{"revision", "created", "pages", "frames", "notes"}`: File › Import…. Each page in a rectangle frame named "Page n", in rows right of everything on the canvas, with a path step each appended in page order; **one undo step** named "Import deck.pdf". Each page comes in as one picture (an `image` element with `"page": {"pdf": key, "index": n}`): the PDF is kept in the document once, as an asset, and the app draws pages from it so they stay sharp at any zoom; thumbnails, exports and the web player draw a 2048-pixel picture of each page made at import. The picture's `alt` is the page's first line of text. `notes` counts pages left out: `[{"note": "page_skipped", "count": 1, "text": "1 unreadable page left out"}]`. Needs 'edit' permission; read-before-write applies. Errors: `unsupported` (not a PDF), `damaged`, `encrypted`, `io`. The file is read off the window's thread; your next call waits for it. |
 
 ```json
 → {"jsonrpc":"2.0","id":3,"method":"batch","params":{"label":"Add intro","commands":[
@@ -153,7 +154,7 @@ than one document open, events carry the `document` id they come from.
 ```
 
 * `add_image` accepts `"path": "/abs/file.png"` in place of `data_base64`. The server reads the file.
-* **Read before you write.** `apply`, `batch`, `copy_to`, `begin`, `undo` and `redo` fail with `stale_revision` if anyone else (the person or another agent) changed the document since you last read it with `describe` or `query`. Your own changes don't count, and a new, untouched document needs no read. The error says who changed it. Read again, then retry. Agents are told apart by name (`--agent`).
+* **Read before you write.** `apply`, `batch`, `copy_to`, `import`, `begin`, `undo` and `redo` fail with `stale_revision` if anyone else (the person or another agent) changed the document since you last read it with `describe` or `query`. Your own changes don't count, and a new, untouched document needs no read. The error says who changed it. Read again, then retry. Agents are told apart by name (`--agent`).
 * `if_revision` adds a stricter check: the call fails with `stale_revision` unless the document is at exactly that revision.
 * An explicitly labelled `apply`, `batch` or transaction is always its own undo step. Single `apply` calls from the same agent that arrive less than 2 s apart are grouped into one step.
 * An agent that disconnects while its transaction is open has that transaction aborted.
@@ -263,6 +264,7 @@ zebractl documents                          # open documents; --document <id|nam
 zebractl new                                # a new document in its own window; prints its id
 zebractl --document d2 close [--discard]    # close one; refused with unsaved changes unless --discard
 zebractl --document d1 copy-to d2 f1 t3 [--x 0 --y 0]   # copy elements into another document
+zebractl import deck.pdf [--from 2 --to 5]              # a PDF's pages as frames + path steps, one undo
 zebractl state | describe
 zebractl query '{"q":"elements","kind":"text"}'     # or: zebractl query path
 zebractl apply '{"op":"set_theme","theme":"night"}'
@@ -330,6 +332,7 @@ same Rust types as the API.
 | `new_document` | A new, empty document in its own window; returns its id. |
 | `close_document` | `{document, discard?}`: refused with unsaved changes unless `discard`. |
 | `copy_to` | `{ids, to, at?, dx?, dy?}`: copy elements into another open document. |
+| `import_file` | `{path, from?, to?}`: a PDF's pages as frames with path steps, one undo step. |
 
 The server's `instructions` teach the model the essentials. The ids are
 short (`f1`, `t3`). Coordinates are world units. x and y are the centre of

@@ -34,6 +34,7 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
                 A(SaveAs),
                 A(SaveAsTemplate),
                 Sep,
+                A(Import),
                 Sub(crate::t!("menu-export-to"), vec![A(ExportPdf), A(ExportPng), A(ExportHtml)]),
             ],
         ),

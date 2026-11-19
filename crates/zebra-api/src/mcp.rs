@@ -161,6 +161,20 @@ fn tools() -> Value {
                 },
                 "required": ["ids", "to"]
             }
+        },
+        {
+            "name": "import_file",
+            "title": "Import a PDF",
+            "description": "File › Import…: add a PDF's pages to the document, each in a frame with a path step, right of what is on the canvas, as one undo step. Text, shapes and pictures come in as objects; equations, gradients and effects as pictures (the result's `notes` count them). Fonts become the theme's.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Absolute path of the .pdf file" },
+                    "from": { "type": "integer", "minimum": 1, "description": "First page (default 1)" },
+                    "to": { "type": "integer", "minimum": 1, "description": "Last page (default: the last)" }
+                },
+                "required": ["path"]
+            }
         }
     ]);
     // Every tool that reaches a document can name one.
@@ -320,6 +334,15 @@ impl<C: Connector> McpServer<C> {
                 }
                 self.rpc("copy_to", p).map(text)
             }
+            "import_file" => {
+                let mut p = json!({});
+                for k in ["path", "from", "to"] {
+                    if let Some(v) = args.get(k) {
+                        p[k] = v.clone();
+                    }
+                }
+                self.rpc("import", p).map(text)
+            }
             "list_commands" => Ok(ToolOut::Content(vec![json!({ "type": "text", "text": catalogue::catalogue_text() })])),
             "describe" => self.rpc("describe", json!({})).map(|v| {
                 let s = v.get("outline").and_then(|o| o.as_str()).map(str::to_string).unwrap_or_else(|| pretty(&v));
@@ -400,7 +423,7 @@ impl<C: Connector> McpServer<C> {
             }
             _ => {
                 return Err(json!({ "code": -32602, "message": format!("unknown tool '{name}'"),
-                    "data": { "valid_values": ["describe","get_state","apply_commands","view","query","capture","undo","list_commands","list_documents","new_document","close_document","copy_to"] } }));
+                    "data": { "valid_values": ["describe","get_state","apply_commands","view","query","capture","undo","list_commands","list_documents","new_document","close_document","copy_to","import_file"] } }));
             }
         };
         Ok(match out {
@@ -451,7 +474,7 @@ mod retry_tests {
         for m in ["describe", "state", "query", "documents", "capture"] {
             assert!(super::retry_is_safe(m), "{m}");
         }
-        for m in ["apply", "batch", "view", "undo", "redo", "begin", "commit", "abort", "new_document", "close_document", "copy_to", "open", "save"] {
+        for m in ["apply", "batch", "view", "undo", "redo", "begin", "commit", "abort", "new_document", "close_document", "copy_to", "import", "open", "save"] {
             assert!(!super::retry_is_safe(m), "{m}");
         }
     }

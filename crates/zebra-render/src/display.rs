@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use kurbo::{Affine, BezPath, Cap, Ellipse, Join, Point, Rect, RoundedRect, Shape, Stroke};
 use zebra_core::{
-    Camera, Crop, Dash, Editor, Element, ElementKind, FrameStyle, ImageMask, ShapeKind, Theme, Vec2,
+    Camera, Crop, Dash, Editor, Element, ElementKind, FrameStyle, ImageMask, PageRef, ShapeKind, Theme, Vec2,
 };
 
 use crate::images::{level_for, Decoded};
@@ -127,7 +127,7 @@ pub(crate) fn build_with(
     let pending = std::cell::Cell::new(false);
     let view = cam.visible_bounds(Vec2::new(vp[0], vp[1]));
     let px_per_world = cam.zoom * ppp;
-    let ctx = Ctx { r, editor, theme: &theme, presenting: o.presenting, full_res_images, ppp, o, anim: &anim, pending: &pending };
+    let ctx = Ctx { r, editor, theme: &theme, presenting: o.presenting, full_res_images, ppp, o, anim: &anim, pending: &pending, screen: (width_px, height_px) };
     ctx.backdrop(cam, vp, &mut list.items);
 
     // Only what may reach into view (from the spatial index), back to front.
@@ -188,6 +188,8 @@ struct Ctx<'a> {
     o: &'a SceneOptions,
     anim: &'a std::cell::Cell<Option<f64>>,
     pending: &'a std::cell::Cell<bool>,
+    /// Device pixels drawn.
+    screen: (u32, u32),
 }
 
 fn local_rect(e: &Element) -> Rect {
@@ -348,7 +350,7 @@ impl Ctx<'_> {
     /// Draw a picture asset filling `e`'s box (through `crop`, clipped to
     /// `mask`). False when it can't be drawn yet.
     #[allow(clippy::too_many_arguments)]
-    fn picture(&self, asset: &str, crop: Option<Crop>, mask: ImageMask, e: &Element, a: &Affine, items: &mut Vec<Item>, svg: Option<crate::svg::SvgStyle>) -> bool {
+    fn picture(&self, asset: &str, crop: Option<Crop>, mask: ImageMask, e: &Element, a: &Affine, items: &mut Vec<Item>, svg: Option<crate::svg::SvgStyle>, page: Option<&PageRef>) -> bool {
         let Some(src) = self.editor.doc.assets.get(asset) else { return false };
         let (w, h) = (e.size.w, e.size.h);
         let c = crop.unwrap_or(Crop::FULL);
@@ -383,9 +385,13 @@ impl Ctx<'_> {
             },
         };
         let lr = local_rect(e);
-        let transform = *a
-            * Affine::translate((-w / 2.0 - c.x * fw, -h / 2.0 - c.y * fh))
-            * Affine::scale_non_uniform(fw / image.width as f64, fh / image.height as f64);
+        // The whole picture's top-left corner, in local units.
+        let whole = *a * Affine::translate((-w / 2.0 - c.x * fw, -h / 2.0 - c.y * fh));
+        let transform = whole * Affine::scale_non_uniform(fw / image.width as f64, fh / image.height as f64);
+        let tiles = match page {
+            Some(p) if !self.full_res_images => self.page_tiles(p, &whole, fw, fh, c, src.width),
+            _ => vec![],
+        };
         if self.o.ghost.as_deref() == Some(e.id.as_str()) {
             items.push(Item::PushOpacity(0.35));
             items.push(Item::Image { image: image.clone(), transform });
@@ -402,10 +408,100 @@ impl Ctx<'_> {
             items.push(Item::PushClip(p));
         }
         items.push(Item::Image { image, transform });
+        items.extend(tiles);
         if clip {
             items.push(Item::PopClip);
         }
         true
+    }
+
+    /// A PDF page seen larger than its picture: the visible part drawn
+    /// again from the PDF at this zoom, in tiles (see [`crate::pages`]).
+    /// `whole` maps the whole page box (`fw` x `fh` local units, top-left
+    /// at 0,0) to device pixels; `pic_w` is the page picture's width.
+    /// Tiles still being made leave a gap: the half-zoom tile under it is
+    /// drawn if cached, else the picture already drawn shows through.
+    fn page_tiles(&self, page: &PageRef, whole: &Affine, fw: f64, fh: f64, c: Crop, pic_w: u32) -> Vec<Item> {
+        use crate::images::TILE_PREFIX;
+        use crate::pages::{PageRequest, MAX_PAGE_PX, TILE};
+        let mut out = vec![];
+        let Some(raster) = self.r.page_raster() else { return out };
+        let Some(pdf) = self.editor.doc.assets.get(&page.pdf) else { return out };
+        if !(fw > 0.0 && fh > 0.0) {
+            return out;
+        }
+        let on_screen = fw * affine_scale(whole);
+        if !on_screen.is_finite() || on_screen <= pic_w as f64 * 1.05 {
+            return out;
+        }
+        let mut pw = TILE;
+        while (pw as f64) < on_screen && pw < MAX_PAGE_PX {
+            pw *= 2;
+        }
+        let height_for = |pw: u32| ((pw as f64) * fh / fw).round().clamp(1.0, (MAX_PAGE_PX * 4) as f64) as u32;
+        let ph = height_for(pw);
+        let to_device = |pw: u32, ph: u32| *whole * Affine::scale_non_uniform(fw / pw as f64, fh / ph as f64);
+        let t = to_device(pw, ph);
+        // The screen, in page pixels.
+        let inv = t.inverse();
+        let (sw, sh) = (self.screen.0 as f64, self.screen.1 as f64);
+        let pts = [Point::new(0.0, 0.0), Point::new(sw, 0.0), Point::new(0.0, sh), Point::new(sw, sh)].map(|p| inv * p);
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for p in pts {
+            (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
+        }
+        // Only the shown (cropped) part of the page.
+        let (cx0, cy0) = (c.x * pw as f64, c.y * ph as f64);
+        let (cx1, cy1) = (cx0 + c.w * pw as f64, cy0 + c.h * ph as f64);
+        let (x0, y0) = (x0.max(cx0).max(0.0), y0.max(cy0).max(0.0));
+        let (x1, y1) = (x1.min(cx1).min(pw as f64), y1.min(cy1).min(ph as f64));
+        if !(x1 > x0 && y1 > y0) {
+            return out;
+        }
+        let tile = TILE as f64;
+        let (tx0, ty0) = ((x0 / tile).floor() as u32, (y0 / tile).floor() as u32);
+        let (tx1, ty1) = ((x1 / tile).ceil() as u32, (y1 / tile).ceil() as u32);
+        // A turned page on a big screen: more tiles than are worth making.
+        if (tx1 - tx0) as u64 * (ty1 - ty0) as u64 > 96 {
+            return out;
+        }
+        let key = |pw: u32, tx: u32, ty: u32| format!("{TILE_PREFIX}{}#{}@{pw}:{tx},{ty}", page.pdf, page.index);
+        let sync = !self.o.async_images;
+        let mut have = vec![];
+        let mut under = std::collections::BTreeSet::new();
+        for ty in ty0..ty1 {
+            for tx in tx0..tx1 {
+                let (x, y) = (tx * TILE, ty * TILE);
+                let rect = (x, y, TILE.min(pw - x), TILE.min(ph - y));
+                let k = key(pw, tx, ty);
+                let req = PageRequest { pdf: page.pdf.clone(), bytes: pdf.bytes.clone(), index: page.index, page_px: (pw, ph), rect };
+                let raster = raster.clone();
+                let name = k.clone();
+                let make: crate::images::Make = Arc::new(move || {
+                    let px = raster(&req)?;
+                    let (w, h) = (req.rect.2, req.rect.3);
+                    (px.len() == (w * h * 4) as usize).then(|| ImageLevel::from_rgba(&name, w, h, px))
+                });
+                match self.r.images.get_made(&k, sync, make) {
+                    Some(Decoded::Still(l)) => have.push(Item::Image { image: l, transform: t * Affine::translate((x as f64, y as f64)) }),
+                    _ => {
+                        self.pending.set(true);
+                        if pw / 2 > pic_w {
+                            under.insert((tx / 2, ty / 2));
+                        }
+                    }
+                }
+            }
+        }
+        let (hw, hh) = (pw / 2, height_for(pw / 2));
+        let th = to_device(hw, hh);
+        for (tx, ty) in under {
+            if let Some(Decoded::Still(l)) = self.r.images.peek(&key(hw, tx, ty)) {
+                out.push(Item::Image { image: l, transform: th * Affine::translate(((tx * TILE) as f64, (ty * TILE) as f64)) });
+            }
+        }
+        out.extend(have);
+        out
     }
 
     fn element(&self, e: &Element, a: &Affine, items: &mut Vec<Item>) {
@@ -645,7 +741,7 @@ impl Ctx<'_> {
                     color2: l.color2.as_ref().map(|c| th.color(c)),
                     sticker: l.sticker,
                 });
-                if !self.picture(&img.asset, img.crop, img.mask, e, a, items, svg) {
+                if !self.picture(&img.asset, img.crop, img.mask, e, a, items, svg, img.page.as_ref()) {
                     placeholder(items, &lr, a, w.min(h), !self.r.images.is_failed(&img.asset));
                 }
             }
@@ -656,7 +752,7 @@ impl Ctx<'_> {
                         * Affine::translate((-w / 2.0, -h / 2.0))
                         * Affine::scale_non_uniform(w / frame.width as f64, h / frame.height as f64);
                     items.push(Item::Image { image: frame.clone(), transform });
-                } else if !v.poster.as_ref().is_some_and(|p| self.picture(p, None, ImageMask::Rectangle, e, a, items, None)) {
+                } else if !v.poster.as_ref().is_some_and(|p| self.picture(p, None, ImageMask::Rectangle, e, a, items, None, None)) {
                     fill(items, &RoundedRect::from_rect(lr, w.min(h) * 0.02), a, [29, 29, 31, 255]);
                 }
                 if !playing {

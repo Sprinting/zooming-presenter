@@ -64,6 +64,7 @@ pub struct SceneOptions {
 
 pub mod display;
 pub mod images;
+pub mod pages;
 pub mod svg;
 mod clip;
 pub use display::DisplayList;
@@ -78,11 +79,23 @@ pub mod gpu;
 pub struct Renderer {
     pub(crate) fonts: text::Fonts,
     pub(crate) images: images::ImageCache,
+    /// Draws imported PDF pages sharp when zoomed in (see [`pages`]).
+    page_raster: std::sync::RwLock<Option<pages::PageRaster>>,
 }
 
 impl Renderer {
     pub fn new() -> Self {
-        Renderer { fonts: text::Fonts::new(), images: images::ImageCache::default() }
+        Renderer { fonts: text::Fonts::new(), images: images::ImageCache::default(), page_raster: Default::default() }
+    }
+
+    /// Give the renderer a way to draw PDF pages (the app has PDFium; the
+    /// web player has none and draws each page's picture).
+    pub fn set_page_raster(&self, f: Option<pages::PageRaster>) {
+        *self.page_raster.write().unwrap_or_else(|e| e.into_inner()) = f;
+    }
+
+    pub(crate) fn page_raster(&self) -> Option<pages::PageRaster> {
+        self.page_raster.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// The decoded-image cache (budget, waker for async decodes, stats).

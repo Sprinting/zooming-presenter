@@ -30,6 +30,7 @@ app-file-filter-image = Image
 app-file-filter-video = Video
 app-file-filter-audio = Audio
 app-file-filter-pdf = PDF
+app-file-filter-import = PDF
 app-file-filter-png = PNG
 app-ai-start-failed = Couldn't start AI control: { $error }
 # When something a person did can't be done (details go to the log).
@@ -57,6 +58,7 @@ app-save-failed-title = The document “{ $name }” could not be saved.
 app-undo-lock = Lock
 app-undo-unlock = Unlock
 app-undo-paste = Paste
+app-undo-import = Import { $name }
 app-undo-add-to-path = Add to path
 app-undo-add-current-view = Add current view
 app-undo-nudge = Nudge
@@ -723,6 +725,7 @@ action-save-as = Save As…
 action-export-pdf = Export PDF…
 action-export-png = Export View as PNG…
 action-export-html = Export Web Page (HTML)…
+action-import = Import…
 action-close = Close
 action-quit = Quit Zebra
 action-undo = Undo
@@ -1280,6 +1283,7 @@ credits-title = Acknowledgements
 credits-clip-art = Symbols
 credits-icons = Icons
 credits-fonts = Fonts
+credits-software = Software
 credits-by = { $author } · { $licence }
 credits-licence-text = Licence text
 
@@ -1464,3 +1468,32 @@ content-frame-topic-1 = Topic 1
 content-frame-topic-2 = Topic 2
 content-frame-topic-3 = Topic 3
 content-frame-topic-4 = Topic 4
+
+## File › Import… (sheet, progress, summary)
+import-sheet-title = Import “{ $name }”
+import-importing = Importing “{ $name }”…
+import-reading = Reading…
+import-page-count = { $count ->
+    [one] 1 page
+   *[other] { $count } pages
+}
+import-pages-all = All pages
+import-pages-from = From
+import-pages-to = to
+import-progress = Page { $done } of { $total }
+import-page-name = Page { $n }
+sheet-import = Import
+import-done-title = { $count ->
+    [one] Imported 1 page
+   *[other] Imported { $count } pages
+}
+import-note-skipped = { $count ->
+    [one] 1 page couldn't be read and was left out.
+   *[other] { $count } pages couldn't be read and were left out.
+}
+import-failed-title = “{ $name }” can't be imported
+import-error-unsupported = Zebra can import PDF files.
+import-error-damaged = The file is damaged or isn't a PDF.
+import-error-encrypted = The file is protected with a password.
+import-error-no-engine = Zebra's PDF reader is missing. Reinstall Zebra.
+import-error-read = The file can't be read.

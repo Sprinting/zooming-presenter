@@ -154,6 +154,8 @@ pub struct ZebraApp {
     pub toast: Option<Toast>,
     /// The sheet waiting for an answer (save changes, errors, confirmations).
     pub sheet: Option<crate::sheets::SheetKind>,
+    /// File › Import… under way (its sheet is up).
+    pub import: Option<crate::import_ui::Flow>,
     /// Use native NSAlert sheets and system dialogs (macOS with a window);
     /// off in UI tests, where sheets are drawn in egui.
     pub native_dialogs: bool,
@@ -302,6 +304,11 @@ impl ZebraApp {
                 // Pictures decode on worker threads; repaint when one lands.
                 let waker_ctx = ctx.clone();
                 renderer.images().set_waker(Some(Arc::new(move || waker_ctx.request_repaint())));
+                // Imported PDF pages are drawn again from the PDF when
+                // zoomed in past their pictures.
+                renderer.set_page_raster(Some(Arc::new(|r: &zebra_render::pages::PageRequest| {
+                    zebra_import::pdf::raster(&r.pdf, &r.bytes, r.index, r.page_px, r.rect)
+                })));
                 renderer
             }
         };
@@ -376,6 +383,7 @@ impl ZebraApp {
             recent,
             toast: None,
             sheet: None,
+            import: None,
             native_dialogs: cfg!(target_os = "macos") && has_window,
             #[cfg(target_os = "macos")]
             open_sheet: None,
@@ -673,6 +681,7 @@ impl ZebraApp {
             ExportPdf => crate::files::export_pdf(self),
             ExportPng => crate::files::export_png(self),
             ExportHtml => crate::files::export_html(self),
+            Import => crate::import_ui::choose_file(self),
             Quit => {
                 self.force_quit = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);

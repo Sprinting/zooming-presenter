@@ -1141,7 +1141,7 @@ impl Editor {
                     name: String::new(),
                     placeholder: false,
                     group: None,
-                    kind: ElementKind::Image(ImageData { asset: key, alt: name, crop: None, mask: ImageMask::Rectangle, symbol: Some(look) }),
+                    kind: ElementKind::Image(ImageData { asset: key, alt: name, crop: None, mask: ImageMask::Rectangle, symbol: Some(look), page: None }),
                 };
                 self.insert_element(e, out)?;
             }
@@ -1191,7 +1191,7 @@ impl Editor {
                     name: String::new(),
                     placeholder: false,
                     group: None,
-                    kind: ElementKind::Image(ImageData { asset: key, alt, crop: None, mask: ImageMask::Rectangle, symbol: None }),
+                    kind: ElementKind::Image(ImageData { asset: key, alt, crop: None, mask: ImageMask::Rectangle, symbol: None, page: None }),
                 };
                 self.insert_element(e, out)?;
             }
@@ -1285,6 +1285,8 @@ impl Editor {
                 // No longer the library's symbol: its tint and outline
                 // settings would be applied to a picture they don't fit.
                 img.symbol = None;
+                // Nor a page of a PDF any more.
+                img.page = None;
                 // Keep the width; the height follows the new picture.
                 let (nw, nh) = (info.width.max(1) as f64, info.height.max(1) as f64);
                 let world_w = e.size.w * e.transform.scale;
@@ -2326,6 +2328,7 @@ impl Editor {
             MediaKind::Image => "an image",
             MediaKind::Video => "a video",
             MediaKind::Audio => "an audio file",
+            MediaKind::Document => "a PDF",
         };
         let check = |info: &crate::media::MediaInfo| -> ZResult<()> {
             if info.kind != want {
@@ -2333,6 +2336,7 @@ impl Editor {
                     MediaKind::Image => "an image",
                     MediaKind::Video => "a video",
                     MediaKind::Audio => "audio",
+                    MediaKind::Document => "a PDF",
                 })));
             }
             Ok(())
@@ -2955,6 +2959,11 @@ fn validate_element(e: &Element, doc: &Document) -> ZResult<()> {
             if !doc.assets.get(&i.asset).is_some_and(|a| a.media_kind() == MediaKind::Image) {
                 return Err(ZError::invalid(format!("unknown image asset '{}'", i.asset)).hint("use add_image"));
             }
+            if let Some(p) = &i.page {
+                if !doc.assets.get(&p.pdf).is_some_and(|a| a.media_kind() == MediaKind::Document) {
+                    return Err(ZError::invalid(format!("unknown PDF asset '{}'", p.pdf)).hint("pages come in with import"));
+                }
+            }
         }
         ElementKind::Video(v) => {
             if !doc.assets.get(&v.asset).is_some_and(|a| a.media_kind() == MediaKind::Video) {
@@ -3280,7 +3289,7 @@ fn plural(n: usize, w: &str) -> String {
     if n == 1 { format!("1 {w}") } else { format!("{n} {w}s") }
 }
 
-fn content_key(bytes: &[u8]) -> String {
+pub(crate) fn content_key(bytes: &[u8]) -> String {
     // FNV-1a 64 + length: stable across runs and platforms.
     let mut h: u64 = 0xcbf29ce484222325;
     for b in bytes {

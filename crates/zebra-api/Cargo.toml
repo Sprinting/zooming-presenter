@@ -16,6 +16,8 @@ zebra-core.workspace = true
 zebra-render = { path = "../zebra-render", default-features = false }
 # File > Export > Web Page (the player is built and embedded by its build.rs).
 zebra-web = { path = "../zebra-web" }
+# The `import` method (PDF pages as frames).
+zebra-import = { path = "../zebra-import" }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true

@@ -73,6 +73,11 @@ Open Recent is in the File menu. While there are unsaved changes, Zebra
 autosaves a sidecar file every 30 s and offers to restore it. Export PDF
 produces one page per step.
 
+**Import**: File › Import… (⇧⌘I), or drop a PDF on the canvas, brings a
+PDF's pages in as pictures, one per frame, with a path step each, as one
+undo step. Zebra keeps the PDF in the document and draws pages from it, so
+they stay sharp at any zoom.
+
 **Web page**: File › Export To › Export Web Page (HTML)… writes one `.html`
 file that presents the deck in any current browser (Safari, Chrome,
 Firefox; desktop and phone), with nothing to install: the same drawing and
@@ -97,6 +102,7 @@ rewrites it).
 | Open… | ⌘O |
 | Save | ⌘S |
 | Save As… | ⇧⌘S |
+| Import… | ⇧⌘I |
 | Export PDF… | ⌘E |
 | Duplicate | ⌘D |
 | Delete | ⌫ or Del |

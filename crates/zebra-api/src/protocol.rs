@@ -14,7 +14,7 @@ use zebra_render::CaptureTarget;
 /// Every method the server understands, in documentation order.
 pub const METHODS: &[&str] = &[
     "hello", "ping", "methods", "commands", "schema", "subscribe", "unsubscribe", "documents", "new_document", "close_document", "state", "describe", "query",
-    "apply", "batch", "copy_to", "begin", "commit", "abort", "undo", "redo", "view", "capture", "wait", "open", "save",
+    "apply", "batch", "copy_to", "import", "begin", "commit", "abort", "undo", "redo", "view", "capture", "wait", "open", "save",
     "export", "disconnect", "quit",
 ];
 
@@ -137,6 +137,9 @@ pub enum Call {
     /// Copy elements (with their groups, frame contents and pictures) into
     /// another open document, moved by `offset` or centred on `at`.
     CopyTo { ids: Vec<String>, to: String, at: Option<(f64, f64)>, offset: (f64, f64) },
+    /// File › Import…: a PDF's pages (1-based `first`..=`last`) as frames
+    /// with a path step each, right of the content, as one undo step.
+    Import { path: PathBuf, first: Option<usize>, last: Option<usize> },
     Capture(CaptureReq),
     Undo,
     Redo,
@@ -153,7 +156,15 @@ impl Call {
     pub fn mutates(&self) -> bool {
         matches!(
             self,
-            Call::Apply { .. } | Call::Batch { .. } | Call::Begin { .. } | Call::Undo | Call::Redo | Call::Open { .. } | Call::CopyTo { .. } | Call::CloseDocument { .. }
+            Call::Apply { .. }
+                | Call::Batch { .. }
+                | Call::Begin { .. }
+                | Call::Undo
+                | Call::Redo
+                | Call::Open { .. }
+                | Call::CopyTo { .. }
+                | Call::CloseDocument { .. }
+                | Call::Import { .. }
         )
     }
 }
@@ -378,6 +389,26 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
             };
             let offset = (p.get("dx").and_then(|n| n.as_f64()).unwrap_or(0.0), p.get("dy").and_then(|n| n.as_f64()).unwrap_or(0.0));
             Call::CopyTo { ids, to, at, offset }
+        }
+        "import" => {
+            const EX: &str = r#"example: {"path":"/Users/me/deck.pdf"} imports every page; add "from":2,"to":5 for some"#;
+            let path = abs_path(p.get("path"), "import")?.ok_or_else(|| RpcError::invalid("`import` needs {\"path\": \"/abs/deck.pdf\"}").hint(EX))?;
+            let page = |k: &str| -> Result<Option<usize>, RpcError> {
+                match p.get(k) {
+                    None | Some(Value::Null) => Ok(None),
+                    Some(v) => match v.as_u64() {
+                        Some(n) if n >= 1 => Ok(Some(n as usize)),
+                        _ => Err(RpcError::invalid(format!("`{k}` is a page number, 1 or more")).hint(EX)),
+                    },
+                }
+            };
+            let (first, last) = (page("from")?, page("to")?);
+            if let (Some(a), Some(b)) = (first, last) {
+                if a > b {
+                    return Err(RpcError::invalid(format!("`from` ({a}) is after `to` ({b})")).hint(EX));
+                }
+            }
+            Call::Import { path, first, last }
         }
         "capture" => Call::Capture(parse_capture(&p)?),
         "undo" => Call::Undo,

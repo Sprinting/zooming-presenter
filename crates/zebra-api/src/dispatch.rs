@@ -144,12 +144,18 @@ impl Dispatcher {
             }
         }
 
-        // 3. Renders finished on workers.
+        // 3. Renders and imports finished on workers.
         let mut j = 0;
         while j < self.jobs.len() {
             match self.jobs[j].rx.try_recv() {
-                Ok(r) => {
+                Ok(JobDone::Reply(r)) => {
                     let job = self.jobs.remove(j);
+                    reply(server, job.client, &job.id, r);
+                }
+                Ok(JobDone::Import(done)) => {
+                    let job = self.jobs.remove(j);
+                    let r = self.finish_import(docs, *done);
+                    self.flush_events(server, docs);
                     reply(server, job.client, &job.id, r);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => j += 1,
@@ -254,6 +260,41 @@ impl Dispatcher {
             }
             return;
         }
+        if let Call::Import { .. } = &p.call {
+            let seen = self.seen.get(&(doc.clone(), p.origin.display())).copied();
+            let allowed = need_edit(editor.view.agent_permission, "import")
+                .and_then(|_| check_agent_allowed(editor))
+                .and_then(|_| if p.origin.is_agent() { check_read(editor, seen) } else { Ok(()) });
+            if let Err(e) = allowed {
+                return reply(server, p.client, &p.id, Err(e));
+            }
+            let Call::Import { path, first, last } = p.call else { unreachable!() };
+            let theme = editor.theme();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let waker = server.inner.shared.waker.clone();
+            let (doc, origin) = (doc.clone(), p.origin.clone());
+            // Reading a big file takes a while: off the window's thread.
+            let spawned = std::thread::Builder::new().name("zebra-import".into()).spawn(move || {
+                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let deck = zebra_import::open(&path).and_then(|r| {
+                    let mut o = zebra_import::Options::all(theme);
+                    o.first = first.unwrap_or(1);
+                    o.last = last.unwrap_or(usize::MAX);
+                    let pages = r.page_count();
+                    if o.first > pages {
+                        return Err(zebra_import::ImportError::Read(format!("the file has {pages} pages; `from` is {}", o.first)));
+                    }
+                    r.read(&o, &zebra_import::Control::default())
+                });
+                let _ = tx.send(JobDone::Import(Box::new(ImportDone { doc, origin, name, deck })));
+                waker();
+            });
+            match spawned {
+                Ok(_) => self.jobs.push(Job { client: p.client, id: p.id, rx }),
+                Err(e) => reply(server, p.client, &p.id, Err(RpcError::app("io", format!("cannot start an import thread: {e}")))),
+            }
+            return;
+        }
         // Captures and exports render a snapshot on a worker so the window
         // never stalls on a big render; the reply is sent when it's done.
         // Writing a file is more than looking.
@@ -298,7 +339,7 @@ impl Dispatcher {
                     Call::Export { format, path, capture } => Self::export(&renderer, &snap, format, path, &capture, limited, &labels),
                     _ => unreachable!(),
                 };
-                let _ = tx.send(r);
+                let _ = tx.send(JobDone::Reply(r));
                 waker();
             });
             match spawned {
@@ -482,7 +523,9 @@ impl Dispatcher {
                 json!({ "ok": true, "path": path })
             }
             Call::Export { format, path, capture } => Self::export(&self.renderer, editor, format, path, &capture, limited, &self.web_labels)?,
-            Call::Wait { .. } | Call::Documents | Call::NewDocument | Call::CloseDocument { .. } | Call::CopyTo { .. } => unreachable!("handled in run"),
+            Call::Wait { .. } | Call::Documents | Call::NewDocument | Call::CloseDocument { .. } | Call::CopyTo { .. } | Call::Import { .. } => {
+                unreachable!("handled in run")
+            }
             Call::Disconnect => {
                 // Any agent may switch AI control off; only the human can turn
                 // it back on (there is deliberately no API to enable it).
@@ -587,11 +630,71 @@ impl Dispatcher {
     }
 }
 
-/// A capture or export rendering on a worker thread.
+/// A capture, export or import running on a worker thread.
 pub(crate) struct Job {
     client: u64,
     id: Option<Value>,
-    rx: std::sync::mpsc::Receiver<Result<Value, RpcError>>,
+    rx: std::sync::mpsc::Receiver<JobDone>,
+}
+
+pub(crate) enum JobDone {
+    /// The reply, as is.
+    Reply(Result<Value, RpcError>),
+    /// A file read for `import`, to add to its document.
+    Import(Box<ImportDone>),
+}
+
+pub(crate) struct ImportDone {
+    doc: String,
+    origin: Origin,
+    /// The file's name, for the undo step.
+    name: String,
+    deck: Result<zebra_import::ImportedDeck, zebra_import::ImportError>,
+}
+
+fn import_error(e: zebra_import::ImportError) -> RpcError {
+    use zebra_import::ImportError as E;
+    let code = match &e {
+        E::NotSupported => "unsupported",
+        E::Damaged(_) => "damaged",
+        E::Encrypted => "encrypted",
+        E::NoEngine(_) => "no_engine",
+        E::Read(_) => "io",
+        E::Cancelled => "cancelled",
+    };
+    let r = RpcError::app(code, e.to_string());
+    match e {
+        E::NotSupported => r.hint(format!("Zebra imports: {}", zebra_import::EXTENSIONS.join(", "))),
+        _ => r,
+    }
+}
+
+impl Dispatcher {
+    /// Add an imported file to its document (still open?) as one undo step.
+    fn finish_import(&mut self, docs: &mut dyn Documents, done: ImportDone) -> Result<Value, RpcError> {
+        let deck = done.deck.map_err(import_error)?;
+        let key = (done.doc.clone(), done.origin.display());
+        let seen = self.seen.get(&key).copied();
+        let Some(editor) = docs.editor(&done.doc) else { return Err(RpcError::app("not_found", "the document was closed during the import")) };
+        need_edit(editor.view.agent_permission, "import")?;
+        check_agent_allowed(editor)?;
+        if done.origin.is_agent() {
+            // Changed by someone else while the file was read: their
+            // change could be what the pages now overlap.
+            check_read(editor, seen)?;
+        }
+        let out = editor.import_deck(&deck, format!("Import {}", done.name), done.origin.clone())?;
+        self.seen.insert(key, editor.revision);
+        let frames: Vec<String> = out.created.iter().filter(|id| editor.doc.get(id).is_some_and(|e| e.is_frame())).cloned().collect();
+        let notes: Vec<Value> = deck.notes.iter().map(|(n, c)| json!({ "note": n, "count": c, "text": n.english(*c) })).collect();
+        let mut v = to_value(out);
+        if let Value::Object(o) = &mut v {
+            o.insert("pages".into(), json!(deck.pages.len()));
+            o.insert("frames".into(), json!(frames));
+            o.insert("notes".into(), json!(notes));
+        }
+        Ok(v)
+    }
 }
 
 /// An agent's save: waiting for another save of the document to finish,

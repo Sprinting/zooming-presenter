@@ -178,3 +178,36 @@ fn big_media_moves_into_a_folder() {
     assert!(!export::build(&r2, &pics, &Labels::default(), 1).unwrap().is_folder());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_imported_pdf_page_plays_from_its_picture_without_the_pdf() {
+    let r = Renderer::new();
+    let mut ed = deck(&r);
+    let mut png = vec![];
+    image::RgbaImage::from_pixel(64, 40, image::Rgba([0, 90, 200, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let pdf = b"%PDF-1.4 a page".repeat(2000);
+    let (pdf_key, pdf_asset) = zebra_core::import::asset_from(pdf).unwrap();
+    let (pic_key, pic) = zebra_core::import::asset_from(png).unwrap();
+    ed.doc.assets.insert(pdf_key.clone(), pdf_asset);
+    ed.doc.assets.insert(pic_key.clone(), pic);
+    let add = serde_json::json!({"op":"add_element","element":{"x":0,"y":0,"w":640,"h":400,
+        "kind":{"type":"image","asset":pic_key,"alt":"","page":{"pdf":pdf_key,"index":0}}}});
+    ed.apply(serde_json::from_value(add).unwrap(), H).unwrap();
+    let page = export::build(&r, &ed, &Labels::default(), export::INLINE_LIMIT).unwrap();
+    let html = &page.html;
+    let start = html.find("id=\"zw-manifest\">").unwrap() + "id=\"zw-manifest\">".len();
+    let end = start + html[start..].find("</script>").unwrap();
+    let m: serde_json::Value = serde_json::from_str(&html[start..end]).unwrap();
+    let keys: Vec<&str> = m["assets"].as_array().unwrap().iter().map(|a| a["key"].as_str().unwrap()).collect();
+    assert!(keys.contains(&pic_key.as_str()), "{keys:?}");
+    assert!(!keys.contains(&pdf_key.as_str()), "the PDF stays out: {keys:?}");
+    // The player (no PDF engine, and no PDF) still opens and plays it.
+    let mut p = Player::new();
+    for (k, a) in ed.doc.assets.iter().filter(|(k, _)| **k != pdf_key) {
+        p.add_asset(k, &a.ext, a.width, a.height, a.bytes.to_vec());
+    }
+    p.load(&zebra_core::io::to_json(&ed.doc)).unwrap();
+    p.resize(640.0, 400.0, 1.0);
+    let mut t = 0.0;
+    settle(&mut p, &mut t);
+}

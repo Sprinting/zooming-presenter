@@ -595,6 +595,7 @@ pub fn insert_file(app: &mut ZebraApp, p: &std::path::Path, at: Vec2) {
         MediaKind::Video => insert_video_file(app, p, at),
         MediaKind::Audio => set_soundtrack_file(app, p),
         MediaKind::Image => app.insert_image_file(p, at),
+        MediaKind::Document => crate::import_ui::start(app, p.to_path_buf()),
     }
 }
 

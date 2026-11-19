@@ -237,6 +237,19 @@ enum Cmd {
         #[arg(long, requires = "x")]
         y: Option<f64>,
     },
+    /// File › Import…: a PDF's pages as frames with a path step each, right
+    /// of what is on the canvas, as one undo step. Prints what came in as
+    /// pictures (equations, gradients, effects).
+    Import {
+        /// The .pdf file.
+        file: PathBuf,
+        /// First page (1-based; default 1).
+        #[arg(long)]
+        from: Option<u64>,
+        /// Last page (default: the last).
+        #[arg(long)]
+        to: Option<u64>,
+    },
     /// Internal: the per-agent background relay that holds this agent's one
     /// connection to Zebra (started by the first command).
     #[command(name = "__relay", hide = true)]
@@ -474,6 +487,16 @@ fn run(cli: Cli) -> Result<()> {
                 p["at"] = json!({ "x": x, "y": y });
             }
             print(&call(c, "copy_to", p)?)
+        }
+        Cmd::Import { file, from, to } => {
+            let mut p = json!({ "path": abs(&file)? });
+            if let Some(n) = from {
+                p["from"] = json!(n);
+            }
+            if let Some(n) = to {
+                p["to"] = json!(n);
+            }
+            print(&call(c, "import", p)?)
         }
         Cmd::Describe => {
             let v = call(c, "describe", json!({}))?;

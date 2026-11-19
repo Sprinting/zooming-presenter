@@ -8,6 +8,7 @@ pub mod library;
 pub mod files;
 pub mod i18n;
 pub mod icons;
+pub mod import_ui;
 pub mod inspector;
 pub mod keep_awake;
 pub mod keymap;

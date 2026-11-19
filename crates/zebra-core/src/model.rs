@@ -88,7 +88,8 @@ fn d_volume() -> f64 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Asset {
     /// Lower-case extension: png, jpg, webp, gif (images), mp4, mov, m4v
-    /// (video), mp3, m4a, aac, wav (audio).
+    /// (video), mp3, m4a, aac, wav (audio), pdf (an imported PDF, drawn
+    /// through the pictures that show its pages).
     pub ext: String,
     /// The encoded file (PNG, JPEG...). Assets from a saved `.zebra` are
     /// memory-mapped from it, not copied into RAM.
@@ -110,6 +111,8 @@ pub enum MediaKind {
     Image,
     Video,
     Audio,
+    /// A PDF that imported pages are drawn from.
+    Document,
 }
 
 impl MediaKind {
@@ -117,6 +120,7 @@ impl MediaKind {
         match ext {
             "mp4" | "mov" | "m4v" => MediaKind::Video,
             "mp3" | "m4a" | "aac" | "wav" => MediaKind::Audio,
+            "pdf" => MediaKind::Document,
             _ => MediaKind::Image,
         }
     }
@@ -637,6 +641,21 @@ pub struct ImageData {
     /// library.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<SymbolLook>,
+    /// Set when the picture is a page of an imported PDF. `asset` is then
+    /// a picture of the page made at import (thumbnails, the web player
+    /// and exports draw that); the app draws the page itself from the PDF,
+    /// so it stays sharp at any zoom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<PageRef>,
+}
+
+/// A page of a PDF kept in the document as an asset.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PageRef {
+    /// Asset key of the PDF (extension "pdf").
+    pub pdf: String,
+    /// 0-based page number.
+    pub index: u32,
 }
 
 /// Where a symbol came from and how it is drawn.
@@ -1029,6 +1048,9 @@ impl Document {
             match &e.kind {
                 ElementKind::Image(i) => {
                     out.insert(i.asset.as_str());
+                    if let Some(p) = &i.page {
+                        out.insert(p.pdf.as_str());
+                    }
                 }
                 ElementKind::Video(v) => {
                     out.insert(v.asset.as_str());

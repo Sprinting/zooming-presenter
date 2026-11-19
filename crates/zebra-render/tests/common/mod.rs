@@ -97,7 +97,7 @@ pub fn sample(r: &Renderer, theme: &str) -> Editor {
     add(&mut ed, "k2", -450.0, -200.0, 300.0, 100.0, 1.0, 0.0, ElementKind::Ink(InkData { points: pts, color: "#ffd400".into(), width: 30.0, highlighter: true }));
     // Image.
     let key = ed.add_asset(checker_png()).unwrap();
-    add(&mut ed, "i1", 450.0, -120.0, 160.0, 120.0, 1.0, 8.0, ElementKind::Image(ImageData { asset: key, alt: "checker".into(), crop: None, mask: Default::default(), symbol: None }));
+    add(&mut ed, "i1", 450.0, -120.0, 160.0, 120.0, 1.0, 8.0, ElementKind::Image(ImageData { asset: key, alt: "checker".into(), crop: None, mask: Default::default(), symbol: None, page: None }));
     // Path: overview, circle, rectangle frame.
     ed.doc.path = vec![
         PathStep { target: StepTarget::Element { id: "f1".into() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None },

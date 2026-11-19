@@ -76,7 +76,30 @@ else
   echo "warning: assets/symbols is missing; the app will have no symbols"
 fi
 
+# PDFium for File > Import (PDF): bblanchon/pdfium-binaries, pinned and
+# checksummed by scripts/fetch-pdfium.sh. Zebra binds it by full path from
+# Contents/Frameworks, never from the system's search paths. Its licence
+# and those of the libraries built into it go in Resources/Licenses/PDFium
+# (Help > Acknowledgements lists them). Checked 19 Nov 2026 (build 8125):
+# needs macOS 13.0 (our LSMinimumSystemVersion), links only AppKit,
+# CoreGraphics, CoreFoundation, Foundation and libSystem, and uses only
+# their public symbols; arm64 7.4 MB, x86_64 7.8 MB, universal 15.2 MB.
+case " $TARGETS " in
+  *aarch64-apple-darwin*x86_64-apple-darwin*|*x86_64-apple-darwin*aarch64-apple-darwin*) PDFIUM=mac-univ ;;
+  *aarch64-apple-darwin*) PDFIUM=mac-arm64 ;;
+  *) PDFIUM=mac-x64 ;;
+esac
+PDFIUM_LIB=$(scripts/fetch-pdfium.sh "$PDFIUM")
+PDFIUM_DIR=$(dirname "$(dirname "$PDFIUM_LIB")")
+mkdir -p "$APP/Contents/Frameworks" "$APP/Contents/Resources/Licenses/PDFium"
+cp "$PDFIUM_LIB" "$APP/Contents/Frameworks/libpdfium.dylib"
+install_name_tool -id @rpath/libpdfium.dylib "$APP/Contents/Frameworks/libpdfium.dylib"
+cp "$PDFIUM_DIR/LICENSE" "$APP/Contents/Resources/Licenses/PDFium/pdfium-binaries.txt"
+cp "$PDFIUM_DIR"/licenses/* "$APP/Contents/Resources/Licenses/PDFium/"
+
 ID=${SIGN_ID:--}
+# Nested code is signed first, with the same identity (library validation).
+codesign --force --options runtime ${SIGN_ID:+--timestamp} --sign "$ID" "$APP/Contents/Frameworks/libpdfium.dylib"
 if [ "${APPSTORE:-0}" = 1 ]; then
   codesign --force --options runtime --timestamp --sign "$ID" \
     --entitlements packaging/macos/zebractl.entitlements "$APP/Contents/MacOS/zebractl"

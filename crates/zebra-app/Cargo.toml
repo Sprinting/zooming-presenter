@@ -20,6 +20,8 @@ kurbo.workspace = true
 zebra-api.workspace = true
 # File > Export > Web Page: the exporter and its embedded web player.
 zebra-web = { path = "../zebra-web" }
+# File > Import (PDF pages as frames).
+zebra-import = { path = "../zebra-import" }
 zebra-media.workspace = true
 arboard = { version = "3.7", default-features = false, features = ["image-data"] }
 eframe.workspace = true

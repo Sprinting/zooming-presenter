@@ -104,6 +104,8 @@ fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc
         let (ext, w, h) = match _ext.to_ascii_lowercase().as_str() {
             // Embedded theme fonts.
             e @ ("ttf" | "otf" | "ttc") => (e.to_string(), 0, 0),
+            // An imported PDF (pages are drawn from it).
+            "pdf" if crate::import::is_pdf(&data) => ("pdf".to_string(), 0, 0),
             // Symbols from the clip-art library.
             "svg" => {
                 let (w, h) = crate::symbols::svg_pixels(&data);
