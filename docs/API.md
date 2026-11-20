@@ -179,8 +179,8 @@ than one document open, events carry the `document` id they come from.
 |---|---|---|
 | `capture` | `{"target"?, "width"?, "height"?, "path"?}` (size: default the person's window, up to 1600 wide; one side keeps the window's shape) | `{"format":"png","width","height","target","data_base64"}`, or `{"path","bytes",…}` when `path` is given |
 | `export` | `{"format": "pdf"\|"png"\|"json"\|"zebra"\|"html", "path"?, "target"?, "width"?, "height"?}` | `{"path","bytes","mime"}`, or the data inline when no `path` is given (`json` returns `{"document": …}`). `html` writes a web page that presents the deck in any current browser (File > Export > Web Page); with `path` the result adds `"folder"`: true when its video and audio passed 50 MB, and `path` is then `<path without .html>/index.html` with the media in `media/` beside it |
-| `open` | `{"path": "/abs/deck.zebra", "force"?: false}` | needs `full`; fails with `unsaved_changes` unless `force` is set |
-| `save` | `{"path"?: "/abs/deck.zebra"}` | needs `full`; with no `path` it saves to the current file |
+| `open` | `{"path": "/abs/deck.zebra", "force"?: false}` | needs `full`; fails with `unsaved_changes` unless `force` is set, and with `already_open` when another document has that file open |
+| `save` | `{"path"?: "/abs/deck.zebra"}` | needs `full`; with no `path` it saves to the current file; fails with `already_open` when another document has that file open |
 | `disconnect` | – | switches AI control off in the app (the person must switch it back on); in headless mode it quits |
 | `quit` | – | headless instances only |
 
@@ -248,6 +248,7 @@ Errors are JSON-RPC errors whose `data` explains how to fix the problem:
 | -32000 | `stale_revision` | Someone changed the document since you last read it (or the `if_revision` check failed). Read again and retry. |
 | -32000 | `no_transaction` | `commit` or `abort` without a matching `begin`. |
 | -32000 | `unsaved_changes` | `open` or `close_document` would discard unsaved work. Save first, or pass `force` (`open`) or `discard` (`close_document`). |
+| -32000 | `already_open` | `open` or `save` names a file another document has open (two documents on one file overwrite each other's saves). The message names that document's id: work in it with `"document"`, or save to another path. |
 | -32000 | `timeout` | A `wait` condition was not met in time. |
 | -32000 | `io`, `bad_file`, `no_path`, `unimplemented` | File and renderer problems. |
 

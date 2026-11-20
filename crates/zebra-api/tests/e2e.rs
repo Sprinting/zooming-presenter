@@ -523,7 +523,12 @@ impl zebra_api::Documents for Windows {
     fn new_document(&mut self) -> Result<String, zebra_api::RpcError> {
         let id = format!("d{}", self.next);
         self.next += 1;
-        self.eds.push((id.clone(), zebra_core::Editor::default()));
+        // Like the app: a new document takes the level the others have.
+        let mut e = zebra_core::Editor::default();
+        if let Some((_, first)) = self.eds.first() {
+            e.view.agent_permission = first.view.agent_permission;
+        }
+        self.eds.push((id.clone(), e));
         Ok(id)
     }
     fn close(&mut self, id: &str, _discard: bool) -> Result<(), zebra_api::RpcError> {
@@ -603,4 +608,35 @@ fn discarding_needs_a_read_of_the_latest_version() {
     c.call("close_document", json!({"document":"d1","discard":true})).unwrap();
     stop.store(true, std::sync::atomic::Ordering::SeqCst);
     assert!(host.join().unwrap().is_empty());
+}
+
+#[test]
+fn open_and_save_refuse_a_file_another_document_has_open() {
+    let (socket, token, stop, host) = windows_host(Permission::Full);
+    let dir = scratch().join("already-open");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("pitch.zebra");
+    let _ = std::fs::remove_file(&file);
+    let mut c = Client::connect_hello(&socket, "files", &token).unwrap();
+    c.call("save", json!({"document":"d1","path":file})).unwrap();
+    let id = c.call("new_document", json!({})).unwrap()["document"]["id"].as_str().unwrap().to_string();
+
+    // Opening it in the second document: refused, naming the first.
+    let e = rpc_err(c.call("open", json!({"document":id,"path":file})));
+    assert_eq!(e.kind(), "already_open", "{e}");
+    assert!(e.to_string().contains("\"d1\""), "{e}");
+    // Another spelling of the same file too.
+    let other_spelling = dir.join(".").join("pitch.zebra");
+    let e = rpc_err(c.call("open", json!({"document":id,"path":other_spelling})));
+    assert_eq!(e.kind(), "already_open", "{e}");
+    // Saving over it from the second document: refused.
+    c.call("apply", json!({"document":id,"command":{"op":"add_frame"}})).unwrap();
+    let e = rpc_err(c.call("save", json!({"document":id,"path":file})));
+    assert_eq!(e.kind(), "already_open", "{e}");
+    // The document's own file, and another path, are fine.
+    c.call("save", json!({"document":"d1"})).unwrap();
+    c.call("save", json!({"document":id,"path":dir.join("notes.zebra")})).unwrap();
+    c.call("open", json!({"document":"d1","path":file})).unwrap();
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    host.join().unwrap();
 }

@@ -248,6 +248,14 @@ impl Dispatcher {
             Ok(d) => d,
             Err(e) => return reply(server, p.client, &p.id, Err(e)),
         };
+        // Two windows on one file overwrite each other's saves: like the
+        // person's File > Open, a file another document has open is
+        // refused (the person's open shows that window instead).
+        if let Call::Open { path, .. } = &p.call {
+            if let Err(e) = open_elsewhere(docs, &doc, path) {
+                return reply(server, p.client, &p.id, Err(e));
+            }
+        }
         let info = docs.list().into_iter().find(|d| d.id == doc);
         let Some(editor) = docs.editor(&doc) else {
             return reply(server, p.client, &p.id, Err(RpcError::app("not_found", "that document was just closed")));
@@ -312,7 +320,8 @@ impl Dispatcher {
         // responsive); the reply goes when it is done. One at a time per
         // document: a save while another runs waits for it.
         if let Call::Save { path } = &p.call {
-            match save_path(editor, path.clone()) {
+            let path = save_path(editor, path.clone());
+            match path.and_then(|path| open_elsewhere(docs, &doc, &path).map(|_| path)) {
                 Ok(path) => {
                     self.saves.push(SaveWait { client: p.client, id: p.id, doc, origin: p.origin, path, started: false });
                     self.pump_saves(server, docs);
@@ -819,6 +828,19 @@ fn save_path(editor: &Editor, path: Option<std::path::PathBuf>) -> Result<std::p
             .hint("use export {\"format\": \"json\", \"path\": ...} for the JSON, and save to a .zebra path"));
     }
     Ok(path)
+}
+
+/// Refuses a file that a document other than `doc` has open.
+fn open_elsewhere(docs: &dyn Documents, doc: &str, path: &Path) -> Result<(), RpcError> {
+    let same = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let want = same(path);
+    let Some(other) = docs.list().into_iter().find(|d| d.id != doc && d.path.as_deref().is_some_and(|p| same(p) == want)) else {
+        return Ok(());
+    };
+    Err(RpcError::app("already_open", format!("{} is already open in document \"{}\"", path.display(), other.id)).hint(format!(
+        "two documents on one file overwrite each other's saves: work in that one with \"document\": \"{}\", or save this one to another path",
+        other.id
+    )))
 }
 
 fn need_full(perm: Permission, what: &str) -> Result<(), RpcError> {
