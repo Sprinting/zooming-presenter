@@ -555,12 +555,12 @@ fn r24_the_theme_editor_follows_the_document() {
     h.run_steps(3);
     let mut mine = h.state().theme_ed.as_ref().unwrap().draft.clone();
     mine.accent = "#112233".into();
-    h.state_mut().editor.apply(Command::SaveTheme { theme: mine.clone(), apply: true }, H).unwrap();
+    h.state_mut().editor.apply(Command::SaveTheme { theme: mine.clone(), apply: true, to_library: false }, H).unwrap();
     h.run_steps(2);
     assert_eq!(h.state().theme_ed.as_ref().unwrap().draft.accent, "#112233");
     let mut theirs = mine.clone();
     theirs.accent = "#445566".into();
-    h.state_mut().editor.apply(Command::SaveTheme { theme: theirs, apply: true }, Origin::agent("a")).unwrap();
+    h.state_mut().editor.apply(Command::SaveTheme { theme: theirs, apply: true, to_library: false }, Origin::agent("a")).unwrap();
     h.run_steps(2);
     assert_eq!(h.state().theme_ed.as_ref().unwrap().draft.accent, "#445566", "the agent's change shows in the editor");
     h.state_mut().editor.undo(H).unwrap();

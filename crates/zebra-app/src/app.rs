@@ -455,11 +455,14 @@ impl ZebraApp {
         app.ai_saved = saved_ai;
         // The first time is always a person: until someone has switched AI
         // control on in this window, neither a launch flag nor a saved
-        // setting turns it on.
+        // setting turns it on. Once switched off (by the person, or an
+        // agent's `disconnect`), a launch flag can't switch it back on.
         let granted = switch.granted;
-        if let Some(api_opts) = opts.api.filter(|_| granted) {
+        if let Some(api_opts) = opts.api.filter(|_| switch.lets_flags_start()) {
             app.api_socket = api_opts.socket.clone();
-            app.editor.view.agent_permission = api_opts.permission;
+            // The person's choice; the flag only ever lowers it.
+            let saved = storage.and_then(|s| eframe::get_value::<String>(s, "agent_permission")).map(|p| parse_permission(&p));
+            app.editor.view.agent_permission = launch_permission(saved, api_opts.permission);
             app.set_ai_control(true);
         } else if saved_ai && granted {
             if let Some(p) = storage.and_then(|s| eframe::get_value::<String>(s, "agent_permission")) {
@@ -1787,6 +1790,26 @@ pub fn permission_name(p: zebra_core::view::Permission) -> &'static str {
     }
 }
 
+/// What an agent may do in a run a launch flag started: the person's
+/// saved choice (Edit if they never chose), lowered to `cap` (from
+/// `--agent-permission`) but never raised by it.
+pub fn launch_permission(saved: Option<zebra_core::view::Permission>, cap: zebra_core::view::Permission) -> zebra_core::view::Permission {
+    saved.unwrap_or(zebra_core::view::Permission::Edit).min(cap)
+}
+
+/// The eframe app id; its settings file is `app.ron` under
+/// `eframe::storage_dir(APP_ID)`.
+pub const APP_ID: &str = "dev.zebra.Zebra";
+
+/// The person's saved agent permission (the AI button / Settings), read
+/// from the app's settings file, for a run with no window (headless).
+pub fn saved_agent_permission() -> Option<zebra_core::view::Permission> {
+    let f = eframe::storage_dir(APP_ID)?.join("app.ron");
+    let kv: HashMap<String, String> = ron::de::from_str(&std::fs::read_to_string(f).ok()?).ok()?;
+    let v: String = ron::de::from_str(kv.get("agent_permission")?).ok()?;
+    Some(parse_permission(&v))
+}
+
 pub fn parse_permission(s: &str) -> zebra_core::view::Permission {
     use zebra_core::view::Permission::*;
     match s {
@@ -1872,4 +1895,20 @@ pub fn still_for_this_document(waiting: Vec<Action>) -> Vec<Action> {
         out.push(a);
     }
     out
+}
+
+#[cfg(test)]
+mod launch_permission_tests {
+    use super::launch_permission;
+    use zebra_core::view::Permission::*;
+
+    #[test]
+    fn a_launch_flag_only_lowers_the_persons_choice() {
+        assert_eq!(launch_permission(None, Full), Edit, "never chose: edit, even with --agent-permission full");
+        assert_eq!(launch_permission(Some(Edit), Full), Edit);
+        assert_eq!(launch_permission(Some(Observe), Full), Observe);
+        assert_eq!(launch_permission(Some(Full), Full), Full, "headless keeps full only when the person chose it");
+        assert_eq!(launch_permission(Some(Full), Observe), Observe);
+        assert_eq!(launch_permission(Some(Full), Edit), Edit);
+    }
 }

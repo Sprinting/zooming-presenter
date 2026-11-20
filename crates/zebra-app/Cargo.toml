@@ -39,6 +39,8 @@ serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 libc.workspace = true
+# Reads the person's saved settings outside a window (headless runs).
+ron = "0.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda.workspace = true

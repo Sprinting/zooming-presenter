@@ -50,7 +50,7 @@ pub use app::{AppOptions, ZebraApp};
 pub fn window_builder(title: &str) -> egui::ViewportBuilder {
     egui::ViewportBuilder::default()
         .with_title(title)
-        .with_app_id("dev.zebra.Zebra")
+        .with_app_id(crate::app::APP_ID)
         .with_min_inner_size([760.0, 480.0])
         .with_drag_and_drop(true)
         .with_fullsize_content_view(cfg!(target_os = "macos"))

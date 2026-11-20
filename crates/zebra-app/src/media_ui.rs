@@ -219,6 +219,15 @@ fn start_live(app: &mut ZebraApp, id: &str) {
 /// visible videos, close off-screen ones, run present-mode media, and
 /// schedule repaints only while something plays.
 pub fn tick(app: &mut ZebraApp) {
+    // An agent's `play` / `pause` (full permission), as the inspector's
+    // Play and Pause.
+    for (id, on) in std::mem::take(&mut app.editor.view.media_requests) {
+        if on {
+            play(app, &id);
+        } else {
+            pause(app, &id);
+        }
+    }
     let now = app.editor.view.now;
     let ppp = app.ctx.pixels_per_point() as f64;
     let presenting = app.editor.view.mode == Mode::Present;
@@ -1023,16 +1032,16 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
         if let Some(f) = frame {
             if ui.button(crate::t!("media-poster-use-frame")).on_hover_text(crate::t!("media-poster-use-frame-tip")).clicked() {
                 let png = zebra_media::encode_png(&zebra_media::Frame { width: f.width, height: f.height, rgba: f.data.data.data().to_vec() });
-                app.apply(Command::SetPoster { id: id.to_string(), data_base64: base64::engine::general_purpose::STANDARD.encode(png), path: None });
+                app.apply(Command::SetPoster { id: id.to_string(), data_base64: base64::engine::general_purpose::STANDARD.encode(png), path: None, at: None });
             }
         }
         if ui.button(crate::t!("media-poster-choose")).clicked() {
             if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), &["png", "jpg", "jpeg", "webp"]).pick_file() {
-                app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: Some(p.to_string_lossy().to_string()) });
+                app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: Some(p.to_string_lossy().to_string()), at: None });
             }
         }
         if v.poster.is_some() && ui.small_button(crate::t!("media-clear-button")).on_hover_text(crate::t!("media-poster-remove-tip")).clicked() {
-            app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: None });
+            app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: None, at: None });
         }
     });
     (patch, dragging)

@@ -167,6 +167,9 @@ enum Cmd {
     },
     /// Save (needs 'full' permission).
     Save { path: Option<PathBuf> },
+    /// File › Save as Template: into the person's My Templates (needs
+    /// 'full' permission). Default name: the document's title.
+    SaveTemplate { name: Option<String> },
     /// Print events as JSON lines.
     Events {
         /// Keep printing forever.
@@ -608,6 +611,7 @@ fn run(cli: Cli) -> Result<()> {
             let p = path.map(|p| abs(&p)).transpose()?;
             print(&call(c, "save", json!({ "path": p }))?);
         }
+        Cmd::SaveTemplate { name } => print(&call(c, "save_template", json!({ "name": name }))?),
         Cmd::Events { follow, count, filter } => {
             let p = if filter.is_empty() { json!({}) } else { json!({ "events": filter }) };
             call(c, "subscribe", p)?;
@@ -769,7 +773,9 @@ fn find_zebra_bin(explicit: Option<PathBuf>) -> Result<PathBuf> {
 
 fn spawn_headless(bin: &Path, file: Option<&Path>) -> Result<Headless> {
     let mut cmd = Proc::new(bin);
-    cmd.args(["--headless", "--api", "--agent-permission", "full"]);
+    // Permission is the person's saved choice (the AI button); no flag
+    // raises it.
+    cmd.args(["--headless", "--api"]);
     if let Some(f) = file {
         cmd.arg(abs(f)?);
     }

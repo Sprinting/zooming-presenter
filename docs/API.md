@@ -33,7 +33,7 @@ asking the person to switch it on.
 | `zebra --api [file.zebra]` | Opens the normal window with AI control already switched on. |
 | `zebra --headless --api [file]` | Runs with no window and the same API. Good for generating decks and for CI. The process prints `ZEBRA_API_READY {...}` on stdout when it is ready. |
 | `--api-socket <path>` | Uses this socket path instead of the default one. |
-| `--agent-permission observe\|edit\|full` | Sets the starting permission. The default is `edit`. The person can change it from the AI button in the toolbar. |
+| `--agent-permission observe\|edit` | Lowers the permission for this run. It never raises it: agents get at most the person's choice from the AI button in the toolbar (`edit` if they never chose). `--headless` uses that choice too. |
 
 ### Permissions
 
@@ -43,7 +43,9 @@ asking the person to switch it on.
 | `edit` (default) | Make undoable document edits. It gets its **own** camera and selection, which are drawn dashed and violet. Present-mode and tool commands are refused. |
 | `full` | Everything in `edit`, plus driving the visible camera, selection and present mode, and `open`/`save`. |
 
-`zebractl mcp --spawn-headless` always starts its private instance with `full` permission, because nobody else is using that instance.
+`zebractl mcp --spawn-headless` starts its private instance with the person's choice from the AI button (`edit` if they never chose); no flag raises it.
+
+`--api` and `--headless` only work while AI control is switched on. Once the person or an agent (`disconnect`) switches it off, they stay off until the person switches it back on in Zebra.
 
 ### Discovery (like Chrome's `DevToolsActivePort`)
 
@@ -177,8 +179,9 @@ than one document open, events carry the `document` id they come from.
 |---|---|---|
 | `capture` | `{"target"?, "width"?, "height"?, "path"?}` (size: default the person's window, up to 1600 wide; one side keeps the window's shape) | `{"format":"png","width","height","target","data_base64"}`, or `{"path","bytes",…}` when `path` is given |
 | `export` | `{"format": "pdf"\|"png"\|"json"\|"zebra"\|"html", "path"?, "target"?, "width"?, "height"?}` | `{"path","bytes","mime"}`, or the data inline when no `path` is given (`json` returns `{"document": …}`). `html` writes a web page that presents the deck in any current browser (File > Export > Web Page); with `path` the result adds `"folder"`: true when its video and audio passed 50 MB, and `path` is then `<path without .html>/index.html` with the media in `media/` beside it |
-| `open` | `{"path": "/abs/deck.zebra", "force"?: false}` | needs `full`; fails with `unsaved_changes` unless `force` is set |
-| `save` | `{"path"?: "/abs/deck.zebra"}` | needs `full`; with no `path` it saves to the current file |
+| `open` | `{"path": "/abs/deck.zebra", "force"?: false}` | needs `full`; fails with `unsaved_changes` unless `force` is set, and with `already_open` when another document has that file open |
+| `save` | `{"path"?: "/abs/deck.zebra"}` | needs `full`; with no `path` it saves to the current file; fails with `already_open` when another document has that file open |
+| `save_template` | `{"name"?: "Quarterly review"}` | needs `full`; File › Save as Template: the document into the person's My Templates (default name: its title; a template of that name stays, this one becomes "name 2"). Returns `{"path", "template"}`; `apply_template` takes that `template` (`saved:<name>`) |
 | `disconnect` | – | switches AI control off in the app (the person must switch it back on); in headless mode it quits |
 | `quit` | – | headless instances only |
 
@@ -246,7 +249,9 @@ Errors are JSON-RPC errors whose `data` explains how to fix the problem:
 | -32000 | `stale_revision` | Someone changed the document since you last read it (or the `if_revision` check failed). Read again and retry. |
 | -32000 | `no_transaction` | `commit` or `abort` without a matching `begin`. |
 | -32000 | `unsaved_changes` | `open` or `close_document` would discard unsaved work. Save first, or pass `force` (`open`) or `discard` (`close_document`). |
+| -32000 | `already_open` | `open` or `save` names a file another document has open (two documents on one file overwrite each other's saves). The message names that document's id: work in it with `"document"`, or save to another path. |
 | -32000 | `timeout` | A `wait` condition was not met in time. |
+| -32000 | `unsupported` | This Zebra can't do it: `play` in a headless instance or off macOS, or `set_poster` with `at` where no video decoder exists (only macOS has one). |
 | -32000 | `io`, `bad_file`, `no_path`, `unimplemented` | File and renderer problems. |
 
 **"Human wins":** while the person is dragging or typing, agent edits are
@@ -280,7 +285,7 @@ zebractl undo | redo
 zebractl present [step] | next | prev | stop   # or present --step N
 zebractl screenshot --step 2 -o step2.png   # the person's window shape; or --width/--height; --build K; --element f1 | --overview | --viewport
 zebractl export pdf -o deck.pdf        # png | json | zebra | html
-zebractl open deck.zebra [--force] | save [path]
+zebractl open deck.zebra [--force] | save [path] | save-template [name]
 zebractl events --follow [--filter document_changed,step_changed]   # JSON lines
 zebractl wait idle | step 3 | revision 12 | mode present  [--timeout-ms 10000]
 zebractl raw '{"method":"state"}'
@@ -344,7 +349,7 @@ move. Path steps are 0-based. Theme colour slots look like `theme:accent`.
 ## 6. Walkthrough: a 3-step presentation
 
 ```sh
-zebra --headless --api --agent-permission full &      # or use the app with AI control switched on
+zebra --headless --api &      # or use the app with AI control switched on
 
 cat > deck.json <<'EOF'
 [
@@ -403,7 +408,7 @@ Send with `apply {"command": ...}` or inside `batch {"commands": [...]}`. Undoab
 | `add_video` | alt?: string, autoplay?: boolean, data_base64?: string, id?: string, loop?: boolean, muted?: boolean, path?: string, poster_base64?: string, width?: number, x?: number, y?: number (or path: string, an absolute file path, instead of data_base64) | Insert a video (mp4/mov, H.264 or HEVC). Give `path` (a file on this computer; it is copied, never read into memory) or `data_base64`. It shows `poster_base64` (PNG/JPEG) until played. | `{"op":"add_video","path":"/Users/me/demo.mp4","x":0,"y":0,"width":960,"alt":"Product demo","loop":false}` |
 | `replace_image` | data_base64?: string, id: string, path?: string (or path: string, an absolute file path, instead of data_base64) | Swap the picture of an image, keeping its place and width. The height follows the new picture; crop is reset, the mask is kept. | `{"op":"replace_image","id":"i1","path":"/Users/me/new-logo.png"}` |
 | `replace_video` | data_base64?: string, id: string, path?: string, poster_base64?: string (or path: string, an absolute file path, instead of data_base64) | Swap a video's clip for another, keeping its place, width, rotation and settings (auto-play, loop, mute, description). The trim starts over, and the poster is the one given, or none. | `{"op":"replace_video","id":"v1","path":"/Users/me/new-clip.mp4"}` |
-| `set_poster` | data_base64?: string, id: string, path?: string (or path: string, an absolute file path, instead of data_base64) | Set a video's poster picture. No data and no path clears it. | `{"op":"set_poster","id":"v1","path":"/Users/me/poster.jpg"}` |
+| `set_poster` | at?: number, data_base64?: string, id: string, path?: string (or path: string, an absolute file path, instead of data_base64) | Set a video's poster picture. No data, path or `at` clears it. | `{"op":"set_poster","id":"v1","path":"/Users/me/poster.jpg"}` |
 | `set_soundtrack` | data_base64?: string, loop?: boolean, name?: string, path?: string, volume?: number (or path: string, an absolute file path, instead of data_base64) | Background music for the presentation. With data or a path the track is replaced; without, only the given settings change. | `{"op":"set_soundtrack","path":"/Users/me/music.m4a","volume":0.4,"loop":true}` |
 | `remove_soundtrack` |  |  | `{"op":"remove_soundtrack"}` |
 | `set_voiceover` | data_base64?: string, index: integer, path?: string (or path: string, an absolute file path, instead of data_base64) | Voice-over for a path step (plays when the step is reached). No data and no path removes it. | `{"op":"set_voiceover","index":0,"path":"/Users/me/step1.m4a"}` |
@@ -429,13 +434,13 @@ Send with `apply {"command": ...}` or inside `batch {"commands": [...]}`. Undoab
 | `update_step` | builds?: array, duration?: number, dwell?: number, hide_builds?: boolean, index: integer, notes?: string, target?: StepTarget |  | `{"op":"update_step","index":0,"notes":"Open with a question","duration":2.5,"dwell":8}` |
 | `clear_path` | discard_notes?: boolean | Remove every step. Refused while a step has speaker notes, unless `discard_notes`. | `{"op":"clear_path"}` |
 | `auto_path` | discard_notes?: boolean | Replace the path with every frame in reading order (top-left to bottom-right, larger frames first). A frame that was already a step keeps its notes, builds and timings. Steps that aren't frames are dropped; refused while one of those has speaker notes, unless `discard_notes`. | `{"op":"auto_path"}` |
-| `set_theme` | theme: string |  | `{"op":"set_theme","theme":"chalkboard"}` |
+| `set_theme` | theme: string | A built-in theme, one of this document's, or one from the person's My Themes (see the `themes` query), copied in with its pictures and fonts. | `{"op":"set_theme","theme":"chalkboard"}` |
 | `set_title` | title: string |  | `{"op":"set_title","title":"Quarterly review"}` |
 | `set_playback` | autoplay?: number, loop?: boolean | Autoplay and loop for the whole presentation. Only given fields change. | `{"op":"set_playback","autoplay":10,"loop":true}` |
-| `save_theme` | apply?: boolean, theme: Theme | Add or replace a custom theme in this document (the theme editor's Save). Built-in ids can't be replaced: copy one under a new id. Fonts that aren't bundled are embedded in the file automatically. | `{"op":"save_theme","apply":true,"theme":{"id":"my-theme","name":"My theme","background":"#101820","title":{"font":"Avenir Next","color":"#ffffff","size":72},"subtitle":{"font":"Sans","color":"#f2aa4c","size":40},"body":{"font":"Sans","color":"#dddddd","size":24},"frame":"#f2aa4c","frame_fill":"#1b2733","accent":"#f2aa4c","shapes":["#f2aa4c","#5fb3b3","#ffffff","#888888"],"layers":[{"asset":"<key from add_asset>","depth":0.2}]}}` |
+| `save_theme` | apply?: boolean, theme: Theme, to_library?: boolean | Add or replace a custom theme in this document (the theme editor's Save). Built-in ids can't be replaced: copy one under a new id. Fonts that aren't bundled are embedded in the file automatically. | `{"op":"save_theme","apply":true,"theme":{"id":"my-theme","name":"My theme","background":"#101820","title":{"font":"Avenir Next","color":"#ffffff","size":72},"subtitle":{"font":"Sans","color":"#f2aa4c","size":40},"body":{"font":"Sans","color":"#dddddd","size":24},"frame":"#f2aa4c","frame_fill":"#1b2733","accent":"#f2aa4c","shapes":["#f2aa4c","#5fb3b3","#ffffff","#888888"],"layers":[{"asset":"<key from add_asset>","depth":0.2}]}}` |
 | `delete_theme` | id: string | Remove a custom theme. If it's in use, its base built-in (or classic) takes over. | `{"op":"delete_theme","id":"my-theme"}` |
 | `add_asset` | data_base64: string (or path: string, an absolute file path, instead of data_base64) | Store an image (base64) for use as a theme background or 3D layer. The new asset key is returned in `assets`. | `{"op":"add_asset","data_base64":"iVBORw0KGgo..."}` |
-| `apply_template` | replace?: boolean, template: string | Start from a template (see the `templates` query): frames, placeholder text, a path and a theme. Needs an empty canvas unless `replace`. | `{"op":"apply_template","template":"big_picture"}` |
+| `apply_template` | replace?: boolean, template: string | Start from a template (see the `templates` query): frames, placeholder text, a path and a theme. `saved:<name>` is one the person saved (File > Save as Template); `sample` is File > New from Sample. Needs an empty canvas unless `replace`. | `{"op":"apply_template","template":"big_picture"}` |
 | `add_layout` | add_to_path?: boolean, layout: string, width?: number, x?: number, y?: number | Insert a layout (see the `templates` query): a frame arrangement with placeholder text, centred at `x`,`y`, `width` world units wide. | `{"op":"add_layout","layout":"two_columns","x":4000,"y":0,"width":1600}` |
 | `add_symbol` | color?: string, color2?: string, id?: string, name: string, set: string, sticker?: boolean, width?: number, x?: number, y?: number | A symbol from the clip-art library (Insert › Symbols & Shapes), centred at x, y. Find sets and names with the `symbols` query. The drawing is copied into the document. | `{"op":"add_symbol","set":"noto","name":"rocket","x":300,"y":0,"width":200}` |
 | `add_diagram` | diagram: string, width?: number, x?: number, y?: number | Insert a diagram (see the `diagrams` query): frames, arrows and placeholder text in theme colours, grouped, centred at `x`,`y`, `width` world units wide. Diagrams made for zooming add their frames to the path. | `{"op":"add_diagram","diagram":"process","x":0,"y":1200,"width":1600}` |
@@ -472,6 +477,8 @@ Send with `view {"command": ...}`. Session state, not undoable.
 | `pause_agents` | paused: boolean |  | `{"op":"pause_agents","paused":true}` |
 | `set_agent_permission` | permission: Permission |  | `{"op":"set_agent_permission","permission":"full"}` |
 | `pause_autoplay` | paused: boolean | Pause or resume autoplay while presenting. | `{"op":"pause_autoplay","paused":true}` |
+| `play` | id: string | Play a video in place, with its sound (the inspector's Play; a click while presenting). Needs a window and a platform that plays video. | `{"op":"play","id":"v1"}` |
+| `pause` | id: string | Pause a playing video. | `{"op":"pause","id":"v1"}` |
 | `set_status` | text: string | Agents: a one-line status the person sees in the status bar ("Rewriting the intro"). Up to 120 characters; "" clears it. | `{"op":"set_status","text":"Rewriting the intro"}` |
 
 ### Queries
@@ -488,14 +495,14 @@ Send with `query {"query": ...}`. Read-only.
 | `hit_test` | x: number, y: number | Topmost element at a world point. | `{"q":"hit_test","x":120,"y":-40}` |
 | `hit_test_screen` | x: number, y: number | Topmost element at a screen point of the human's window. | `{"q":"hit_test_screen","x":640,"y":400}` |
 | `path` |  |  | `{"q":"path"}` |
-| `themes` |  |  | `{"q":"themes"}` |
+| `themes` |  | Built-in themes, this document's own (`custom`) and the person's My Themes (`library`; `set_theme` copies one in with its pictures and fonts). | `{"q":"themes"}` |
 | `icons` | limit?: integer, query?: string | Search the icon library by name or keyword (e.g. "idea", "arrow right"). Empty query lists names only. | `{"q":"icons","query":"idea","limit":10}` |
 | `shapes` |  | The shape kinds with their human names. | `{"q":"shapes"}` |
 | `symbols` | limit?: integer, query?: string, set?: string | Search the clip-art library (sets, then symbols by name or keyword). With no `query` and no `set`, lists the sets. | `{"q":"symbols"}` |
 | `diagrams` |  | The diagrams `add_diagram` accepts. | `{"q":"diagrams"}` |
 | `history` |  |  | `{"q":"history"}` |
 | `lint` |  | Layout lint: overlaps, text unreadable at its step, empty steps... | `{"q":"lint"}` |
-| `templates` |  | Templates and layouts that `apply_template` / `add_layout` accept. | `{"q":"templates"}` |
+| `templates` |  | Templates and layouts that `apply_template` / `add_layout` accept, the person's saved templates (`saved`) and whether `sample` is there. | `{"q":"templates"}` |
 | `fonts` |  | Font families installed on this machine (any can be used in a theme). | `{"q":"fonts"}` |
 | `perf` |  | Memory and speed: heap in use, cache sizes, frame times, repaints. | `{"q":"perf"}` |
 

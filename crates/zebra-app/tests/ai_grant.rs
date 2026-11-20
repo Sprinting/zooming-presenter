@@ -6,7 +6,13 @@ use egui_kittest::Harness;
 use zebra_app::{AppOptions, ZebraApp};
 
 fn harness(api: bool, dir: &std::path::Path) -> Harness<'static, ZebraApp> {
-    let api = api.then(|| zebra_api::ApiOptions { socket: Some(dir.join(format!("z{}.sock", rand_suffix()))), permission: zebra_api::Permission::Edit });
+    harness_with(api.then_some(zebra_api::Permission::Full), dir)
+}
+
+/// `perm`: `--api` with the most `--agent-permission` allows (Full when
+/// the flag isn't given).
+fn harness_with(perm: Option<zebra_api::Permission>, dir: &std::path::Path) -> Harness<'static, ZebraApp> {
+    let api = perm.map(|permission| zebra_api::ApiOptions { socket: Some(dir.join(format!("z{}.sock", rand_suffix()))), permission });
     let mut h = Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .with_step_dt(0.02)
@@ -68,11 +74,46 @@ fn launch_flag_needs_a_person_to_switch_ai_control_on_first() {
         assert!(!h.state().ai_enabled, "switched off stays off");
     }
 
-    // 3. From then on the flag works, and it is not saved as the person's choice.
+    // 2c. Switched off (by the person, or an agent's `disconnect`), a
+    // relaunch with `--api` must not switch it back on.
+    {
+        let h = harness(true, &dir);
+        assert!(h.state().api.is_none() && !h.state().ai_enabled, "--api must not undo a switch-off");
+        assert!(zebra_api::discovery::list().is_empty());
+    }
+    // An agent's `disconnect` records the same off as the person's click.
+    zebra_api::discovery::record_ai_switch(true).unwrap();
+    zebra_api::discovery::record_ai_switch(false).unwrap();
+    {
+        let h = harness(true, &dir);
+        assert!(!h.state().ai_enabled, "--api after disconnect stays off");
+    }
+
+    // 3. Switched on again by the person, the flag works.
+    zebra_api::discovery::record_ai_switch(true).unwrap();
     {
         let h = harness(true, &dir);
         assert!(h.state().api.is_some() && h.state().ai_enabled, "--api works once a person has switched AI control on");
+    }
+    // `--agent-permission full` can't raise it past the person's choice
+    // (Edit: this person never chose), but `observe` lowers it.
+    {
+        let h = harness_with(Some(zebra_api::Permission::Full), &dir);
+        assert!(h.state().ai_enabled);
+        assert_eq!(h.state().editor.view.agent_permission, zebra_api::Permission::Edit, "a flag must not raise permission");
+    }
+    {
+        let h = harness_with(Some(zebra_api::Permission::Observe), &dir);
+        assert_eq!(h.state().editor.view.agent_permission, zebra_api::Permission::Observe, "a flag may lower permission");
+    }
+    // An older grant that didn't keep the choice still lets the flag work.
+    std::fs::write(zebra_api::discovery::human_grant_file(), b"").unwrap();
+    assert_eq!(zebra_api::discovery::ai_switch().on, None);
+    {
+        let h = harness(true, &dir);
+        assert!(h.state().ai_enabled, "an older grant keeps today's behaviour");
         assert!(!h.state().ai_saved, "a flag launch must not be saved as the person's choice");
     }
+    assert_eq!(zebra_api::discovery::ai_switch().on, None, "nor kept with the grant");
     let _ = std::fs::remove_dir_all(dir);
 }

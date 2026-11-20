@@ -15,7 +15,7 @@ use zebra_render::CaptureTarget;
 pub const METHODS: &[&str] = &[
     "hello", "ping", "methods", "commands", "schema", "subscribe", "unsubscribe", "documents", "new_document", "close_document", "state", "describe", "query",
     "apply", "batch", "copy_to", "import", "begin", "commit", "abort", "undo", "redo", "view", "capture", "wait", "open", "save",
-    "export", "disconnect", "quit",
+    "save_template", "export", "disconnect", "quit",
 ];
 
 /// JSON-RPC error codes used by Zebra.
@@ -146,6 +146,9 @@ pub enum Call {
     Redo,
     Open { path: PathBuf, force: bool },
     Save { path: Option<PathBuf> },
+    /// File › Save as Template: the document into the person's My
+    /// Templates, under `name` (default: its title).
+    SaveTemplate { name: Option<String> },
     Export { format: ExportFormat, path: Option<PathBuf>, capture: CaptureReq },
     Wait { until: WaitUntil, timeout: Duration },
     Disconnect,
@@ -419,6 +422,13 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
             Call::Open { path, force: p.get("force").and_then(|f| f.as_bool()).unwrap_or(false) }
         }
         "save" => Call::Save { path: abs_path(p.get("path"), "save")? },
+        "save_template" => Call::SaveTemplate {
+            name: match p.get("name") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(s)) => Some(s.clone()),
+                Some(other) => return Err(RpcError::invalid(format!("`save_template`: name must be a string, got {other}"))),
+            },
+        },
         "export" => {
             let format = match p.get("format").and_then(|f| f.as_str()) {
                 Some("pdf") => ExportFormat::Pdf,

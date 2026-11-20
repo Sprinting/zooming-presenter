@@ -23,9 +23,11 @@ struct Cli {
     /// Socket path for the automation API (default: per-user temp dir).
     #[arg(long, value_name = "PATH")]
     api_socket: Option<PathBuf>,
-    /// What a connected agent may do: observe, edit or full.
-    #[arg(long, value_name = "LEVEL", default_value = "edit")]
-    agent_permission: String,
+    /// Lower what a connected agent may do this run: observe or edit. It
+    /// never raises it: the person's choice from the AI button is the most
+    /// an agent gets.
+    #[arg(long, value_name = "LEVEL")]
+    agent_permission: Option<String>,
     /// No window: only the API (implies --api).
     #[arg(long)]
     headless: bool,
@@ -48,13 +50,18 @@ struct Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     zebra_app::keymap::load();
-    let permission = match cli.agent_permission.as_str() {
-        "observe" => Permission::Observe,
-        "full" => Permission::Full,
-        "edit" => Permission::Edit,
-        other => anyhow::bail!("--agent-permission must be observe, edit or full (got '{other}')"),
+    // My Themes, My Templates and the sample, for agents too.
+    zebra_api::library::install(Some(zebra_app::sample::commands));
+    // Only a person raises permission (the AI button): the flag can only
+    // lower it. `ApiOptions::permission` is the most the flag allows; the
+    // app takes the lower of it and the person's saved choice.
+    let cap = match cli.agent_permission.as_deref() {
+        None | Some("full") => Permission::Full,
+        Some("observe") => Permission::Observe,
+        Some("edit") => Permission::Edit,
+        Some(other) => anyhow::bail!("--agent-permission must be observe, edit or full (got '{other}')"),
     };
-    let api_opts = ApiOptions { socket: cli.api_socket.clone(), permission };
+    let mut api_opts = ApiOptions { socket: cli.api_socket.clone(), permission: cap };
     // The first time is always a person: no flag turns AI control on until
     // someone has switched it on in Zebra's window once.
     for v in zebra_api::discovery::ignored_overrides() {
@@ -67,12 +74,14 @@ fn main() -> anyhow::Result<()> {
     let _ = std::thread::Builder::new().name("zebra-symbols".into()).spawn(|| {
         let _ = zebra_core::symbols::library();
     });
-    let granted = zebra_api::discovery::human_has_granted();
-    const NOT_GRANTED: &str = "AI control stays off until a person switches it on in Zebra once (the AI button in the toolbar). After that, --api and --headless work.";
+    let refused = zebra_api::discovery::ai_switch().flag_refusal();
     if cli.headless {
-        if !granted {
-            anyhow::bail!("{NOT_GRANTED}");
+        // No window and no person: only while the person's switch is on.
+        if let Some(why) = refused {
+            anyhow::bail!("{why}");
         }
+        // No window, so no person to ask: the person's saved choice.
+        api_opts.permission = zebra_app::app::launch_permission(zebra_app::app::saved_agent_permission(), cap);
         return zebra_api::run_headless(api_opts, cli.file);
     }
     let screenshot = match &cli.screenshot_after {
@@ -85,10 +94,10 @@ fn main() -> anyhow::Result<()> {
     let last = frames.as_ref().and_then(|f| f.last);
     let first = zebra_app::mac::first_window_size(zebra_app::mac::main_screen_room());
     let (w, h) = asked.or(last.map(|f| (f.size[0], f.size[1]))).unwrap_or((first.x, first.y));
-    if cli.api && !granted {
-        eprintln!("zebra: {NOT_GRANTED}");
+    if let (true, Some(why)) = (cli.api, refused) {
+        eprintln!("zebra: {why}");
     }
-    let opts = AppOptions { open: cli.file, api: (cli.api && granted).then_some(api_opts), screenshot, demo: cli.demo, as_launch: false };
+    let opts = AppOptions { open: cli.file, api: (cli.api && refused.is_none()).then_some(api_opts), screenshot, demo: cli.demo, as_launch: false };
 
     let background = cli.background || std::env::var_os("ZEBRA_BACKGROUND").is_some_and(|v| v != "0");
     let native = eframe::NativeOptions {

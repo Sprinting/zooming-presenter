@@ -192,13 +192,18 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         poster_base64: Option<String>,
     },
-    /// Set a video's poster picture. No data and no path clears it.
+    /// Set a video's poster picture. No data, path or `at` clears it.
     SetPoster {
         id: ElementId,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         data_base64: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
+        /// A frame of the video itself, this many seconds from the start of
+        /// its file (the inspector's "Use current frame"). Needs a platform
+        /// that decodes video (macOS).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<f64>,
     },
     /// Background music for the presentation. With data or a path the track
     /// is replaced; without, only the given settings change.
@@ -398,6 +403,9 @@ pub enum Command {
     },
 
     // ---- document ----
+    /// A built-in theme, one of this document's, or one from the person's
+    /// My Themes (see the `themes` query), copied in with its pictures and
+    /// fonts.
     SetTheme { theme: String },
     SetTitle { title: String },
     /// Autoplay and loop for the whole presentation. Only given fields change.
@@ -416,6 +424,10 @@ pub enum Command {
         /// Also make it the presentation's theme.
         #[serde(default)]
         apply: bool,
+        /// Also save it in the person's My Themes (Save as Theme in the
+        /// theme editor), with its pictures and fonts. Needs 'full'.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        to_library: bool,
     },
     /// Remove a custom theme. If it's in use, its base built-in (or classic) takes over.
     DeleteTheme { id: String },
@@ -423,7 +435,9 @@ pub enum Command {
     /// The new asset key is returned in `assets`.
     AddAsset { data_base64: String },
     /// Start from a template (see the `templates` query): frames, placeholder
-    /// text, a path and a theme. Needs an empty canvas unless `replace`.
+    /// text, a path and a theme. `saved:<name>` is one the person saved (File
+    /// > Save as Template); `sample` is File > New from Sample. Needs an
+    /// empty canvas unless `replace`.
     ApplyTemplate {
         template: String,
         /// Clear the current canvas and path first.
@@ -778,6 +792,11 @@ pub enum ViewCommand {
     SetAgentPermission { permission: Permission },
     /// Pause or resume autoplay while presenting.
     PauseAutoplay { paused: bool },
+    /// Play a video in place, with its sound (the inspector's Play; a click
+    /// while presenting). Needs a window and a platform that plays video.
+    Play { id: ElementId },
+    /// Pause a playing video.
+    Pause { id: ElementId },
     /// Agents: a one-line status the person sees in the status bar
     /// ("Rewriting the intro"). Up to 120 characters; "" clears it.
     SetStatus { text: String },
@@ -813,6 +832,9 @@ pub enum Query {
     /// Topmost element at a screen point of the human's window.
     HitTestScreen { x: f64, y: f64 },
     Path,
+    /// Built-in themes, this document's own (`custom`) and the person's My
+    /// Themes (`library`; `set_theme` copies one in with its pictures and
+    /// fonts).
     Themes,
     /// Search the icon library by name or keyword (e.g. "idea", "arrow
     /// right"). Empty query lists names only.
@@ -840,7 +862,8 @@ pub enum Query {
     History,
     /// Layout lint: overlaps, text unreadable at its step, empty steps...
     Lint,
-    /// Templates and layouts that `apply_template` / `add_layout` accept.
+    /// Templates and layouts that `apply_template` / `add_layout` accept,
+    /// the person's saved templates (`saved`) and whether `sample` is there.
     Templates,
     /// Font families installed on this machine (any can be used in a theme).
     Fonts,

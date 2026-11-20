@@ -320,8 +320,27 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                 .collect();
             json!({ "steps": steps, "play": d.play })
         }
-        Query::Themes => json!({ "current": d.theme, "themes": Theme::builtins(), "custom": d.themes }),
-        Query::Templates => json!({ "templates": &*crate::templates::TEMPLATES, "layouts": &*crate::templates::LAYOUTS }),
+        Query::Themes => {
+            // My Themes: `set_theme` takes these ids too (it copies the
+            // theme into the document, pictures and fonts included).
+            let lib = crate::library::get().map(|l| l.themes()).unwrap_or_default();
+            let library: Vec<Value> = lib.iter().filter(|(_, t)| !d.themes.iter().any(|c| c.id == t.id)).map(|(_, t)| json!({ "id": t.id, "name": t.name })).collect();
+            json!({ "current": d.theme, "themes": Theme::builtins(), "custom": d.themes, "library": library })
+        }
+        Query::Templates => {
+            // My Templates (`apply_template` takes `saved:<name>`) and the
+            // sample presentation, where the host has them.
+            let lib = crate::library::get();
+            let saved: Vec<Value> = lib
+                .as_ref()
+                .map(|l| l.templates())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|n| json!({ "id": format!("{}{n}", crate::library::SAVED_PREFIX), "name": n }))
+                .collect();
+            let sample = lib.is_some_and(|l| l.sample().is_some());
+            json!({ "templates": &*crate::templates::TEMPLATES, "layouts": &*crate::templates::LAYOUTS, "saved": saved, "sample": sample })
+        }
         Query::Fonts => json!({ "families": ed.measure.font_families(), "bundled": ["Sans", "Serif", "Mono", "Hand"] }),
         Query::Perf => {
             let mut v = ed.perf.report(ed.view.now);

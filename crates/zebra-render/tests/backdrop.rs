@@ -33,7 +33,7 @@ fn theme_with(ed: &mut Editor, f: impl FnOnce(&mut Theme, String)) {
     let mut t = Theme::resolve("classic");
     t.id = "t".into();
     f(&mut t, key);
-    ed.apply(Command::SaveTheme { theme: t, apply: true }, Origin::Human).unwrap();
+    ed.apply(Command::SaveTheme { theme: t, apply: true, to_library: false }, Origin::Human).unwrap();
 }
 
 fn red_at_centre(r: &Renderer, ed: &Editor, cx: f64, zoom: f64) -> i32 {

@@ -40,6 +40,7 @@ pub use zebra_core::view::Permission;
 pub mod catalogue;
 pub mod client;
 pub mod discovery;
+pub mod library;
 mod dispatch;
 mod headless;
 pub mod mcp;
@@ -56,8 +57,10 @@ pub use zebra_core::editor::Event;
 pub struct ApiOptions {
     /// Socket path; default: per-user temp dir + pid.
     pub socket: Option<PathBuf>,
-    /// Initial agent permission. Applied to `editor.view.agent_permission`
-    /// on the first `pump`; the human can change it later from the UI.
+    /// Agent permission. Headless: what agents get (`zebra` passes the
+    /// person's saved choice). The app's `--api`: the most the launch flag
+    /// allows, never above the person's saved choice. The person changes
+    /// it from the UI.
     pub permission: Permission,
 }
 
@@ -224,6 +227,8 @@ impl Dispatcher {
         self.saves.clear();
     }
     pub fn new(renderer: Arc<zebra_render::Renderer>) -> Self {
+        // Agents see the person's own themes and templates.
+        library::install_default();
         Dispatcher {
             renderer,
             web_labels: Default::default(),
@@ -265,6 +270,11 @@ impl Dispatcher {
 
 /// `zebra --headless`: no window, same API. Blocks until killed or `quit`.
 pub fn run_headless(opts: ApiOptions, open: Option<PathBuf>) -> anyhow::Result<()> {
+    // Only while the person's AI control switch is on (a person switched it
+    // on once, and nobody switched it off since).
+    if let Some(why) = discovery::ai_switch().flag_refusal() {
+        anyhow::bail!("{why}");
+    }
     headless::run(opts, open)
 }
 

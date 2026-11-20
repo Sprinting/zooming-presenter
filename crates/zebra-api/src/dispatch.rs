@@ -7,7 +7,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 use zebra_core::editor::Event;
 use zebra_core::view::Permission;
-use zebra_core::{Editor, Mode, Origin, Query, ZError};
+use zebra_core::{Command, Editor, Mode, Origin, Query, ViewCommand, ZError};
 use zebra_render::CaptureTarget;
 
 use crate::protocol::{self, Call, CaptureReq, ExportFormat, RpcError, WaitUntil};
@@ -248,6 +248,14 @@ impl Dispatcher {
             Ok(d) => d,
             Err(e) => return reply(server, p.client, &p.id, Err(e)),
         };
+        // Two windows on one file overwrite each other's saves: like the
+        // person's File > Open, a file another document has open is
+        // refused (the person's open shows that window instead).
+        if let Call::Open { path, .. } = &p.call {
+            if let Err(e) = open_elsewhere(docs, &doc, path) {
+                return reply(server, p.client, &p.id, Err(e));
+            }
+        }
         let info = docs.list().into_iter().find(|d| d.id == doc);
         let Some(editor) = docs.editor(&doc) else {
             return reply(server, p.client, &p.id, Err(RpcError::app("not_found", "that document was just closed")));
@@ -312,7 +320,8 @@ impl Dispatcher {
         // responsive); the reply goes when it is done. One at a time per
         // document: a save while another runs waits for it.
         if let Call::Save { path } = &p.call {
-            match save_path(editor, path.clone()) {
+            let path = save_path(editor, path.clone());
+            match path.and_then(|path| open_elsewhere(docs, &doc, &path).map(|_| path)) {
                 Ok(path) => {
                     self.saves.push(SaveWait { client: p.client, id: p.id, doc, origin: p.origin, path, started: false });
                     self.pump_saves(server, docs);
@@ -457,16 +466,20 @@ impl Dispatcher {
         let perm = editor.view.agent_permission;
         let limited = perm != Permission::Full;
         Ok(match call {
-            Call::Apply { command, if_revision } => {
+            Call::Apply { mut command, if_revision } => {
                 check_rev(editor, if_revision)?;
-                to_value(editor.apply(command, origin.clone())?)
+                let lib = prepare(std::slice::from_mut(&mut command), editor)?;
+                let out = to_value(editor.apply(command, origin.clone())?);
+                to_library(out, editor, &lib)?
             }
-            Call::Batch { commands, label, if_revision } => {
+            Call::Batch { mut commands, label, if_revision } => {
                 check_rev(editor, if_revision)?;
                 if commands.is_empty() {
                     return Err(RpcError::invalid("`commands` is empty"));
                 }
-                to_value(editor.apply_batch(commands, label, origin.clone())?)
+                let lib = prepare(&mut commands, editor)?;
+                let out = to_value(editor.apply_batch(commands, label, origin.clone())?);
+                to_library(out, editor, &lib)?
             }
             Call::Begin { label } => {
                 if let Some(&owner) = self.tx_owner.get(doc) {
@@ -496,7 +509,18 @@ impl Dispatcher {
                 self.tx_owner.remove(doc);
                 json!({ "ok": true, "revision": editor.revision })
             }
-            Call::View(cmd) => editor.view(cmd, origin.clone())?,
+            Call::View(cmd) => {
+                if let ViewCommand::Play { .. } = cmd {
+                    // Nothing would play: say so instead of a silent "ok".
+                    if self.headless {
+                        return Err(RpcError::app("unsupported", "a headless Zebra has no window to play video in").hint("run the Zebra app"));
+                    }
+                    if !zebra_media::platform().can_play() {
+                        return Err(RpcError::app("unsupported", "video plays on macOS only"));
+                    }
+                }
+                editor.view(cmd, origin.clone())?
+            }
             Call::Query(q) => editor.query(q)?,
             Call::Describe => editor.query(Query::Describe)?,
             Call::State => editor.query(Query::State)?,
@@ -513,6 +537,14 @@ impl Dispatcher {
                 let doc = zebra_core::io::load(&path)?;
                 editor.load(doc, Some(path.clone()));
                 json!({ "ok": true, "path": path, "revision": editor.revision })
+            }
+            Call::SaveTemplate { name } => {
+                need_full(perm, "save_template")?;
+                let dir = crate::library::templates_dir().ok_or_else(|| RpcError::app("io", "the templates folder can't be made"))?;
+                let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| editor.doc.title.clone());
+                let path = crate::library::save_template(&editor.doc, &name, &dir, "Untitled")?;
+                let saved = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(name);
+                json!({ "ok": true, "path": path, "template": format!("{}{saved}", zebra_core::library::SAVED_PREFIX) })
             }
             Call::Save { path } => {
                 // (Saves are run by `run`, on a worker; this is the direct
@@ -806,6 +838,61 @@ fn check_read(editor: &Editor, seen: Option<u64>) -> Result<(), RpcError> {
         .hint("read it again (`describe`, or `query` for the parts you are changing), then retry"))
 }
 
+/// Before commands run: a poster `at` a time in the video becomes that
+/// frame's picture, and `save_theme` with `to_library` is checked (it
+/// writes into the person's own files, like `save`). Returns the ids of
+/// the themes to save to the library once the commands succeed.
+fn prepare(cmds: &mut [Command], editor: &Editor) -> Result<Vec<String>, RpcError> {
+    let mut lib = vec![];
+    for c in cmds {
+        match c {
+            Command::SaveTheme { theme, to_library: true, .. } => {
+                need_full(editor.view.agent_permission, "save_theme with to_library")?;
+                lib.push(theme.id.clone());
+            }
+            Command::SetPoster { id, data_base64, path, at } if at.is_some() => {
+                need_edit(editor.view.agent_permission, "set_poster")?;
+                let secs = at.take().unwrap_or_default();
+                if !secs.is_finite() || secs < 0.0 {
+                    return Err(RpcError::invalid("`at` is seconds from the start of the video, 0 or more"));
+                }
+                if !data_base64.is_empty() || path.is_some() {
+                    return Err(RpcError::invalid("give `at`, or data_base64 or path, not both"));
+                }
+                let Some(zebra_core::ElementKind::Video(v)) = editor.doc.get(id).map(|e| &e.kind) else {
+                    return Err(RpcError::app("not_found", format!("no video '{id}'")).hint("`query` {\"q\":\"elements\",\"kind\":\"video\"} lists them"));
+                };
+                let a = editor.doc.assets.get(&v.asset).ok_or_else(|| RpcError::app("bad_file", format!("the video '{id}' has no data")))?;
+                let file = zebra_core::media::materialize(&v.asset, &a.ext, &a.bytes).map_err(|e| RpcError::app("io", e.to_string()))?;
+                let png = zebra_media::platform().poster_png(&file, secs, 1280).map_err(|e| {
+                    RpcError::app("unsupported", format!("cannot grab a frame of the video here: {e}")).hint("pass data_base64 or path with a picture instead")
+                })?;
+                *data_base64 = base64::engine::general_purpose::STANDARD.encode(png);
+            }
+            _ => {}
+        }
+    }
+    Ok(lib)
+}
+
+/// After the commands succeeded: save the themes `prepare` found to My
+/// Themes, and say where in the reply.
+fn to_library(mut out: Value, editor: &Editor, ids: &[String]) -> Result<Value, RpcError> {
+    if ids.is_empty() {
+        return Ok(out);
+    }
+    let dir = crate::library::themes_dir().ok_or_else(|| RpcError::app("io", "the themes folder can't be made"))?;
+    let mut files = vec![];
+    for id in ids {
+        let Some(t) = editor.doc.themes.iter().find(|t| t.id == *id) else { continue };
+        files.push(crate::library::save_theme(&editor.doc, t, &dir, "Untitled")?);
+    }
+    if let Value::Object(o) = &mut out {
+        o.insert("library".into(), json!(files));
+    }
+    Ok(out)
+}
+
 /// Where `save` writes: the path given, else the document's own file.
 fn save_path(editor: &Editor, path: Option<std::path::PathBuf>) -> Result<std::path::PathBuf, RpcError> {
     need_full(editor.view.agent_permission, "save")?;
@@ -821,10 +908,23 @@ fn save_path(editor: &Editor, path: Option<std::path::PathBuf>) -> Result<std::p
     Ok(path)
 }
 
+/// Refuses a file that a document other than `doc` has open.
+fn open_elsewhere(docs: &dyn Documents, doc: &str, path: &Path) -> Result<(), RpcError> {
+    let same = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let want = same(path);
+    let Some(other) = docs.list().into_iter().find(|d| d.id != doc && d.path.as_deref().is_some_and(|p| same(p) == want)) else {
+        return Ok(());
+    };
+    Err(RpcError::app("already_open", format!("{} is already open in document \"{}\"", path.display(), other.id)).hint(format!(
+        "two documents on one file overwrite each other's saves: work in that one with \"document\": \"{}\", or save this one to another path",
+        other.id
+    )))
+}
+
 fn need_full(perm: Permission, what: &str) -> Result<(), RpcError> {
     if perm != Permission::Full {
         return Err(RpcError::app("permission", format!("`{what}` needs 'full' agent permission"))
-            .hint("the person can grant it from the AI button in Zebra's toolbar, or launch with --agent-permission full; `export` works without it"));
+            .hint("the person can grant it from the AI button in Zebra's toolbar; `export` works without it"));
     }
     Ok(())
 }
