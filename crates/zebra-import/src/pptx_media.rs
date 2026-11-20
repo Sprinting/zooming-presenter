@@ -1,13 +1,13 @@
-//! A PowerPoint file's media, streamed out of the (memory-mapped) file.
+//! A PowerPoint file's parts, read straight out of the (memory-mapped)
+//! file as they are needed.
 //!
-//! BetterOffice's parser takes the whole file and unpacks every part into
-//! memory, twice over, with a ceiling of 512 MB unpacked: a deck with a
-//! big video either failed to import ("damaged") or held the video in
-//! memory five times. So the parser gets a copy of the file *without* its
-//! media (`ppt/media/*` left in as empty entries, so every link still
-//! resolves): XML only, a few megabytes at most. The media is read here,
-//! part by part, straight out of the file: big parts are streamed into
-//! the document's spill files (disk, not memory), small ones read.
+//! BetterOffice's parser takes a whole file and unpacks every part into
+//! memory: a deck with a big video either failed to import ("damaged") or
+//! held the video in memory five times. So the parser is only ever given
+//! small zips made here of the parts a few slides need, with the media
+//! left in as empty entries (see [`crate::pptx_package`]). The media is
+//! read here, part by part: big parts are streamed into the document's
+//! spill files (disk, not memory), small ones read.
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::sync::Mutex;
@@ -26,9 +26,9 @@ const MAX_RATIO: u64 = 200;
 /// into memory to be converted; bigger ones are left out.
 pub const MAX_CONVERTED: u64 = 64 * 1024 * 1024;
 
-/// Is this part a media part (kept out of what the parser sees)?
-fn is_media(name: &str) -> bool {
-    name.len() > 10 && name[..10].eq_ignore_ascii_case("ppt/media/") && !name.ends_with('/')
+/// Is this part a media part (never given to the parser)?
+pub(crate) fn is_media(name: &str) -> bool {
+    name.len() > 10 && name.is_char_boundary(10) && name[..10].eq_ignore_ascii_case("ppt/media/") && !name.ends_with('/')
 }
 
 /// A video or sound taken out of the deck: key, asset, what it is.
@@ -36,41 +36,65 @@ type Taken = Option<(String, Asset, MediaInfo)>;
 
 pub struct MediaSource {
     zip: Mutex<zip::ZipArchive<Cursor<AssetBytes>>>,
-    /// Media part path -> index in the zip.
-    parts: HashMap<String, usize>,
+    /// Every part's path -> index in the zip.
+    entries: HashMap<String, usize>,
     /// Videos and sounds taken out already, by part path (one used on
     /// several slides is copied once).
     av: Mutex<HashMap<String, Taken>>,
 }
 
 impl MediaSource {
-    /// Read the file's directory; return it and the file without its media,
-    /// for the parser.
-    pub fn open(file: AssetBytes) -> Result<(MediaSource, Vec<u8>), ImportError> {
+    /// Read the file's directory (not its parts).
+    pub fn open(file: AssetBytes) -> Result<MediaSource, ImportError> {
         let damaged = |_| ImportError::Damaged("PowerPoint");
         let mut zip = zip::ZipArchive::new(Cursor::new(file)).map_err(damaged)?;
-        let mut slim = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let mut parts = HashMap::new();
+        let mut entries = HashMap::new();
         for i in 0..zip.len() {
             let f = zip.by_index_raw(i).map_err(damaged)?;
             let name = f.name().map_err(damaged)?.to_string();
-            if is_media(&name) {
-                parts.insert(name.clone(), i);
-                drop(f);
-                let empty = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-                slim.start_file(name, empty).map_err(damaged)?;
-            } else {
-                slim.raw_copy_file(f).map_err(damaged)?;
+            if !name.ends_with('/') {
+                entries.entry(name).or_insert(i);
             }
         }
-        let slim = slim.finish().map_err(damaged)?.into_inner();
-        Ok((MediaSource { zip: Mutex::new(zip), parts, av: Mutex::new(HashMap::new()) }, slim))
+        Ok(MediaSource { zip: Mutex::new(zip), entries, av: Mutex::new(HashMap::new()) })
+    }
+
+    /// Is there a part at `path`?
+    pub fn has(&self, path: &str) -> bool {
+        self.entries.contains_key(path)
+    }
+
+    /// Copy part `path` into `out` as it is in the file (still compressed:
+    /// nothing is unpacked).
+    pub fn copy_raw(&self, path: &str, out: &mut zip::ZipWriter<Cursor<Vec<u8>>>) -> bool {
+        let Some(&i) = self.entries.get(path) else { return false };
+        let mut zip = self.zip.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(f) = zip.by_index_raw(i) else { return false };
+        out.raw_copy_file(f).is_ok()
+    }
+
+    /// Any part's bytes (not only media), at most `max` unpacked; None when
+    /// it is missing, can't be unpacked, or is bigger.
+    pub fn read_part(&self, path: &str, max: u64) -> Option<Vec<u8>> {
+        self.with_entry(path, |r, limit| {
+            let mut v = Vec::with_capacity(limit.min(max).min(1 << 20) as usize);
+            r.take(max.saturating_add(1)).read_to_end(&mut v).ok()?;
+            (v.len() as u64 <= max).then_some(v)
+        })
     }
 
     /// Run `f` with a reader of part `path`, limited to what it may
     /// unpack to (a bomb errors out partway instead of filling the disk).
     fn with_part<T>(&self, path: &str, f: impl FnOnce(&mut dyn Read, u64) -> Option<T>) -> Option<T> {
-        let i = *self.parts.get(path)?;
+        if !is_media(path) {
+            return None;
+        }
+        self.with_entry(path, f)
+    }
+
+    /// [`Self::with_part`] for any part.
+    fn with_entry<T>(&self, path: &str, f: impl FnOnce(&mut dyn Read, u64) -> Option<T>) -> Option<T> {
+        let i = *self.entries.get(path)?;
         let mut zip = self.zip.lock().unwrap_or_else(|e| e.into_inner());
         let entry = zip.by_index(i).ok()?;
         let limit = entry.size().min(entry.compressed_size().saturating_mul(MAX_RATIO).max(1 << 20));

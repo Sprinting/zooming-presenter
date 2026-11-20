@@ -20,6 +20,7 @@ pub mod pdf;
 pub mod pptx;
 mod pptx_xml;
 mod pptx_media;
+mod pptx_package;
 
 /// The file types File › Import… offers (lower case, no dot).
 pub const EXTENSIONS: &[&str] = &["pdf", "pptx"];

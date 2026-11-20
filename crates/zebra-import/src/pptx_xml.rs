@@ -317,9 +317,18 @@ impl Elem {
 /// far outside them gets here.
 const MAX_ELEMENTS: usize = 4_000_000;
 const MAX_DEPTH: usize = 256;
+/// A SmartArt data or layout part is read only up to this many elements:
+/// [`MAX_ITEMS`] items take far fewer, and 1.5 million empty points took a
+/// gigabyte as a tree.
+const MAX_SMARTART_ELEMENTS: usize = 200_000;
 
 /// The root element of an XML document; None when it isn't well formed.
 pub(crate) fn parse(bytes: &[u8]) -> Option<Elem> {
+    parse_within(bytes, MAX_ELEMENTS)
+}
+
+/// [`parse`], giving up past `max` elements.
+fn parse_within(bytes: &[u8], max: usize) -> Option<Elem> {
     use quick_xml::events::{BytesStart, Event};
     let mut reader = quick_xml::Reader::from_reader(bytes);
     let decoder = reader.decoder();
@@ -372,7 +381,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Option<Elem> {
         };
         if let Some(e) = done {
             n += 1;
-            if n > MAX_ELEMENTS {
+            if n > max {
                 return None;
             }
             match stack.last_mut() {
@@ -399,7 +408,7 @@ const MAX_ITEMS: usize = 4_096;
 /// Read a SmartArt data part, and its layout part when there is one. None
 /// when the data part isn't a data model.
 pub(crate) fn smart_art(data: &[u8], layout: Option<&[u8]>) -> Option<SmartArt> {
-    let root = parse(data)?;
+    let root = parse_within(data, MAX_SMARTART_ELEMENTS)?;
     if root.local() != "dataModel" {
         return None;
     }
@@ -407,7 +416,7 @@ pub(crate) fn smart_art(data: &[u8], layout: Option<&[u8]>) -> Option<SmartArt> 
     let kind = |p: &Elem| p.attr("type").unwrap_or("node").to_string();
     let doc: Vec<&str> = pts.iter().filter(|p| kind(p) == "doc").filter_map(|p| p.attr("modelId")).collect();
     let name = |id: &str| id.rsplit('/').next().unwrap_or(id).to_string();
-    let from_layout = layout.and_then(parse).and_then(|l| l.attr("uniqueId").map(name));
+    let from_layout = layout.and_then(|l| parse_within(l, MAX_SMARTART_ELEMENTS)).and_then(|l| l.attr("uniqueId").map(name));
     let from_doc = || pts.iter().filter(|p| kind(p) == "doc").find_map(|p| p.child("prSet")?.attr("loTypeId").map(name));
     let layout = from_layout.or_else(from_doc).filter(|l| !l.is_empty());
     // Items (`node`, and an org chart's `asst`) by id, with their words.
