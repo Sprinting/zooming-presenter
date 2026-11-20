@@ -29,6 +29,8 @@ pub mod rich;
 pub mod spatial;
 pub mod step_index;
 pub mod symbols;
+pub mod table;
+pub mod calc;
 pub mod diagrams;
 pub mod templates;
 pub mod theme;
@@ -44,6 +46,10 @@ pub use theme::{BackgroundLayer, Theme, TextStyleDef};
 pub use view::{Mode, Tool, ViewState};
 
 /// Bumped whenever the on-disk document format changes.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// 2: tables (`type: "table"`, ids `b1`...) and theme colours shape5
+/// and shape6. A build that reads only version 1 refuses version 2 files
+/// (see `io::from_json`) rather than dropping the tables.
+pub const FORMAT_VERSION: u32 = 2;
 /// Bumped whenever the command/query/API schema changes incompatibly.
 pub const API_VERSION: u32 = 1;

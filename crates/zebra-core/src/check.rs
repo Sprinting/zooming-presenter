@@ -96,6 +96,11 @@ pub fn element(e: &Element) -> ZResult<()> {
                 return bad("start, end or duration");
             }
         }
+        ElementKind::Table(t) => {
+            if let Err(what) = t.check() {
+                return Err(ZError::invalid(format!("'{}': {what}", e.id)));
+            }
+        }
         ElementKind::Frame(_) => {}
     }
     Ok(())
@@ -218,6 +223,11 @@ pub fn repair(doc: &mut Document) -> usize {
                     d.duration = 0.0;
                 }
                 d.end = d.end.filter(|x| fin(*x) && *x > d.start);
+            }
+            ElementKind::Table(t) => {
+                // Sizes in a table that lost them come back at the usual
+                // body text size; measuring afterwards fits the rest.
+                t.repair(24.0);
             }
             ElementKind::Frame(_) => {}
         }

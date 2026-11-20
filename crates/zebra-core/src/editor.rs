@@ -15,6 +15,8 @@ use crate::model::*;
 use crate::theme::{valid_color, Theme};
 use crate::view::{Mode, Permission, ViewState};
 
+mod table_cmds;
+
 /// Who issued a change. Shown in history and the activity panel.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -257,6 +259,8 @@ pub struct Editor {
     /// anyone (an agent too), with a count of such trips: a host scrolls
     /// its step list to it when the count changes.
     pub went_to_step: (u64, usize),
+    /// Tables' formula sheets (see [`crate::calc`]).
+    calc: std::sync::Mutex<crate::calc::Calc>,
 }
 
 impl Default for Editor {
@@ -296,6 +300,7 @@ impl Editor {
             journal: None,
             saving: None,
             saved: vec![],
+            calc: Default::default(),
         }
     }
 
@@ -382,7 +387,12 @@ impl Editor {
         measure.prepare(&doc);
         let theme = Theme::resolve_in(&doc, &doc.theme);
         let n = doc.elements.len().max(1);
+        let mut calc = crate::calc::Calc::new();
         for (i, e) in doc.elements.values_mut().enumerate() {
+            // Formulas worked out afresh (TODAY() moves on), from the inputs.
+            if let ElementKind::Table(t) = &mut e.kind {
+                calc.recalc(&e.id, t);
+            }
             measure_text(measure, &theme, e);
             if i % 1024 == 0 {
                 progress(0.9 * i as f32 / n as f32);
@@ -400,6 +410,7 @@ impl Editor {
         self.loads += 1;
         self.doc = p.doc;
         self.index = p.index;
+        self.calc.get_mut().unwrap_or_else(|p| p.into_inner()).clear();
         self.undo.clear();
         self.redo.clear();
         self.revision += 1;
@@ -1183,6 +1194,20 @@ impl Editor {
                 };
                 self.insert_element(e, out)?;
             }
+            c @ (Command::AddTable { .. }
+            | Command::SetCells { .. }
+            | Command::InsertRows { .. }
+            | Command::DeleteRows { .. }
+            | Command::InsertColumns { .. }
+            | Command::DeleteColumns { .. }
+            | Command::MoveRows { .. }
+            | Command::MoveColumns { .. }
+            | Command::MergeCells { .. }
+            | Command::UnmergeCells { .. }
+            | Command::FormatCells { .. }
+            | Command::SetColumn { .. }
+            | Command::SetRow { .. }
+            | Command::SortTable { .. }) => self.apply_table(c, out)?,
             Command::AddDiagram { diagram, x, y, width } => {
                 let Some(d) = crate::diagrams::get(&diagram) else {
                     return Err(ZError::invalid(format!("unknown diagram '{diagram}'")).values(crate::diagrams::ALL.iter().map(|d| d.key.to_string()).collect()));
@@ -1471,6 +1496,11 @@ impl Editor {
                 self.note(&id);
                 let e = self.doc.elements.get_mut(&id).expect("element exists");
                 apply_patch(e, &patch)?;
+                if let ElementKind::Table(t) = &mut e.kind {
+                    if patch.w.is_some() || patch.h.is_some() {
+                        t.resize(theme.text_style(TextStyle::Body).size, patch.w, patch.h);
+                    }
+                }
                 if patch.text.is_some() {
                     // Typing into a placeholder makes it real content.
                     e.placeholder = false;
@@ -1685,6 +1715,10 @@ impl Editor {
                     }
                     ElementKind::Connector(_) => {
                         return Err(ZError::invalid("a connector's size comes from its ends").hint("move its ends with `update`, or the elements they're stuck to"));
+                    }
+                    ElementKind::Table(t) => {
+                        t.resize(theme.text_style(TextStyle::Body).size, width.map(|w| w / s), height.map(|h| h / s));
+                        measure_text(&*self.measure, &theme, e);
                     }
                     _ => {
                         if let Some(w) = width {
@@ -2398,6 +2432,7 @@ impl Editor {
                         TextStyle::Subtitle => 0.08,
                         TextStyle::Body => 0.055,
                     },
+                    ElementKind::Table(_) => 0.6,
                     _ => 0.3,
                 };
                 let theme = self.theme();
@@ -3173,11 +3208,15 @@ fn default_size(k: &ElementKind) -> (f64, f64) {
         ElementKind::Ink(_) => (100.0, 100.0),
         ElementKind::Icon(_) => (96.0, 96.0),
         ElementKind::Connector(_) => (0.0, 0.0),
+        ElementKind::Table(_) => (0.0, 0.0),
     }
 }
 
 /// Recompute a text element's box from its content.
 pub fn measure_text(m: &dyn TextMeasure, theme: &Theme, e: &mut Element) {
+    if matches!(e.kind, ElementKind::Table(_)) {
+        return table_cmds::measure_table(m, theme, e);
+    }
     if let ElementKind::Text(t) = &e.kind {
         if t.fixed_width {
             let (_, h) = m.measure(t, theme, Some(e.size.w));
@@ -3213,6 +3252,15 @@ fn validate_element(e: &Element, doc: &Document) -> ZResult<()> {
             check(&d.stroke)?;
         }
         ElementKind::Frame(d) => check(&d.color)?,
+        ElementKind::Table(t) => {
+            for f in &t.cell_formats {
+                for c in [&f.format.fill, &f.format.color, &f.format.border.as_ref().and_then(|b| b.color.clone())] {
+                    if c.as_ref().is_some_and(|c| !c.is_empty()) {
+                        check(c)?;
+                    }
+                }
+            }
+        }
         ElementKind::Ink(d) => check(&Some(d.color.clone()))?,
         ElementKind::Connector(d) => {
             check(&Some(d.color.clone()))?;
@@ -3350,6 +3398,36 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
         }
         if let Some(v) = p.bullets {
             t.bullets = v;
+        }
+    }
+    if p.table_style.is_some() || p.header_rows.is_some() || p.header_columns.is_some() || p.footer_rows.is_some() || p.font_size.is_some() || p.banded.is_some() || p.gridlines.is_some() || p.show_name.is_some() {
+        let ElementKind::Table(t) = &mut e.kind else { return Err(wrong("table_style/header_rows/header_columns/footer_rows/font_size/banded/gridlines/show_name")) };
+        let max = crate::table::MAX_HEADERS;
+        let (hr, fr, hc) = (p.header_rows.unwrap_or(t.header_rows), p.footer_rows.unwrap_or(t.footer_rows), p.header_columns.unwrap_or(t.header_columns));
+        if hr > max || fr > max || hc > max {
+            return Err(ZError::invalid(format!("header rows, footer rows and header columns are 0 to {max}")));
+        }
+        if hr as usize + fr as usize > t.n_rows() || hc as usize > t.n_cols() {
+            return Err(ZError::invalid(format!("the table has {} rows and {} columns: too few for {hr} header and {fr} footer rows and {hc} header columns", t.n_rows(), t.n_cols())).hint("insert_rows first"));
+        }
+        (t.header_rows, t.footer_rows, t.header_columns) = (hr, fr, hc);
+        if let Some(v) = p.font_size {
+            if !(v.is_finite() && v > 0.01 && v <= 100.0) {
+                return Err(ZError::invalid("font_size must be > 0 (1 = the theme's body text)"));
+            }
+            t.font_size = v;
+        }
+        if let Some(v) = p.table_style {
+            t.style = v;
+        }
+        if let Some(v) = p.banded {
+            t.banded = Some(v);
+        }
+        if let Some(v) = p.gridlines {
+            t.gridlines = Some(v);
+        }
+        if let Some(v) = p.show_name {
+            t.show_name = v;
         }
     }
     if let Some(c) = &p.color {
@@ -3555,6 +3633,21 @@ pub fn command_label(c: &Command) -> String {
         Command::AddLayout { layout, .. } => format!("Insert layout: {layout}"),
         Command::AddSymbol { name, .. } => format!("Insert symbol {name}"),
         Command::AddDiagram { diagram, .. } => format!("Insert diagram: {diagram}"),
+        Command::AddTable { .. } => "Add table".into(),
+        Command::SetCells { values, .. } if values.len() == 1 && values[0].len() == 1 => "Edit cell".into(),
+        Command::SetCells { .. } => "Edit cells".into(),
+        Command::InsertRows { count, .. } => format!("Add {}", plural(*count, "row")),
+        Command::DeleteRows { count, .. } => format!("Delete {}", plural(*count, "row")),
+        Command::InsertColumns { count, .. } => format!("Add {}", plural(*count, "column")),
+        Command::DeleteColumns { count, .. } => format!("Delete {}", plural(*count, "column")),
+        Command::MoveRows { count, .. } => format!("Move {}", plural(*count, "row")),
+        Command::MoveColumns { count, .. } => format!("Move {}", plural(*count, "column")),
+        Command::MergeCells { .. } => "Merge cells".into(),
+        Command::UnmergeCells { .. } => "Unmerge cells".into(),
+        Command::FormatCells { .. } => "Format cells".into(),
+        Command::SetColumn { .. } => "Change column".into(),
+        Command::SetRow { .. } => "Change row height".into(),
+        Command::SortTable { .. } => "Sort".into(),
     }
 }
 

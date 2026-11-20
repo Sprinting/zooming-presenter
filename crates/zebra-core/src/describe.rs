@@ -77,6 +77,21 @@ fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
         ElementKind::Icon(i) => {
             let _ = write!(s, " {}", i.name);
         }
+        ElementKind::Table(t) => {
+            let _ = write!(s, " {}x{} {}", t.n_rows(), t.n_cols(), t.style.id());
+            for (n, w) in [(t.header_rows, "header row"), (t.footer_rows, "footer row"), (t.header_columns, "header column")] {
+                if n > 0 && !(w == "header row" && n == 1) {
+                    let _ = write!(s, " {n} {w}{}", if n > 1 { "s" } else { "" });
+                }
+            }
+            if t.header_rows == 0 {
+                s.push_str(" no header row");
+            }
+            if !t.merges.is_empty() {
+                let m: Vec<String> = t.merges.iter().map(|m| m.a1()).collect();
+                let _ = write!(s, " merged {}", m.join(","));
+            }
+        }
         ElementKind::Connector(c) => {
             let end = |e: &crate::model::Endpoint| e.element.clone().unwrap_or_else(|| "point".into());
             let _ = write!(s, " {} -> {}", end(&c.from), end(&c.to));
@@ -206,6 +221,11 @@ pub fn describe(ed: &Editor) -> String {
             for &id in children.get(&parent).map(|v| v.as_slice()).unwrap_or_default() {
                 let e = &ed.doc.elements[id];
                 let _ = writeln!(out, "{}{}", "  ".repeat(depth + 1), one_line(ed, e, steps.get(id).map(|v| v.as_slice()).unwrap_or_default()));
+                if let ElementKind::Table(t) = &e.kind {
+                    for line in table_lines(t, DESCRIBE_ROWS) {
+                        let _ = writeln!(out, "{}{line}", "  ".repeat(depth + 2));
+                    }
+                }
                 if e.is_frame() {
                     walk(ed, children, steps, Some(id), depth + 1, out);
                 }
@@ -230,6 +250,42 @@ pub fn describe(ed: &Editor) -> String {
     if ed.view.mode == crate::view::Mode::Present {
         let p = &ed.view.present;
         let _ = writeln!(out, "Presenting: step {:?} build {}", p.step.map(|s| s + 1), p.build);
+    }
+    out
+}
+
+/// Rows of a table `describe` lists; the `table` query has them all.
+const DESCRIBE_ROWS: usize = 20;
+
+/// A table as lines of text: row number, then each cell as it shows,
+/// with a formula after its value (`£2,220,000 =SUM(B2:B3)`) and merged
+/// cells shown once.
+pub fn table_lines(t: &crate::table::TableData, max_rows: usize) -> Vec<String> {
+    let looks: Vec<_> = (0..t.n_cols()).map(|c| t.column_look(c)).collect();
+    let mut out = vec![];
+    let n = t.n_rows();
+    for r in 0..n.min(max_rows) {
+        let mut cells = vec![];
+        for c in 0..t.n_cols() {
+            if t.anchor(r, c) != (r, c) {
+                cells.push("←".to_string());
+                continue;
+            }
+            let shown = t.shown(r, c, looks[c].as_ref());
+            let mut v = match shown.tick {
+                Some(on) => (if on { "☑" } else { "☐" }).to_string(),
+                None => truncate(&shown.text.replace('\n', " / "), 40),
+            };
+            let cell = &t.cells[r][c];
+            if cell.is_formula() {
+                v = if v.is_empty() { cell.input.clone() } else { format!("{v} {}", cell.input) };
+            }
+            cells.push(v);
+        }
+        out.push(format!("{}: {}", r + 1, cells.join(" | ")));
+    }
+    if n > max_rows {
+        out.push(format!("… {} more rows (table query)", n - max_rows));
     }
     out
 }
@@ -267,6 +323,48 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
             })
         }
         Query::Document => serde_json::to_value(d).unwrap(),
+        Query::Table { id, range } => {
+            let e = d.get(&id).ok_or_else(|| ZError::not_found(&id, d.elements.keys().cloned()))?;
+            let ElementKind::Table(t) = &e.kind else {
+                return Err(ZError::invalid(format!("'{id}' is a {}, not a table", e.kind.type_name())));
+            };
+            let whole = t.whole();
+            let range = match range {
+                Some(r) => r.clip(t.n_rows(), t.n_cols()).ok_or_else(|| ZError::invalid(format!("{} is outside the table", r.a1())))?,
+                None => whole,
+            };
+            let mut formulas = serde_json::Map::new();
+            let mut errors = serde_json::Map::new();
+            for r in range.r0..=range.r1 {
+                for c in range.c0..=range.c1 {
+                    let cell = &t.cells[r][c];
+                    if cell.is_formula() {
+                        formulas.insert(crate::table::cell_name(r, c), json!(cell.input));
+                    }
+                    if let Some(crate::table::CellValue::Error { error }) = &cell.value {
+                        errors.insert(crate::table::cell_name(r, c), json!(error));
+                    }
+                }
+            }
+            let columns: Vec<Value> = t
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let mut v = serde_json::to_value(c).unwrap();
+                    v.as_object_mut().unwrap().insert("letter".into(), json!(crate::table::column_name(i)));
+                    v
+                })
+                .collect();
+            json!({
+                "id": id, "range": range.a1(), "rows": t.n_rows(), "columns": t.n_cols(),
+                "style": t.style, "style_name": t.style.name(),
+                "header_rows": t.header_rows, "header_columns": t.header_columns, "footer_rows": t.footer_rows,
+                "shown": t.shown_rows(&range), "formulas": formulas, "errors": errors,
+                "column_info": columns, "merges": t.merges, "cell_formats": t.cell_formats,
+                "font_size": t.font_size, "banded": t.banded, "gridlines": t.gridlines, "show_name": t.show_name,
+            })
+        }
         Query::Element { id } => {
             let e = d.get(&id).ok_or_else(|| ZError::not_found(&id, d.elements.keys().cloned()))?;
             element_json(ed, e)
@@ -296,6 +394,7 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                             ElementKind::Text(t) => t.text.to_lowercase(),
                             ElementKind::Image(i) => i.alt.to_lowercase(),
                             ElementKind::Video(v) => v.alt.to_lowercase(),
+                            ElementKind::Table(t) => t.cells.iter().flatten().map(|c| c.input.to_lowercase()).collect::<Vec<_>>().join("\n"),
                             _ => String::new(),
                         };
                         hay.contains(n.as_str()) || e.name.to_lowercase().contains(n.as_str())
