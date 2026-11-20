@@ -135,7 +135,8 @@ pub fn element(e: &Element) -> ZResult<()> {
             }
         }
         ElementKind::Video(d) => {
-            if !(fin(d.start) && d.start >= 0.0 && fin(d.duration) && d.end.is_none_or(|x| fin(x) && x > d.start)) {
+            let length = crate::media::plausible_duration(d.duration) == d.duration;
+            if !(fin(d.start) && d.start >= 0.0 && length && d.end.is_none_or(|x| fin(x) && x > d.start)) {
                 return bad("start, end or duration");
             }
         }
@@ -362,9 +363,8 @@ pub fn repair(doc: &mut Document) -> usize {
                 if !(fin(d.start) && d.start >= 0.0) {
                     d.start = 0.0;
                 }
-                if !fin(d.duration) {
-                    d.duration = 0.0;
-                }
+                // A length no video has (from a lying header) is unknown.
+                d.duration = crate::media::plausible_duration(d.duration);
                 d.end = d.end.filter(|x| fin(*x) && *x > d.start);
             }
             ElementKind::Table(t) => {
