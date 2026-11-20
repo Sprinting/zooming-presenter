@@ -18,10 +18,6 @@ use zebra_core::{Asset, AssetBytes};
 
 use crate::ImportError;
 
-/// A media part (or any part) is at most this many times the size it
-/// takes in the file: a part that unpacks to more is a zip bomb, not a
-/// picture. Media is stored unpacked by PowerPoint (ratio 1).
-const MAX_RATIO: u64 = 200;
 /// Pictures that are turned into something else (EMF, WMF, SVG) are read
 /// into memory to be converted; bigger ones are left out.
 pub const MAX_CONVERTED: u64 = 64 * 1024 * 1024;
@@ -82,8 +78,7 @@ impl MediaSource {
 
     /// Any part's bytes (not only media), at most `max` unpacked; None when
     /// it is missing, can't be unpacked, or is bigger. `max` is the only
-    /// bound: XML packs far tighter than [`MAX_RATIO`] (a slide of 20,000
-    /// alike runs, 266 to 1).
+    /// bound: XML packs tightly (a slide of 20,000 alike runs, 266 to 1).
     pub fn read_part(&self, path: &str, max: u64) -> Option<Vec<u8>> {
         let i = *self.entries.get(path)?;
         let mut zip = self.zip.lock().unwrap_or_else(|e| e.into_inner());
@@ -108,10 +103,9 @@ impl MediaSource {
         let i = *self.entries.get(path)?;
         let mut zip = self.zip.lock().unwrap_or_else(|e| e.into_inner());
         let entry = zip.by_index(i).ok()?;
+        // However well it packed: nothing is cut (B8). A big part streams
+        // to a spill file, which stops before the disk fills.
         let size = entry.size();
-        if size > entry.compressed_size().saturating_mul(MAX_RATIO).max(1 << 20) {
-            return None;
-        }
         f(&mut Exact { inner: entry, left: size }, size)
     }
 

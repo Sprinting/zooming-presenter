@@ -105,7 +105,6 @@ pub fn note_lines(notes: &BTreeMap<ImportNote, usize>, slides: &BTreeMap<ImportN
             });
             match (n, named) {
                 (ImportNote::PageSkipped, Some(s)) => crate::t!("import-note-skipped-slides", count = c, slides = s),
-                (ImportNote::TextCut, s) => crate::t!("import-note-text-cut", count = c, slides = s.unwrap_or_default()),
                 (ImportNote::Simplified, s) => crate::t!("import-note-simplified", count = c, slides = s.unwrap_or_default()),
                 (ImportNote::Design, _) => crate::t!("import-note-design"),
                 (ImportNote::PageSkipped, None) => crate::t!("import-note-skipped", count = c),
@@ -143,6 +142,7 @@ pub fn finish(app: &mut ZebraApp, path: &Path, deck: ImportedDeck) {
     let label = crate::t!("app-undo-import", name = file_name(path));
     let r = app.editor.import_deck(&deck, label, Origin::Human);
     let Some(out) = app.report(r) else { return };
+    app.editor.doc.warn_import(&file_name(path), &deck);
     let frames: Vec<String> = out.created.iter().filter(|id| app.editor.doc.get(id).is_some_and(|e| e.is_frame())).cloned().collect();
     app.select(frames);
     app.view_cmd(ViewCommand::ZoomToSelection);
@@ -425,18 +425,17 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
 
-    /// All of an import's notes go in one summary; skipped slides, cut
-    /// text and simplified formatting name their slides.
+    /// All of an import's notes go in one summary; skipped slides and
+    /// simplified formatting name their slides.
     #[test]
     fn the_summary_names_slides() {
-        let notes = BTreeMap::from([(ImportNote::PageSkipped, 3), (ImportNote::Chart, 1), (ImportNote::TextCut, 1), (ImportNote::Simplified, 2), (ImportNote::Design, 2)]);
-        let slides = BTreeMap::from([(ImportNote::PageSkipped, vec![2, 5, 6]), (ImportNote::TextCut, vec![4]), (ImportNote::Simplified, vec![1, 3])]);
+        let notes = BTreeMap::from([(ImportNote::PageSkipped, 3), (ImportNote::Chart, 1), (ImportNote::Simplified, 2), (ImportNote::Design, 2)]);
+        let slides = BTreeMap::from([(ImportNote::PageSkipped, vec![2, 5, 6]), (ImportNote::Simplified, vec![1, 3])]);
         assert_eq!(
             note_lines(&notes, &slides),
             [
                 "Slides 2, 5\u{2013}6 couldn't be read and were left out.",
                 "1 chart was left out.",
-                "Text on slide 4 was cut to 100,000 characters.",
                 "Some formatting on slides 1, 3 was simplified.",
                 "Some slide designs couldn't be read.",
             ]

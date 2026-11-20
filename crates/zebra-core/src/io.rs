@@ -106,53 +106,156 @@ pub fn load_bytes(bytes: &[u8]) -> ZResult<Document> {
 fn read_zip(bytes: &[u8], map: Option<&Arc<crate::media::MappedFile>>) -> ZResult<Document> {
     let bad = |m: String| ZError::new("bad_file", m);
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| bad(format!("not a .zebra file: {e}")))?;
-    let f = z.by_name("document.json").map_err(|e| bad(e.to_string()))?;
-    if f.size() > MAX_DOCUMENT_JSON {
-        return Err(too_long());
-    }
-    let json = read_json(f)?;
-    let mut doc = from_json(&json)?;
+    // Inflated twice: once to count what it would take, once to parse.
+    check_memory(std::io::BufReader::with_capacity(1 << 16, z.by_name("document.json").map_err(|e| bad(e.to_string()))?))?;
+    let mut doc = from_reader(std::io::BufReader::with_capacity(1 << 16, z.by_name("document.json").map_err(|e| bad(e.to_string()))?))?;
     // Only what the document refers to: a file can carry assets nothing
     // uses (a hostile one, a 200 MB bomb), and reading one would spill it
     // to disk for nothing. Just opened, nothing else can need them: there
     // is no undo history yet, and a save would leave them out anyway.
     let used: std::collections::BTreeSet<String> = doc.used_assets().into_iter().map(str::to_string).collect();
-    doc.assets = read_assets(&mut z, map, Some(&used))?;
+    let mut warnings = vec![];
+    doc.assets = read_assets(&mut z, map, Some(&used), &mut warnings)?;
+    doc.warnings.extend(warnings);
     Ok(doc)
 }
 
-/// Largest `document.json` Zebra opens. Media lives in its own files, so
-/// even a deck of thousands of frames is a few MB; past this it is a
-/// broken or hostile file (1 GB of spaces deflates to 1 MB).
-pub const MAX_DOCUMENT_JSON: u64 = 32 << 20;
-
 #[cfg(not(target_arch = "wasm32"))]
-fn too_long() -> ZError {
-    ZError::new("bad_file", "the document is too large to be a Zebra document (over 32 MB of text)").about(crate::error::About::Document)
+fn needs_more_memory(need: u64) -> ZError {
+    ZError::new("bad_file", format!("the presentation needs about {} MB of memory to open; this Mac allows {} MB", need >> 20, memory_budget() >> 20)).about(crate::error::About::Document)
 }
 
-/// Largest inflation a compressed asset may claim. Zebra stores assets
-/// uncompressed; a picture or video another tool deflated shrinks by a
-/// few percent, a font or SVG by 3-10x. A zip bomb is 1000x.
+/// Most memory opening one document may take (its parsed form): half of
+/// this computer's physical memory, at least 1 GB. Keynote has no
+/// document-size limit beyond memory, and nor does Zebra: a deck this Mac
+/// saved is already in its memory, so it always reopens. This only stops
+/// a file built to take all memory (a zip bomb).
 #[cfg(not(target_arch = "wasm32"))]
-const MAX_INFLATE: u64 = 100;
-
-/// Read `document.json` (or a `.json` document) up to
-/// [`MAX_DOCUMENT_JSON`], whatever the zip's directory claims.
-#[cfg(not(target_arch = "wasm32"))]
-fn read_json(r: impl Read) -> ZResult<String> {
-    let mut json = String::new();
-    r.take(MAX_DOCUMENT_JSON + 1).read_to_string(&mut json).map_err(|e| ZError::new("bad_file", e.to_string()))?;
-    if json.len() as u64 > MAX_DOCUMENT_JSON {
-        return Err(too_long());
+pub fn memory_budget() -> u64 {
+    match BUDGET_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => (physical_memory() / 2).max(1 << 30),
+        b => b,
     }
-    Ok(json)
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+static BUDGET_OVERRIDE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Tests only: a smaller [`memory_budget`] (None: the real one).
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_memory_budget(b: Option<u64>) {
+    BUDGET_OVERRIDE.store(b.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(target_os = "macos")]
+fn physical_memory() -> u64 {
+    let mut v: u64 = 0;
+    let mut len = std::mem::size_of::<u64>();
+    // SAFETY: hw.memsize is a u64; `v` and `len` are valid for the call.
+    let r = unsafe { libc::sysctlbyname(c"hw.memsize".as_ptr(), &mut v as *mut u64 as *mut libc::c_void, &mut len, std::ptr::null_mut(), 0) };
+    if r == 0 { v } else { 0 }
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn physical_memory() -> u64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|m| m.lines().find_map(|l| l.strip_prefix("MemTotal:").and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())))
+        .map_or(0, |kb| kb * 1024)
+}
+
+/// Bytes a parsed JSON value costs beyond its text: a `serde_json::Value`
+/// is 32 bytes, plus its slot in an array or map.
+#[cfg(not(target_arch = "wasm32"))]
+const VALUE_COST: u64 = 48;
+
+/// Walk a document's JSON without keeping any of it, adding up what its
+/// parsed form would take; past [`memory_budget`], refuse it then, before
+/// anything big is allocated. A whitespace bomb costs nothing here and
+/// then fails as not JSON.
+#[cfg(not(target_arch = "wasm32"))]
+fn check_memory(r: impl Read) -> ZResult<()> {
+    use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
+    struct Tally {
+        cost: u64,
+        budget: u64,
+    }
+    impl Tally {
+        fn add<E: serde::de::Error>(&mut self, n: u64) -> Result<(), E> {
+            self.cost += n;
+            if self.cost > self.budget { Err(E::custom(OVER)) } else { Ok(()) }
+        }
+    }
+    const OVER: &str = "zebra: over the memory budget";
+    struct Count<'a>(&'a mut Tally);
+    impl<'de> DeserializeSeed<'de> for Count<'_> {
+        type Value = ();
+        fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+            d.deserialize_any(self)
+        }
+    }
+    impl<'de> Visitor<'de> for Count<'_> {
+        type Value = ();
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("JSON")
+        }
+        fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<(), E> {
+            self.0.add(VALUE_COST)
+        }
+        fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<(), E> {
+            self.0.add(VALUE_COST)
+        }
+        fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<(), E> {
+            self.0.add(VALUE_COST)
+        }
+        fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<(), E> {
+            self.0.add(VALUE_COST)
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+            self.0.add(VALUE_COST)
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<(), E> {
+            self.0.add(VALUE_COST + v.len() as u64)
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<(), A::Error> {
+            self.0.add::<A::Error>(VALUE_COST)?;
+            while a.next_element_seed(Count(&mut *self.0))?.is_some() {}
+            Ok(())
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<(), A::Error> {
+            self.0.add::<A::Error>(VALUE_COST)?;
+            while a.next_key_seed(Count(&mut *self.0))?.is_some() {
+                a.next_value_seed(Count(&mut *self.0))?;
+            }
+            Ok(())
+        }
+    }
+    let mut t = Tally { cost: 0, budget: memory_budget() };
+    let mut de = serde_json::Deserializer::from_reader(r);
+    match Count(&mut t).deserialize(&mut de).and_then(|_| de.end()) {
+        Ok(()) => Ok(()),
+        Err(_) if t.cost > t.budget => Err(needs_more_memory(t.cost)),
+        Err(e) => Err(ZError::new("bad_file", e.to_string())),
+    }
+}
+
+/// Parse a document from a reader that [`check_memory`] has passed.
+#[cfg(not(target_arch = "wasm32"))]
+fn from_reader(r: impl Read) -> ZResult<Document> {
+    let v: serde_json::Value = serde_json::from_reader(r).map_err(|e| ZError::new("bad_file", e.to_string()))?;
+    from_value(v)
+}
+
+/// Compressed assets up to this size are read into memory; bigger ones
+/// stream to a spill file.
+#[cfg(not(target_arch = "wasm32"))]
+const SMALL_ASSET: u64 = 1 << 20;
 
 #[cfg(not(target_arch = "wasm32"))]
 /// The assets in a `.zebra` zip (mapped when `map` is the file and they
 /// are stored uncompressed). Assets are only read as far as their headers.
-fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc<crate::media::MappedFile>>, only: Option<&std::collections::BTreeSet<String>>) -> ZResult<std::collections::BTreeMap<String, Asset>> {
+fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc<crate::media::MappedFile>>, only: Option<&std::collections::BTreeSet<String>>, warnings: &mut Vec<crate::warnings::Warning>) -> ZResult<std::collections::BTreeMap<String, Asset>> {
     let bad = |m: String| ZError::new("bad_file", m);
     let mut assets = std::collections::BTreeMap::new();
     for i in 0..z.len() {
@@ -175,27 +278,30 @@ fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc
         let data = match mapped {
             Some(m) => m,
             None => {
-                // Compressed (or no mapping): read at most what the entry
-                // could honestly hold, so a 2 MB zip can't ask for 2 GB.
-                // The type is checked from the first bytes before the
-                // rest is read. Big ones go to a spill file, not the heap.
-                let limit = f.size().min(f.compressed_size().saturating_mul(MAX_INFLATE).max(1 << 20));
+                // Compressed (or no mapping): read all of it, whatever its
+                // size or how well it packed (nothing is cut). The type is
+                // checked from the first bytes before the rest is read.
+                // Up to 1 MB stays in memory; past that it streams to a
+                // spill file, which stops before the disk fills, so a zip
+                // bomb takes neither memory nor the disk.
                 let mut head = Vec::new();
-                (&mut f).take(limit.min(4096)).read_to_end(&mut head).map_err(|e| bad(e.to_string()))?;
+                (&mut f).take(4096).read_to_end(&mut head).map_err(|e| bad(e.to_string()))?;
                 if !plausible_asset(_ext, &head) {
                     continue;
                 }
-                let rest = limit - head.len() as u64;
-                let mut r = std::io::Cursor::new(head).chain((&mut f).take(rest));
-                if limit >= 1 << 20 {
+                let mut data = head;
+                (&mut f).take((SMALL_ASSET + 1).saturating_sub(data.len() as u64)).read_to_end(&mut data).map_err(|e| bad(e.to_string()))?;
+                if data.len() as u64 <= SMALL_ASSET {
+                    data.into()
+                } else {
+                    let mut r = std::io::Cursor::new(data).chain(&mut f);
                     match crate::media::spill_reader(&mut r, &safe_ext(_ext)) {
                         Ok((_, b)) => b,
-                        Err(_) => continue,
+                        Err(e) => {
+                            warnings.push(crate::warnings::Warning::AssetNotRead { key: key.to_string(), kind: crate::warnings::MediaWord::of_ext(_ext), disk_full: e.kind() == std::io::ErrorKind::StorageFull });
+                            continue;
+                        }
                     }
-                } else {
-                    let mut data = Vec::new();
-                    r.read_to_end(&mut data).map_err(|e| bad(e.to_string()))?;
-                    data.into()
                 }
             }
         };
@@ -246,7 +352,10 @@ fn sniff_asset(ext: &str, data: AssetBytes) -> Option<Asset> {
 }
 
 pub fn from_json(json: &str) -> ZResult<Document> {
-    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| ZError::new("bad_file", e.to_string()))?;
+    from_value(serde_json::from_str(json).map_err(|e| ZError::new("bad_file", e.to_string()))?)
+}
+
+fn from_value(v: serde_json::Value) -> ZResult<Document> {
     let ver = v.get("format_version").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
     if ver > crate::FORMAT_VERSION {
         return Err(ZError::new("bad_file", format!("file format {ver} is newer than this app ({})", crate::FORMAT_VERSION)));
@@ -341,7 +450,7 @@ fn mapped_assets(path: &Path) -> ZResult<Vec<(String, AssetBytes)>> {
     let ioe = |e: std::io::Error| ZError::new("io", format!("{}: {e}", path.display()));
     let map = Arc::new(map_document(path).map_err(ioe)?);
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(&map[..])).map_err(|e| ZError::new("bad_file", e.to_string()))?;
-    Ok(read_assets(&mut z, Some(&map), None)?.into_iter().filter(|(_, a)| a.bytes.is_mapped()).map(|(k, a)| (k, a.bytes)).collect())
+    Ok(read_assets(&mut z, Some(&map), None, &mut vec![])?.into_iter().filter(|(_, a)| a.bytes.is_mapped()).map(|(k, a)| (k, a.bytes)).collect())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -436,7 +545,9 @@ pub fn load(path: &Path) -> ZResult<Document> {
     let ioe = |e: std::io::Error| ZError::new("io", format!("{}: {e}", path.display()));
     if path.extension().is_some_and(|e| e == "json") {
         crate::media::regular_file(path).map_err(ioe)?;
-        return from_json(&read_json(std::fs::File::open(path).map_err(ioe)?)?);
+        let open = || std::fs::File::open(path).map(|f| std::io::BufReader::with_capacity(1 << 16, f)).map_err(ioe);
+        check_memory(open()?)?;
+        return from_reader(open()?);
     }
     let map = Arc::new(map_document(path).map_err(ioe)?);
     read_zip(&map, Some(&map))
@@ -614,7 +725,7 @@ pub fn load_autosave(path: &Path, base: Option<&Path>) -> ZResult<Document> {
         let from = (|| -> Option<std::collections::BTreeMap<String, Asset>> {
             let map = Arc::new(map_document(b).ok()?);
             let mut z = zip::ZipArchive::new(std::io::Cursor::new(&map[..])).ok()?;
-            read_assets(&mut z, Some(&map), Some(&want)).ok()
+            read_assets(&mut z, Some(&map), Some(&want), &mut vec![]).ok()
         })();
         for (k, a) in from.into_iter().flatten() {
             doc.assets.insert(k, a);

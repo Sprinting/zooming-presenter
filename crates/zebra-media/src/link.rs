@@ -31,7 +31,7 @@ const IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 /// A download that receives nothing for this long has stalled.
 pub const DOWNLOAD_IDLE: Duration = Duration::from_secs(30);
 /// Space a download leaves free on the disk, and below which it stops.
-pub const SPACE_MARGIN: u64 = 512 * 1024 * 1024;
+pub use zebra_core::media::SPACE_MARGIN;
 /// How often (bytes written) a download looks at the free space again.
 const SPACE_EVERY: u64 = 16 * 1024 * 1024;
 /// Redirects followed before a link counts as unreachable (a loop).
@@ -467,23 +467,7 @@ fn is_disk_full(e: &std::io::Error) -> bool {
 /// Free bytes on the disk holding `dir` (for the user, not root). None
 /// when it can't be told.
 pub fn free_space(dir: &Path) -> Option<u64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
-        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-        // SAFETY: `c` is a NUL-terminated path and `st` a writable statvfs.
-        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-            return None;
-        }
-        #[allow(clippy::unnecessary_cast)]
-        Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = dir;
-        None
-    }
+    zebra_core::media::free_space(dir)
 }
 
 fn tls() -> ureq::tls::TlsConfig {

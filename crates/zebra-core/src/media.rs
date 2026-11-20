@@ -42,6 +42,11 @@ fn sniff_av(b: &[u8]) -> Option<MediaInfo> {
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
         let brand = &b[8..12];
         let mov = parse_mov(b);
+        // A movie header with no tracks in it holds nothing to play: not
+        // a sound, not a video (a bomb's first bytes, then zeros).
+        if mov.as_ref().is_some_and(|m| m.tracks == 0) {
+            return None;
+        }
         let has_video = mov.as_ref().map(|m| m.has_video);
         let duration = mov.as_ref().map(|m| m.duration).unwrap_or(0.0);
         let is_audio_brand = matches!(brand, b"M4A " | b"M4B " | b"M4P ");
@@ -84,6 +89,9 @@ fn sniff_av(b: &[u8]) -> Option<MediaInfo> {
 #[derive(Debug, Default)]
 struct MovInfo {
     has_video: bool,
+    /// Tracks in `moov`: none means nothing can play (a header followed
+    /// by zeros).
+    tracks: usize,
     width: u32,
     height: u32,
     duration: f64,
@@ -99,10 +107,12 @@ fn parse_mov(b: &[u8]) -> Option<MovInfo> {
         out.duration = mvhd_duration(mvhd).unwrap_or(0.0);
     }
     for trak in boxes(moov).filter(|(t, _)| t == b"trak").map(|(_, body)| body) {
+        out.tracks += 1;
         let is_video = find_box(trak, b"mdia")
             .and_then(|mdia| find_box(mdia, b"hdlr"))
             .is_some_and(|hdlr| hdlr.len() >= 12 && &hdlr[8..12] == b"vide");
-        if is_video {
+        // The first video track gives the size.
+        if is_video && !out.has_video {
             out.has_video = true;
             if let Some(tkhd) = find_box(trak, b"tkhd") {
                 // width and height are the last 8 bytes, 16.16 fixed point.
@@ -112,7 +122,6 @@ fn parse_mov(b: &[u8]) -> Option<MovInfo> {
                     out.height = u32::from_be_bytes(tkhd[n - 4..n].try_into().ok()?) >> 16;
                 }
             }
-            break;
         }
     }
     Some(out)
@@ -433,10 +442,60 @@ pub fn spill(bytes: Vec<u8>, key: &str, ext: &str) -> AssetBytes {
 /// Stream media into a spill file without holding it in memory (a video
 /// out of a PowerPoint file, a clip being inserted): returns its content
 /// key and the mapped bytes. `ext` is the file's type ("mp4").
+/// Space unpacking or downloading media leaves free on the disk, and below
+/// which it stops.
+pub const SPACE_MARGIN: u64 = 512 * 1024 * 1024;
+/// How often (bytes written) a spill looks at the free space again.
+const SPACE_EVERY: u64 = 16 * 1024 * 1024;
+
+/// Free bytes on the disk holding `dir` (for the user, not root). None
+/// when it can't be told.
+pub fn free_space(dir: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+        // SAFETY: plain old data, filled in by statvfs.
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        // SAFETY: `c` is a NUL-terminated path and `st` a writable statvfs.
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+            return None;
+        }
+        #[allow(clippy::unnecessary_cast)]
+        Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        None
+    }
+}
+
+#[doc(hidden)]
+/// Tests only: pretend the disk has this much free (None: ask the disk).
+pub fn set_free_space_for_tests(free: Option<u64>) {
+    FREE_OVERRIDE.store(free.map_or(u64::MAX, |f| f.min(u64::MAX - 1)), std::sync::atomic::Ordering::Relaxed);
+}
+static FREE_OVERRIDE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+
+fn spill_room(dir: &Path) -> bool {
+    let free = match FREE_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        u64::MAX => free_space(dir),
+        f => Some(f),
+    };
+    free.is_none_or(|f| f >= SPACE_MARGIN)
+}
+
+/// Copy `r` into a spill file and map it: its content key and the mapped
+/// bytes. Stops with `StorageFull` once the disk is down to
+/// [`SPACE_MARGIN`], however much `r` has left (a zip bomb fills nothing).
 pub fn spill_reader(r: &mut dyn std::io::Read, ext: &str) -> std::io::Result<(String, AssetBytes)> {
     check_ext(ext)?;
     let dir = stream_dir();
     std::fs::create_dir_all(&dir)?;
+    if !spill_room(&dir) {
+        return Err(std::io::Error::new(std::io::ErrorKind::StorageFull, "the disk is full"));
+    }
     let part = spill_path(&dir, "part");
     let mut key = KeyHasher::default();
     let r = (|| -> std::io::Result<()> {
@@ -444,6 +503,7 @@ pub fn spill_reader(r: &mut dyn std::io::Read, ext: &str) -> std::io::Result<(St
         let f = std::fs::OpenOptions::new().write(true).create_new(true).open(&part)?;
         let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
         let mut buf = vec![0u8; 1 << 20];
+        let mut since = 0u64;
         loop {
             let n = match r.read(&mut buf) {
                 Ok(0) => break,
@@ -453,6 +513,13 @@ pub fn spill_reader(r: &mut dyn std::io::Read, ext: &str) -> std::io::Result<(St
             };
             key.update(&buf[..n]);
             w.write_all(&buf[..n])?;
+            since += n as u64;
+            if since >= SPACE_EVERY {
+                since = 0;
+                if !spill_room(&dir) {
+                    return Err(std::io::Error::new(std::io::ErrorKind::StorageFull, "the disk is full"));
+                }
+            }
         }
         w.flush()
     })();

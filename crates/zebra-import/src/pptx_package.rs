@@ -38,18 +38,18 @@ pub const BATCH_SLIDES: usize = 100;
 const BATCH_XML: u64 = 4 << 20;
 /// Parts in one batch's zip: BetterOffice refuses more than 5000.
 const BATCH_PARTS: usize = 4000;
-/// A slide with more XML than this is left out: its parse alone would
-/// take hundreds of megabytes (real slides have well under 1 MB).
-pub const MAX_SLIDE_XML: u64 = 8 << 20;
-/// SmartArt parts (`ppt/diagrams/`) over this are left out (real ones are
-/// tens of KB; a 34 MB one took a gigabyte to read, a 6.6 MB one 200 MB).
-pub const MAX_DIAGRAM_XML: u64 = 2 << 20;
-/// Relationships parts.
-const MAX_RELS_XML: u64 = 8 << 20;
-/// `presentation.xml` (one line per slide).
-const MAX_PRESENTATION_XML: u64 = 32 << 20;
-/// Any other XML part (layouts, masters, themes, notes, charts…).
-const MAX_OTHER_XML: u64 = 16 << 20;
+/// What parsing takes per byte of XML: BetterOffice builds a whole tree,
+/// about 55 times the XML (measured: +452 MB for an 8 MB slide).
+const PARSE_COST: u64 = 55;
+
+/// The most XML one part may have: what its parse would take must fit
+/// in [`zebra_core::io::memory_budget`] (half the Mac's memory). There is
+/// no size limit beyond that, as Keynote has none; a part past it is left
+/// out and the import says so.
+pub fn max_xml() -> u64 {
+    zebra_core::io::memory_budget() / PARSE_COST
+}
+
 /// Deepest XML nesting BetterOffice reads.
 const MAX_DEPTH: usize = 256;
 
@@ -99,7 +99,7 @@ pub enum Read {
 pub enum Skip {
     /// Missing or broken.
     Broken,
-    /// Over a limit: more XML than [`MAX_SLIDE_XML`], or more shapes or
+    /// Over a limit: more XML than [`max_xml`], or more shapes or
     /// XML than the parser reads.
     TooBig,
 }
@@ -125,7 +125,7 @@ impl Package {
         let damaged = ImportError::Damaged("PowerPoint");
         let root = read_rels(&src, "");
         let presentation = root.iter().find(|r| r.is(OFFICE_DOCUMENT)).and_then(|r| r.to.clone()).filter(|p| src.has(p)).unwrap_or_else(|| "ppt/presentation.xml".into());
-        let presentation_xml = src.read_part(&presentation, MAX_PRESENTATION_XML).filter(|b| check(b)).ok_or(damaged.clone())?;
+        let presentation_xml = src.read_part(&presentation, max_xml()).filter(|b| check(b)).ok_or(damaged.clone())?;
         let rels = read_rels(&src, &presentation);
         let list = id_list(&presentation_xml, "sldIdLst", "sldId").ok_or(damaged.clone())?;
         let slides: Vec<Option<String>> = list
@@ -136,7 +136,7 @@ impl Package {
         if slides.iter().all(Option::is_none) {
             return Err(damaged);
         }
-        let content_types = src.read_part(CONTENT_TYPES, MAX_OTHER_XML).filter(|b| check(b)).unwrap_or_else(default_content_types);
+        let content_types = src.read_part(CONTENT_TYPES, max_xml()).filter(|b| check(b)).unwrap_or_else(default_content_types);
         Ok(Package { src, presentation, presentation_xml, content_types, slides, checked: Mutex::new(HashMap::new()), broken_design: Mutex::new(BTreeSet::new()) })
     }
 
@@ -176,7 +176,7 @@ impl Package {
     fn read_batch(&self, slides: &[usize], each: &mut impl FnMut(Read) -> bool) -> bool {
         let mut ok = vec![];
         for &i in slides {
-            let checked = self.slides.get(i).cloned().flatten().map_or(Checked::Bad, |p| self.check(&p, MAX_SLIDE_XML));
+            let checked = self.slides.get(i).cloned().flatten().map_or(Checked::Bad, |p| self.check(&p, max_xml()));
             let why = if checked == Checked::TooBig { Skip::TooBig } else { Skip::Broken };
             if matches!(checked, Checked::Ok(_)) {
                 ok.push(i);
@@ -274,13 +274,7 @@ impl Package {
                     parts.insert(to.clone(), Kind::Empty);
                     continue;
                 }
-                let cap = if r.is("/slide") {
-                    MAX_SLIDE_XML
-                } else if to.starts_with("ppt/diagrams/") {
-                    MAX_DIAGRAM_XML
-                } else {
-                    MAX_OTHER_XML
-                };
+                let cap = max_xml();
                 match self.check(to, cap) {
                     Checked::Ok(n) => {
                         if !design {
@@ -371,7 +365,7 @@ fn rels_path(part: &str) -> String {
 /// `part`'s relationships, read from the file; none when they are missing
 /// or broken.
 fn read_rels(src: &MediaSource, part: &str) -> Vec<Rel> {
-    let Some(bytes) = src.read_part(&rels_path(part), MAX_RELS_XML) else { return vec![] };
+    let Some(bytes) = src.read_part(&rels_path(part), max_xml()) else { return vec![] };
     parse_rels(&bytes, part).unwrap_or_default()
 }
 

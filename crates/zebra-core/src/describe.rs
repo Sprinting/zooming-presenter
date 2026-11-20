@@ -306,6 +306,9 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                 "revision": ed.revision,
                 "dirty": ed.dirty(),
                 "file": ed.file_path.as_ref().map(|p| p.display().to_string()),
+                // Document Warnings: what opening or importing couldn't
+                // bring in (the person's View › Show Document Warnings).
+                "warnings": d.warnings.iter().map(|w| w.english()).collect::<Vec<_>>(),
                 "mode": v.mode,
                 "tool": v.tool,
                 "selection": v.selection,

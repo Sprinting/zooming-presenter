@@ -29,5 +29,5 @@ zip.workspace = true
 # Table formulas. Not in the web player: it draws the values files save.
 ironcalc_base = "=0.9.1"
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -178,11 +178,11 @@ fn notes_name_their_slides() {
     assert_eq!((groups, more), (vec!["2\u{2013}9999".to_string()], 0));
     let mut d = ImportedDeck::default();
     for s in [7, 3, 7, 3, 12] {
-        d.note_slide(ImportNote::TextCut, s);
+        d.note_slide(ImportNote::Simplified, s);
     }
-    assert_eq!(d.slides[&ImportNote::TextCut], [3, 7, 12]);
-    assert_eq!(d.notes[&ImportNote::TextCut], 3);
+    assert_eq!(d.slides[&ImportNote::Simplified], [3, 7, 12]);
+    assert_eq!(d.notes[&ImportNote::Simplified], 3);
     assert_eq!(ImportNote::PageSkipped.english_with(2, &[2, 5]), "2 unreadable slides left out (2, 5)");
     assert_eq!(ImportNote::PageSkipped.english_with(2, &[]), "2 unreadable pages left out");
-    assert_eq!(ImportNote::TextCut.english_with(1, &[4]), "1 slide with text cut to 100,000 characters (4)");
+    assert_eq!(ImportNote::Simplified.english_with(1, &[4]), "1 slide with formatting simplified (4)");
 }

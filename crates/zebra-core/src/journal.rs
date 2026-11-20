@@ -52,6 +52,7 @@ fn meta_of(doc: &Document) -> Document {
         themes: doc.themes.clone(),
         play: doc.play,
         soundtrack: doc.soundtrack.clone(),
+        warnings: Default::default(),
     }
 }
 

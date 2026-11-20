@@ -280,6 +280,8 @@ pub struct ZebraApp {
     pub show_diagrams: bool,
     /// Help › Acknowledgements.
     pub show_credits: bool,
+    /// View › Show Document Warnings.
+    pub show_warnings: bool,
     /// The Symbols tab's tiles and search.
     pub symbols: crate::symbols_ui::Symbols,
     #[cfg(target_os = "macos")]
@@ -410,6 +412,7 @@ impl ZebraApp {
             show_layouts: false,
             show_diagrams: false,
             show_credits: false,
+            show_warnings: false,
             symbols: Default::default(),
             show_sidebar: true,
             show_props: true,
@@ -1129,6 +1132,7 @@ impl ZebraApp {
                 self.close_centre_panels();
                 self.show_credits = true
             }
+            ShowDocumentWarnings => self.show_warnings = true,
         }
     }
 
@@ -1341,6 +1345,8 @@ impl ZebraApp {
                 }
                 self.editor.load_prepared(prepared, Some(p.to_path_buf()));
                 self.after_load();
+                // What couldn't be opened is listed, as Keynote does.
+                self.show_warnings = !self.editor.doc.warnings.is_empty();
                 self.push_recent(p.to_path_buf());
                 self.recovered = crate::files::autosave_newer(p);
                 // A file Finder sent after the chooser came up replaces it.
@@ -1745,6 +1751,7 @@ impl ZebraApp {
             crate::welcome::layout_gallery(self, &ctx);
             crate::welcome::diagram_gallery(self, &ctx);
             crate::credits::window(self, &ctx);
+            crate::warnings_ui::window(self, &ctx);
             crate::welcome::window(self, &ctx);
         }
         crate::presenting::presenter_window(self, &ctx);

@@ -71,6 +71,7 @@ fn main() {
     std::fs::write(bad.join("too-wide.png"), lying_png(2_000_000, 10)).unwrap();
     sparse_after(b"koly-this-is-a-disk-image", &bad.join("disk-image-named.png"), 4 << 30);
     zebra_bomb_json(&bad.join("bomb-document.zebra"));
+    zebra_bomb_numbers(&bad.join("bomb-numbers.zebra"));
     zebra_bomb_asset(&bad.join("bomb-picture.zebra"));
     pptx_bomb(&extras, &bad.join("bomb-media.pptx"));
 
@@ -205,6 +206,21 @@ fn zebra_bomb_json(out: &Path) {
         z.write_all(&spaces).unwrap();
     }
     z.write_all(doc().as_bytes()).unwrap();
+    z.finish().unwrap();
+}
+
+/// A `.zebra` of about 6 MB whose document is 3 billion zeros in a list:
+/// 6 GB of text that would take about 144 GB parsed. Zebra refuses it
+/// once it passes half the Mac's memory, before taking it.
+fn zebra_bomb_numbers(out: &Path) {
+    let mut z = zip::ZipWriter::new(std::fs::File::create(out).unwrap());
+    z.start_file("document.json", deflated()).unwrap();
+    z.write_all(b"{\"format_version\":1,\"a\":[").unwrap();
+    let zeros = "0,".repeat(1 << 19);
+    for _ in 0..(3_000_000_000u64 >> 19) {
+        z.write_all(zeros.as_bytes()).unwrap();
+    }
+    z.write_all(b"0]}").unwrap();
     z.finish().unwrap();
 }
 

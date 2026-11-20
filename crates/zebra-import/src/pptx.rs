@@ -39,7 +39,6 @@ use pptx_parse::{
 use crate::pptx_media::MediaSource;
 use crate::pptx_package::{Package, Read, Skip};
 use zebra_core::import::{asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox, MAX_IMPORT_SPANS};
-use zebra_core::rich::MAX_INSERT_CHARS;
 use zebra_core::{
     Align, AssetBytes, Crop, Dash, Element, ElementKind, ImageData, ImageMask, InkData, ListKind, MediaKind, ParaFormat, ShapeData, ShapeKind, Size, Soundtrack, SpanFormat, TextData, TextSpan, TextStyle, Transform, VideoData,
 };
@@ -239,8 +238,6 @@ struct Built {
     /// The size most of its characters have, points.
     base_pt: f64,
     chars: usize,
-    /// Cut to [`MAX_INSERT_CHARS`].
-    cut: bool,
     /// Formatting past [`MAX_IMPORT_SPANS`] dropped.
     simplified: bool,
 }
@@ -1147,9 +1144,6 @@ impl<'a> SlideReader<'a> {
             _ => 1.0,
         };
         let Some(built) = self.build_text(&c, scale) else { return };
-        if built.cut {
-            self.deck.note_slide(ImportNote::TextCut, self.number);
-        }
         if built.simplified {
             self.deck.note_slide(ImportNote::Simplified, self.number);
         }
@@ -1181,10 +1175,10 @@ impl<'a> SlideReader<'a> {
     }
 
     /// The text, its base size in points (the size most characters have)
-    /// and its length, or None when there is nothing to show. A text longer
-    /// than paste allows ([`MAX_INSERT_CHARS`]) is cut there, and formatting
-    /// past [`MAX_IMPORT_SPANS`] changes is dropped (a box with 65,536
-    /// crashed text layout).
+    /// and its length, or None when there is nothing to show. All the text
+    /// comes in, however long (as in Keynote); formatting past
+    /// [`MAX_IMPORT_SPANS`] changes is dropped (a box with 65,536 crashed
+    /// text layout).
     fn build_text(&self, c: &Cascade, font_scale: f64) -> Option<Built> {
         struct Run {
             start: usize,
@@ -1264,20 +1258,6 @@ impl<'a> SlideReader<'a> {
                 n += len;
             }
         }
-        // Longer than one paste may be: cut there (laid out on every frame,
-        // a megabyte of text froze the window).
-        let cut = n > MAX_INSERT_CHARS;
-        if cut {
-            if let Some((at, _)) = text.char_indices().nth(MAX_INSERT_CHARS) {
-                text.truncate(at);
-            }
-            n = MAX_INSERT_CHARS;
-            paras.truncate(text.split('\n').count());
-            runs.retain(|r| r.start < n);
-            if let Some(r) = runs.last_mut() {
-                r.end = r.end.min(n);
-            }
-        }
         // Empty lines at the end take room and show nothing.
         while text.ends_with('\n') {
             text.pop();
@@ -1327,7 +1307,7 @@ impl<'a> SlideReader<'a> {
         zebra_core::rich::normalize(&mut data);
         let simplified = data.spans.len() > MAX_IMPORT_SPANS;
         data.spans.truncate(MAX_IMPORT_SPANS);
-        Some(Built { data, base_pt, chars: n, cut, simplified })
+        Some(Built { data, base_pt, chars: n, simplified })
     }
 
     /// The strike-through part `part`'s shape `id` says (None when it

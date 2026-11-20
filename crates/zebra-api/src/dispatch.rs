@@ -800,6 +800,7 @@ impl Dispatcher {
             check_read(editor, seen)?;
         }
         let out = editor.import_deck(&deck, format!("Import {}", done.name), done.origin.clone())?;
+        editor.doc.warn_import(&done.name, &deck);
         self.seen.insert(key, editor.revision);
         let frames: Vec<String> = out.created.iter().filter(|id| editor.doc.get(id).is_some_and(|e| e.is_frame())).cloned().collect();
         let notes: Vec<Value> = deck
@@ -1035,8 +1036,7 @@ fn fetch_web(call: &mut Call, tasks: &[WebTask], files: &mut Vec<std::path::Path
     Ok(())
 }
 
-/// Before commands run: text over the one-insert limit is refused
-/// ([`zebra_core::rich::insert_error`]), a poster `at` a time in the
+/// Before commands run: a poster `at` a time in the
 /// video becomes that frame's picture, and `save_theme` with `to_library`
 /// is checked (it writes into the person's own files, like `save`).
 /// Returns the ids of the themes to save to the library once the
@@ -1044,11 +1044,6 @@ fn fetch_web(call: &mut Call, tasks: &[WebTask], files: &mut Vec<std::path::Path
 fn prepare(cmds: &mut [Command], editor: &Editor) -> Result<Vec<String>, RpcError> {
     let mut lib = vec![];
     for c in cmds {
-        // Text in one box, as the person's paste is: 100,000 characters
-        // at a time.
-        if let Some(e) = zebra_core::rich::insert_error(c, &editor.doc) {
-            return Err(e.into());
-        }
         match c {
             Command::SaveTheme { theme, to_library: true, .. } => {
                 need_full(editor.view.agent_permission, "save_theme with to_library")?;
