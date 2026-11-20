@@ -6653,6 +6653,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "raw-window-handle",
  "rfd",
+ "ron",
  "rust-embed",
  "ruzstd",
  "serde",

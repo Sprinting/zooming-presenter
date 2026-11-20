@@ -824,7 +824,7 @@ fn save_path(editor: &Editor, path: Option<std::path::PathBuf>) -> Result<std::p
 fn need_full(perm: Permission, what: &str) -> Result<(), RpcError> {
     if perm != Permission::Full {
         return Err(RpcError::app("permission", format!("`{what}` needs 'full' agent permission"))
-            .hint("the person can grant it from the AI button in Zebra's toolbar, or launch with --agent-permission full; `export` works without it"));
+            .hint("the person can grant it from the AI button in Zebra's toolbar; `export` works without it"));
     }
     Ok(())
 }

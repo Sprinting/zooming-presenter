@@ -56,8 +56,10 @@ pub use zebra_core::editor::Event;
 pub struct ApiOptions {
     /// Socket path; default: per-user temp dir + pid.
     pub socket: Option<PathBuf>,
-    /// Initial agent permission. Applied to `editor.view.agent_permission`
-    /// on the first `pump`; the human can change it later from the UI.
+    /// Agent permission. Headless: what agents get (`zebra` passes the
+    /// person's saved choice). The app's `--api`: the most the launch flag
+    /// allows, never above the person's saved choice. The person changes
+    /// it from the UI.
     pub permission: Permission,
 }
 

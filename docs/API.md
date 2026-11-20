@@ -33,7 +33,7 @@ asking the person to switch it on.
 | `zebra --api [file.zebra]` | Opens the normal window with AI control already switched on. |
 | `zebra --headless --api [file]` | Runs with no window and the same API. Good for generating decks and for CI. The process prints `ZEBRA_API_READY {...}` on stdout when it is ready. |
 | `--api-socket <path>` | Uses this socket path instead of the default one. |
-| `--agent-permission observe\|edit\|full` | Sets the starting permission. The default is `edit`. The person can change it from the AI button in the toolbar. |
+| `--agent-permission observe\|edit` | Lowers the permission for this run. It never raises it: agents get at most the person's choice from the AI button in the toolbar (`edit` if they never chose). `--headless` uses that choice too. |
 
 ### Permissions
 
@@ -43,7 +43,9 @@ asking the person to switch it on.
 | `edit` (default) | Make undoable document edits. It gets its **own** camera and selection, which are drawn dashed and violet. Present-mode and tool commands are refused. |
 | `full` | Everything in `edit`, plus driving the visible camera, selection and present mode, and `open`/`save`. |
 
-`zebractl mcp --spawn-headless` always starts its private instance with `full` permission, because nobody else is using that instance.
+`zebractl mcp --spawn-headless` starts its private instance with the person's choice from the AI button (`edit` if they never chose); no flag raises it.
+
+`--api` and `--headless` only work while AI control is switched on. Once the person or an agent (`disconnect`) switches it off, they stay off until the person switches it back on in Zebra.
 
 ### Discovery (like Chrome's `DevToolsActivePort`)
 
@@ -344,7 +346,7 @@ move. Path steps are 0-based. Theme colour slots look like `theme:accent`.
 ## 6. Walkthrough: a 3-step presentation
 
 ```sh
-zebra --headless --api --agent-permission full &      # or use the app with AI control switched on
+zebra --headless --api &      # or use the app with AI control switched on
 
 cat > deck.json <<'EOF'
 [

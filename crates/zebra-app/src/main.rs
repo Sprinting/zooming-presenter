@@ -23,9 +23,11 @@ struct Cli {
     /// Socket path for the automation API (default: per-user temp dir).
     #[arg(long, value_name = "PATH")]
     api_socket: Option<PathBuf>,
-    /// What a connected agent may do: observe, edit or full.
-    #[arg(long, value_name = "LEVEL", default_value = "edit")]
-    agent_permission: String,
+    /// Lower what a connected agent may do this run: observe or edit. It
+    /// never raises it: the person's choice from the AI button is the most
+    /// an agent gets.
+    #[arg(long, value_name = "LEVEL")]
+    agent_permission: Option<String>,
     /// No window: only the API (implies --api).
     #[arg(long)]
     headless: bool,
@@ -48,13 +50,16 @@ struct Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     zebra_app::keymap::load();
-    let permission = match cli.agent_permission.as_str() {
-        "observe" => Permission::Observe,
-        "full" => Permission::Full,
-        "edit" => Permission::Edit,
-        other => anyhow::bail!("--agent-permission must be observe, edit or full (got '{other}')"),
+    // Only a person raises permission (the AI button): the flag can only
+    // lower it. `ApiOptions::permission` is the most the flag allows; the
+    // app takes the lower of it and the person's saved choice.
+    let cap = match cli.agent_permission.as_deref() {
+        None | Some("full") => Permission::Full,
+        Some("observe") => Permission::Observe,
+        Some("edit") => Permission::Edit,
+        Some(other) => anyhow::bail!("--agent-permission must be observe, edit or full (got '{other}')"),
     };
-    let api_opts = ApiOptions { socket: cli.api_socket.clone(), permission };
+    let mut api_opts = ApiOptions { socket: cli.api_socket.clone(), permission: cap };
     // The first time is always a person: no flag turns AI control on until
     // someone has switched it on in Zebra's window once.
     for v in zebra_api::discovery::ignored_overrides() {
@@ -73,6 +78,8 @@ fn main() -> anyhow::Result<()> {
         if let Some(why) = refused {
             anyhow::bail!("{why}");
         }
+        // No window, so no person to ask: the person's saved choice.
+        api_opts.permission = zebra_app::app::launch_permission(zebra_app::app::saved_agent_permission(), cap);
         return zebra_api::run_headless(api_opts, cli.file);
     }
     let screenshot = match &cli.screenshot_after {

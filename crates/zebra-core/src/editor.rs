@@ -2453,7 +2453,7 @@ impl Editor {
                 )
             {
                 return Err(ZError::new("permission", "this view command needs 'full' agent permission")
-                    .hint("the person can grant it from the AI button in Zebra's toolbar, or launch with --agent-permission full; captures of any step work without it"));
+                    .hint("the person can grant it from the AI button in Zebra's toolbar; captures of any step work without it"));
             }
         }
         let vp = self.view.viewport;

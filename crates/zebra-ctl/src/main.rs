@@ -769,7 +769,9 @@ fn find_zebra_bin(explicit: Option<PathBuf>) -> Result<PathBuf> {
 
 fn spawn_headless(bin: &Path, file: Option<&Path>) -> Result<Headless> {
     let mut cmd = Proc::new(bin);
-    cmd.args(["--headless", "--api", "--agent-permission", "full"]);
+    // Permission is the person's saved choice (the AI button); no flag
+    // raises it.
+    cmd.args(["--headless", "--api"]);
     if let Some(f) = file {
         cmd.arg(abs(f)?);
     }
