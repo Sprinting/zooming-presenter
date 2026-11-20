@@ -283,6 +283,12 @@ impl Editor {
     /// every cell of a sheet one by one (75 ms to insert a row at the top
     /// of 100,000 cells), while sending the moved cells again at the next
     /// recalculation takes 15 ms.
+    ///
+    /// Undo size: every row whose formulas are rewritten is a changed row
+    /// in the undo step. A table with a formula in every row, at the
+    /// 100,000-cell cap (4,999 x 20), makes a step of about 1.2 MB for an
+    /// insert or delete at the top. That is bounded by the cell cap and
+    /// accepted (review of 19a); plain tables make steps of a few KB.
     fn reshape_table(&mut self, id: &str, op: &Reshape) -> ZResult<()> {
         match self.doc.elements.get_mut(id).map(|e| &mut e.kind) {
             Some(ElementKind::Table(t)) => crate::calc::reshape(t, op).map_err(ZError::invalid),

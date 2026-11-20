@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{Align, ColorRef, TextSpan};
 
+#[path = "table_refs.rs"]
+pub mod refs;
+
 /// Most header rows, header columns or footer rows (as in Keynote).
 pub const MAX_HEADERS: u8 = 5;
 /// Most rows and columns a table can have.
