@@ -436,7 +436,7 @@ impl Ctx<'_> {
     /// drawn if cached, else the picture already drawn shows through.
     fn page_tiles(&self, page: &PageRef, whole: &Affine, fw: f64, fh: f64, c: Crop, pic_w: u32) -> Vec<Item> {
         use crate::images::TILE_PREFIX;
-        use crate::pages::{tile_for, PageRequest, MAX_PAGE_PX, MAX_TILE_PIXELS, TILE};
+        use crate::pages::{tile_for, PageRequest, MAX_PAGE_PX, MAX_TILE_PIXELS};
         let mut out = vec![];
         let Some(raster) = self.r.page_raster() else { return out };
         let Some(pdf) = self.editor.doc.assets.get(&page.pdf) else { return out };
@@ -453,10 +453,11 @@ impl Ctx<'_> {
         if on_screen <= pic_w as f64 * 1.05 {
             return out;
         }
-        let mut pw = TILE;
-        while (pw as f64) < on_screen && pw < MAX_PAGE_PX {
-            pw *= 2;
-        }
+        // Levels a factor of √2 apart (not 2), so tiles carry at most
+        // twice the pixels the screen shows: the GPU keeps every picture
+        // of the last frames in one 8192² atlas, and on a wide page the
+        // doubling levels overflowed it mid-zoom (tiles went missing).
+        let pw = crate::pages::page_level(on_screen);
         let height_for = |pw: u32| ((pw as f64) * fh / fw).round().clamp(1.0, (MAX_PAGE_PX * 4) as f64) as u32;
         let ph = height_for(pw);
         let to_device = |pw: u32, ph: u32| *whole * Affine::scale_non_uniform(fw / pw as f64, fh / ph as f64);

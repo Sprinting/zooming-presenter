@@ -130,11 +130,12 @@ fn a_page_filling_a_5k_screen_is_drawn_in_bigger_tiles() {
     let ed = deck_with(&r, 512);
     let asked = Arc::new(Mutex::new(vec![]));
     r.set_page_raster(Some(green(asked.clone())));
-    // 5120 x 2880 device pixels, the page 4900 px wide: drawn 8192 wide.
+    // 5120 x 2880 device pixels, the page 4900 px wide: drawn 5792 wide
+    // (levels are √2 apart: 4096, 5792, 8192).
     let l = r.build_display_list(&ed, &cam(12.25), [2560.0, 1440.0], 2.0, &sync());
     let q = asked.lock().unwrap().clone();
     assert!(!q.is_empty(), "the tile cap must not bite at fit-to-screen");
-    assert!(q.iter().all(|q| q.page_px == (8192, 4096) && q.rect.2 == 1024));
+    assert!(q.iter().all(|q| q.page_px == (5792, 2896) && q.rect.2 == 724));
     // Every tile on screen: the page is 8 x 4 tiles, all visible.
     assert_eq!(q.len(), 32);
     assert!(!l.images_pending);
@@ -147,11 +148,12 @@ fn zoomed_in_on_a_big_screen_the_biggest_tiles_still_come() {
     let asked = Arc::new(Mutex::new(vec![]));
     r.set_page_raster(Some(green(asked.clone())));
     // A 2560 x 1440 screen 4x past fitting the page: 10000 px wide, drawn
-    // 16384 wide in 2048 px tiles (whole tiles reach past the screen).
+    // 11584 wide in 1024 px tiles (the biggest; whole tiles reach past
+    // the screen).
     let l = r.build_display_list(&ed, &cam(25.0), [1280.0, 720.0], 2.0, &sync());
     let q = asked.lock().unwrap().clone();
     assert!(!q.is_empty(), "fell back to the preview");
-    assert!(q.iter().all(|q| q.page_px.0 == 16384 && q.rect.2 == 2048));
+    assert!(q.iter().all(|q| q.page_px.0 == 11584 && q.rect.2 == 1024));
     assert!(!l.images_pending);
 }
 
