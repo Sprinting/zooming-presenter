@@ -102,3 +102,29 @@ fn the_page_mask_fades_in_at_the_end_of_the_flight() {
     let (_, a) = zebra_app::present::deck_page(&ed).unwrap();
     assert!(a > 0.0 && a < 1.0, "{a}");
 }
+
+/// Two PowerPoint slides: a slide of one picture is still framed, and the
+/// frame (marked as a slide) is the step, shown deck-style.
+#[test]
+fn a_powerpoint_slide_step_shows_only_the_slide() {
+    let mut d = deck(2, false);
+    for p in &mut d.pages {
+        p.slide = true;
+    }
+    let mut ed = Editor::default();
+    ed.view(ViewCommand::SetViewport { width: 1440.0, height: 900.0 }, Origin::Human).unwrap();
+    ed.import_deck(&d, "Import slides.pptx".into(), Origin::Human).unwrap();
+    ed.view(ViewCommand::Present { step: Some(1) }, Origin::Human).unwrap();
+    settle(&mut ed);
+    let slide = match &ed.doc.path[1].target {
+        StepTarget::Element { id } => ed.doc.get(id).unwrap().clone(),
+        t => panic!("{t:?}"),
+    };
+    assert!(matches!(&slide.kind, ElementKind::Frame(f) if f.slide), "{:?}", slide.kind);
+    assert_eq!(slide.name, "Page 2");
+    assert!(slide.is_page());
+    assert_eq!(slide.fit_margin(), 0.0);
+    let (corners, a) = zebra_app::present::deck_page(&ed).expect("slide step hides its surroundings");
+    assert_eq!(a, 1.0);
+    assert_eq!(corners, slide.corners());
+}

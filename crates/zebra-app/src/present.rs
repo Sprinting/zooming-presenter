@@ -169,7 +169,8 @@ fn toggle(cur: Option<Blank>, b: Blank) -> Option<Blank> {
     if cur == Some(b) { None } else { Some(b) }
 }
 
-/// The current step's imported PDF page and how strongly to hide what is
+/// The current step's imported page (a PDF page or PowerPoint slide,
+/// [`zebra_core::Element::is_page`]) and how strongly to hide what is
 /// around it (0..1): a page step shows only the page, like a slide deck.
 /// It fades in over the end of the flight there; off the path, in the
 /// overview and on every other step the canvas shows as usual.
