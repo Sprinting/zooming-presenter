@@ -110,6 +110,7 @@ pub fn error(code: &str) -> String {
         "io" => t!("app-error-io"),
         "not_empty" => t!("app-error-not-empty"),
         "not_found" => t!("app-error-not-found"),
+        "too_big" => t!("app-error-too-big"),
         _ => t!("app-error-other"),
     }
 }
@@ -147,6 +148,33 @@ fn command(c: &Command) -> String {
         Command::Delete { ids } => t!("history-delete", count = (ids.len() as u64)),
         Command::Duplicate { .. } => t!("history-duplicate"),
         Command::ZOrder { .. } => t!("history-change-order"),
+        Command::AddTable { .. } => t!("history-add-table"),
+        Command::SetCells { values, .. } if values.len() * values.first().map_or(0, |r| r.len()) <= 1 => t!("history-edit-cell"),
+        Command::SetCells { .. } => t!("history-edit-cells"),
+        Command::InsertRows { count, .. } => {
+            let count = *count;
+            t!("history-add-rows", count = count)
+        }
+        Command::DeleteRows { count, .. } => {
+            let count = *count;
+            t!("history-delete-rows", count = count)
+        }
+        Command::InsertColumns { count, .. } => {
+            let count = *count;
+            t!("history-add-columns", count = count)
+        }
+        Command::DeleteColumns { count, .. } => {
+            let count = *count;
+            t!("history-delete-columns", count = count)
+        }
+        Command::MoveRows { .. } => t!("history-move-rows"),
+        Command::MoveColumns { .. } => t!("history-move-columns"),
+        Command::MergeCells { .. } => t!("history-merge-cells"),
+        Command::UnmergeCells { .. } => t!("history-unmerge-cells"),
+        Command::FormatCells { .. } => t!("history-format-cells"),
+        Command::SetColumn { .. } => t!("history-change-column"),
+        Command::SetRow { .. } => t!("history-change-row"),
+        Command::SortTable { .. } => t!("history-sort-table"),
         Command::WrapInFrame { .. } => t!("history-frame-selection"),
         Command::Arrange { .. } => t!("history-arrange"),
         Command::Align { .. } => t!("history-align"),

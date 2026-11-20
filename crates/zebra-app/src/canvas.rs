@@ -190,6 +190,8 @@ pub struct CanvasState {
     /// on a frame then takes the frame on its own, without what it holds.
     /// Read at the press, so letting Option go mid-drag changes nothing.
     pub alt_press: bool,
+    /// Cells selected in the selected table, or one being edited.
+    pub table: Option<crate::table_ui::TableSel>,
 }
 
 impl Default for CanvasState {
@@ -213,6 +215,7 @@ impl Default for CanvasState {
             text_menu: None,
             refit_until: None,
             alt_press: false,
+            table: None,
         }
     }
 }
@@ -664,16 +667,29 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     if resp.drag_started_by(PointerButton::Primary) {
         let start = ctx.input(|i| i.pointer.press_origin()).unwrap_or_default();
         commit_text_edit(app);
-        start_gesture(app, start, space, mods.shift);
+        if !(tool == Tool::Select && !space && crate::table_ui::drag_start(app, start)) {
+            start_gesture(app, start, space, mods.shift);
+        }
     }
     if resp.dragged_by(PointerButton::Primary) {
         if let Some(p) = resp.interact_pointer_pos() {
-            update_gesture(app, p, resp.drag_delta(), mods.shift, mods.alt);
+            if crate::table_ui::dragging(app) {
+                crate::table_ui::drag_update(app, p);
+            } else {
+                update_gesture(app, p, resp.drag_delta(), mods.shift, mods.alt);
+            }
         }
     }
     if resp.drag_stopped_by(PointerButton::Primary) {
         let p = resp.interact_pointer_pos().or(pointer).unwrap_or_default();
-        end_gesture(app, p, mods.shift);
+        if crate::table_ui::dragging(app) {
+            crate::table_ui::drag_end(app);
+        } else {
+            end_gesture(app, p, mods.shift);
+        }
+    }
+    if crate::table_ui::dragging(app) && !ctx.input(|i| i.pointer.any_down()) {
+        crate::table_ui::drag_end(app);
     }
     // A drag that ended where the canvas didn't see it (a sheet or menu
     // took the pointer, or the button came up outside the window): end it
@@ -703,7 +719,7 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
                 } else {
                     let _ = app.editor.view(ViewCommand::Select { ids: vec![id], frame_only: false }, H);
                 }
-            } else {
+            } else if !(tool == Tool::Select && crate::table_ui::click(app, p, mods.shift)) {
                 click(app, p, mods.shift, app.canvas.alt_press);
             }
         }
@@ -717,7 +733,11 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
                     app.canvas.renaming = Some((id, name, false));
                 }
                 Some(_) => {}
-                None => double_click(app, p),
+                None => {
+                    if !(tool == Tool::Select && crate::table_ui::double_click(app, p)) {
+                        double_click(app, p)
+                    }
+                }
             }
         }
     }
@@ -764,6 +784,9 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     // ---- overlays
     let painter = ui.painter_at(rect);
     draw_overlays(app, &painter, path_mode, zoom);
+    if !path_mode {
+        crate::table_ui::overlay(app, ui, &painter);
+    }
     if let Some(e) = pick_hover.as_ref().and_then(|id| app.editor.doc.get(id)) {
         let mut q = outline_screen(app, e);
         q.push(q[0]);
@@ -2955,6 +2978,7 @@ fn context_menu(app: &mut ZebraApp, resp: &egui::Response) {
         if let Some(p) = resp.interact_pointer_pos() {
             commit_text_edit(app);
             app.canvas.menu_at = Some(p);
+            crate::table_ui::secondary_click(app, p);
             match hit(app, p, false) {
                 Some(id) if !app.editor.view.selection.contains(&id) => app.select(vec![id]),
                 Some(_) => {}
@@ -3023,6 +3047,7 @@ fn context_menu(app: &mut ZebraApp, resp: &egui::Response) {
                 item(ui, app, Action::PlayPauseVideo);
                 w::menu_separator(ui);
             }
+            Some(ElementKind::Table(_)) if crate::table_ui::active(app) => crate::table_ui::menu(ui, app),
             _ => {}
         }
         for a in [Action::Cut, Action::Copy, Action::Paste, Action::Duplicate, Action::Delete] {
