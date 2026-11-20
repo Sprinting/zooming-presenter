@@ -485,8 +485,14 @@ fn evict(i: &mut Inner, budget: usize, generation: u64) {
 }
 
 /// Decode `job.key.1`, plus the smallest level as a quick fallback for
-/// next time. Empty on failure.
+/// next time. Empty on failure, a panic included: a decoder that panics
+/// (tiny-skia did on hostile SVGs, audit T-C3) turns the picture into the
+/// placeholder, and the worker thread lives on to decode the next one.
 fn decode_job(job: &Job) -> Vec<(u8, Decoded)> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_job_inner(job))).unwrap_or_default()
+}
+
+fn decode_job_inner(job: &Job) -> Vec<(u8, Decoded)> {
     if let Some(make) = &job.make {
         return make().map(|l| vec![(job.key.1, Decoded::Still(Arc::new(l)))]).unwrap_or_default();
     }
@@ -1009,6 +1015,38 @@ mod tests {
         let l = decode_limits();
         assert!(l.max_alloc.unwrap() >= 11648 * 8736 * 3, "a 100 MP JPEG must decode");
         assert_eq!(l.max_image_width, Some(MAX_DECODE_DIM));
+    }
+
+    /// Audit T-C3: a panicking decode used to end its worker thread and
+    /// leave the picture pending for good; two of them and nothing decoded
+    /// again until restart.
+    #[test]
+    fn a_panicking_decode_is_a_placeholder_and_workers_live_on() {
+        let c = ImageCache::default();
+        let woke = Arc::new(AtomicUsize::new(0));
+        let w2 = woke.clone();
+        c.set_waker(Some(Arc::new(move || {
+            w2.fetch_add(1, Ordering::SeqCst);
+        })));
+        let wait = |n: usize| {
+            let t0 = std::time::Instant::now();
+            while woke.load(Ordering::SeqCst) < n && t0.elapsed().as_secs() < 10 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        // More panics than there are workers.
+        for i in 0..3 {
+            let boom: Make = Arc::new(|| panic!("decoder bug"));
+            assert!(c.get_made(&format!("tile:boom{i}"), false, boom).is_none());
+        }
+        wait(3);
+        for i in 0..3 {
+            assert!(c.is_failed(&format!("tile:boom{i}")));
+        }
+        let fine: Make = Arc::new(|| Some(ImageLevel::from_rgba("x", 1, 1, vec![1, 2, 3, 255])));
+        assert!(c.get_made("tile:fine", false, fine.clone()).is_none());
+        wait(4);
+        assert!(c.peek("tile:fine").is_some(), "a worker is still decoding");
     }
 
     #[test]

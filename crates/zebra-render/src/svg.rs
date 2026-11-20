@@ -168,6 +168,9 @@ impl Cost {
                 usvg::Node::Path(p) => {
                     self.nodes += 1;
                     let at = t.pre_concat(p.abs_transform());
+                    if !p.data().bounds().transform(at).is_some_and(|b| near(b.left()) && near(b.right()) && near(b.top()) && near(b.bottom())) {
+                        return false;
+                    }
                     let paints = p.fill().map(|f| f.paint()).into_iter().chain(p.stroke().map(|s| s.paint()));
                     self.nodes <= MAX_NODES && paints.into_iter().all(|paint| tile_ok(paint, at))
                 }
@@ -185,6 +188,16 @@ impl Cost {
         }
         true
     }
+}
+
+/// Farthest a path may reach from the picture, in pixels at the size
+/// drawn. tiny-skia panics on coordinates around 1e9 (one panicked again
+/// while unwinding and aborted; audit T-C3); usvg's tree can't be edited,
+/// so such pictures are refused rather than clamped.
+const MAX_COORD: f32 = 1e6;
+
+fn near(v: f32) -> bool {
+    v.abs() <= MAX_COORD
 }
 
 /// A pattern's tile, drawn with `t`, is within [`MAX_TILE_AREA`].
@@ -421,6 +434,19 @@ mod tests {
         let ok = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><pattern id="p" patternUnits="userSpaceOnUse" width="10" height="10"><rect width="5" height="5" fill="red"/></pattern></defs><rect width="100" height="100" fill="url(#p)"/></svg>"#;
         let px = rasterize(ok, &SvgStyle::default(), 400, 400).unwrap();
         assert!(at(&px, 400, 5, 5)[3] > 0);
+    }
+
+    /// Audit T-C3: paths reaching ~1e9 px made tiny-skia panic (one of
+    /// them again while unwinding, which aborts).
+    #[test]
+    fn far_flung_paths_are_refused() {
+        for svg in [
+            &include_bytes!("../tests/data/tinyskia-curve.svg")[..],
+            &include_bytes!("../tests/data/tinyskia-rect.svg")[..],
+            &include_bytes!("../tests/data/meta-crash-22912.svg")[..],
+        ] {
+            assert!(rasterize(svg, &SvgStyle::default(), 480, 320).is_none());
+        }
     }
 
     #[test]
