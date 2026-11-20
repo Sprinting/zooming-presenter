@@ -302,7 +302,9 @@ pub fn para(t: &TextData, i: usize) -> (ListKind, u8, Align) {
 /// as a plain paragraph. Spaces and line breaks at either end are dropped.
 pub fn slice(t: &TextData, start: usize, end: usize) -> TextData {
     let chars: Vec<char> = t.text.chars().collect();
-    let (mut a, mut b) = (start.min(chars.len()), end.min(chars.len()));
+    let a = start.min(chars.len());
+    // A backwards range is empty, not a panic.
+    let (mut a, mut b) = (a, end.min(chars.len()).max(a));
     while a < b && chars[a].is_whitespace() {
         a += 1;
     }
@@ -699,6 +701,16 @@ mod tests {
         for part in ["Why **zebras** have *stripes*", "- flies get [confused](https://example.com)", "  - really ~~maybe~~", "1. first", "2. second"] {
             assert!(md.contains(part), "{part} missing from {md}");
         }
+    }
+
+    /// W8 of the 20 Nov audit: `slice` is public, so a backwards range is
+    /// guarded here and not only by its callers.
+    #[test]
+    fn a_backwards_slice_is_empty() {
+        let t = TextData { text: "one\ntwo".into(), ..Default::default() };
+        assert_eq!(slice(&t, 5, 2).text, "");
+        assert_eq!(slice(&t, 99, 0).text, "");
+        assert_eq!(slice(&t, 0, 3).text, "one");
     }
 }
 
