@@ -1302,6 +1302,7 @@ impl Editor {
                     group: None,
                     kind: ElementKind::Video(VideoData {
                         asset: key,
+                        link: None,
                         poster,
                         autoplay,
                         looping,
@@ -1352,6 +1353,8 @@ impl Editor {
                 let e = self.element_mut(&id)?;
                 let ElementKind::Video(v) = &mut e.kind else { unreachable!("checked above") };
                 v.asset = key;
+                // A web video becomes an ordinary one.
+                v.link = None;
                 v.poster = poster;
                 v.start = 0.0;
                 v.end = None;
@@ -1364,6 +1367,96 @@ impl Editor {
                 let world_w = e.size.w * e.transform.scale;
                 e.size = Size { w: nw, h: nh };
                 e.transform.scale = world_w / nw;
+                out.changed.push(id);
+            }
+            Command::AddWebVideo { url, x, y, width, alt, poster_base64, autoplay, looping, muted, start, end, id, found } => {
+                let (u, site) = crate::weblink::classify(&url).map_err(link_error)?;
+                // The site decides a card; checking the link decides the rest.
+                let kind = match (site.kind(), &found) {
+                    (Some(k), _) => k,
+                    (None, Some(f)) if !f.kind.is_card() => f.kind,
+                    (None, _) => crate::weblink::guess_kind(&u, &site),
+                };
+                let poster = match poster_base64.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+                    Some(p) => Some(self.load_media(p, None, MediaKind::Image)?.0),
+                    None => None,
+                };
+                let live = kind == LinkKind::Live;
+                let start = if live { 0.0 } else { start.or_else(|| crate::weblink::link_start(&u)).unwrap_or(0.0) };
+                if !start.is_finite() || start < 0.0 {
+                    return Err(ZError::invalid("start must be 0 or more seconds"));
+                }
+                let end = if live { None } else { end.filter(|e| *e >= 0.0) };
+                if let Some(e) = end {
+                    if !e.is_finite() || e <= start {
+                        return Err(ZError::invalid(format!("end ({e}s) must be after start ({start}s)")));
+                    }
+                }
+                if live && looping {
+                    return Err(ZError::invalid("a live stream can't loop"));
+                }
+                let duration = found.as_ref().map(|f| f.duration).filter(|d| d.is_finite() && *d > 0.0 && !live).unwrap_or(0.0);
+                // Size from what the check found; else the poster; else 16:9.
+                let (pw, ph) = match found.as_ref().map(|f| (f.width, f.height)) {
+                    Some((w, h)) if w > 0 && h > 0 => (w as f64, h as f64),
+                    _ => poster
+                        .as_ref()
+                        .and_then(|p| self.doc.assets.get(p))
+                        .filter(|a| a.width > 0 && a.height > 0)
+                        .map(|a| (a.width as f64, a.height as f64))
+                        .unwrap_or((640.0, 360.0)),
+                };
+                let scale = width.filter(|w| w.is_finite() && *w > 0.0).map(|w| w / pw).unwrap_or(1.0);
+                let card = kind.is_card();
+                let e = Element {
+                    id: id.unwrap_or_default(),
+                    transform: Transform { x, y, scale, rotation: 0.0 },
+                    size: Size { w: pw, h: ph },
+                    locked: false,
+                    name: String::new(),
+                    placeholder: false,
+                    group: None,
+                    kind: ElementKind::Video(VideoData {
+                        asset: String::new(),
+                        link: Some(VideoLink { url: url.trim().to_string(), kind }),
+                        poster,
+                        // A card never starts by itself: it opens when clicked.
+                        autoplay: autoplay && !card,
+                        looping: looping && !card,
+                        muted: muted && !card,
+                        start,
+                        end,
+                        duration,
+                        alt,
+                    }),
+                };
+                self.insert_element(e, out)?;
+            }
+            Command::DownloadVideo { id, path } => {
+                self.check_ids(std::slice::from_ref(&id))?;
+                self.check_unlocked(std::slice::from_ref(&id))?;
+                let link = match self.doc.get(&id).map(|e| &e.kind) {
+                    Some(ElementKind::Video(v)) => v.link.clone(),
+                    Some(k) => return Err(ZError::invalid(format!("'{id}' is a {}, not a video", k.type_name()))),
+                    None => None,
+                };
+                let Some(link) = link else {
+                    return Err(ZError::invalid(format!("'{id}' is already kept in the deck")).hint("only a web video can be downloaded"));
+                };
+                if link.kind != LinkKind::File {
+                    return Err(ZError::invalid("only a link to a video file (MP4, MOV or M4V) can be downloaded").hint("streams and video cards play from the web"));
+                }
+                let Some(path) = path.filter(|p| !p.trim().is_empty()) else {
+                    return Err(ZError::new("unsupported", "this Zebra can't download").hint("give `path`: the same clip on this computer"));
+                };
+                let (key, info) = self.load_media("", Some(&path), MediaKind::Video)?;
+                let e = self.element_mut(&id)?;
+                let ElementKind::Video(v) = &mut e.kind else { unreachable!("checked above") };
+                v.asset = key;
+                v.link = None;
+                if info.duration > 0.0 {
+                    v.duration = info.duration;
+                }
                 out.changed.push(id);
             }
             Command::SetPoster { id, data_base64, path, at } => {
@@ -3237,8 +3330,22 @@ fn validate_element(e: &Element, doc: &Document) -> ZResult<()> {
             }
         }
         ElementKind::Video(v) => {
-            if !doc.assets.get(&v.asset).is_some_and(|a| a.media_kind() == MediaKind::Video) {
-                return Err(ZError::invalid(format!("unknown video asset '{}'", v.asset)).hint("use add_video"));
+            match &v.link {
+                Some(l) => {
+                    if !v.asset.is_empty() {
+                        return Err(ZError::invalid("a video has a clip or a link, not both").hint("download_video keeps a web video's clip"));
+                    }
+                    let (u, site) = crate::weblink::classify(&l.url).map_err(link_error)?;
+                    let card = site.kind();
+                    if card.is_some() != l.kind.is_card() || card.is_some_and(|k| k != l.kind) {
+                        return Err(ZError::invalid(format!("'{}' is not a {} link", u.host, serde_json::to_value(l.kind).unwrap_or_default().as_str().unwrap_or("video"))).hint("use add_web_video"));
+                    }
+                }
+                None => {
+                    if !doc.assets.get(&v.asset).is_some_and(|a| a.media_kind() == MediaKind::Video) {
+                        return Err(ZError::invalid(format!("unknown video asset '{}'", v.asset)).hint("use add_video, or add_web_video for a link"));
+                    }
+                }
             }
             if let Some(p) = &v.poster {
                 if !doc.assets.get(p).is_some_and(|a| a.media_kind() == MediaKind::Image) {
@@ -3468,6 +3575,12 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
     }
     if p.autoplay.is_some() || p.looping.is_some() || p.muted.is_some() || p.start.is_some() || p.end.is_some() {
         let ElementKind::Video(v) = &mut e.kind else { return Err(wrong("autoplay/loop/muted/start/end")) };
+        if v.is_card() && (p.autoplay.is_some() || p.looping.is_some() || p.muted.is_some()) {
+            return Err(ZError::invalid("a video card has no auto-play, loop or mute").hint("it plays in the site's own player when clicked; set start and end"));
+        }
+        if v.is_live() && (p.start.is_some() || p.end.is_some() || p.looping == Some(true)) {
+            return Err(ZError::invalid("a live stream has no start, end or loop"));
+        }
         if let Some(b) = p.autoplay {
             v.autoplay = b;
         }
@@ -3501,6 +3614,11 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
     Ok(())
 }
 
+/// A web video link's problem as an API error, with the sheet's words.
+fn link_error(e: crate::weblink::LinkError) -> ZError {
+    ZError::new(e.code(), e.message())
+}
+
 pub fn command_label(c: &Command) -> String {
     match c {
         Command::AddElement { element } => format!("Add {}", element.kind.type_name()),
@@ -3510,7 +3628,8 @@ pub fn command_label(c: &Command) -> String {
         Command::AddImage { .. } => "Insert image".into(),
         Command::AddIcon { name, .. } => format!("Add icon {name}"),
         Command::AddConnector { .. } => "Add connector".into(),
-        Command::AddVideo { .. } => "Insert video".into(),
+        Command::AddVideo { .. } | Command::AddWebVideo { .. } => "Insert video".into(),
+        Command::DownloadVideo { .. } => "Download video".into(),
         Command::ReplaceImage { .. } => "Replace image".into(),
         Command::SetPoster { .. } => "Set poster frame".into(),
         Command::ReplaceVideo { .. } => "Replace video".into(),

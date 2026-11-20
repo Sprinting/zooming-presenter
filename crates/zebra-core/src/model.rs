@@ -738,11 +738,17 @@ pub enum ImageMask {
     Circle,
 }
 
-/// A video clip. The bytes live in an asset like images do.
+/// A video clip. The bytes live in an asset like images do; a web video
+/// keeps only its `link` (and its poster) and plays from the web.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct VideoData {
-    /// Video asset key (mp4/mov).
+    /// Video asset key (mp4/mov). Empty for a web video.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub asset: String,
+    /// A web video: the https link it plays from. Opening a deck never
+    /// fetches it; only playing, previewing or presenting does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<VideoLink>,
     /// Image asset shown while the video isn't playing. None: a frame
     /// from the video where the platform can make one, else a placeholder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -770,6 +776,47 @@ pub struct VideoData {
 
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
+}
+
+impl VideoData {
+    /// A YouTube or Vimeo video card: it opens the site's own player.
+    pub fn is_card(&self) -> bool {
+        self.link.as_ref().is_some_and(|l| l.kind.is_card())
+    }
+    /// A live stream: no start, end or loop.
+    pub fn is_live(&self) -> bool {
+        self.link.as_ref().is_some_and(|l| l.kind == LinkKind::Live)
+    }
+}
+
+/// Where a web video plays from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VideoLink {
+    /// The https link as the person gave it.
+    pub url: String,
+    pub kind: LinkKind,
+}
+
+/// What a web video link is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkKind {
+    /// An MP4, MOV or M4V file.
+    File,
+    /// An HLS stream (.m3u8) with an end.
+    Stream,
+    /// A live HLS stream: no start, end or loop.
+    Live,
+    /// A YouTube video, shown as a card that opens YouTube's own player.
+    Youtube,
+    /// A Vimeo video, shown as a card that opens Vimeo's own player.
+    Vimeo,
+}
+
+impl LinkKind {
+    pub fn is_card(self) -> bool {
+        matches!(self, LinkKind::Youtube | LinkKind::Vimeo)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1096,7 +1143,9 @@ impl Document {
                     }
                 }
                 ElementKind::Video(v) => {
-                    out.insert(v.asset.as_str());
+                    if !v.asset.is_empty() {
+                        out.insert(v.asset.as_str());
+                    }
                     if let Some(p) = &v.poster {
                         out.insert(p.as_str());
                     }

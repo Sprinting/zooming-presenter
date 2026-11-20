@@ -171,6 +171,61 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<ElementId>,
     },
+    /// Insert a web video from an https link. MP4, MOV and M4V files and
+    /// HLS streams (.m3u8) play in place from the link; a YouTube or Vimeo
+    /// link becomes a video card that opens the site's own player. The deck
+    /// keeps only the link and a poster, never the video. Zebra checks the
+    /// link first (up to 10 seconds, no cookies or sign-in) and takes the
+    /// poster from the video's first frame, or a card's from the site's
+    /// thumbnail. A link that doesn't play is refused with the Insert Web
+    /// Video sheet's message: "Use an https link.", "This link isn't a
+    /// video.", "This video needs a sign-in.", "Nothing found at this
+    /// link." or "Couldn't reach this link. Check your connection."
+    AddWebVideo {
+        url: String,
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
+        /// World width; height follows the video's shape.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f64>,
+        #[serde(default)]
+        alt: String,
+        /// A poster picture (PNG/JPEG) instead of the one Zebra takes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        poster_base64: Option<String>,
+        /// Play by itself when its step is reached while presenting (not
+        /// cards: they open when clicked).
+        #[serde(default = "yes")]
+        autoplay: bool,
+        #[serde(default, rename = "loop")]
+        looping: bool,
+        #[serde(default)]
+        muted: bool,
+        /// Seconds into the video to start. Default: the time written in
+        /// the link (YouTube's `t=`), else 0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<f64>,
+        /// Seconds into the video to stop. Default: the end.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<ElementId>,
+        /// What checking the link found. Zebra fills it in; leave it out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        found: Option<LinkFound>,
+    },
+    /// Keep a web video's clip in the deck: it becomes an ordinary video
+    /// in the same place, with the same size, poster, trim and settings,
+    /// and no longer needs the link. Zebra downloads it from the link (MP4,
+    /// MOV and M4V file links; not streams or video cards). `path`: a copy
+    /// of the same clip already on this computer, instead of downloading.
+    DownloadVideo {
+        id: ElementId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     /// Swap the picture of an image, keeping its place and width. The
     /// height follows the new picture; crop is reset, the mask is kept.
     ReplaceImage {
@@ -662,6 +717,20 @@ pub struct NewElement {
 
 fn one() -> f64 {
     1.0
+}
+
+/// What checking a web video's link found (see `add_web_video`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LinkFound {
+    pub kind: LinkKind,
+    /// Pixels (0 when the link didn't say).
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    /// Seconds (0 when unknown or live).
+    #[serde(default)]
+    pub duration: f64,
 }
 
 /// Partial update. Fields that don't apply to the element's kind are rejected.

@@ -96,6 +96,10 @@ fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
             }
         }
         ElementKind::Video(v) => {
+            if let Some(l) = &v.link {
+                let kind = serde_json::to_value(l.kind).ok().and_then(|k| k.as_str().map(str::to_string)).unwrap_or_default();
+                let _ = write!(s, " {} link={:?}", if l.kind.is_card() { format!("{kind} card") } else { format!("web {kind}") }, l.url);
+            }
             if !v.alt.is_empty() {
                 let _ = write!(s, " alt={:?}", truncate(&v.alt, 40));
             }
