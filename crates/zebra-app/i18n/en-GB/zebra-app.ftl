@@ -653,6 +653,17 @@ theme-editor-font-sans-shown = Sans (Inter)
 theme-editor-font-serif-shown = Serif (Lora)
 theme-editor-font-mono-shown = Mono (JetBrains Mono)
 theme-editor-font-hand-shown = Handwriting (Caveat)
+theme-editor-weight = Weight
+# Font weights, by their names in the macOS Fonts window.
+font-weight-100 = Ultralight
+font-weight-200 = Thin
+font-weight-300 = Light
+font-weight-400 = Regular
+font-weight-500 = Medium
+font-weight-600 = Semibold
+font-weight-700 = Bold
+font-weight-800 = Heavy
+font-weight-900 = Black
 theme-editor-search-fonts = Search fonts
 # Unit after the font size (points).
 theme-editor-unit-pt = pt

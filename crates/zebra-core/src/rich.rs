@@ -186,6 +186,28 @@ pub fn common_format(t: &TextData, start: usize, end: usize) -> SpanFormat {
     acc
 }
 
+/// The bold setting of character `i`: its span's, else the box's (None
+/// when neither sets it, so the style's weight applies).
+pub fn bold_at(t: &TextData, i: usize) -> Option<bool> {
+    t.spans.iter().find(|s| s.start <= i && i < s.end).and_then(|s| s.format.bold).or(t.bold.then_some(true))
+}
+
+/// The weight character `i` is drawn at in a style of weight `style`.
+pub fn weight_at(t: &TextData, style: u16, i: usize) -> u16 {
+    crate::theme::bold_weight(style, bold_at(t, i))
+}
+
+/// Whether every character in `start..end` is Bold or heavier (the B
+/// button's state). An empty range asks about the whole text.
+pub fn all_bold(t: &TextData, style: u16, start: usize, end: usize) -> bool {
+    let n = char_len(&t.text);
+    let (a, b) = if start < end { (start.min(n), end.min(n)) } else { (0, n) };
+    if a >= b {
+        return crate::theme::bold_weight(style, t.bold.then_some(true)) >= crate::theme::BOLD_FROM;
+    }
+    (a..b).all(|i| weight_at(t, style, i) >= crate::theme::BOLD_FROM)
+}
+
 /// Replace the text, keeping formatting on the characters that survive.
 pub fn edit_text(t: &mut TextData, new_text: &str) {
     if t.text == new_text {
@@ -410,5 +432,23 @@ mod tests {
         for part in ["Why **zebras** have *stripes*", "- flies get [confused](https://example.com)", "  - really ~~maybe~~", "1. first", "2. second"] {
             assert!(md.contains(part), "{part} missing from {md}");
         }
+    }
+}
+
+#[cfg(test)]
+mod bold_tests {
+    use super::*;
+
+    #[test]
+    fn b_button_state_follows_the_style_weight() {
+        let mut t = TextData { text: "Big title".into(), ..Default::default() };
+        assert!(!all_bold(&t, 400, 0, 3));
+        assert!(all_bold(&t, 600, 0, 3), "a Semibold style is already bold");
+        apply_format(&mut t, 0, 3, &SpanFormat { bold: Some(false), ..Default::default() });
+        assert!(!all_bold(&t, 800, 0, 3), "bold: false in a heavy style is Regular");
+        assert_eq!(weight_at(&t, 800, 0), 400);
+        assert_eq!(weight_at(&t, 800, 5), 800);
+        assert!(!all_bold(&t, 800, 0, 9), "mixed");
+        assert_eq!(t.spans[0].format.bold, Some(false), "kept, not normalised away");
     }
 }

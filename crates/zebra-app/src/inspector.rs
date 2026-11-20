@@ -454,24 +454,20 @@ fn text_tab(insp: &mut Insp, ui: &mut Ui) {
         });
     });
     w::section(ui, &crate::t!("inspector-section-font"), |ui| {
-        let font = match t.style {
-            TextStyle::Title => insp.theme.title.font.clone(),
-            TextStyle::Subtitle => insp.theme.subtitle.font.clone(),
-            TextStyle::Body => insp.theme.body.font.clone(),
-        };
-        let font = match font.as_str() {
-            "Serif" => "Lora",
-            "Hand" => "Caveat",
-            "Mono" => "JetBrains Mono",
-            _ => "Inter",
-        };
-        w::caption(ui, crate::t!("inspector-font-from-theme", font = font));
+        // The face the style is set in: "Inter Semibold (from the theme)".
+        let st = insp.theme.text_style(t.style).clone();
+        let family = zebra_render::text::family_for(&st.font).to_string();
+        let face = crate::words::style_face_name(&insp.app.font_faces(&st.font), st.weight);
+        w::caption(ui, crate::t!("inspector-font-from-theme", font = format!("{family} {face}")));
         let wdt = ui.available_width();
         let bold = crate::i18n::with_shortcut(crate::t!("inspector-bold"), &Action::Bold);
         let italic = crate::i18n::with_shortcut(crate::t!("inspector-italic"), &Action::Italic);
-        if let Some(i) = w::segmented_toggles(ui, &[t.bold, t.italic], &[Seg::Icon(Icon::Bold, &bold), Seg::Icon(Icon::Italic, &italic)], Some(wdt * 0.5)) {
+        // Bold is on for Bold or heavier, the style's weight included.
+        let is_bold = zebra_core::rich::all_bold(&t, st.weight, 0, 0);
+        if let Some(i) = w::segmented_toggles(ui, &[is_bold, t.italic], &[Seg::Icon(Icon::Bold, &bold), Seg::Icon(Icon::Italic, &italic)], Some(wdt * 0.5)) {
             match i {
-                0 => insp.set(ElementPatch { bold: Some(!t.bold), ..Default::default() }),
+                // Same as Format › Bold (one undo step, heavy styles too).
+                0 => insp.app.queued.push(Action::Bold),
                 _ => insp.set(ElementPatch { italic: Some(!t.italic), ..Default::default() }),
             }
         }

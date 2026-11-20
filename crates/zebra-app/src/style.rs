@@ -146,27 +146,72 @@ macro_rules! font {
     };
 }
 
-/// Fonts: Inter for the chrome; theme families (Sans/Serif/Hand/Mono) for the
-/// in-place text editor so typing looks like the result.
+/// The in-place editor's faces of a bundled family: (theme name, upright
+/// file, italic file, weights). Inter, Lora and JetBrains Mono are
+/// variable fonts, drawn at each weight through their weight axis; Caveat
+/// has a Regular and a Bold file (and no italic).
+struct DocFamily {
+    base: &'static str,
+    file: &'static str,
+    upright: &'static [u8],
+    italic: Option<&'static [u8]>,
+    weights: &'static [u16],
+    /// Static files per weight, when the family isn't variable.
+    statics: &'static [(u16, &'static [u8])],
+}
+
+const ALL_WEIGHTS: [u16; 9] = [100, 200, 300, 400, 500, 600, 700, 800, 900];
+
+const DOC_FAMILIES: [DocFamily; 4] = [
+    DocFamily { base: "Sans", file: "inter", upright: font!("inter/InterVariable.ttf"), italic: Some(font!("inter/InterVariable-Italic.ttf")), weights: &ALL_WEIGHTS, statics: &[] },
+    DocFamily { base: "Serif", file: "lora", upright: font!("lora/Lora-Variable.ttf"), italic: Some(font!("lora/Lora-Italic-Variable.ttf")), weights: &[400, 500, 600, 700], statics: &[] },
+    DocFamily {
+        base: "Mono",
+        file: "jbm",
+        upright: font!("jetbrains-mono/JetBrainsMono-Variable.ttf"),
+        italic: Some(font!("jetbrains-mono/JetBrainsMono-Italic-Variable.ttf")),
+        weights: &[100, 200, 300, 400, 500, 600, 700, 800],
+        statics: &[],
+    },
+    DocFamily {
+        base: "Hand",
+        file: "caveat",
+        upright: font!("caveat/Caveat-Regular.ttf"),
+        italic: None,
+        weights: &[400, 700],
+        statics: &[(400, font!("caveat/Caveat-Regular.ttf")), (700, font!("caveat/Caveat-Bold.ttf"))],
+    },
+];
+
+/// A bundled font file at a weight of its weight axis.
+fn at_weight(bytes: &'static [u8], w: u16) -> FontData {
+    let blob: egui::epaint::text::Blob = Arc::new(bytes);
+    FontData {
+        font: blob,
+        index: 0,
+        tweak: egui::epaint::text::FontTweak { coords: egui::epaint::text::VariationCoords::new([(b"wght", w as f32)]), ..Default::default() },
+    }
+}
+
+/// Fonts: Inter for the chrome; theme families (Sans/Serif/Hand/Mono) at
+/// every weight they have, for the in-place text editor so typing looks
+/// like the result.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut defs = FontDefinitions::default();
-    let mut add = |name: &str, bytes: &'static [u8]| {
-        defs.font_data.insert(name.to_string(), Arc::new(FontData::from_static(bytes)));
-    };
-    add("inter", font!("inter/Inter-Regular.ttf"));
-    add("inter-bold", font!("inter/Inter-Bold.ttf"));
-    add("inter-italic", font!("inter/Inter-Italic.ttf"));
-    add("inter-bolditalic", font!("inter/Inter-BoldItalic.ttf"));
-    add("lora", font!("lora/Lora-Regular.ttf"));
-    add("lora-bold", font!("lora/Lora-Bold.ttf"));
-    add("lora-italic", font!("lora/Lora-Italic.ttf"));
-    add("lora-bolditalic", font!("lora/Lora-BoldItalic.ttf"));
-    add("caveat", font!("caveat/Caveat-Regular.ttf"));
-    add("caveat-bold", font!("caveat/Caveat-Bold.ttf"));
-    add("jbm", font!("jetbrains-mono/JetBrainsMono-Regular.ttf"));
-    add("jbm-bold", font!("jetbrains-mono/JetBrainsMono-Bold.ttf"));
-    add("jbm-italic", font!("jetbrains-mono/JetBrainsMono-Italic.ttf"));
-    add("jbm-bolditalic", font!("jetbrains-mono/JetBrainsMono-BoldItalic.ttf"));
+    defs.font_data.insert("inter".into(), Arc::new(FontData::from_static(DOC_FAMILIES[0].upright)));
+    defs.font_data.insert("inter-bold".into(), Arc::new(at_weight(DOC_FAMILIES[0].upright, 700)));
+    for f in &DOC_FAMILIES {
+        for &w in f.weights {
+            let (up, it) = match f.statics.iter().find(|(sw, _)| *sw == w) {
+                Some((_, b)) => (FontData::from_static(b), None),
+                None => (at_weight(f.upright, w), f.italic.map(|i| at_weight(i, w))),
+            };
+            defs.font_data.insert(format!("{}-{w}", f.file), Arc::new(up));
+            if let Some(it) = it {
+                defs.font_data.insert(format!("{}-{w}-i", f.file), Arc::new(it));
+            }
+        }
+    }
 
     // Inter is the first fallback everywhere: SF Pro and the theme fonts
     // lack some of the symbols the chrome uses (⇤ ↵ ⌫ ⎋ …), and egui's own
@@ -200,12 +245,13 @@ pub fn install_fonts(ctx: &egui::Context) {
     fam(&mut defs, SANS, ui_regular);
     fam(&mut defs, SANS_BOLD, ui_semibold);
     fam(&mut defs, UI_SEMIBOLD, ui_semibold);
-    for (base, file) in [("Sans", "inter"), ("Serif", "lora"), ("Hand", "caveat"), ("Mono", "jbm")] {
-        for (suffix, fsuffix) in [("", ""), ("-b", "-bold"), ("-i", "-italic"), ("-bi", "-bolditalic")] {
-            let f = format!("{file}{fsuffix}");
-            let f = if defs.font_data.contains_key(&f) { f } else { format!("{file}{}", if suffix.contains('b') { "-bold" } else { "" }) };
-            let f = if defs.font_data.contains_key(&f) { f } else { file.to_string() };
-            fam(&mut defs, &format!("doc:{base}{suffix}"), &f);
+    for f in &DOC_FAMILIES {
+        for &w in f.weights {
+            let up = format!("{}-{w}", f.file);
+            let it = format!("{}-{w}-i", f.file);
+            let it = if defs.font_data.contains_key(&it) { it } else { up.clone() };
+            fam(&mut defs, &format!("doc:{}-{w}", f.base), &up);
+            fam(&mut defs, &format!("doc:{}-{w}-i", f.base), &it);
         }
     }
     let prop = defs.families.get_mut(&FontFamily::Proportional).unwrap();
@@ -226,19 +272,13 @@ fn system_ui_font() -> Option<egui::epaint::text::Blob> {
     Some(std::sync::Arc::new(bytes) as egui::epaint::text::Blob)
 }
 
-/// egui family for a theme font name + bold/italic.
-pub fn doc_family(font: &str, bold: bool, italic: bool) -> FontFamily {
-    let base = match font {
-        "Serif" | "Hand" | "Mono" => font,
-        _ => "Sans",
-    };
-    let suffix = match (bold, italic) {
-        (false, false) => "",
-        (true, false) => "-b",
-        (false, true) => "-i",
-        (true, true) => "-bi",
-    };
-    FontFamily::Name(format!("doc:{base}{suffix}").into())
+/// egui family for a theme font name at a weight (the nearest the
+/// bundled family has), upright or italic. Other fonts show in Inter
+/// while typing.
+pub fn doc_family(font: &str, weight: u16, italic: bool) -> FontFamily {
+    let f = DOC_FAMILIES.iter().find(|f| f.base == font).unwrap_or(&DOC_FAMILIES[0]);
+    let w = zebra_core::theme::nearest_weight(f.weights, weight);
+    FontFamily::Name(format!("doc:{}-{w}{}", f.base, if italic { "-i" } else { "" }).into())
 }
 
 pub fn bold(size: f32) -> FontId {

@@ -188,14 +188,24 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
             has_sel
         }
         Bold | Italic | Underline => {
-            let texts: Vec<(bool, bool)> = app
-                .selection()
-                .iter()
-                .filter_map(|id| match app.editor.doc.get(id).map(|e| &e.kind) {
-                    Some(zebra_core::ElementKind::Text(t)) => Some((t.bold, t.italic)),
-                    _ => None,
-                })
-                .collect();
+            // Bold is ticked for Bold or heavier, a heavy style's own weight
+            // included (Keynote); while typing, for the selected words.
+            let theme = app.editor.theme();
+            let editing = app.canvas.text.as_ref().map(|t| {
+                let (a, b) = t.sel;
+                (zebra_core::rich::all_bold(&t.rich, theme.text_style(t.style).weight, a, b), t.italic)
+            });
+            let texts: Vec<(bool, bool)> = match editing {
+                Some(e) => vec![e],
+                None => app
+                    .selection()
+                    .iter()
+                    .filter_map(|id| match app.editor.doc.get(id).map(|e| &e.kind) {
+                        Some(zebra_core::ElementKind::Text(t)) => Some((zebra_core::rich::all_bold(t, theme.text_style(t.style).weight, 0, 0), t.italic)),
+                        _ => None,
+                    })
+                    .collect(),
+            };
             checked = Some(
                 !texts.is_empty()
                     && match a {

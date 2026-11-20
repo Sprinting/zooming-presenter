@@ -244,7 +244,8 @@ pub enum Command {
     /// link or relative size on characters `start..end` (counted in
     /// characters), or on every occurrence of `find`. With neither, the
     /// whole text. Unset fields in `format` are left as they are; `false` or
-    /// `""` turns a property off.
+    /// `""` turns a property off (`bold: false` in a Semibold or heavier
+    /// theme style makes the words Regular, as Bold does in Keynote).
     FormatText {
         id: ElementId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -415,6 +416,8 @@ pub enum Command {
     /// Add or replace a custom theme in this document (the theme editor's
     /// Save). Built-in ids can't be replaced: copy one under a new id.
     /// Fonts that aren't bundled are embedded in the file automatically.
+    /// Each text style has a font, colour, size and weight (400 Regular
+    /// when left out; the `fonts` query with a `family` lists its weights).
     SaveTheme {
         theme: crate::theme::Theme,
         /// Also make it the presentation's theme.
@@ -859,8 +862,13 @@ pub enum Query {
     /// Templates and layouts that `apply_template` / `add_layout` accept,
     /// the person's saved templates (`saved`) and whether `sample` is there.
     Templates,
-    /// Font families installed on this machine (any can be used in a theme).
-    Fonts,
+    /// Font families installed on this machine (any can be used in a
+    /// theme). With `family`: that family's weights (what a theme style's
+    /// `weight` can be), with the names the Weight pop-up shows.
+    Fonts {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        family: Option<String>,
+    },
     /// Memory and speed: heap in use, cache sizes, frame times, repaints.
     Perf,
 }

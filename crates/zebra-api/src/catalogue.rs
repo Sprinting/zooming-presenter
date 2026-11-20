@@ -78,7 +78,7 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::Command, r#"{"op":"set_theme","theme":"chalkboard"}"#),
     (Kind::Command, r#"{"op":"set_title","title":"Quarterly review"}"#),
     (Kind::Command, r#"{"op":"set_playback","autoplay":10,"loop":true}"#),
-    (Kind::Command, r##"{"op":"save_theme","apply":true,"theme":{"id":"my-theme","name":"My theme","background":"#101820","title":{"font":"Avenir Next","color":"#ffffff","size":72},"subtitle":{"font":"Sans","color":"#f2aa4c","size":40},"body":{"font":"Sans","color":"#dddddd","size":24},"frame":"#f2aa4c","frame_fill":"#1b2733","accent":"#f2aa4c","shapes":["#f2aa4c","#5fb3b3","#ffffff","#888888"],"layers":[{"asset":"<key from add_asset>","depth":0.2}]}}"##),
+    (Kind::Command, r##"{"op":"save_theme","apply":true,"theme":{"id":"my-theme","name":"My theme","background":"#101820","title":{"font":"Avenir Next","color":"#ffffff","size":72,"weight":600},"subtitle":{"font":"Sans","color":"#f2aa4c","size":40},"body":{"font":"Sans","color":"#dddddd","size":24},"frame":"#f2aa4c","frame_fill":"#1b2733","accent":"#f2aa4c","shapes":["#f2aa4c","#5fb3b3","#ffffff","#888888"],"layers":[{"asset":"<key from add_asset>","depth":0.2}]}}"##),
     (Kind::Command, r#"{"op":"delete_theme","id":"my-theme"}"#),
     (Kind::Command, r#"{"op":"add_asset","data_base64":"iVBORw0KGgo..."}"#),
     (Kind::Command, r#"{"op":"apply_template","template":"big_picture"}"#),
@@ -135,6 +135,7 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::Query, r#"{"q":"history"}"#),
     (Kind::Query, r#"{"q":"templates"}"#),
     (Kind::Query, r#"{"q":"fonts"}"#),
+    (Kind::Query, r#"{"q":"fonts","family":"Avenir Next"}"#),
     (Kind::Query, r#"{"q":"perf"}"#),
 ];
 

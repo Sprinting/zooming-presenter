@@ -154,6 +154,16 @@ pub fn describe(ed: &Editor) -> String {
         d.path.len(),
         serde_json::to_value(ed.view.mode).unwrap().as_str().unwrap()
     );
+    // Text style weights, once a style isn't Regular (the `themes` query
+    // always has them).
+    let th = ed.theme();
+    if [&th.title, &th.subtitle, &th.body].iter().any(|s| s.weight != crate::theme::REGULAR) {
+        let one = |n: &str, s: &crate::theme::TextStyleDef| {
+            let w = crate::theme::weight_name(s.weight).map(str::to_string).unwrap_or_else(|| s.weight.to_string());
+            format!("{n} {} {w} {}", s.font, r(s.size))
+        };
+        let _ = writeln!(out, "Styles: {} · {} · {}", one("title", &th.title), one("subtitle", &th.subtitle), one("body", &th.body));
+    }
     if let Some(t) = &d.soundtrack {
         let name = if t.name.is_empty() { "audio" } else { t.name.as_str() };
         let _ = writeln!(out, "Soundtrack: {name:?} volume {}{}", r(t.volume), if t.looping { " loop" } else { "" });
@@ -341,7 +351,15 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
             let sample = lib.is_some_and(|l| l.sample().is_some());
             json!({ "templates": &*crate::templates::TEMPLATES, "layouts": &*crate::templates::LAYOUTS, "saved": saved, "sample": sample })
         }
-        Query::Fonts => json!({ "families": ed.measure.font_families(), "bundled": ["Sans", "Serif", "Mono", "Hand"] }),
+        Query::Fonts { family: None } => json!({ "families": ed.measure.font_families(), "bundled": ["Sans", "Serif", "Mono", "Hand"] }),
+        Query::Fonts { family: Some(f) } => {
+            let faces = ed.measure.font_faces(&ed.doc, &f);
+            let weights: Vec<Value> = faces
+                .iter()
+                .map(|x| json!({ "weight": x.weight, "name": x.name.as_deref().or(crate::theme::weight_name(x.weight)).map(str::to_string).unwrap_or_else(|| x.weight.to_string()) }))
+                .collect();
+            json!({ "family": f, "weights": weights })
+        }
         Query::Perf => {
             let mut v = ed.perf.report(ed.view.now);
             let (mut mapped, mut in_ram) = (0usize, 0usize);

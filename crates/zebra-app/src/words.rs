@@ -31,6 +31,29 @@ fn key_part<T: serde::Serialize>(v: &T) -> String {
     serde_json::to_value(v).ok().and_then(|v| v.as_str().map(|s| s.replace('_', "-"))).unwrap_or_default()
 }
 
+/// A font weight by its macOS Fonts-window name ("Semibold"), or its
+/// number when it isn't one of the usual nine.
+pub fn weight_name(w: u16) -> String {
+    if zebra_core::theme::weight_name(w).is_some() { tr(&format!("font-weight-{w}")) } else { w.to_string() }
+}
+
+/// A face as the Weight pop-up lists it: an installed font's own name for
+/// it ("Demi Bold"), else the usual name of its weight.
+pub fn face_name(f: &zebra_core::FontFace) -> String {
+    f.name.clone().unwrap_or_else(|| weight_name(f.weight))
+}
+
+/// The face a style of `weight` is drawn in, by name: the face of that
+/// weight if the font has one, else the nearest.
+pub fn style_face_name(faces: &[zebra_core::FontFace], weight: u16) -> String {
+    let have: Vec<u16> = faces.iter().map(|f| f.weight).collect();
+    let w = if have.is_empty() { weight } else { zebra_core::theme::nearest_weight(&have, weight) };
+    match faces.iter().find(|f| f.weight == w) {
+        Some(f) if f.weight == weight || f.name.is_some() => face_name(f),
+        _ => weight_name(weight),
+    }
+}
+
 pub fn shape_name(k: ShapeKind) -> String {
     tr(&format!("shape-{}", key_part(&k)))
 }

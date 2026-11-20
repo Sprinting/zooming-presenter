@@ -371,6 +371,8 @@ pub struct TextSpan {
 /// or inherited (when stored).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
 pub struct SpanFormat {
+    /// Bold. In a style that is Semibold or heavier, `true` keeps the
+    /// style's weight and `false` makes the characters Regular.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
