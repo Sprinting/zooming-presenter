@@ -57,6 +57,23 @@ pub trait TextMeasure: Send + Sync {
     }
     /// Make the document's embedded fonts available before measuring it.
     fn prepare(&self, _doc: &Document) {}
+    /// The upright faces of a family (bundled, installed or embedded in
+    /// `doc`'s themes), lightest first, one per weight: what a style's
+    /// weight can be. Empty when unknown.
+    fn font_faces(&self, _doc: &Document, _family: &str) -> Vec<FontFace> {
+        vec![]
+    }
+}
+
+/// One face of a font family, as the theme editor's Weight pop-up lists it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct FontFace {
+    pub weight: u16,
+    /// The font's own name for the face ("Demi Bold"). None for Zebra's
+    /// bundled fonts, which go by the usual macOS names
+    /// ([`crate::theme::weight_name`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 pub struct EstimateMeasure;
@@ -2091,6 +2108,10 @@ impl Editor {
         for s in [&t.title, &t.subtitle, &t.body] {
             if !(s.size.is_finite() && s.size > 0.0) || s.font.trim().is_empty() {
                 return Err(ZError::invalid("text styles need a font and a size > 0"));
+            }
+            if !(1..=1000).contains(&s.weight) {
+                return Err(ZError::invalid(format!("weight {} is out of range", s.weight))
+                    .hint("a weight is 1 to 1000: 400 Regular, 600 Semibold, 700 Bold; the `fonts` query with a `family` lists the weights a font has"));
             }
         }
         if t.layers.len() > crate::theme::MAX_LAYERS {

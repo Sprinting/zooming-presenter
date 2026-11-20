@@ -859,8 +859,13 @@ pub enum Query {
     /// Templates and layouts that `apply_template` / `add_layout` accept,
     /// the person's saved templates (`saved`) and whether `sample` is there.
     Templates,
-    /// Font families installed on this machine (any can be used in a theme).
-    Fonts,
+    /// Font families installed on this machine (any can be used in a
+    /// theme). With `family`: that family's weights (what a theme style's
+    /// `weight` can be), with the names the Weight pop-up shows.
+    Fonts {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        family: Option<String>,
+    },
     /// Memory and speed: heap in use, cache sizes, frame times, repaints.
     Perf,
 }
