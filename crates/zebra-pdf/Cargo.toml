@@ -1,0 +1,20 @@
+[package]
+name = "zebra-pdf"
+description = "PDF pages read and drawn in a separate helper process (zebra-pdf-helper), with a memory budget and deadlines"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zebra-core.workspace = true
+thiserror.workspace = true
+libc.workspace = true
+
+# Only the helper binary binds PDFium (BSD-3), at run time, by full path
+# from the app bundle (Contents/Frameworks/libpdfium.dylib); see
+# scripts/fetch-pdfium.sh. The library part of this crate never calls it.
+pdfium-render = { version = "0.9.5", default-features = false, features = ["pdfium_8125", "thread_safe"] }
+
+[[bin]]
+name = "zebra-pdf-helper"
+path = "src/bin/zebra-pdf-helper.rs"

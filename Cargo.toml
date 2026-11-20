@@ -13,6 +13,7 @@ zebra-core = { path = "crates/zebra-core" }
 zebra-render = { path = "crates/zebra-render" }
 zebra-api = { path = "crates/zebra-api" }
 zebra-media = { path = "crates/zebra-media" }
+zebra-pdf = { path = "crates/zebra-pdf" }
 
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: a saved number reads back bit for bit.
