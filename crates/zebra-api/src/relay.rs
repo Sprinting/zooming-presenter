@@ -26,7 +26,8 @@ use crate::client::Client;
 pub const IDLE: Duration = Duration::from_secs(10 * 60);
 
 /// The relay socket for `name` on the Zebra instance at `zebra_socket`:
-/// next to it, named from the instance and a hash of the agent name.
+/// next to it, named from the instance and a 64-bit hash of the agent
+/// name (32 bits let two agent names share one relay; audit L5).
 pub fn socket_for(zebra_socket: &Path, name: &str) -> PathBuf {
     // FNV-1a: stable across runs and builds (unlike DefaultHasher).
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -35,7 +36,19 @@ pub fn socket_for(zebra_socket: &Path, name: &str) -> PathBuf {
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
     let stem = zebra_socket.file_stem().and_then(|s| s.to_str()).unwrap_or("zebra");
-    zebra_socket.with_file_name(format!("{stem}.agent{:08x}.sock", h as u32))
+    zebra_socket.with_file_name(format!("{stem}.agent{h:016x}.sock"))
+}
+
+/// Connect to the relay at `relay_socket` and say hello, checking it is
+/// the relay for `name`: should two names ever share a socket, the call
+/// goes elsewhere instead of acting as the other agent.
+pub fn connect(relay_socket: &Path, name: &str, token: &str) -> Result<Client, crate::client::ClientError> {
+    let mut c = Client::connect(relay_socket)?;
+    let v = c.call("hello", json!({ "name": name, "token": token }))?;
+    if v.get("relay").and_then(Value::as_bool) != Some(true) || v.get("name").and_then(Value::as_str) != Some(name) {
+        return Err(crate::client::ClientError::Io(std::io::Error::other(format!("{} is not the relay for {name:?}", relay_socket.display()))));
+    }
+    Ok(c)
 }
 
 /// A zebractl process that sends nothing (or reads nothing) for this long

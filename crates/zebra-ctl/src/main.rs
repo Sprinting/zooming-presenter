@@ -386,7 +386,7 @@ fn connect_agent(c: &Conn, direct: bool) -> Result<Client> {
         }
     };
     let rs = zebra_api::relay::socket_for(&sock, &c.name());
-    if let Ok(cl) = Client::connect_hello(&rs, &c.name(), &tok) {
+    if let Ok(cl) = zebra_api::relay::connect(&rs, &c.name(), &tok) {
         return Ok(cl);
     }
     if let Ok(exe) = std::env::current_exe() {
@@ -413,7 +413,7 @@ fn connect_agent(c: &Conn, direct: bool) -> Result<Client> {
         }
         if cmd.spawn().is_ok() {
             for _ in 0..40 {
-                if let Ok(cl) = Client::connect_hello(&rs, &c.name(), &tok) {
+                if let Ok(cl) = zebra_api::relay::connect(&rs, &c.name(), &tok) {
                     return Ok(cl);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
