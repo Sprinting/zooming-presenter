@@ -860,8 +860,6 @@ pub enum Query {
     /// The diagrams `add_diagram` accepts.
     Diagrams,
     History,
-    /// Layout lint: overlaps, text unreadable at its step, empty steps...
-    Lint,
     /// Templates and layouts that `apply_template` / `add_layout` accept,
     /// the person's saved templates (`saved`) and whether `sample` is there.
     Templates,

@@ -1,7 +1,7 @@
 //! One rule says which frame an element belongs to (`frame_holds`), and
 //! every reader agrees with what moves when the person drags a frame:
 //! `parent_frame`, the describe outline, the element and elements queries,
-//! lint, and the spatial index.
+//! and the spatial index.
 use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
@@ -82,10 +82,6 @@ fn shape(ed: &mut Editor, id: &str, x: f64, y: f64, w: f64, h: f64) {
     run(ed, json!({"op":"add_shape","id":id,"shape":"rectangle","x":x,"y":y,"w":w,"h":h}));
 }
 
-fn outside_frame<'a>(issues: &'a [Value], id: &str) -> Option<&'a Value> {
-    issues.iter().find(|i| i["kind"] == "outside_frame" && i["id"] == id)
-}
-
 #[test]
 fn straddling_element_belongs_to_neither_frame() {
     let mut ed = Editor::default();
@@ -99,12 +95,6 @@ fn straddling_element_belongs_to_neither_frame() {
     assert_eq!(ed.parent_frame("both"), None);
     assert!(moved_by_drag(&mut ed, "a").is_empty());
     assert_agrees(&mut ed);
-    // Lint names the frame it mostly sits in and says it won't move with it.
-    let issues = describe::lint(&ed);
-    let i = outside_frame(&issues, "s").expect("straddler not linted");
-    assert_eq!(i["frame"], "a");
-    assert_eq!(i["moves_with_frame"], false);
-    assert!(i["message"].as_str().unwrap().contains("doesn't move with a"), "{i}");
 }
 
 #[test]
@@ -126,12 +116,6 @@ fn nested_frames() {
     assert_eq!(ed.parent_frame("half_small").as_deref(), Some("mid"));
     assert_eq!(moved_by_drag(&mut ed, "big").len(), 6);
     assert_agrees(&mut ed);
-    // It moves with mid but not with small, which it mostly sits in.
-    let issues = describe::lint(&ed);
-    let i = outside_frame(&issues, "half_small").expect("straddler of a nested frame not linted");
-    assert_eq!(i["frame"], "small");
-    assert_eq!(i["moves_with_frame"], false);
-    assert!(outside_frame(&issues, "in_small").is_none());
 }
 
 #[test]

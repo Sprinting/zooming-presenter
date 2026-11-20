@@ -158,7 +158,7 @@ than one document open, events carry the `document` id they come from.
 * An explicitly labelled `apply`, `batch` or transaction is always its own undo step. Single `apply` calls from the same agent that arrive less than 2 s apart are grouped into one step.
 * An agent that disconnects while its transaction is open has that transaction aborted.
 * **Sizes.** An element's own `w` and `h` are at scale 1; on the canvas it is that times its `transform.scale`. `bounds` (in `query element`) and the sizes `describe` prints are world units, scale included. So a box that should be 900 wide at scale 1.5 needs `w` 600. Or use `resize`, which takes the size on the canvas.
-* **Frames.** An element belongs to a frame only while it sits wholly inside it (`parent_frame`, the frame's `contents`). One that crosses the edge belongs to no frame, doesn't move with it, and `lint` reports it as `outside_frame`. Deleting a frame deletes only the frame: what was inside stays where it is. To remove both, delete the frame's `contents` too.
+* **Frames.** An element belongs to a frame only while it sits wholly inside it (`parent_frame`, the frame's `contents`). One that crosses the edge belongs to no frame and doesn't move with it. Deleting a frame deletes only the frame: what was inside stays where it is. To remove both, delete the frame's `contents` too.
 
 ### View: camera, selection, presenting (not undoable)
 
@@ -328,7 +328,6 @@ EOF
 
 zebractl apply -f deck.json --label "Build deck"   # one undo step
 zebractl describe                                  # check ids, text and the path
-zebractl query lint                                # overlaps, unreadable text
 zebractl screenshot --step 2 -o step2.png          # look at what the audience will see
 zebractl present 0 && zebractl wait step 0
 zebractl next && zebractl wait step 1
@@ -453,7 +452,6 @@ Send with `query {"query": ...}`. Read-only.
 | `symbols` | limit?: integer, query?: string, set?: string | Search the clip-art library (sets, then symbols by name or keyword). With no `query` and no `set`, lists the sets. | `{"q":"symbols"}` |
 | `diagrams` |  | The diagrams `add_diagram` accepts. | `{"q":"diagrams"}` |
 | `history` |  |  | `{"q":"history"}` |
-| `lint` |  | Layout lint: overlaps, text unreadable at its step, empty steps... | `{"q":"lint"}` |
 | `templates` |  | Templates and layouts that `apply_template` / `add_layout` accept, the person's saved templates (`saved`) and whether `sample` is there. | `{"q":"templates"}` |
 | `fonts` |  | Font families installed on this machine (any can be used in a theme). | `{"q":"fonts"}` |
 | `perf` |  | Memory and speed: heap in use, cache sizes, frame times, repaints. | `{"q":"perf"}` |

@@ -134,7 +134,6 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::Query, r#"{"q":"path"}"#),
     (Kind::Query, r#"{"q":"themes"}"#),
     (Kind::Query, r#"{"q":"history"}"#),
-    (Kind::Query, r#"{"q":"lint"}"#),
     (Kind::Query, r#"{"q":"templates"}"#),
     (Kind::Query, r#"{"q":"fonts"}"#),
     (Kind::Query, r#"{"q":"perf"}"#),
