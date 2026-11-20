@@ -247,6 +247,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A bitmap inside an SVG shows: an EMF or WMF picture imported from
+    /// PowerPoint is an SVG, and its bitmaps are PNG or JPEG data links.
+    #[test]
+    fn bitmaps_inside_an_svg_show() {
+        use base64::Engine;
+        let mut png = vec![];
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 160, 0, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><image width="10" height="10" preserveAspectRatio="none" href="data:image/png;base64,{}"/></svg>"#,
+            base64::engine::general_purpose::STANDARD.encode(&png)
+        );
+        let px = rasterize(svg.as_bytes(), &SvgStyle::default(), 10, 10).unwrap();
+        assert_eq!(at(&px, 10, 5, 5), [0, 160, 0, 255]);
+    }
+
     #[test]
     fn one_colour_symbols_take_the_colour() {
         let px = rasterize(DOT, &SvgStyle { color: Some([200, 0, 0, 255]), ..Default::default() }, 40, 40).unwrap();

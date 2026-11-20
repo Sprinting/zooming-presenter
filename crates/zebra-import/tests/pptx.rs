@@ -83,6 +83,9 @@ fn a_16_by_9_deck_comes_in_as_slides_of_zebra_objects() {
         assert_eq!(bg.shape, ShapeKind::Rectangle);
         assert_eq!(bg.fill.as_deref(), Some(if i == 6 { "#102040" } else { "#ffffff" }));
         assert_eq!((p.items[0].element.size.w, p.items[0].element.size.h), (p.w, p.h));
+        // Locked, like Keynote's slide background; nothing else is.
+        assert!(p.items[0].element.locked);
+        assert!(p.items[1..].iter().all(|i| !i.element.locked));
     }
 
     // 1. Title and subtitle: placeholders placed by their layout, centred.
@@ -184,12 +187,207 @@ fn a_4_by_3_deck_brings_pictures_kept_for_a_chart_and_a_video() {
     }
     assert_eq!(deck.pages[0].name, "Chart with a picture");
     assert_eq!(deck.pages[0].notes, "Chart notes");
-    // The chart PowerPoint 2016 can't be drawn here: its picture comes in.
+    // The chart PowerPoint 2016 can't be drawn here: its picture comes in,
+    // and the summary says so.
     assert_eq!(kinds(&deck, 0), count(&[("shape:Rectangle", 1), ("text", 1), ("image", 1)]));
-    // The video: its poster.
-    assert_eq!(kinds(&deck, 1), count(&[("shape:Rectangle", 1), ("image", 1)]));
-    assert_eq!(deck.notes, BTreeMap::from([(ImportNote::Media, 1)]));
+    assert_eq!(deck.notes.get(&ImportNote::AsPicture), Some(&1));
+    // The video: a Zebra video (python-pptx's stand-in bytes have an MP4
+    // header), its poster the picture PowerPoint shows.
+    assert_eq!(kinds(&deck, 1), count(&[("shape:Rectangle", 1), ("video", 1)]));
+    assert_eq!(deck.notes, BTreeMap::from([(ImportNote::AsPicture, 1)]));
     assert_eq!(deck.pages[2].name, "Four by three");
+}
+
+#[test]
+fn what_the_master_shows_on_every_slide_is_noted_once() {
+    let ed = editor();
+    let deck = read("extras.pptx", &ed);
+    // The master's gradient band comes in on every slide; its gear can't.
+    for p in &deck.pages[..3] {
+        let bands = p.items.iter().filter(|i| matches!(&i.element.kind, ElementKind::Shape(s) if s.fill.as_deref() == Some("#1f4e79"))).count();
+        assert_eq!(bands, 1, "{}", p.name);
+    }
+    assert_eq!(deck.notes.get(&ImportNote::Shape), Some(&1), "{:?}", deck.notes);
+    assert_eq!(deck.notes.get(&ImportNote::Gradient), Some(&1), "{:?}", deck.notes);
+}
+
+#[test]
+fn strike_through_comes_in() {
+    let ed = editor();
+    let deck = read("extras.pptx", &ed);
+    let struck = |t: &TextData| -> Vec<(usize, usize)> { t.spans.iter().filter(|s| s.format.strike == Some(true)).map(|s| (s.start, s.end)).collect() };
+    // On runs: single and double.
+    let t = text(&deck, 0, "plain ");
+    assert_eq!(t.text, "plain single and double");
+    assert_eq!(struck(t), [(6, 12), (17, 23)]);
+    // From the box's list style, but not where a run says noStrike.
+    let t = text(&deck, 0, "struck ");
+    assert_eq!(struck(t), [(0, 7)]);
+    assert!(text(&deck, 0, "Extras 1").spans.iter().all(|s| s.format.strike.is_none()));
+}
+
+#[test]
+fn videos_and_sounds_come_out_of_the_file() {
+    let mut ed = editor();
+    let deck = read("extras.pptx", &ed);
+    // A video a Mac plays: a Zebra video where its picture was, the
+    // picture its poster; it starts by itself, loops, is muted and trimmed.
+    let (e, v) = deck.pages[3]
+        .items
+        .iter()
+        .find_map(|i| match &i.element.kind {
+            ElementKind::Video(v) => Some((&i.element, v)),
+            _ => None,
+        })
+        .expect("a video");
+    assert_eq!(deck.assets[&v.asset].ext, "mp4");
+    assert_eq!(deck.assets[v.poster.as_ref().unwrap()].ext, "png");
+    assert!(v.autoplay && v.looping && v.muted, "{v:?}");
+    assert!((v.start - 0.25).abs() < 1e-9 && v.end.is_none(), "{v:?}");
+    assert!((v.duration - 1.0).abs() < 0.05, "{}", v.duration);
+    assert_eq!(v.alt, "Blue");
+    // 4 x 2.25 inches at (1, 1) on a 10-inch slide 1000 units wide.
+    assert!((e.size.w - 400.0).abs() < 0.01 && (e.size.h - 225.0).abs() < 0.01, "{:?}", e.size);
+    assert!((e.transform.x - 300.0).abs() < 0.01 && (e.transform.y - 212.5).abs() < 0.01, "{:?}", e.transform);
+    // Windows Media won't play on a Mac: its poster, noted.
+    assert_eq!(kinds(&deck, 3), count(&[("shape:Rectangle", 2), ("video", 1), ("image", 1)]));
+    assert_eq!(deck.notes.get(&ImportNote::Media), Some(&1));
+    // The sound on its slide is the slide's voice-over; the music across
+    // the slides the document's. Their speaker pictures stay out.
+    let voice = deck.pages[4].voiceover.clone().expect("a voice-over");
+    assert_eq!(deck.assets[&voice].ext, "wav");
+    let music = deck.soundtrack.clone().expect("music");
+    assert_eq!(deck.assets[&music.asset].ext, "m4a");
+    assert!(music.looping && (music.volume - 0.4).abs() < 1e-9 && music.name == "Theme tune", "{music:?}");
+    assert_eq!(kinds(&deck, 4), count(&[("shape:Rectangle", 2)]));
+
+    // On the canvas, in the one undo step.
+    ed.import_deck(&deck, "Import".into(), Origin::Human).unwrap();
+    assert_eq!(ed.doc.path[4].voiceover.as_deref(), Some(voice.as_str()));
+    assert!(ed.doc.path.iter().enumerate().all(|(i, s)| i == 4 || s.voiceover.is_none()));
+    let t = ed.doc.soundtrack.clone().expect("the document's music");
+    assert_eq!((t.asset.as_str(), t.looping, t.name.as_str()), (music.asset.as_str(), true, "Theme tune"));
+    assert!((t.volume - 0.4).abs() < 1e-9);
+    let video = ed.doc.elements.values().find(|e| matches!(e.kind, ElementKind::Video(_))).unwrap();
+    assert!(matches!(&video.kind, ElementKind::Video(d) if d.asset == v.asset && ed.doc.assets[&d.asset].ext == "mp4"));
+    ed.undo(Origin::Human).unwrap();
+    assert!(ed.doc.soundtrack.is_none() && ed.doc.path.is_empty() && ed.doc.elements.is_empty());
+
+    // A document with music keeps it: the file's stays a picture, noted.
+    let r = zebra_import::open_bytes(fixture("extras.pptx"), "x".into()).unwrap();
+    let mut o = Options::all(ed.theme());
+    o.has_soundtrack = true;
+    let deck = r.read(&o, &Control::default()).unwrap();
+    assert!(deck.soundtrack.is_none());
+    assert_eq!(deck.notes.get(&ImportNote::Media), Some(&2));
+    assert_eq!(kinds(&deck, 4), count(&[("shape:Rectangle", 2), ("image", 1)]));
+    assert!(deck.pages[4].voiceover.is_some());
+}
+
+#[test]
+fn emf_and_wmf_pictures_are_drawn_as_svg() {
+    let ed = editor();
+    let deck = read("extras.pptx", &ed);
+    let svgs: Vec<String> = deck.pages[5]
+        .items
+        .iter()
+        .filter_map(|i| match &i.element.kind {
+            ElementKind::Image(img) => Some(&deck.assets[&img.asset]),
+            _ => None,
+        })
+        .map(|a| {
+            assert_eq!(a.ext, "svg");
+            String::from_utf8(a.bytes.to_vec()).unwrap()
+        })
+        .collect();
+    // The EMF's yellow rectangle and ellipse, the WMF's green rectangle;
+    // the third can't be drawn: left out, noted.
+    assert_eq!(svgs.len(), 2, "{:?}", deck.pages[5].items.iter().map(|i| i.element.kind.type_name()).collect::<Vec<_>>());
+    assert!(svgs[0].starts_with("<svg") && svgs[0].to_ascii_lowercase().contains("#e0c040"), "{}", svgs[0]);
+    assert!(svgs[1].to_ascii_lowercase().contains("#40a030"), "{}", svgs[1]);
+    assert_eq!(deck.notes.get(&ImportNote::Metafile), Some(&1));
+    // Each fills its picture's box: 2.8 x 1.4 inches.
+    let first = deck.pages[5].items.iter().find(|i| matches!(i.element.kind, ElementKind::Image(_))).unwrap();
+    assert!((first.element.size.w - 280.0).abs() < 0.01 && (first.element.size.h - 140.0).abs() < 0.01);
+}
+
+#[test]
+fn equations_are_found_and_noted() {
+    let ed = editor();
+    let deck = read("extras.pptx", &ed);
+    let page = &deck.pages[6];
+    // PowerPoint's picture of the first equation comes in where it was;
+    // the second has none and the third is bare in a paragraph whose
+    // other words come in: both left out.
+    let pictures: Vec<&Element> = page.items.iter().map(|i| &i.element).filter(|e| matches!(e.kind, ElementKind::Image(_))).collect();
+    assert_eq!(pictures.len(), 1);
+    assert!((pictures[0].transform.x - 250.0).abs() < 0.01 && (pictures[0].transform.y - 150.0).abs() < 0.01, "{:?}", pictures[0].transform);
+    assert_eq!(texts(&page.items.iter().map(|i| &i.element).collect::<Vec<_>>()), ["Energy: "]);
+    assert_eq!(deck.notes.get(&ImportNote::Equation), Some(&2), "{:?}", deck.notes);
+    assert_eq!(deck.notes.get(&ImportNote::AsPicture), Some(&1), "{:?}", deck.notes);
+}
+
+#[test]
+fn smart_art_comes_in_as_a_diagram_its_shapes_or_a_list() {
+    let mut ed = editor();
+    let deck = read("smartart.pptx", &ed);
+    let els = |page: usize| deck.pages[page].items.iter().map(|i| &i.element).collect::<Vec<_>>();
+    let one_group = |page: usize| {
+        let g = els(page)[1..].iter().map(|e| e.group.clone()).collect::<std::collections::BTreeSet<_>>();
+        assert!(g.len() == 1 && g.iter().all(Option::is_some), "slide {}: {g:?}", page + 1);
+    };
+    // Each graphic's box: 1 to 9 inches across, 1 to 5 down.
+    let inside = |e: &Element| (100.0 - 0.01..=900.01).contains(&e.transform.x) && (100.0 - 0.01..=500.01).contains(&e.transform.y);
+
+    // Basic Process: Zebra's process diagram, a step for each item with
+    // its child as the note, in the theme's colours (not the drawing
+    // PowerPoint saved).
+    assert_eq!(kinds(&deck, 0), count(&[("shape:Rectangle", 1), ("shape:RoundedRect", 3), ("shape:Arrow", 2), ("text", 4)]));
+    let mut words: Vec<(f64, String)> = els(0).iter().filter_map(|e| if let ElementKind::Text(t) = &e.kind { Some((e.transform.x, t.text.clone())) } else { None }).collect();
+    words.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let words: Vec<&str> = words.iter().map(|w| w.1.as_str()).collect();
+    assert!(words == ["Plan", "Build", "Test it", "Ship"] || words == ["Plan", "Test it", "Build", "Ship"], "{words:?}");
+    one_group(0);
+    for e in &els(0)[1..] {
+        assert!(inside(e), "{e:?}");
+        assert!(!e.placeholder);
+        if let ElementKind::Shape(s) = &e.kind {
+            assert!(s.fill.as_deref().is_none_or(|f| f.starts_with("theme:")), "{s:?}");
+        }
+    }
+    let steps: Vec<f64> = els(0).iter().filter(|e| matches!(&e.kind, ElementKind::Shape(s) if s.shape == ShapeKind::RoundedRect)).map(|e| e.transform.x).collect();
+    assert!(steps.windows(2).all(|w| w[1] > w[0] + 100.0), "{steps:?}");
+    assert!((steps[1] - 500.0).abs() < 1.0, "the diagram is centred in the graphic's box: {steps:?}");
+
+    // A pyramid: no Zebra diagram, so the shapes PowerPoint saved,
+    // where it saved them, with their words, grouped.
+    assert_eq!(kinds(&deck, 1), count(&[("shape:Rectangle", 1), ("shape:Triangle", 1), ("shape:Trapezoid", 1), ("text", 2)]));
+    assert_eq!(texts(&els(1)), ["Top", "Base"]);
+    one_group(1);
+    let top = els(1).into_iter().find(|e| matches!(&e.kind, ElementKind::Shape(s) if s.shape == ShapeKind::Triangle)).unwrap();
+    assert!((top.transform.x - 500.0).abs() < 0.01 && (top.transform.y - 200.0).abs() < 0.01, "{:?}", top.transform);
+    assert!((top.size.w - 300.0).abs() < 0.01 && (top.size.h - 200.0).abs() < 0.01, "{:?}", top.size);
+
+    // No drawing saved: the items as a bulleted list, by level.
+    let list = text(&deck, 2, "Goals");
+    assert_eq!(list.text, "Goals\nGrow\nKeep\nRisks");
+    assert_eq!(list.paras.iter().map(|p| p.indent).collect::<Vec<_>>(), [0, 1, 1, 0]);
+    assert!(list.paras.iter().all(|p| p.list == Some(ListKind::Bullet)), "{:?}", list.paras);
+
+    // A data model that can't be read and no drawing: left out, noted.
+    assert_eq!(kinds(&deck, 3), count(&[("shape:Rectangle", 1)]));
+    assert_eq!(deck.notes.get(&ImportNote::SmartArt), Some(&1), "{:?}", deck.notes);
+
+    // On the canvas the diagram's words fit their steps.
+    let out = ed.import_deck(&deck, "Import smartart.pptx".into(), Origin::Human).unwrap();
+    let doc = &ed.doc;
+    let made: Vec<&Element> = out.created.iter().filter_map(|id| doc.get(id)).collect();
+    let boxes: Vec<zebra_core::Rect> = made.iter().filter(|e| matches!(&e.kind, ElementKind::Shape(s) if s.shape == ShapeKind::RoundedRect)).map(|e| e.bounds()).collect();
+    for word in ["Plan", "Build", "Ship"] {
+        let e = made.iter().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text == word)).unwrap();
+        let b = e.bounds();
+        assert!(boxes.iter().any(|r| b.x0 >= r.x0 - 0.5 && b.x1 <= r.x1 + 0.5 && b.y0 >= r.y0 - 0.5 && b.y1 <= r.y1 + 0.5), "{word} at {b:?} is in no step: {boxes:?}");
+    }
 }
 
 #[test]
@@ -215,6 +413,10 @@ fn on_the_canvas_slides_are_frames_with_steps_and_one_undo_removes_them() {
         assert_eq!(step.notes, deck.pages[i].notes);
         assert_eq!(ed.doc.frame_contents(id).len(), deck.pages[i].items.len(), "slide {}", i + 1);
     }
+    // Each slide's background is locked on the canvas too; nothing else.
+    let locked: Vec<&Element> = ed.doc.elements.values().filter(|e| e.locked).collect();
+    assert_eq!(locked.len(), deck.pages.len());
+    assert!(locked.iter().all(|e| matches!(&e.kind, ElementKind::Shape(s) if s.shape == ShapeKind::Rectangle) && e.size.w == 1000.0));
     // Groups stay groups (one per slide's group, not merged across slides).
     let groups: std::collections::BTreeSet<&str> = ed.doc.elements.values().filter_map(|e| e.group.as_deref()).collect();
     assert_eq!(groups.len(), 2);
@@ -223,6 +425,20 @@ fn on_the_canvas_slides_are_frames_with_steps_and_one_undo_removes_them() {
         let slide = ed.doc.elements.values().find(|f| matches!(&f.kind, ElementKind::Frame(fd) if fd.slide) && ed.doc.frame_contents(&f.id).contains(&e.id));
         assert!(slide.is_some(), "{:?} outside its slide", e.kind);
     }
+    // A box that doesn't wrap, with a left-aligned and a centred line: the
+    // centred line is centred on the box (8 inches from 1 inch, inset 0.1
+    // inch each side), not on the longer line above it.
+    let slide3 = ed.doc.elements.values().find(|f| f.name == "Slide 3").unwrap();
+    let left = slide3.transform.x - slide3.size.w / 2.0;
+    let runs = ed.doc.elements.values().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text.starts_with("Bold "))).unwrap();
+    let ElementKind::Text(t) = &runs.kind else { unreachable!() };
+    assert!(t.fixed_width && t.paras[1].align == Some(Align::Center));
+    let inch = 1000.0 / 13.333;
+    assert!((runs.transform.x - (left + 5.0 * inch)).abs() < 0.5, "{} vs {}", runs.transform.x, left + 5.0 * inch);
+    assert!((runs.size.w * runs.transform.scale - 7.8 * inch).abs() < 0.5, "{}", runs.size.w * runs.transform.scale);
+    // One alignment throughout: the text still sizes itself.
+    let big = ed.doc.elements.values().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text == "Big words")).unwrap();
+    assert!(matches!(&big.kind, ElementKind::Text(t) if !t.fixed_width));
     assert_eq!(ed.undo_label().as_deref(), Some("Import deck16x9.pptx (You)"));
     ed.undo(Origin::Human).unwrap();
     assert_eq!(ed.doc.elements, before.elements);
@@ -355,7 +571,7 @@ fn damaged_and_other_files_give_an_error_never_a_panic() {
 fn broken_parts_give_an_error_or_a_partial_deck_never_a_panic() {
     use std::io::{Read, Write};
     let ed = editor();
-    for name in ["deck16x9.pptx", "deck4x3.pptx"] {
+    for name in ["deck16x9.pptx", "deck4x3.pptx", "extras.pptx", "smartart.pptx"] {
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(fixture(name))).unwrap();
         let mut parts = vec![];
         for i in 0..z.len() {
@@ -400,7 +616,7 @@ fn powerpoint_is_offered() {
 #[test]
 fn render_for_a_look() {
     let Some(dir) = std::env::var_os("ZEBRA_PPTX_PNG_DIR") else { return };
-    for f in ["deck16x9.pptx", "deck4x3.pptx"] {
+    for f in ["deck16x9.pptx", "deck4x3.pptx", "extras.pptx", "smartart.pptx"] {
         let r = zebra_render::Renderer::new();
         let mut ed = Editor::default();
         ed.measure = r.measure();

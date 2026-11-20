@@ -210,7 +210,7 @@ impl Reader for PdfReader {
                 group: None,
                 kind: ElementKind::Image(ImageData { asset: key, alt, crop: None, mask: Default::default(), symbol: None, page: Some(page) }),
             };
-            deck.pages.push(ImportedPage { w, h, name: (opts.page_name)(i + 1), items: vec![ImportedItem { element, fit: None }], notes: String::new(), slide: false });
+            deck.pages.push(ImportedPage { w, h, name: (opts.page_name)(i + 1), items: vec![ImportedItem { element, fit: None }], notes: String::new(), slide: false, voiceover: None });
         }
         deck.assets.insert(pdf_key, pdf);
         Ok(deck)

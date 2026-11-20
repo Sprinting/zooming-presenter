@@ -3,31 +3,45 @@
 //!
 //! Each slide becomes a frame (marked as a slide, so it shows deck-style
 //! when presenting) holding:
-//! - its background, as a rectangle (or picture) at the back;
+//! - its background, as a locked rectangle (or picture) at the back;
 //! - the master's and layout's own objects, then the slide's;
 //! - text boxes and placeholders as Zebra text: the source's paragraphs
 //!   and line breaks, bullets and numbering by level, alignment, and runs'
-//!   bold, italic, underline, colour, links and sizes. Fonts are never
+//!   bold, italic, underline, strike-through, colour, links and sizes
+//!   (strike-through read from the part's XML, which BetterOffice's model
+//!   leaves it out of). Fonts are never
 //!   copied: every box takes a style of the document's theme by its size
 //!   (sizes are ranked deck-wide into title, subtitle and body, as the PDF
 //!   prototype did) and keeps its size on the slide through its scale;
 //!   sizes within a box become relative spans;
-//! - pictures (PNG, JPEG, GIF, SVG) and the basic shapes Zebra has, with
-//!   their fill, line and text; groups stay groups.
+//! - pictures (PNG, JPEG, GIF, SVG; EMF and WMF drawn as SVG through
+//!   BetterOffice's metafile player) and the basic shapes Zebra has, with
+//!   their fill, line and text; groups stay groups;
+//! - videos as Zebra videos (their pictures as posters); sounds as the
+//!   slide's voice-over, or the document's music when they play across
+//!   slides;
+//! - SmartArt as the Zebra diagram for its layout, holding its items'
+//!   words; a layout Zebra has none for as the shapes PowerPoint saved of
+//!   it (grouped); one saved without them as a bulleted list of its items.
 //!
 //! What has no Zebra match comes in as the picture the file keeps of it,
 //! when it keeps one, or is left out; either way it is counted in the
 //! deck's notes ([`ImportNote`]).
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use zebra_core::diagrams::Item;
+use zebra_core::templates::Piece;
 use ooxml_drawingml::{resolve_color_value_to_hex_with_theme, style_fill, style_outline, ColorValue, ShapeFill, ShapeOutline, Theme as DmlTheme, ThemeFormatScheme};
 use pptx_parse::{
     Bullet, GraphicFrameData, ParagraphProperties, Picture, PictureCrop, Placeholder, PptxPackage, Relationship, RunProperties, Shape, ShapeNode, ShapeTransform, Slide,
     SlideLayout, SlideMaster, SourceShape, TargetMode, TextAutofit, TextBody, TextCaps,
 };
-use zebra_core::import::{asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox};
-use zebra_core::{Align, Crop, Dash, Element, ElementKind, ImageData, ImageMask, ListKind, ParaFormat, ShapeData, ShapeKind, Size, SpanFormat, TextData, TextSpan, TextStyle, Transform};
+use zebra_core::import::{asset_from, av_asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox};
+use zebra_core::{
+    Align, Crop, Dash, Element, ElementKind, ImageData, ImageMask, InkData, ListKind, MediaKind, ParaFormat, ShapeData, ShapeKind, Size, Soundtrack, SpanFormat, TextData, TextSpan, TextStyle, Transform, VideoData,
+};
 
+use crate::pptx_xml::{part_info, smart_art, MediaRef, PartInfo, ShapeInfo, SmartArt, StandIn, StyleKind, TextStrike};
 use crate::{Control, ImportError, Options, Reader};
 
 /// Long side of a slide on the canvas, world units (the same as a PDF's
@@ -95,6 +109,8 @@ impl Reader for PptxReader {
         let mut deck = ImportedDeck { title: self.title.clone(), ..Default::default() };
         let mut pending = vec![];
         let mut media = BTreeMap::new();
+        let mut counted = BTreeSet::new();
+        let mut infos = BTreeMap::new();
         for i in crate::page_range(opts, pkg.slides.len()) {
             if ctl.cancelled() {
                 return Err(ImportError::Cancelled);
@@ -105,13 +121,21 @@ impl Reader for PptxReader {
                 ctl.page_done();
                 continue;
             }
-            let mut r = SlideReader::new(pkg, slide, k, (sw, sh), &mut deck, &mut media);
+            let (layout, master) = slide_parts(pkg, slide);
+            let parts = [Some(pkg.presentation.part_path.as_str()), Some(slide.part_path.as_str()), layout.map(|l| l.part_path.as_str()), master.map(|m| m.part_path.as_str())];
+            for part in parts.into_iter().flatten() {
+                if !infos.contains_key(part) {
+                    infos.insert(part.to_string(), part_info(pkg, part));
+                }
+            }
+            let mut r = SlideReader::new(pkg, slide, k, (sw, sh), &mut deck, &mut media, &mut counted, &infos, &opts.theme);
+            r.has_soundtrack = opts.has_soundtrack;
             r.read();
-            let SlideReader { items, pending: texts, .. } = r;
+            let SlideReader { items, pending: texts, voiceover, .. } = r;
             let page = deck.pages.len();
             pending.extend(texts.into_iter().map(|t| (page, t)));
             let name = slide_title(slide).unwrap_or_else(|| (opts.slide_name)(i + 1));
-            deck.pages.push(ImportedPage { w: sw as f64 * k, h: sh as f64 * k, name, items, notes: slide.notes.trim().to_string(), slide: true });
+            deck.pages.push(ImportedPage { w: sw as f64 * k, h: sh as f64 * k, name, items, notes: slide.notes.trim().to_string(), slide: true, voiceover });
             ctl.page_done();
         }
         if ctl.cancelled() {
@@ -123,6 +147,13 @@ impl Reader for PptxReader {
         rank_text(&mut deck, &pending, opts, k);
         Ok(deck)
     }
+}
+
+/// A slide's layout and master.
+fn slide_parts<'p>(pkg: &'p PptxPackage, slide: &Slide) -> (Option<&'p SlideLayout>, Option<&'p SlideMaster>) {
+    let layout = slide.layout_part_path.as_deref().and_then(|p| pkg.layouts.iter().find(|l| l.part_path == p)).or_else(|| pkg.layouts.first());
+    let master = pptx_parse::master_for_layout(pkg, layout).or_else(|| pkg.masters.first());
+    (layout, master)
 }
 
 /// A text box read from a slide, waiting for the deck-wide size ranking.
@@ -253,6 +284,9 @@ struct Cascade<'a> {
     master: Option<&'a TextBody>,
     placeholder: Option<&'a Placeholder>,
     style_color: Option<&'a ColorValue>,
+    /// The strike-through `primary`, `layout` and `master` say (which
+    /// the parser's model leaves out).
+    strike: [Option<&'a TextStrike>; 3],
 }
 
 struct SlideReader<'a> {
@@ -272,12 +306,35 @@ struct SlideReader<'a> {
     groups: usize,
     /// The part whose objects are being read (for its links).
     part: &'a str,
+    /// Masters, layouts and inherited backgrounds whose notes are counted
+    /// already: what every slide shows of them is noted once per import.
+    counted: &'a mut BTreeSet<String>,
+    /// Reading something whose notes are counted already.
+    quiet: bool,
+    /// What the parser's model leaves out of each part, by part path.
+    infos: &'a BTreeMap<String, PartInfo>,
+    /// The document has background music already.
+    has_soundtrack: bool,
+    /// The slide's sound, for its step's voice-over.
+    voiceover: Option<String>,
+    /// The document's theme (diagrams are built in its colours).
+    zebra: &'a zebra_core::Theme,
 }
 
 impl<'a> SlideReader<'a> {
-    fn new(pkg: &'a PptxPackage, slide: &'a Slide, k: f64, size: (i64, i64), deck: &'a mut ImportedDeck, media: &'a mut BTreeMap<String, Option<String>>) -> Self {
-        let layout = slide.layout_part_path.as_deref().and_then(|p| pkg.layouts.iter().find(|l| l.part_path == p)).or_else(|| pkg.layouts.first());
-        let master = pptx_parse::master_for_layout(pkg, layout).or_else(|| pkg.masters.first());
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        pkg: &'a PptxPackage,
+        slide: &'a Slide,
+        k: f64,
+        size: (i64, i64),
+        deck: &'a mut ImportedDeck,
+        media: &'a mut BTreeMap<String, Option<String>>,
+        counted: &'a mut BTreeSet<String>,
+        infos: &'a BTreeMap<String, PartInfo>,
+        zebra: &'a zebra_core::Theme,
+    ) -> Self {
+        let (layout, master) = slide_parts(pkg, slide);
         let theme = pptx_parse::slide_theme(pkg, Some(&slide.part_path), layout.map(|l| l.part_path.as_str()));
         let scheme = master
             .and_then(|m| m.theme_part_path.as_deref())
@@ -285,26 +342,38 @@ impl<'a> SlideReader<'a> {
             .or_else(|| pkg.themes.first())
             .map(|t| t.format_scheme.clone())
             .unwrap_or_default();
-        SlideReader { pkg, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path }
+        SlideReader { pkg, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos, has_soundtrack: false, voiceover: None, zebra }
     }
 
     fn note(&mut self, n: ImportNote) {
-        *self.deck.notes.entry(n).or_default() += 1;
+        if !self.quiet {
+            *self.deck.notes.entry(n).or_default() += 1;
+        }
+    }
+
+    /// Count notes from here on only if `key` (an inherited part) hasn't
+    /// had its notes counted yet.
+    fn count_once(&mut self, key: String) {
+        self.quiet = !self.counted.insert(key);
     }
 
     fn read(&mut self) {
         self.background();
+        self.quiet = false;
         let show = self.slide.show_master_shapes;
         if let (Some(m), true) = (self.master, show && self.layout.is_none_or(|l| l.show_master_shapes)) {
             self.part = &m.part_path;
+            self.count_once(m.part_path.clone());
             self.walk(&m.shapes, None, &[], None, Role::Inherited);
         }
         if let (Some(l), true) = (self.layout, show) {
             self.part = &l.part_path;
+            self.count_once(l.part_path.clone());
             self.walk(&l.shapes, None, &[], None, Role::Inherited);
         }
         let (pkg, slide) = (self.pkg, self.slide);
         self.part = &slide.part_path;
+        self.quiet = false;
         let source = pkg.slide_source(&slide.part_path);
         self.walk(&slide.shapes, source.map(|s| s.shapes.as_slice()), &[], None, Role::Slide);
         if let Some(src) = source {
@@ -323,25 +392,36 @@ impl<'a> SlideReader<'a> {
         let pkg_bg = |fill: &Option<ShapeFill>, pic: &Option<Box<pptx_parse::PictureFill>>, rf: &Option<ooxml_drawingml::StyleReference>| {
             (fill.is_some() || pic.is_some() || rf.is_some()).then(|| (fill.clone(), pic.clone(), rf.clone()))
         };
+        // Whose background it is: an inherited one is noted once.
         let found = pkg_bg(&self.slide.background, &self.slide.background_picture, &self.slide.background_reference)
-            .or_else(|| self.layout.and_then(|l| pkg_bg(&l.background, &l.background_picture, &l.background_reference)))
-            .or_else(|| self.master.and_then(|m| pkg_bg(&m.background, &m.background_picture, &m.background_reference)));
+            .map(|b| (b, None))
+            .or_else(|| self.layout.and_then(|l| Some((pkg_bg(&l.background, &l.background_picture, &l.background_reference)?, Some(&l.part_path)))))
+            .or_else(|| self.master.and_then(|m| Some((pkg_bg(&m.background, &m.background_picture, &m.background_reference)?, Some(&m.part_path)))));
+        let (found, owner) = match found {
+            Some((b, owner)) => (Some(b), owner),
+            None => (None, None),
+        };
+        if let Some(p) = owner {
+            self.count_once(format!("{p}#background"));
+        }
         let (w, h) = (self.size.0 as f64, self.size.1 as f64);
         let all = Placed { cx: w / 2.0, cy: h / 2.0, w, h, rot: 0.0, flip_h: false, flip_v: false };
         let (fill, pic, rf) = found.unwrap_or_default();
-        if let Some(path) = pic.as_ref().and_then(|p| p.media_part_path.clone()) {
-            if self.picture(&path, &PictureCrop::default(), "rect", all, String::new(), None) {
-                return;
-            }
-        }
-        let fill = fill.or_else(|| rf.map(|r| style_fill(&self.scheme, &r, &self.theme)));
-        let color = fill.as_ref().and_then(|f| self.fill_color(f)).or_else(|| self.hex(&scheme_color("background1")));
-        if let Some(c) = color {
+        let pictured = pic.as_ref().and_then(|p| p.media_part_path.clone()).is_some_and(|path| self.picture(&path, &PictureCrop::default(), "rect", all, String::new(), None));
+        if !pictured {
+            let fill = fill.or_else(|| rf.map(|r| style_fill(&self.scheme, &r, &self.theme)));
+            let color = fill.as_ref().and_then(|f| self.fill_color(f)).or_else(|| self.hex(&scheme_color("background1")));
+            let Some(c) = color else { return };
             self.push_shape(ShapeKind::Rectangle, all, Some(c), None, 0.0, 0.0, Dash::Solid, None);
+        }
+        // Locked, as a slide's background is in Keynote: clicking the
+        // slide doesn't pick it up.
+        if let Some(it) = self.items.last_mut() {
+            it.element.locked = true;
         }
     }
 
-    fn walk(&mut self, nodes: &'a [ShapeNode], source: Option<&'a [SourceShape]>, parents: &[&'a ShapeTransform], group: Option<&str>, role: Role) {
+    fn walk(&mut self, nodes: &'a [ShapeNode], source: Option<&'a [SourceShape]>, parents: &[&ShapeTransform], group: Option<&str>, role: Role) {
         for (i, node) in nodes.iter().enumerate() {
             let src = source.and_then(|s| s.get(i));
             match node {
@@ -370,10 +450,24 @@ impl<'a> SlideReader<'a> {
                     if p.base.hidden || (role == Role::Inherited && p.base.placeholder.is_some()) {
                         continue;
                     }
-                    if src.is_some_and(|s| s.media.is_some()) {
+                    // A video or sound: a Zebra video, the slide's voice-over
+                    // or the document's music; else (not in the file, or a
+                    // format a Mac won't play) its poster picture, noted.
+                    let media = self.shape_info(self.part, p.base.id).and_then(|i| i.media.as_ref());
+                    if let Some(m) = media {
+                        if self.media_node(p, m, parents, group) {
+                            continue;
+                        }
+                    }
+                    if media.is_some() || src.is_some_and(|s| s.media.is_some()) {
                         self.note(ImportNote::Media);
                     }
-                    self.picture_node(p, &p.base.transform, parents, group);
+                    // A chart (or other object) the file keeps a picture of
+                    // beside it comes in as that picture: say so.
+                    let stand_in = self.shape_info(self.part, p.base.id).and_then(|i| i.stands_in);
+                    if self.picture_node(p, &p.base.transform, parents, group) && stand_in.is_some() {
+                        self.note(ImportNote::AsPicture);
+                    }
                 }
                 ShapeNode::GraphicFrame(f) => {
                     if f.base.hidden || (role == Role::Inherited && f.base.placeholder.is_some()) {
@@ -382,7 +476,12 @@ impl<'a> SlideReader<'a> {
                     match &f.data {
                         GraphicFrameData::Table(_) => self.note(ImportNote::Table),
                         GraphicFrameData::Chart { .. } => self.note(ImportNote::Chart),
-                        GraphicFrameData::Diagram { .. } => self.note(ImportNote::SmartArt),
+                        GraphicFrameData::Diagram { relationship_ids, drawing_part_path } => {
+                            let at = place(&f.base.transform, parents);
+                            if !self.smart_art(at, &f.base.transform, relationship_ids, drawing_part_path.as_deref(), parents, group) {
+                                self.note(ImportNote::SmartArt);
+                            }
+                        }
                         GraphicFrameData::Unknown { picture: Some(p), .. } => {
                             if self.picture_node(p, &f.base.transform, parents, group) {
                                 self.note(ImportNote::AsPicture);
@@ -393,6 +492,153 @@ impl<'a> SlideReader<'a> {
                 }
             }
         }
+    }
+
+    /// A SmartArt graphic over `at` (`t` its frame's own place): the Zebra
+    /// diagram for its layout, holding its items' words; else the shapes
+    /// PowerPoint saved of it, grouped; else its items as a bulleted list.
+    /// False when none of these can be made.
+    fn smart_art(&mut self, at: Placed, t: &ShapeTransform, rel_ids: &[String], drawing: Option<&str>, parents: &[&ShapeTransform], group: Option<&str>) -> bool {
+        let data = self.smart_art_data(rel_ids);
+        if let Some(d) = &data {
+            let key = d.layout.as_deref().and_then(|l| diagram_for(l, &d.items));
+            if let Some(pieces) = key.and_then(|k| zebra_core::diagrams::with_items(k, &d.items)) {
+                let gid = self.group_for(group);
+                self.pieces(&pieces, at, &gid);
+                return true;
+            }
+        }
+        // The drawing PowerPoint saved (not one the parser laid out itself
+        // when there was none): its shapes sit in the frame's box.
+        let pkg = self.pkg;
+        let saved = drawing.and_then(|p| pkg.diagram_drawings.iter().find(|d| d.part_path == p)).filter(|d| d.synthesis_extent.is_none());
+        if let Some(dd) = saved {
+            let before = self.items.len();
+            let gid = self.group_for(group);
+            let frame = ShapeTransform { child_x: Some(0), child_y: Some(0), child_width: Some(t.width), child_height: Some(t.height), ..t.clone() };
+            let mut ps = parents.to_vec();
+            ps.push(&frame);
+            let part = self.part;
+            self.part = &dd.part_path;
+            self.walk(&dd.shapes, None, &ps, Some(&gid), Role::Slide);
+            self.part = part;
+            if self.items.len() > before {
+                return true;
+            }
+        }
+        data.is_some_and(|d| self.bullet_list(&d.items, at, group))
+    }
+
+    /// The SmartArt data model (and layout) the slide's relationships
+    /// `rel_ids` name.
+    fn smart_art_data(&self, rel_ids: &[String]) -> Option<SmartArt> {
+        let rels = self.pkg.relationships.get(self.part)?;
+        let target = |kind: &str| rels.iter().find(|r| rel_ids.contains(&r.id) && r.has_type(kind)).and_then(|r| r.resolved_target.as_deref());
+        let data = self.pkg.part_bytes(target("/diagramData")?)?;
+        let layout = target("/diagramLayout").and_then(|p| self.pkg.part_bytes(p));
+        smart_art(data, layout)
+    }
+
+    /// A diagram's pieces (unit coordinates) fitted into `at`, centred,
+    /// as one group.
+    fn pieces(&mut self, pieces: &[Piece], at: Placed, gid: &str) {
+        let (mut lo, mut hi) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
+        let mut grow = |x: f64, y: f64, hw: f64, hh: f64| {
+            lo = (lo.0.min(x - hw), lo.1.min(y - hh));
+            hi = (hi.0.max(x + hw), hi.1.max(y + hh));
+        };
+        for p in pieces {
+            match p {
+                Piece::Shape { x, y, w, h, rot, .. } | Piece::Frame { x, y, w, h, rot, .. } => {
+                    let (s, c) = rot.to_radians().sin_cos();
+                    grow(*x, *y, (w * c.abs() + h * s.abs()) / 2.0, (w * s.abs() + h * c.abs()) / 2.0);
+                }
+                Piece::Text { x, y, w, h, .. } => grow(*x, *y, w / 2.0, h / 2.0),
+                Piece::Ink { points, .. } => points.iter().for_each(|q| grow(q[0], q[1], 0.0, 0.0)),
+            }
+        }
+        if !(hi.0 > lo.0 && hi.1 > lo.1) {
+            return;
+        }
+        let k = self.k;
+        // World units per diagram unit, and where the diagram's (0, 0) goes.
+        let u = (at.w / (hi.0 - lo.0)).min(at.h / (hi.1 - lo.1)) * k;
+        let (ox, oy) = (at.cx * k - (lo.0 + hi.0) / 2.0 * u, at.cy * k - (lo.1 + hi.1) / 2.0 * u);
+        let element = |transform: Transform, size: Size, kind: ElementKind| Element { id: String::new(), transform, size, locked: false, name: String::new(), placeholder: false, group: Some(gid.to_string()), kind };
+        for p in pieces {
+            let (element, fit) = match p {
+                Piece::Frame { .. } => continue,
+                Piece::Shape { shape, x, y, w, h, rot, fill, stroke, sw, dash } => {
+                    let data = ShapeData { shape: *shape, fill: fill.clone(), stroke: stroke.clone(), stroke_width: (u * sw.unwrap_or(0.004)).max(1.0), dash: *dash, ..Default::default() };
+                    (element(Transform { x: ox + x * u, y: oy + y * u, scale: 1.0, rotation: *rot }, Size { w: w * u, h: h * u }, ElementKind::Shape(data)), None)
+                }
+                Piece::Text { style, text, x, y, w, h, bullets, align, on, .. } => {
+                    // Each line as tall as the piece allows; the import
+                    // makes it smaller if the theme font runs wider.
+                    let lines = text.lines().count().max(1) as f64;
+                    let size = self.zebra.text_style(*style).size.max(1.0);
+                    let scale = (h * u / lines / (size * 1.25)).max(1e-6);
+                    let color = on.as_ref().map(|f| self.zebra.text_on(Some(f)).unwrap_or_else(|| "theme:body".into()));
+                    let data = TextData { text: text.clone(), style: *style, bullets: *bullets, align: *align, color, fixed_width: false, ..Default::default() };
+                    let (cx, cy, hw, hh) = (ox + x * u, oy + y * u, w * u / 2.0, h * u / 2.0);
+                    let fit = SourceBox { x0: cx - hw, y0: cy - hh, x1: cx + hw, y1: cy + hh, anchor: BoxAnchor::Middle };
+                    (element(Transform { x: cx, y: cy, scale, rotation: 0.0 }, Size { w: 0.0, h: 0.0 }, ElementKind::Text(data)), Some(fit))
+                }
+                Piece::Ink { points, width, color } => {
+                    let pts: Vec<(f64, f64)> = points.iter().map(|q| (q[0] * u, q[1] * u)).collect();
+                    let (x0, x1) = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q.0), a.1.max(q.0)));
+                    let (y0, y1) = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q.1), a.1.max(q.1)));
+                    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+                    let data = InkData { points: pts.iter().map(|q| zebra_core::Vec2::new(q.0 - cx, q.1 - cy)).collect(), color: color.clone(), width: width * u, highlighter: false };
+                    (element(Transform { x: ox + cx, y: oy + cy, scale: 1.0, rotation: 0.0 }, Size { w: x1 - x0, h: y1 - y0 }, ElementKind::Ink(data)), None)
+                }
+            };
+            self.items.push(ImportedItem { element, fit });
+        }
+    }
+
+    /// SmartArt items as a bulleted list over `at`, each level indented
+    /// one more. False when they have no words.
+    fn bullet_list(&mut self, items: &[Item], at: Placed, group: Option<&str>) -> bool {
+        fn add(items: &[Item], depth: u8, out: &mut Vec<(u8, String)>) {
+            for it in items {
+                out.extend(it.text.lines().filter(|l| !l.trim().is_empty()).map(|l| (depth, l.trim().to_string())));
+                add(&it.children, (depth + 1).min(8), out);
+            }
+        }
+        let mut lines = vec![];
+        add(items, 0, &mut lines);
+        if lines.is_empty() {
+            return false;
+        }
+        let text = lines.iter().map(|l| l.1.as_str()).collect::<Vec<_>>().join("\n");
+        let chars = text.chars().count();
+        let paras = lines.iter().map(|l| ParaFormat { indent: l.0, list: Some(ListKind::Bullet), align: None }).collect();
+        let color = self.hex(&scheme_color("text1")).unwrap_or_else(|| "#000000".into()).to_ascii_lowercase();
+        let mut data = TextData { text, style: TextStyle::Body, align: Align::Left, color: Some(color), fixed_width: true, paras, ..Default::default() };
+        zebra_core::rich::normalize(&mut data);
+        // The box, inset as a text box is; the text as big as fits it,
+        // 18 point at most.
+        let k = self.k;
+        let (w, h) = ((at.w - 182_880.0).max(at.w * 0.5), (at.h - 91_440.0).max(at.h * 0.5));
+        let pt = (h / EMU_PER_PT / (lines.len() as f64 * 1.25)).clamp(6.0, 18.0);
+        let (bw, bh) = (w * k, h * k);
+        let fit = SourceBox { x0: at.cx * k - bw / 2.0, y0: at.cy * k - bh / 2.0, x1: at.cx * k + bw / 2.0, y1: at.cy * k + bh / 2.0, anchor: BoxAnchor::Top };
+        self.pending.push(PendingText { item: self.items.len(), base_pt: pt, chars, wrap: bw });
+        self.items.push(ImportedItem {
+            element: Element {
+                id: String::new(),
+                transform: Transform { x: at.cx * k, y: at.cy * k, scale: 1.0, rotation: at.rot },
+                size: Size { w: bw, h: bh },
+                locked: false,
+                name: String::new(),
+                placeholder: false,
+                group: group.map(str::to_string),
+                kind: ElementKind::Text(data),
+            },
+            fit: Some(fit),
+        });
+        true
     }
 
     /// The layout's and master's placeholders a slide placeholder fills.
@@ -412,12 +658,21 @@ impl<'a> SlideReader<'a> {
         };
         let mut at = place(t, parents);
         let nodes = [Some(node), lay, mas];
+        // An equation comes in as the picture PowerPoint keeps of it (the
+        // shape the parser reads), else is left out; either way, noted.
+        let equation = self.shape_info(self.part, s.base.id).and_then(|i| i.stands_in) == Some(StandIn::Equation);
         // A shape filled with a picture is that picture.
         if let Some(path) = s.picture_fill.as_ref().and_then(|p| p.media_part_path.clone()) {
             let alt = s.base.description.clone().unwrap_or_default();
             let crop = s.picture_fill.as_ref().map(|p| p.crop.clone()).unwrap_or_default();
-            self.picture(&path, &crop, &s.geometry, at, alt, group);
+            let came = self.picture(&path, &crop, &s.geometry, at, alt, group);
+            if equation {
+                self.note(if came { ImportNote::AsPicture } else { ImportNote::Equation });
+            }
         } else {
+            if equation {
+                self.note(ImportNote::Equation);
+            }
             let custom = !s.has_preset_geometry && !s.paths.is_empty();
             let line = matches!(s.geometry.as_str(), "line" | "straightConnector1");
             let kind = (!custom && !line).then(|| shape_kind(&s.geometry)).flatten();
@@ -575,20 +830,8 @@ impl<'a> SlideReader<'a> {
 
     /// The picture at media part `path` over `at`. True when it came in.
     fn picture(&mut self, path: &str, crop: &PictureCrop, geometry: &str, mut at: Placed, alt: String, group: Option<&str>) -> bool {
-        let key = match self.media.get(path) {
-            Some(k) => k.clone(),
-            None => {
-                let key = self.media_asset(path);
-                self.media.insert(path.to_string(), key.clone());
-                key
-            }
-        };
-        let Some(key) = key else { return false };
-        if at.flip_h && at.flip_v {
-            at.rot = (at.rot + 180.0).rem_euclid(360.0);
-        } else if at.flip_h || at.flip_v {
-            self.note(ImportNote::Flip);
-        }
+        let Some(key) = self.picture_asset(path) else { return false };
+        self.unflip_picture(&mut at);
         let f = |v: i32| v.max(0) as f64 / 100_000.0;
         let (l, t, r, b) = (f(crop.left), f(crop.top), f(crop.right), f(crop.bottom));
         let crop = (l + r < 0.99 && t + b < 0.99 && (l + t + r + b) > 0.0).then(|| Crop { x: l, y: t, w: 1.0 - l - r, h: 1.0 - t - b }.clamped());
@@ -614,6 +857,97 @@ impl<'a> SlideReader<'a> {
         true
     }
 
+    /// The picture asset for media part `path` (read once per import), or
+    /// None (noted the first time) when Zebra can't show it.
+    fn picture_asset(&mut self, path: &str) -> Option<String> {
+        match self.media.get(path) {
+            Some(k) => k.clone(),
+            None => {
+                let key = self.media_asset(path);
+                self.media.insert(path.to_string(), key.clone());
+                key
+            }
+        }
+    }
+
+    /// Pictures can't flip: flipped both ways is turned half round; one
+    /// way is shown unflipped (noted).
+    fn unflip_picture(&mut self, at: &mut Placed) {
+        if at.flip_h && at.flip_v {
+            at.rot = (at.rot + 180.0).rem_euclid(360.0);
+        } else if at.flip_h || at.flip_v {
+            self.note(ImportNote::Flip);
+        }
+    }
+
+    /// The video or sound picture `p` plays, taken out of the file: a
+    /// video at the picture's place with the picture as its poster; a
+    /// sound playing across slides as the document's music, one on its
+    /// slide as the slide's voice-over. False when it can't come in (the
+    /// file links to it, it is in a format a Mac won't play, or the music
+    /// or voice-over is taken).
+    fn media_node(&mut self, p: &Picture, m: &MediaRef, parents: &[&ShapeTransform], group: Option<&str>) -> bool {
+        let rels: &[Relationship] = self.pkg.relationships.get(self.part).map(Vec::as_slice).unwrap_or_default();
+        let found = m.rels.iter().filter_map(|id| rels.iter().find(|r| &r.id == id)).filter_map(|r| r.resolved_target.as_deref()).find_map(|t| self.pkg.media.iter().find(|x| x.part_path == t));
+        let Some(part) = found else { return false };
+        let Ok((key, asset, info)) = av_asset_from(part.bytes.clone()) else { return false };
+        let timing = self.infos.get(self.part).and_then(|i| i.timing.get(&p.base.id)).cloned().unwrap_or_default();
+        match info.kind {
+            MediaKind::Video => {
+                let poster = p.media_part_path.clone().and_then(|path| self.picture_asset(&path));
+                let mut at = place(&p.base.transform, parents);
+                self.unflip_picture(&mut at);
+                let start = m.trim.0 / 1000.0;
+                let end = (m.trim.1 > 0.0 && info.duration > 0.0).then(|| info.duration - m.trim.1 / 1000.0).filter(|e| *e > start);
+                let k = self.k;
+                self.items.push(ImportedItem {
+                    element: Element {
+                        id: String::new(),
+                        transform: Transform { x: at.cx * k, y: at.cy * k, scale: 1.0, rotation: at.rot },
+                        size: Size { w: (at.w * k).max(0.5), h: (at.h * k).max(0.5) },
+                        locked: false,
+                        name: String::new(),
+                        placeholder: false,
+                        group: group.map(str::to_string),
+                        kind: ElementKind::Video(VideoData {
+                            asset: key.clone(),
+                            poster,
+                            autoplay: timing.auto,
+                            looping: timing.looping,
+                            muted: timing.mute,
+                            start: if start < info.duration || info.duration == 0.0 { start } else { 0.0 },
+                            end,
+                            duration: info.duration,
+                            alt: p.base.description.clone().unwrap_or_default(),
+                        }),
+                    },
+                    fit: None,
+                });
+            }
+            MediaKind::Audio if timing.across => {
+                if self.has_soundtrack || self.deck.soundtrack.is_some() {
+                    return false;
+                }
+                let name = &p.base.name;
+                let name = match name.rsplit_once('.') {
+                    Some((stem, ext)) if (1..=4).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric()) => stem,
+                    _ => name.as_str(),
+                };
+                // ECMA-376's default volume is half.
+                self.deck.soundtrack = Some(Soundtrack { asset: key.clone(), looping: timing.looping, volume: timing.volume.unwrap_or(0.5), name: name.trim().to_string() });
+            }
+            MediaKind::Audio => {
+                if self.voiceover.is_some() {
+                    return false;
+                }
+                self.voiceover = Some(key.clone());
+            }
+            _ => return false,
+        }
+        self.deck.assets.entry(key).or_insert(asset);
+        true
+    }
+
     /// The asset for media part `path`, or None (noted) when Zebra can't
     /// show it.
     fn media_asset(&mut self, path: &str) -> Option<String> {
@@ -623,12 +957,19 @@ impl<'a> SlideReader<'a> {
         };
         let ct = part.content_type.to_ascii_lowercase();
         let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-        if ct.contains("emf") || ct.contains("wmf") || matches!(ext.as_str(), "emf" | "wmf" | "emz" | "wmz") {
-            self.note(ImportNote::Metafile);
-            return None;
-        }
         let mut bytes = part.bytes.clone();
-        if ct.contains("svg") || ext == "svg" {
+        let metafile = ct.contains("emf") || ct.contains("wmf") || matches!(ext.as_str(), "emf" | "wmf" | "emz" | "wmz");
+        if metafile {
+            // Drawn as SVG, as Keynote converts them.
+            match metafile_svg(&bytes) {
+                Some(svg) => bytes = svg,
+                None => {
+                    self.note(ImportNote::Metafile);
+                    return None;
+                }
+            }
+        }
+        if metafile || ct.contains("svg") || ext == "svg" {
             // Zebra knows an SVG by its first tag.
             match bytes.windows(4).position(|w| w == b"<svg") {
                 Some(i) => {
@@ -661,6 +1002,11 @@ impl<'a> SlideReader<'a> {
             master: inherited.1.and_then(node_text),
             placeholder: s.base.placeholder.as_ref(),
             style_color: s.style.as_ref().and_then(|st| st.font_color.as_ref()),
+            strike: [
+                self.text_strike(self.part, s.base.id),
+                inherited.0.zip(self.layout).and_then(|(n, l)| self.text_strike(&l.part_path, n.id())),
+                inherited.1.zip(self.master).and_then(|(n, m)| self.text_strike(&m.part_path, n.id())),
+            ],
         };
         let bodies = [c.primary, c.layout, c.master];
         let pick = |f: &dyn Fn(&TextBody) -> Option<i64>| bodies.iter().flatten().find_map(|b| f(b));
@@ -716,6 +1062,7 @@ impl<'a> SlideReader<'a> {
             bold: bool,
             italic: bool,
             underline: bool,
+            strike: bool,
             color: String,
             link: Option<String>,
         }
@@ -744,7 +1091,9 @@ impl<'a> SlideReader<'a> {
             }
             let has_runs = p.runs.iter().any(|r| !r.line_break && !r.text.is_empty());
             paras.push((level as u8, if has_runs { list } else { ListKind::None }, align));
-            for r in &p.runs {
+            let para_strike = self.strike_default(c, pi, level as usize);
+            let run_strike = c.strike[0].and_then(|t| t.paras.get(pi));
+            for (ri, r) in p.runs.iter().enumerate() {
                 if r.line_break {
                     // A line break inside a paragraph: Zebra starts a new
                     // paragraph, without a bullet of its own.
@@ -773,6 +1122,7 @@ impl<'a> SlideReader<'a> {
                     bold: rp.bold.unwrap_or(false),
                     italic: rp.italic.unwrap_or(false),
                     underline: rp.underline.as_deref().is_some_and(|u| u != "none"),
+                    strike: run_strike.and_then(|p| p.1.get(ri).copied().flatten()).or(para_strike).unwrap_or(false),
                     color,
                     link,
                 });
@@ -815,7 +1165,7 @@ impl<'a> SlideReader<'a> {
                     bold: (r.bold != bold).then_some(r.bold),
                     italic: (r.italic != italic).then_some(r.italic),
                     underline: r.underline.then_some(true),
-                    strike: None,
+                    strike: r.strike.then_some(true),
                     color: (r.color != color).then(|| r.color.to_ascii_lowercase()),
                     link: r.link.clone(),
                     size: ((r.pt / base_pt - 1.0).abs() > 0.02).then_some(r.pt / base_pt),
@@ -826,6 +1176,49 @@ impl<'a> SlideReader<'a> {
         let mut data = TextData { text, style: TextStyle::Body, bold, italic, align: box_align, bullets: false, color: Some(color.to_ascii_lowercase()), fixed_width: true, spans, paras };
         zebra_core::rich::normalize(&mut data);
         Some((data, base_pt, n))
+    }
+
+    /// The strike-through part `part`'s shape `id` says (None when it
+    /// says none).
+    fn text_strike(&self, part: &str, id: u32) -> Option<&'a TextStrike> {
+        self.shape_info(part, id)?.text.as_ref()
+    }
+
+    /// What the parser's model leaves out of part `part`'s shape `id`.
+    fn shape_info(&self, part: &str, id: u32) -> Option<&'a ShapeInfo> {
+        let infos: &'a BTreeMap<String, PartInfo> = self.infos;
+        infos.get(part)?.shapes.get(&id)
+    }
+
+    /// Whether paragraph `index` at `level`'s runs strike through unless
+    /// they say otherwise: the cascade of [`Self::paragraph_properties`].
+    fn strike_default(&self, c: &Cascade, index: usize, level: usize) -> Option<bool> {
+        let level = level.min(8);
+        let mut out = None;
+        let mut set = |v: Option<bool>| {
+            if v.is_some() {
+                out = v;
+            }
+        };
+        if let Some(info) = self.master.and_then(|m| self.infos.get(&m.part_path)) {
+            set(info.styles[style_kind(c.placeholder) as usize][level]);
+        }
+        if c.placeholder.is_none() {
+            if let Some(info) = self.infos.get(&self.pkg.presentation.part_path) {
+                set(info.default);
+                set(info.styles[StyleKind::Other as usize][level]);
+            }
+        }
+        for (t, own) in [(c.strike[2], false), (c.strike[1], false), (c.strike[0], true)] {
+            let Some(t) = t else { continue };
+            set(t.default);
+            set(t.levels[level]);
+            let p = if own { t.paras.get(index) } else { t.paras.get(index).or_else(|| t.paras.get(level)) };
+            if let Some(p) = p {
+                set(p.0);
+            }
+        }
+        out
     }
 
     /// The URL a run's link relationship points at (web and mail links
@@ -927,6 +1320,56 @@ impl<'a> SlideReader<'a> {
     }
 }
 
+/// An EMF or WMF picture (or a gzipped .emz or .wmz) as an SVG document;
+/// None when it can't be drawn.
+fn metafile_svg(bytes: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    /// A compressed metafile bigger than this is refused.
+    const MAX: u64 = 64 << 20;
+    let mut plain = vec![];
+    let bytes = if bytes.starts_with(&[0x1f, 0x8b]) {
+        flate2::read::GzDecoder::new(bytes).take(MAX + 1).read_to_end(&mut plain).ok()?;
+        (plain.len() as u64 <= MAX).then_some(plain.as_slice())?
+    } else {
+        bytes
+    };
+    if !ooxml_metafile::is_metafile(bytes) {
+        return None;
+    }
+    let svg = ooxml_metafile::to_svg(bytes).ok()?;
+    (svg.width > 0.0 && svg.height > 0.0).then(|| svg.markup.into_bytes())
+}
+
+/// The Zebra diagram for SmartArt layout `layout` (the last part of its
+/// id) holding `items`, when Zebra has one.
+fn diagram_for(layout: &str, items: &[Item]) -> Option<&'static str> {
+    Some(match layout {
+        // Basic Block List (PowerPoint's default).
+        "default" => "block_list",
+        // Basic Process.
+        "process1" => "process",
+        // Basic Chevron Process, Closed Chevron Process.
+        "chevron1" | "hChevron3" => "chevrons",
+        // The cycles of nodes round a loop.
+        "cycle1" | "cycle2" | "cycle3" | "cycle5" | "cycle6" => "cycle",
+        // Basic Timeline.
+        "hProcess11" => "timeline",
+        "funnel1" => "funnel",
+        // Basic Target.
+        "target1" => "target",
+        // Basic Venn.
+        "venn1" => match items.len() {
+            2 => "venn2",
+            3 => "venn3",
+            _ => return None,
+        },
+        // Hierarchy, Organization Chart; Horizontal Hierarchy.
+        "hierarchy1" | "orgChart1" => "org_chart",
+        "hierarchy2" => "tree",
+        _ => return None,
+    })
+}
+
 fn scheme_color(slot: &str) -> ColorValue {
     ColorValue { theme_color: Some(slot.to_string()), ..ColorValue::default() }
 }
@@ -1022,13 +1465,23 @@ fn find_placeholder<'n>(nodes: &'n [ShapeNode], ph: &Placeholder) -> Option<&'n 
     })
 }
 
+/// The master's text style a placeholder of this kind takes (text
+/// outside placeholders: other).
+fn style_kind(ph: Option<&Placeholder>) -> StyleKind {
+    match ph.map(|p| p.placeholder_type.as_deref().unwrap_or("body")) {
+        Some("title" | "ctrTitle") => StyleKind::Title,
+        Some("body" | "obj" | "subTitle") => StyleKind::Body,
+        _ => StyleKind::Other,
+    }
+}
+
 /// The master's title, body or other text style at `level` for a
 /// placeholder of this kind (text outside placeholders: other).
 fn master_style<'m>(m: &'m SlideMaster, ph: Option<&Placeholder>, level: u32) -> Option<&'m ParagraphProperties> {
-    let styles = match ph.map(|p| p.placeholder_type.as_deref().unwrap_or("body")) {
-        Some("title" | "ctrTitle") => &m.text_styles.title,
-        Some("body" | "obj" | "subTitle") => &m.text_styles.body,
-        _ => &m.text_styles.other,
+    let styles = match style_kind(ph) {
+        StyleKind::Title => &m.text_styles.title,
+        StyleKind::Body => &m.text_styles.body,
+        StyleKind::Other => &m.text_styles.other,
     };
     styles.get(level as usize).or_else(|| styles.first())
 }

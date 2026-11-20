@@ -112,6 +112,37 @@ fn real(style: TextStyle, key: &str, x: f64, y: f64, w: f64, h: f64, on: Option<
     Piece::Text { style, text: key.into(), x, y, w, h, bullets: false, align: Align::Center, ph: false, on: on.map(String::from) }
 }
 
+/// What a text piece says: a placeholder's [`crate::content`] key, or an
+/// item's own words (a diagram built [`with_items`]).
+enum Say {
+    Key(&'static str),
+    Own(String),
+}
+
+impl Say {
+    fn key(k: &'static str) -> Say {
+        Say::Key(k)
+    }
+}
+
+/// `s` in a `w` wide box centred on (x, y), `line` high a line. A
+/// placeholder is one line, as [`ph`] makes it; words of one's own take
+/// as many lines as they have, at most `room` high, and grow from the
+/// line's place down (`grow` 1), up (-1) or both ways (0). Empty words
+/// show nothing.
+#[allow(clippy::too_many_arguments)]
+fn say(style: TextStyle, s: &Say, x: f64, y: f64, w: f64, line: f64, room: f64, grow: f64, on: Option<&str>) -> Option<Piece> {
+    match s {
+        Say::Key(k) => Some(ph(style, k, x, y, w, line, on)),
+        Say::Own(t) if t.trim().is_empty() => None,
+        Say::Own(t) => {
+            let h = (line * t.lines().count().max(1) as f64).min(room.max(line));
+            let y = y + grow * (h - line) / 2.0;
+            Some(Piece::Text { style, text: t.clone(), x, y, w, h, bullets: false, align: Align::Center, ph: false, on: on.map(String::from) })
+        }
+    }
+}
+
 fn frame(style: FrameStyle, x: f64, y: f64, w: f64, h: f64) -> Piece {
     Piece::Frame { style, x, y, w, h, rot: 0.0, name: String::new(), path: true, color: None }
 }
@@ -150,29 +181,54 @@ fn step_key(i: usize, n: usize, goal: bool) -> &'static str {
     }
 }
 
+/// Steps with a heading and a note under each (the placeholders' when
+/// inserted).
+type Steps = Vec<(Say, Say)>;
+
+fn placeholder_steps(n: usize, goal: bool) -> Steps {
+    (0..n).map(|i| (Say::key(step_key(i, n, goal)), Say::key("content-add-text"))).collect()
+}
+
 fn process() -> Vec<Piece> {
+    process_of(placeholder_steps(4, true))
+}
+
+fn process_of(steps: Steps) -> Vec<Piece> {
     let mut v = vec![];
-    let (w, h, step) = (0.19, 0.13, 0.25);
-    for i in 0..4 {
-        let x = -0.375 + i as f64 * step;
+    let n = steps.len();
+    let step = if n <= 4 { 0.25 } else { 1.0 / n as f64 };
+    let f = step / 0.25;
+    let (w, h) = (0.19 * f, 0.13 * f);
+    let x0 = -(n as f64 - 1.0) * step / 2.0;
+    for (i, (head, note)) in steps.iter().enumerate() {
+        let x = x0 + i as f64 * step;
         v.push(shape(K::RoundedRect, x, -0.03, w, h, Some(fill(i)), None));
-        v.push(ph(Subtitle, step_key(i, 4, true), x, -0.03, w * 0.75, 0.045, Some(fill(i))));
-        v.push(ph(Body, "content-add-text", x, 0.1, w, 0.035, None));
-        if i < 3 {
-            v.push(line(x + w / 2.0 + 0.012, -0.03, x + step - w / 2.0 - 0.012, -0.03, true));
+        v.extend(say(Subtitle, head, x, -0.03, w * 0.75, 0.045 * f, h * 0.85, 0.0, Some(fill(i))));
+        v.extend(say(Body, note, x, 0.1, w, 0.035 * f, 0.2, 1.0, None));
+        if i + 1 < n {
+            v.push(line(x + w / 2.0 + 0.012 * f, -0.03, x + step - w / 2.0 - 0.012 * f, -0.03, true));
         }
     }
     v
 }
 
 fn cycle() -> Vec<Piece> {
+    cycle_of((0..5).map(|i| Say::key(step_key(i, 5, false))).collect(), Some(Say::key("content-idea")))
+}
+
+fn cycle_of(steps: Vec<Say>, centre: Option<Say>) -> Vec<Piece> {
     let mut v = vec![];
-    let (n, r, d) = (5, 0.21, 0.13);
+    let (n, r) = (steps.len(), 0.21);
+    let d = if n <= 5 { 0.13 } else { (2.0 * r * (PI / n as f64).sin() * 0.75).min(0.13) };
+    let f = d / 0.13;
     let at = |i: usize| {
         let a = (-90.0 + 360.0 * i as f64 / n as f64) * PI / 180.0;
         (r * a.cos(), r * a.sin() + 0.01)
     };
     for i in 0..n {
+        if n < 2 {
+            break;
+        }
         let (x, y) = at(i);
         let (x2, y2) = at((i + 1) % n);
         let (dx, dy) = (x2 - x, y2 - y);
@@ -180,24 +236,34 @@ fn cycle() -> Vec<Piece> {
         let k = (d / 2.0 + 0.015) / len;
         v.push(line(x + dx * k, y + dy * k, x2 - dx * k, y2 - dy * k, true));
     }
-    for i in 0..n {
+    for (i, s) in steps.iter().enumerate() {
         let (x, y) = at(i);
         v.push(shape(K::Ellipse, x, y, d, d, Some(fill(i)), None));
-        v.push(ph(Body, step_key(i, n, false), x, y, d * 0.7, 0.035, Some(fill(i))));
+        v.extend(say(Body, s, x, y, d * 0.7, 0.035 * f, d * 0.7, 0.0, Some(fill(i))));
     }
-    v.push(ph(Subtitle, "content-idea", 0.0, 0.01, 0.16, 0.05, None));
+    if let Some(c) = centre {
+        v.extend(say(Subtitle, &c, 0.0, 0.01, 0.16, 0.05, 0.2, 0.0, None));
+    }
     v
 }
 
 fn timeline() -> Vec<Piece> {
+    timeline_of((0..5).map(|_| (Say::key("content-date"), Say::key("content-add-an-event"))).collect())
+}
+
+fn timeline_of(points: Steps) -> Vec<Piece> {
     let mut v = vec![stroked(line(-0.48, 0.0, 0.48, 0.0, true), 0.006, Dash::Solid)];
-    for i in 0..5 {
-        let x = -0.36 + i as f64 * 0.18;
+    let n = points.len();
+    let sp = if n <= 5 { 0.18 } else { 0.9 / n as f64 };
+    // Labels alternate above and below: each has two steps' room.
+    let f = sp / 0.18;
+    for (i, (date, event)) in points.iter().enumerate() {
+        let x = -(n as f64 - 1.0) * sp / 2.0 + i as f64 * sp;
         let s = if i % 2 == 0 { -1.0 } else { 1.0 };
         v.push(line(x, 0.0, x, s * 0.07, false));
         v.push(shape(K::Ellipse, x, 0.0, 0.028, 0.028, Some("theme:accent"), None));
-        v.push(ph(Subtitle, "content-date", x, s * 0.105, 0.14, 0.035, None));
-        v.push(ph(Body, "content-add-an-event", x, s * 0.155, 0.17, 0.03, None));
+        v.extend(say(Subtitle, date, x, s * 0.105, 0.14 * f, 0.035, 0.035, s, None));
+        v.extend(say(Body, event, x, s * 0.155, 0.17 * f, 0.03, 0.14, s, None));
     }
     v
 }
@@ -233,23 +299,35 @@ fn perspective() -> Vec<Piece> {
 }
 
 fn funnel() -> Vec<Piece> {
+    let stages = ["content-stage-1", "content-stage-2", "content-stage-3"].into_iter().map(Say::key).collect();
+    funnel_of(stages, Say::key("content-outcome"))
+}
+
+fn funnel_of(stages: Vec<Say>, outcome: Say) -> Vec<Piece> {
     let mut v = vec![];
+    let n = stages.len();
     for i in 0..4 {
         let x = -0.18 + i as f64 * 0.12;
         v.push(shape(K::Ellipse, x, -0.27, 0.07, 0.07, Some(fill(i)), None));
         v.push(line(x * 0.9, -0.225, x * 0.6, -0.185, true));
     }
-    let (mut w, h, mut y) = (0.52, 0.1, -0.12);
-    for i in 0..3 {
-        let d = (w * 0.2_f64).min(h);
+    // Three stages fill the funnel; more share its height and narrow
+    // evenly to the same spout.
+    let h = if n <= 3 { 0.1 } else { 0.3 / n as f64 - 0.008 };
+    let (mut w, mut y) = (0.52, -0.12 - (0.1 - h) / 2.0);
+    for (i, s) in stages.iter().enumerate() {
+        let d = if n <= 3 { (w * 0.2_f64).min(h) } else { (0.52 - 0.112) / (2.0 * n as f64) };
         v.push(turned(shape(K::Trapezoid, 0.0, y, w, h, Some(fill(i)), None), 180.0));
-        v.push(ph(Body, ["content-stage-1", "content-stage-2", "content-stage-3"][i], 0.0, y, (w - 2.0 * d) * 0.85, 0.035, Some(fill(i))));
+        v.extend(say(Body, s, 0.0, y, (w - 2.0 * d) * 0.85, 0.035_f64.min(h * 0.4), h * 0.85, 0.0, Some(fill(i))));
         w -= 2.0 * d;
         y += h + 0.008;
     }
+    if n == 0 {
+        y = -0.12;
+    }
     v.push(line(0.0, y - h / 2.0 + 0.004, 0.0, y + 0.03, true));
     v.push(shape(K::RoundedRect, 0.0, y + 0.08, 0.22, 0.08, Some("theme:accent"), None));
-    v.push(ph(Subtitle, "content-outcome", 0.0, y + 0.08, 0.16, 0.04, Some("theme:accent")));
+    v.extend(say(Subtitle, &outcome, 0.0, y + 0.08, 0.16, 0.04, 0.07, 0.0, Some("theme:accent")));
     v
 }
 
@@ -289,12 +367,25 @@ fn org_chart() -> Vec<Piece> {
 }
 
 fn block_list() -> Vec<Piece> {
+    block_list_of((0..4).map(|_| (Say::key("content-heading"), Say::key("content-add-your-points-block"))).collect())
+}
+
+fn block_list_of(blocks: Steps) -> Vec<Piece> {
     let mut v = vec![];
-    for i in 0..4 {
-        let x = -0.36 + i as f64 * 0.24;
-        v.push(shape(K::RoundedRect, x, 0.0, 0.22, 0.32, Some(fill(i)), None));
-        v.push(ph(Subtitle, "content-heading", x, -0.1, 0.17, 0.045, Some(fill(i))));
-        v.push(ph(Body, "content-add-your-points-block", x, 0.03, 0.18, 0.08, Some(fill(i))));
+    let n = blocks.len();
+    let step = if n <= 4 { 0.24 } else { 0.96 / n as f64 };
+    let f = step / 0.24;
+    for (i, (head, points)) in blocks.iter().enumerate() {
+        let x = -(n as f64 - 1.0) * step / 2.0 + i as f64 * step;
+        v.push(shape(K::RoundedRect, x, 0.0, 0.22 * f, 0.32, Some(fill(i)), None));
+        v.extend(say(Subtitle, head, x, -0.1, 0.17 * f, 0.045, 0.09, 0.0, Some(fill(i))));
+        // The points start under the heading (a placeholder's two lines
+        // are centred there).
+        let (y, line, grow) = match points {
+            Say::Key(_) => (0.03, 0.08, 0.0),
+            Say::Own(_) => (-0.03, 0.035, 1.0),
+        };
+        v.extend(say(Body, points, x, y, 0.18 * f, line, 0.2, grow, Some(fill(i))));
     }
     v
 }
@@ -312,16 +403,23 @@ fn numbered_list() -> Vec<Piece> {
 }
 
 fn chevrons() -> Vec<Piece> {
+    let steps = (0..5).map(|i| (Say::key(step_key(i, 5, true)), Say::key("content-add-text"))).collect();
+    chevrons_of(steps)
+}
+
+fn chevrons_of(steps: Steps) -> Vec<Piece> {
     let mut v = vec![];
-    let (w, h) = (0.22, 0.13);
+    let n = steps.len();
+    let f = if n <= 5 { 1.0 } else { 5.0 / n as f64 };
+    let (w, h) = (0.22 * f, 0.13);
     let d = (w * 0.3_f64).min(h / 2.0);
     let step = w - d + 0.012;
-    let x0 = -(step * 4.0) / 2.0;
-    for i in 0..5 {
+    let x0 = -(step * (n as f64 - 1.0)) / 2.0;
+    for (i, (head, note)) in steps.iter().enumerate() {
         let x = x0 + i as f64 * step;
         v.push(shape(K::Chevron, x, -0.03, w, h, Some(fill(i)), None));
-        v.push(ph(Body, step_key(i, 5, true), x + d * 0.3, -0.03, (w - 2.0 * d) * 0.9, 0.035, Some(fill(i))));
-        v.push(ph(Body, "content-add-text", x, 0.08, step * 0.95, 0.03, None));
+        v.extend(say(Body, head, x + d * 0.3, -0.03, (w - 2.0 * d) * 0.9, 0.035, h * 0.8, 0.0, Some(fill(i))));
+        v.extend(say(Body, note, x, 0.08, step * 0.95, 0.03, 0.2, 1.0, None));
     }
     v
 }
@@ -380,37 +478,59 @@ fn venn_circle(x: f64, y: f64, r: f64, i: usize) -> Piece {
 }
 
 fn venn2() -> Vec<Piece> {
-    vec![
-        venn_circle(-0.11, 0.0, 0.21, 0),
-        venn_circle(0.11, 0.0, 0.21, 1),
-        ph(Subtitle, "content-idea", -0.2, 0.0, 0.13, 0.04, None),
-        ph(Subtitle, "content-idea", 0.2, 0.0, 0.13, 0.04, None),
-        ph(Body, "content-both", 0.0, 0.0, 0.08, 0.03, None),
-    ]
+    venn2_of([Say::key("content-idea"), Say::key("content-idea")], Some(Say::key("content-both")))
+}
+
+fn venn2_of(sets: [Say; 2], both: Option<Say>) -> Vec<Piece> {
+    let mut v = vec![venn_circle(-0.11, 0.0, 0.21, 0), venn_circle(0.11, 0.0, 0.21, 1)];
+    v.extend(say(Subtitle, &sets[0], -0.2, 0.0, 0.13, 0.04, 0.3, 0.0, None));
+    v.extend(say(Subtitle, &sets[1], 0.2, 0.0, 0.13, 0.04, 0.3, 0.0, None));
+    if let Some(b) = both {
+        v.extend(say(Body, &b, 0.0, 0.0, 0.08, 0.03, 0.2, 0.0, None));
+    }
+    v
 }
 
 fn venn3() -> Vec<Piece> {
+    venn3_of([Say::key("content-idea"), Say::key("content-idea"), Say::key("content-idea")], Some(Say::key("content-all")))
+}
+
+fn venn3_of(sets: [Say; 3], all: Option<Say>) -> Vec<Piece> {
     let r = 0.17;
     let c = [(0.0, -0.085), (-0.1, 0.085), (0.1, 0.085)];
     let mut v: Vec<Piece> = c.iter().enumerate().map(|(i, &(x, y))| venn_circle(x, y, r, i)).collect();
-    v.push(ph(Subtitle, "content-idea", 0.0, -0.17, 0.12, 0.04, None));
-    v.push(ph(Subtitle, "content-idea", -0.17, 0.13, 0.12, 0.04, None));
-    v.push(ph(Subtitle, "content-idea", 0.17, 0.13, 0.12, 0.04, None));
-    v.push(ph(Body, "content-all", 0.0, 0.03, 0.05, 0.028, None));
+    v.extend(say(Subtitle, &sets[0], 0.0, -0.17, 0.12, 0.04, 0.12, 0.0, None));
+    v.extend(say(Subtitle, &sets[1], -0.17, 0.13, 0.12, 0.04, 0.12, 0.0, None));
+    v.extend(say(Subtitle, &sets[2], 0.17, 0.13, 0.12, 0.04, 0.12, 0.0, None));
+    if let Some(a) = all {
+        v.extend(say(Body, &a, 0.0, 0.03, 0.05, 0.028, 0.05, 0.0, None));
+    }
     v
 }
 
 fn target() -> Vec<Piece> {
-    let radii = [0.29, 0.22, 0.15, 0.08];
+    let mut rings: Vec<Say> = (0..3).map(|_| Say::key("content-add-context")).collect();
+    rings.push(Say::key("content-main-point"));
+    target_of(rings)
+}
+
+/// Rings from the outermost in; the last is the centre.
+fn target_of(rings: Vec<Say>) -> Vec<Piece> {
+    let n = rings.len();
+    let gap = if n > 1 { 0.21 / (n as f64 - 1.0) } else { 0.0 };
+    let radii: Vec<f64> = (0..n).map(|i| 0.29 - i as f64 * gap).collect();
     let mut v = vec![];
     for (i, &r) in radii.iter().enumerate() {
-        v.push(shape(K::Ellipse, 0.0, 0.0, 2.0 * r, 2.0 * r, Some(fill(3 - i)), None));
+        v.push(shape(K::Ellipse, 0.0, 0.0, 2.0 * r, 2.0 * r, Some(fill(n - 1 - i)), None));
     }
-    for i in 0..3 {
-        let y = -(radii[i] + radii[i + 1]) / 2.0;
-        v.push(ph(Body, "content-add-context", 0.0, y, 0.16, 0.03, Some(fill(3 - i))));
+    for (i, s) in rings.iter().enumerate() {
+        if i + 1 < n {
+            let y = -(radii[i] + radii[i + 1]) / 2.0;
+            v.extend(say(Body, s, 0.0, y, 0.16, 0.03_f64.min(gap * 0.5), gap * 0.8, 0.0, Some(fill(n - 1 - i))));
+        } else {
+            v.extend(say(Subtitle, s, 0.0, 0.0, 0.1, 0.04, radii[i] * 1.4, 0.0, Some(fill(0))));
+        }
     }
-    v.push(ph(Subtitle, "content-main-point", 0.0, 0.0, 0.1, 0.04, Some(fill(0))));
     v
 }
 
@@ -521,6 +641,152 @@ fn big_picture() -> Vec<Piece> {
     v
 }
 
+/// One item of a diagram brought in from another app (a SmartArt
+/// graphic's points): its words and the items under it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Item {
+    pub text: String,
+    pub children: Vec<Item>,
+}
+
+impl Item {
+    /// The words of the items under it, and under them, a line each.
+    pub fn under(&self) -> String {
+        fn add(i: &Item, out: &mut Vec<String>) {
+            for c in &i.children {
+                if !c.text.trim().is_empty() {
+                    out.push(c.text.clone());
+                }
+                add(c, out);
+            }
+        }
+        let mut out = vec![];
+        add(self, &mut out);
+        out.join("\n")
+    }
+
+    /// Its words, with the words under it on the lines after them.
+    pub fn all(&self) -> String {
+        [self.text.clone(), self.under()].into_iter().filter(|t| !t.trim().is_empty()).collect::<Vec<_>>().join("\n")
+    }
+
+    fn leaves(&self) -> usize {
+        self.children.iter().map(Item::leaves).sum::<usize>().max(1)
+    }
+
+    fn depth(&self) -> usize {
+        1 + self.children.iter().map(Item::depth).max().unwrap_or(0)
+    }
+}
+
+/// Diagram `key` built for `items` in place of its placeholders: a step,
+/// ring or box for each item, with the item's words (text pieces hold the
+/// words themselves, not content keys, and are not placeholders) and the
+/// words of the items under it as the diagram's note where it has one,
+/// else under the item's own. An org chart or tree takes the whole
+/// hierarchy. None when the diagram can't show these items (a Venn of
+/// four, more steps than fit) or isn't one of these.
+pub fn with_items(key: &str, items: &[Item]) -> Option<Vec<Piece>> {
+    let n = items.len();
+    if n == 0 {
+        return None;
+    }
+    let own = |s: String| Say::Own(s);
+    let steps = || items.iter().map(|i| (own(i.text.clone()), own(i.under()))).collect::<Steps>();
+    let whole = || items.iter().map(|i| own(i.all())).collect::<Vec<Say>>();
+    Some(match key {
+        "process" if n <= 8 => process_of(steps()),
+        "chevrons" if n <= 8 => chevrons_of(steps()),
+        "block_list" if n <= 8 => block_list_of(steps()),
+        "timeline" if n <= 10 => timeline_of(steps()),
+        "cycle" if n <= 10 => cycle_of(whole(), None),
+        "target" if n <= 6 => target_of(whole()),
+        "funnel" if n <= 7 => {
+            let (last, rest) = items.split_last()?;
+            funnel_of(rest.iter().map(|i| own(i.all())).collect(), own(last.all()))
+        }
+        "venn2" if n == 2 => venn2_of([own(items[0].all()), own(items[1].all())], None),
+        "venn3" if n == 3 => venn3_of([own(items[0].all()), own(items[1].all()), own(items[2].all())], None),
+        "org_chart" | "tree" => {
+            let leaves: usize = items.iter().map(Item::leaves).sum();
+            let depth = items.iter().map(Item::depth).max().unwrap_or(1);
+            if leaves > 24 || depth > 5 {
+                return None;
+            }
+            hierarchy(items, key == "tree")
+        }
+        _ => return None,
+    })
+}
+
+/// A hierarchy of boxes joined by elbow lines: top down, or left to right
+/// when `across`. Each item sits over (or beside) the middle of its own.
+fn hierarchy(items: &[Item], across: bool) -> Vec<Piece> {
+    let leaves: usize = items.iter().map(Item::leaves).sum();
+    let levels = items.iter().map(Item::depth).max().unwrap_or(1);
+    // Along: where the leaves are spread (0.96 wide, or 0.6 tall);
+    // deep: where the levels step (the other way).
+    let (along, deep) = if across { (0.6, 0.96) } else { (0.96, 0.6) };
+    let slot = along / leaves as f64;
+    let pitch = (deep / levels as f64).min(if across { 0.3 } else { 0.2 });
+    // Box size along and deep.
+    let (ba, bd) = if across { ((slot * 0.8).min(0.1), (pitch * 0.75).min(0.19)) } else { ((slot * 0.88).min(0.19), (pitch * 0.55).min(0.09)) };
+    let at = |a: f64, d: f64| if across { (d, a) } else { (a, d) };
+    let mut lines = vec![];
+    let mut boxes = vec![];
+    struct Ctx<'v> {
+        across: bool,
+        slot: f64,
+        pitch: f64,
+        ba: f64,
+        bd: f64,
+        d0: f64,
+        a0: f64,
+        lines: &'v mut Vec<Piece>,
+        boxes: &'v mut Vec<Piece>,
+    }
+    fn place(c: &mut Ctx, it: &Item, first: usize, level: usize, at: &dyn Fn(f64, f64) -> (f64, f64)) -> f64 {
+        let a = c.a0 + (first as f64 + it.leaves() as f64 / 2.0) * c.slot;
+        let d = c.d0 + level as f64 * c.pitch;
+        let mut kids = vec![];
+        let mut k = first;
+        for ch in &it.children {
+            kids.push(place(c, ch, k, level + 1, at));
+            k += ch.leaves();
+        }
+        if !kids.is_empty() {
+            let mid = d + c.pitch / 2.0;
+            let seg = |c: &mut Ctx, a1: f64, d1: f64, a2: f64, d2: f64| {
+                let (x1, y1) = at(a1, d1);
+                let (x2, y2) = at(a2, d2);
+                c.lines.push(line(x1, y1, x2, y2, false));
+            };
+            seg(c, a, d + c.bd / 2.0, a, mid);
+            if kids.len() > 1 {
+                seg(c, kids[0], mid, kids[kids.len() - 1], mid);
+            }
+            for &ka in &kids {
+                seg(c, ka, mid, ka, d + c.pitch - c.bd / 2.0);
+            }
+        }
+        let (x, y) = at(a, d);
+        let (w, h) = if c.across { (c.bd, c.ba) } else { (c.ba, c.bd) };
+        c.boxes.push(shape(K::RoundedRect, x, y, w, h, Some(fill(level)), None));
+        let style = if level == 0 { Subtitle } else { Body };
+        let line_h = (h * 0.4).min(if level == 0 { 0.04 } else { 0.034 });
+        c.boxes.extend(say(style, &Say::Own(it.text.clone()), x, y, w * 0.8, line_h, h * 0.85, 0.0, Some(fill(level))));
+        a
+    }
+    let mut c = Ctx { across, slot, pitch, ba, bd, d0: -(levels as f64 - 1.0) * pitch / 2.0, a0: -along / 2.0, lines: &mut lines, boxes: &mut boxes };
+    let mut k = 0;
+    for it in items {
+        place(&mut c, it, k, 0, &at);
+        k += it.leaves();
+    }
+    lines.extend(boxes);
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,6 +805,48 @@ mod tests {
             }
             let frames = pieces.iter().filter(|p| matches!(p, Piece::Frame { .. })).count();
             assert_eq!(frames > 0, d.path, "{}: only zooming diagrams use frames", d.key);
+        }
+    }
+
+    fn item(text: &str, children: Vec<Item>) -> Item {
+        Item { text: text.into(), children }
+    }
+
+    #[test]
+    fn diagrams_take_items_of_their_own() {
+        let flat = |n: usize| (0..n).map(|i| item(&format!("Item {i}"), vec![item(&format!("Note {i}"), vec![])])).collect::<Vec<_>>();
+        let words = |p: &[Piece]| p.iter().filter_map(|p| if let Piece::Text { text, ph, .. } = p { assert!(!ph); Some(text.clone()) } else { None }).collect::<Vec<_>>();
+        for key in ["process", "chevrons", "block_list", "timeline", "cycle", "target", "funnel", "venn2", "venn3", "org_chart", "tree"] {
+            for n in 1..=8 {
+                let items = flat(n);
+                let Some(pieces) = with_items(key, &items) else { continue };
+                for p in &pieces {
+                    let (x, y) = match p {
+                        Piece::Frame { x, y, .. } | Piece::Text { x, y, .. } | Piece::Shape { x, y, .. } => (*x, *y),
+                        Piece::Ink { points, .. } => (points[0][0], points[0][1]),
+                    };
+                    assert!(x.abs() <= 0.5 && y.abs() <= 0.35, "{key} of {n} has a piece at {x}, {y}");
+                }
+                let w = words(&pieces).join("\n");
+                for i in 0..n {
+                    assert!(w.contains(&format!("Item {i}")), "{key} of {n} leaves out item {i}: {w}");
+                    assert!(w.contains(&format!("Note {i}")), "{key} of {n} leaves out note {i}: {w}");
+                }
+            }
+        }
+        // Steps carry their notes apart from their words.
+        let p = with_items("process", &flat(3)).unwrap();
+        assert!(words(&p).contains(&"Note 1".to_string()));
+        assert_eq!(p.iter().filter(|p| matches!(p, Piece::Shape { shape: K::RoundedRect, .. })).count(), 3);
+        assert!(with_items("venn2", &flat(3)).is_none());
+        assert!(with_items("process", &[]).is_none());
+        assert!(with_items("perspective", &flat(3)).is_none());
+        // A hierarchy: one box for each item, joined by lines.
+        let org = [item("Head", vec![item("A", vec![item("A1", vec![]), item("A2", vec![])]), item("B", vec![])])];
+        for key in ["org_chart", "tree"] {
+            let p = with_items(key, &org).unwrap();
+            assert_eq!(p.iter().filter(|p| matches!(p, Piece::Shape { shape: K::RoundedRect, .. })).count(), 5, "{key}");
+            assert_eq!(words(&p), ["A1", "A2", "A", "B", "Head"], "{key}");
         }
     }
 }

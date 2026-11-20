@@ -178,6 +178,7 @@ fn run(app: &mut ZebraApp, path: PathBuf, reader: Box<dyn Reader>, first: usize,
     opts.last = last;
     opts.page_name = std::sync::Arc::new(|n| crate::t!("import-page-name", n = (n as i64)));
     opts.slide_name = std::sync::Arc::new(|n| crate::t!("import-slide-name", n = (n as i64)));
+    opts.has_soundtrack = app.editor.doc.soundtrack.is_some();
     let ctl = Control::default();
     let (tx, rx) = std::sync::mpsc::channel();
     let (c, ctx) = (ctl.clone(), app.ctx.clone());

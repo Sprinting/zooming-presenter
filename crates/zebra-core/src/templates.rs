@@ -41,7 +41,9 @@ pub enum Piece {
     Text {
         style: TextStyle,
         /// A [`crate::content`] key (`content-add-a-title`), filled in when
-        /// the text is placed; or a number, kept as it is. Never English.
+        /// the text is placed; or a number, kept as it is. Never English,
+        /// except in a diagram built from another app's items
+        /// ([`crate::diagrams::with_items`]): their own words.
         text: String,
         x: f64,
         y: f64,

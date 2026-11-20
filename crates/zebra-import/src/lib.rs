@@ -18,6 +18,7 @@ use zebra_core::Theme;
 
 pub mod pdf;
 pub mod pptx;
+mod pptx_xml;
 
 /// The file types File › Import… offers (lower case, no dot).
 pub const EXTENSIONS: &[&str] = &["pdf", "pptx"];
@@ -84,11 +85,14 @@ pub struct Options {
     pub page_name: Arc<dyn Fn(usize) -> String + Send + Sync>,
     /// The frame name for slide `n` (1-based) when it has no title.
     pub slide_name: Arc<dyn Fn(usize) -> String + Send + Sync>,
+    /// The document has background music already: music a file plays
+    /// across its slides stays a picture (noted) rather than replace it.
+    pub has_soundtrack: bool,
 }
 
 impl Options {
     pub fn all(theme: Theme) -> Options {
-        Options { first: 1, last: usize::MAX, theme, page_name: Arc::new(|n| format!("Page {n}")), slide_name: Arc::new(|n| format!("Slide {n}")) }
+        Options { first: 1, last: usize::MAX, theme, page_name: Arc::new(|n| format!("Page {n}")), slide_name: Arc::new(|n| format!("Slide {n}")), has_soundtrack: false }
     }
 }
 

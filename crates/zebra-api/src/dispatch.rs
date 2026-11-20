@@ -278,6 +278,7 @@ impl Dispatcher {
             }
             let Call::Import { path, first, last } = p.call else { unreachable!() };
             let theme = editor.theme();
+            let has_soundtrack = editor.doc.soundtrack.is_some();
             let (tx, rx) = std::sync::mpsc::channel();
             let waker = server.inner.shared.waker.clone();
             let (doc, origin) = (doc.clone(), p.origin.clone());
@@ -288,6 +289,7 @@ impl Dispatcher {
                     let mut o = zebra_import::Options::all(theme);
                     o.first = first.unwrap_or(1);
                     o.last = last.unwrap_or(usize::MAX);
+                    o.has_soundtrack = has_soundtrack;
                     let pages = r.page_count();
                     if o.first > pages {
                         let what = if r.kind() == "PowerPoint" { "slides" } else { "pages" };

@@ -6,6 +6,7 @@
 //! shares, so a PDF and a PowerPoint file land on the canvas the same way.
 use std::collections::BTreeMap;
 
+use base64::Engine as _;
 use serde::Serialize;
 
 use crate::clip::Clip;
@@ -13,7 +14,7 @@ use crate::command::Command;
 use crate::editor::{Editor, Outcome};
 use crate::error::{ZError, ZResult};
 use crate::geom::Transform;
-use crate::model::{Align, Asset, Element, ElementKind, FrameData, FrameStyle, Size, StepTarget};
+use crate::model::{Align, Asset, Element, ElementKind, FrameData, FrameStyle, MediaKind, Size, Soundtrack, StepTarget};
 use crate::Origin;
 
 /// What a reader made of a file.
@@ -26,6 +27,9 @@ pub struct ImportedDeck {
     pub assets: BTreeMap<String, Asset>,
     /// What could not come in as it was, and how often.
     pub notes: BTreeMap<ImportNote, usize>,
+    /// Music the file plays across its pages (an asset in `assets`); it
+    /// becomes the document's background music unless it has some.
+    pub soundtrack: Option<Soundtrack>,
 }
 
 /// One page or slide. Coordinates are world units with the page's top-left
@@ -43,6 +47,9 @@ pub struct ImportedPage {
     /// A PowerPoint slide: always framed (even when it holds one object),
     /// and its frame shows deck-style when presenting ([`FrameData::slide`]).
     pub slide: bool,
+    /// Sound the page plays (an asset in [`ImportedDeck::assets`]): its
+    /// path step's voice-over.
+    pub voiceover: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,20 +94,24 @@ pub enum ImportNote {
     HiddenSlide,
     /// Charts with no picture of them in the file were left out.
     Chart,
-    /// SmartArt graphics were left out.
+    /// SmartArt graphics were left out: neither a Zebra diagram, the
+    /// shapes PowerPoint saved of them nor a list of their items could be
+    /// made (their data is missing or unreadable).
     SmartArt,
     /// Tables were left out.
     Table,
-    /// Equations were left out.
+    /// Equations with no picture of them in the file were left out.
     Equation,
-    /// Videos and sounds came in as their poster pictures.
+    /// Videos and sounds that could not be taken out of the file, or that
+    /// won't play on a Mac (WMV, AVI…), came in as their poster pictures.
     Media,
-    /// Embedded objects came in as the picture the file keeps of them.
+    /// Embedded objects (and charts and equations PowerPoint saves a
+    /// picture of beside them) came in as that picture.
     AsPicture,
     /// Shapes Zebra has no match for (custom shapes, curved connectors…)
     /// were left out; their text came in.
     Shape,
-    /// EMF and WMF pictures with no other picture beside them were left out.
+    /// EMF and WMF pictures that could not be drawn were left out.
     Metafile,
     /// Pictures in other formats (TIFF, BMP…) or that could not be read
     /// were left out.
@@ -176,6 +187,19 @@ pub fn asset_from(bytes: Vec<u8>) -> ZResult<(String, Asset)> {
     Ok((key, Asset { ext, bytes, width: w, height: h }))
 }
 
+/// A video or sound asset (MP4, MOV, M4V; MP3, M4A, AAC, WAV) and its
+/// content key, for [`ImportedDeck::assets`], with what its header says
+/// (kind, size, length). Other formats are refused: they won't play.
+pub fn av_asset_from(bytes: Vec<u8>) -> ZResult<(String, Asset, crate::media::MediaInfo)> {
+    let info = crate::media::info(&bytes)?;
+    if !matches!(info.kind, MediaKind::Video | MediaKind::Audio) {
+        return Err(crate::error::ZError::invalid("not a video or a sound"));
+    }
+    let key = crate::editor::content_key(&bytes);
+    let bytes = crate::media::spill(bytes, &key);
+    Ok((key, Asset { ext: info.ext.clone(), bytes, width: info.width, height: info.height }, info))
+}
+
 /// Pages per row on the canvas for `n` pages: a block about as wide as tall.
 pub fn columns(n: usize) -> usize {
     (n as f64).sqrt().ceil().max(1.0) as usize
@@ -188,7 +212,9 @@ impl Editor {
     /// page appended in page order (carrying the page's notes). A page that
     /// is a single picture (every PDF page) is its own step and carries the
     /// page's name; a page of several objects, and every slide, is framed
-    /// on its own. Objects grouped on a page stay grouped.
+    /// on its own. Objects grouped on a page stay grouped, locked ones
+    /// locked. A page's sound becomes its step's voice-over; the deck's
+    /// music the document's background music, unless it has some.
     pub fn import_deck(&mut self, deck: &ImportedDeck, label: String, origin: Origin) -> ZResult<Outcome> {
         if deck.pages.is_empty() {
             return Err(ZError::invalid("the file has no pages to import"));
@@ -253,7 +279,7 @@ impl Editor {
                     group: None,
                     kind: ElementKind::Frame(FrameData { style: FrameStyle::Rectangle, color: None, slide: p.slide }),
                 });
-                steps.push((fid, p.notes.clone()));
+                steps.push((fid, p.notes.clone(), p.voiceover.clone()));
             }
             for it in &p.items {
                 let mut e = it.element.clone();
@@ -267,16 +293,37 @@ impl Editor {
                 e.transform.y += oy;
                 if single {
                     e.name = p.name.clone();
-                    steps.push((e.id.clone(), p.notes.clone()));
+                    steps.push((e.id.clone(), p.notes.clone(), p.voiceover.clone()));
                 }
                 clip.elements.push(e);
             }
         }
+        // Sounds go in through the commands that set them, which take the
+        // bytes; they are the assets the paste adds, so stored once.
+        let b64 = |key: &str| deck.assets.get(key).map(|a| base64::engine::general_purpose::STANDARD.encode(&a.bytes[..]));
+        // A paste adds unlocked copies: lock what the page has locked.
+        let locked: Vec<String> = clip.elements.iter().filter(|e| e.locked).map(|e| e.id.clone()).collect();
+        let first_step = self.doc.path.len();
+        let music = deck.soundtrack.as_ref().filter(|_| self.doc.soundtrack.is_none());
         self.paste_clip_then(&clip, 0.0, 0.0, Some(label), origin, |ids| {
-            steps
+            let mut cmds: Vec<Command> = steps
                 .iter()
-                .map(|(f, notes)| Command::AddStep { target: StepTarget::Element { id: ids[f.as_str()].clone() }, index: None, builds: vec![], notes: notes.clone() })
-                .collect()
+                .map(|(f, notes, _)| Command::AddStep { target: StepTarget::Element { id: ids[f.as_str()].clone() }, index: None, builds: vec![], notes: notes.clone() })
+                .collect();
+            for (i, (_, _, voice)) in steps.iter().enumerate() {
+                if let Some(data) = voice.as_deref().and_then(b64) {
+                    cmds.push(Command::SetVoiceover { index: first_step + i, data_base64: data, path: None });
+                }
+            }
+            if let Some(t) = music {
+                if let Some(data) = b64(&t.asset) {
+                    cmds.push(Command::SetSoundtrack { data_base64: data, path: None, looping: Some(t.looping), volume: Some(t.volume), name: Some(t.name.clone()) });
+                }
+            }
+            for id in &locked {
+                cmds.push(Command::Update { id: ids[id.as_str()].clone(), patch: crate::command::ElementPatch { locked: Some(true), ..Default::default() } });
+            }
+            cmds
         })
     }
 }
@@ -288,6 +335,9 @@ impl Editor {
 fn fit_text(ed: &Editor, theme: &crate::Theme, e: &mut Element, b: SourceBox) {
     let ElementKind::Text(t) = &e.kind else { return };
     let align = t.align;
+    // Text that sizes itself aligns its paragraphs within its widest line;
+    // the source aligned them within its box.
+    let mixed = !t.fixed_width && t.paras.iter().any(|p| p.align.is_some_and(|a| a != align));
     crate::editor::measure_text(&*ed.measure, theme, e);
     let src_w = (b.x1 - b.x0).max(1.0);
     let w = e.size.w * e.transform.scale;
@@ -295,6 +345,16 @@ fn fit_text(ed: &Editor, theme: &crate::Theme, e: &mut Element, b: SourceBox) {
     // more and the text is made smaller so lines stay where they were.
     if w > src_w * 1.04 && w > 0.0 {
         e.transform.scale *= src_w * 1.04 / w;
+    }
+    if mixed {
+        // As wide as the box (or its widest line, a hair over the box), so
+        // a centred line is centred on the box and a right-aligned one
+        // ends at its right edge. Nothing rewraps: every line fits.
+        e.size.w = (src_w / e.transform.scale).max(e.size.w * 1.001);
+        if let ElementKind::Text(t) = &mut e.kind {
+            t.fixed_width = true;
+        }
+        crate::editor::measure_text(&*ed.measure, theme, e);
     }
     if e.transform.rotation.abs() > 0.5 {
         // Turned text keeps its centre.
