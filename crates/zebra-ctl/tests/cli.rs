@@ -64,6 +64,26 @@ fn zebractl_end_to_end() {
     assert!(ok && out.contains("\"Two\""), "{out}");
     let (ok, _, err) = ctl(&h, &data, &["apply", r#"{"op":"add_txet"}"#]);
     assert!(!ok && err.contains("invalid_params") && err.contains("add_text"), "{err}");
+    // Charts: add from a CSV, fill its own data, read it back; one made
+    // from a table follows it.
+    let csv = dir.join("sales.csv");
+    std::fs::write(&csv, ",Q2,Q3\nNorth,1240,1410\nSouth,980,1120\n").unwrap();
+    let (ok, _, err) = ctl(&h, &data, &["add", "chart", "bar", "--csv", csv.to_str().unwrap(), "--id", "h7", "--title", "Sales", "--x", "4000"]);
+    assert!(ok, "{err}");
+    let more = dir.join("more.csv");
+    std::fs::write(&more, "East,410,500\n").unwrap();
+    let (ok, _, err) = ctl(&h, &data, &["chart-data", "h7", "A4", more.to_str().unwrap()]);
+    assert!(ok, "{err}");
+    let (ok, out, err) = ctl(&h, &data, &["chart", "h7"]);
+    assert!(ok && out.contains("East") && out.contains("bar"), "{out}{err}");
+    let (ok, _, err) = ctl(&h, &data, &["add", "table", "--csv", csv.to_str().unwrap(), "--id", "b7", "--x", "6000"]);
+    assert!(ok, "{err}");
+    let (ok, _, err) = ctl(&h, &data, &["add", "chart", "line", "--from-table", "b7", "--link", "--id", "h8", "--x", "7000"]);
+    assert!(ok, "{err}");
+    let (ok, _, err) = ctl(&h, &data, &["chart-data", "h8", "A1", more.to_str().unwrap()]);
+    assert!(!ok && err.contains("link"), "a linked chart is changed through its table: {err}");
+    let (ok, _, err) = ctl(&h, &data, &["add", "chart", "nonsense", "--csv", csv.to_str().unwrap()]);
+    assert!(!ok && err.contains("column"), "lists the types: {err}");
     let shot = dir.join("s.png");
     let (ok, _, err) = ctl(&h, &data, &["screenshot", "--step", "0", "-o", shot.to_str().unwrap(), "--width", "160", "--height", "100"]);
     assert!(ok || err.contains("unimplemented"), "{err}");
