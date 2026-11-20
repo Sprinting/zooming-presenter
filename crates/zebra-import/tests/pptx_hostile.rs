@@ -455,6 +455,45 @@ fn a_video_with_a_lying_length_comes_in_with_it_unknown() {
     }
 }
 
+/// A17 of the cloud pass: a video part that unpacks to far more than it
+/// takes in the file (a bomb: the MP4's first bytes, then zeros) was cut
+/// at 200 times its packed size and came in, cut, as slide 4's sound. It
+/// is left out now, noted, and nothing else takes its place.
+#[test]
+fn a_bomb_video_is_left_out_not_cut_short() {
+    let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let extras = fixture("extras.pptx");
+    let seed = unpack(&extras).into_iter().find(|(n, _)| n == "ppt/media/media1.mp4").unwrap().1;
+    let mut src = zip::ZipArchive::new(std::io::Cursor::new(&extras)).unwrap();
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..src.len() {
+        let f = src.by_index_raw(i).unwrap();
+        if f.name().unwrap() == "ppt/media/media1.mp4" {
+            drop(f);
+            w.start_file("ppt/media/media1.mp4", zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(&seed[..64]).unwrap();
+            let zeros = vec![0u8; 1 << 20];
+            for _ in 0..256 {
+                w.write_all(&zeros).unwrap();
+            }
+        } else {
+            w.raw_copy_file(f).unwrap();
+        }
+    }
+    let bytes = w.finish().unwrap().into_inner();
+    assert!(bytes.len() < 4 << 20, "{} bytes", bytes.len());
+    let (d, grew) = peak(|| read(bytes).unwrap());
+    eprintln!("256 MB bomb video: heap +{} MB", grew / MB);
+    let slide4 = &d.pages[3];
+    assert!(!slide4.items.iter().any(|i| matches!(i.element.kind, ElementKind::Video(_))));
+    assert!(slide4.voiceover.is_none(), "came in as a sound");
+    assert!(d.assets.values().all(|a| a.bytes.len() < 1 << 20), "a cut part came in");
+    // One more poster-only video than the deck as it was.
+    let before = read(extras).unwrap().notes.get(&ImportNote::Media).copied().unwrap_or(0);
+    assert_eq!(d.notes.get(&ImportNote::Media).copied().unwrap_or(0), before + 1, "{:?}", d.notes);
+    assert!(grew < 64 * MB, "heap +{} MB", grew / MB);
+}
+
 /// Big files: a 2 GB file named .pptx that is nothing is refused without
 /// being read (it is mapped, never on the heap).
 #[test]

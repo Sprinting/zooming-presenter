@@ -89,8 +89,11 @@ impl MediaSource {
         (v.len() as u64 <= max).then_some(v)
     }
 
-    /// Run `f` with a reader of part `path`, limited to what it may
-    /// unpack to (a bomb errors out partway instead of filling the disk).
+    /// Run `f` with a reader of media part `path` and the size it says it
+    /// unpacks to. None when that is more than it may unpack to (a bomb,
+    /// not media); the reader fails, rather than ends, where the part
+    /// turns out longer or shorter than it says, so a part is never taken
+    /// in cut short (a 2 GB bomb video, cut at 398 MB, came in as a sound).
     fn with_part<T>(&self, path: &str, f: impl FnOnce(&mut dyn Read, u64) -> Option<T>) -> Option<T> {
         if !is_media(path) {
             return None;
@@ -98,9 +101,11 @@ impl MediaSource {
         let i = *self.entries.get(path)?;
         let mut zip = self.zip.lock().unwrap_or_else(|e| e.into_inner());
         let entry = zip.by_index(i).ok()?;
-        let limit = entry.size().min(entry.compressed_size().saturating_mul(MAX_RATIO).max(1 << 20));
-        let mut r = entry.take(limit);
-        f(&mut r, limit)
+        let size = entry.size();
+        if size > entry.compressed_size().saturating_mul(MAX_RATIO).max(1 << 20) {
+            return None;
+        }
+        f(&mut Exact { inner: entry, left: size }, size)
     }
 
     /// The bytes of a part of at most `max` bytes, read into memory.
@@ -159,6 +164,38 @@ impl MediaSource {
     }
 }
 
+/// A reader of exactly `left` more bytes of `inner`: an error, not the
+/// end, when `inner` gives fewer or more.
+struct Exact<R> {
+    inner: R,
+    left: u64,
+}
+
+impl<R: Read> Read for Exact<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::{Error, ErrorKind};
+        if self.left == 0 {
+            // At the size it said: anything more means it lied.
+            let mut one = [0u8; 1];
+            return match self.inner.read(&mut one)? {
+                0 => Ok(0),
+                _ => Err(Error::new(ErrorKind::InvalidData, "part longer than it says")),
+            };
+        }
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let want = buf.len().min(usize::try_from(self.left).unwrap_or(usize::MAX));
+        match self.inner.read(&mut buf[..want])? {
+            0 => Err(Error::new(ErrorKind::UnexpectedEof, "part shorter than it says")),
+            n => {
+                self.left -= n as u64;
+                Ok(n)
+            }
+        }
+    }
+}
+
 /// A safe file extension for part `path` ("bin" if it has none usable).
 fn part_ext(path: &str) -> String {
     let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
@@ -166,5 +203,25 @@ fn part_ext(path: &str) -> String {
         ext
     } else {
         "bin".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Exact;
+    use std::io::Read;
+
+    fn read(bytes: &[u8], says: u64) -> std::io::Result<Vec<u8>> {
+        let mut v = vec![];
+        Exact { inner: bytes, left: says }.read_to_end(&mut v).map(|_| v)
+    }
+
+    #[test]
+    fn a_part_is_read_whole_or_not_at_all() {
+        assert_eq!(read(b"abcd", 4).unwrap(), b"abcd");
+        assert_eq!(read(b"", 0).unwrap(), b"");
+        // Longer or shorter than it says: an error, never a cut part.
+        assert_eq!(read(b"abcdef", 4).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(read(b"ab", 4).unwrap_err().kind(), std::io::ErrorKind::UnexpectedEof);
     }
 }
