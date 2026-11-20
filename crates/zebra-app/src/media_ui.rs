@@ -503,10 +503,8 @@ fn present_tick(app: &mut ZebraApp, loud_video: bool) {
 // Inserting
 
 pub fn insert_video_dialog(app: &mut ZebraApp) {
-    if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-video"), &["mp4", "mov", "m4v"]).pick_file() {
-        let c = app.canvas_center_world();
-        insert_video_file(app, &p, c);
-    }
+    let c = app.canvas_center_world();
+    crate::pickers::ask(app, crate::pickers::Pick::InsertVideo(c));
 }
 
 /// Insert a video: the poster is made on a worker, then the video is added
@@ -518,9 +516,11 @@ pub fn insert_video_file(app: &mut ZebraApp, p: &std::path::Path, at: Vec2) {
 
 /// Replace a video's clip, keeping its place, size and settings.
 pub fn replace_video_dialog(app: &mut ZebraApp, id: &str) {
-    if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-video"), &["mp4", "mov", "m4v"]).pick_file() {
-        make_poster_then(app, &p, Vec2::new(0.0, 0.0), Some(id.to_string()));
-    }
+    crate::pickers::ask(app, crate::pickers::Pick::ReplaceVideo(id.to_string()));
+}
+
+pub fn replace_video_file(app: &mut ZebraApp, p: &std::path::Path, id: ElementId) {
+    make_poster_then(app, p, Vec2::new(0.0, 0.0), Some(id));
 }
 
 fn make_poster_then(app: &mut ZebraApp, p: &std::path::Path, at: Vec2, replace: Option<ElementId>) {
@@ -571,9 +571,7 @@ fn finish_insert_video(app: &mut ZebraApp, i: Insert) {
 }
 
 pub fn soundtrack_dialog(app: &mut ZebraApp) {
-    if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-audio"), &["mp3", "m4a", "aac", "wav"]).pick_file() {
-        set_soundtrack_file(app, &p);
-    }
+    crate::pickers::ask(app, crate::pickers::Pick::Soundtrack);
 }
 
 pub fn set_soundtrack_file(app: &mut ZebraApp, p: &std::path::Path) {
@@ -587,15 +585,11 @@ pub fn set_soundtrack_file(app: &mut ZebraApp, p: &std::path::Path) {
 }
 
 pub fn voiceover_dialog(app: &mut ZebraApp, step: usize) {
-    if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-audio"), &["mp3", "m4a", "aac", "wav"]).pick_file() {
-        app.apply(Command::SetVoiceover { index: step, data_base64: String::new(), path: Some(p.to_string_lossy().to_string()) });
-    }
+    crate::pickers::ask(app, crate::pickers::Pick::Voiceover(step));
 }
 
 pub fn replace_image_dialog(app: &mut ZebraApp, id: &str) {
-    if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), &["png", "jpg", "jpeg", "webp", "gif"]).pick_file() {
-        app.apply(Command::ReplaceImage { id: id.to_string(), data_base64: String::new(), path: Some(p.to_string_lossy().to_string()) });
-    }
+    crate::pickers::ask(app, crate::pickers::Pick::ReplaceImage(id.to_string()));
 }
 
 /// Insert any dropped or pasted file by what it is: pictures and videos go
@@ -1036,9 +1030,7 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
             }
         }
         if ui.button(crate::t!("media-poster-choose")).clicked() {
-            if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), &["png", "jpg", "jpeg", "webp"]).pick_file() {
-                app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: Some(p.to_string_lossy().to_string()), at: None });
-            }
+            crate::pickers::ask(app, crate::pickers::Pick::Poster(id.to_string()));
         }
         if v.poster.is_some() && ui.small_button(crate::t!("media-clear-button")).on_hover_text(crate::t!("media-poster-remove-tip")).clicked() {
             app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: None, at: None });

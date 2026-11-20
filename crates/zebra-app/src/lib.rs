@@ -24,6 +24,7 @@ pub mod menus;
 pub mod open_events;
 pub mod opening;
 pub mod panels;
+pub mod pickers;
 pub mod present;
 pub mod presenting;
 pub mod sample;

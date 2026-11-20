@@ -320,37 +320,42 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
     }
 }
 
-/// Insert › Image…'s picker, up as a sheet on its window.
+/// An open or save panel, up as a sheet on its window (see `pickers`).
 #[cfg(target_os = "macos")]
 pub struct OpenPicker {
-    at: zebra_core::Vec2,
+    pick: crate::pickers::Pick,
     answer: std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>>>>,
 }
 
-/// Put up the image picker when one was asked for, and insert the picture
+/// Put up the panel a pick asked for, and finish the pick with the file
 /// it gives. Like the alerts above, it is a sheet with no modal loop,
 /// polled when AppKit wakes us. True while it is open.
 #[cfg(target_os = "macos")]
 fn run_picker(app: &mut ZebraApp, frame: Option<&eframe::Frame>) -> bool {
     if app.open_picker.is_none() {
-        let Some(at) = app.want_image_picker.take() else { return false };
-        let dialog = rfd::AsyncFileDialog::new().add_filter(crate::t!("app-file-filter-image"), crate::app::IMAGE_TYPES);
+        let Some(pick) = app.want_pick.take() else { return false };
+        let panel = pick.panel(app);
+        let dialog = rfd::AsyncFileDialog::new().add_filter(panel.filter, panel.types);
         let dialog = match (frame, app.mac_sync.window.clone()) {
             (Some(f), _) => dialog.set_parent(f),
             (None, Some(w)) => dialog.set_parent(&crate::mac::NsParent(w)),
             (None, None) => dialog,
         };
-        app.open_picker = Some(OpenPicker { at, answer: Box::pin(dialog.pick_file()) });
+        let answer: std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>>>> = match panel.save_as {
+            Some(name) => Box::pin(dialog.set_file_name(name).save_file()),
+            None => Box::pin(dialog.pick_file()),
+        };
+        app.open_picker = Some(OpenPicker { pick, answer });
     }
     let ctx = app.ctx.clone();
     let waker = std::task::Waker::from(std::sync::Arc::new(Repaint(ctx)));
     let mut cx = std::task::Context::from_waker(&waker);
     let open = app.open_picker.as_mut().expect("picker");
     let std::task::Poll::Ready(file) = open.answer.as_mut().poll(&mut cx) else { return true };
-    let at = open.at;
+    let pick = open.pick.clone();
     app.open_picker = None;
     if let Some(f) = file {
-        app.insert_image_file(f.path(), at);
+        crate::pickers::finish(app, pick, f.path().to_path_buf());
     }
     true
 }
