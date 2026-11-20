@@ -1079,7 +1079,7 @@ pub fn insert_frame(app: &mut ZebraApp) {
         Vec2::new(b.x1 + bw / 2.0 + bw.min(bh) * 0.15, b.center().y)
     };
     let at = app.editor.doc.free_spot(at, bw, bh);
-    let el = NewElement { id: None, x: at.x, y: at.y, scale: s, rotation: cam.rotation, w: Some(w), h: Some(h), name: String::new(), kind: ElementKind::Frame(FrameData { style, color: None }) };
+    let el = NewElement { id: None, x: at.x, y: at.y, scale: s, rotation: cam.rotation, w: Some(w), h: Some(h), name: String::new(), kind: ElementKind::Frame(FrameData { style, color: None, slide: false }) };
     // A step waiting for a frame takes this one (one undo step for both).
     if let Some(out) = crate::sidebar::add_frame_for_pick(app, Command::AddElement { element: el }) {
         app.select(out.created);
@@ -1118,7 +1118,7 @@ fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
         Tool::Frame => {
             let style = app.editor.view.frame_style;
             let (w, h) = if style == FrameStyle::Circle { (w.max(h), w.max(h)) } else { (w, h) };
-            (ElementKind::Frame(FrameData { style, color: None }), rot, w, h)
+            (ElementKind::Frame(FrameData { style, color: None, slide: false }), rot, w, h)
         }
         Tool::Line | Tool::Arrow if dragged && (attach_target(app, a, None).is_some() || attach_target(app, b, None).is_some()) => {
             // A line drawn from or to an object sticks to it.

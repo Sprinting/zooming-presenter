@@ -488,7 +488,7 @@ mod tests {
             w: Some(w),
             h: Some(h),
             name: name.into(),
-            kind: ElementKind::Frame(FrameData { style, color: None }),
+            kind: ElementKind::Frame(FrameData { style, color: None, slide: false }),
         };
         ed.apply(Command::AddElement { element: el }, H).expect("sample frame").created[0].clone()
     }

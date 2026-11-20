@@ -1,6 +1,6 @@
 [package]
 name = "zebra-import"
-description = "File > Import: PDF (and later PowerPoint) pages as Zebra frames"
+description = "File > Import: PDF pages and PowerPoint slides as Zebra frames"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,13 @@ thiserror.workspace = true
 # (Contents/Frameworks/libpdfium.dylib); scripts/fetch-pdfium.sh gets it.
 pdfium-render = { version = "0.9.5", default-features = false, features = ["pdfium_8125", "image_025", "thread_safe"] }
 
+# PowerPoint slides through BetterOffice (Apache-2.0): its parser and the
+# DrawingML colour and theme helpers, without the editing and drawing
+# engine the `betteroffice-pptx` facade bundles (about 3 MB less).
+betteroffice-pptx-parse = "=0.5.1"
+betteroffice-drawingml = "=0.5.1"
+
 [dev-dependencies]
 zebra-render = { path = "../zebra-render", default-features = false }
 serde_json.workspace = true
+zip.workspace = true

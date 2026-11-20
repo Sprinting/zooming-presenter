@@ -1066,7 +1066,7 @@ impl Editor {
                     name: name.unwrap_or_default(),
                     placeholder: false,
                     group: None,
-                    kind: ElementKind::Frame(FrameData { style, color: None }),
+                    kind: ElementKind::Frame(FrameData { style, color: None, slide: false }),
                 };
                 let id = self.insert_element(e, out)?;
                 if add_to_path {
@@ -2172,7 +2172,7 @@ impl Editor {
                     name: if name.is_empty() { String::new() } else { self.phrase(Phrase::Content(name)) },
                     placeholder: false,
                     group: None,
-                    kind: ElementKind::Frame(FrameData { style: *style, color: color.clone() }),
+                    kind: ElementKind::Frame(FrameData { style: *style, color: color.clone(), slide: false }),
                 },
                 Piece::Text { style, text, x, y, w, h, bullets, align, ph, on } => {
                     let mut e = Element {

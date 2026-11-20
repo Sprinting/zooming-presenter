@@ -30,7 +30,7 @@ app-file-filter-image = Image
 app-file-filter-video = Video
 app-file-filter-audio = Audio
 app-file-filter-pdf = PDF
-app-file-filter-import = PDF
+app-file-filter-import = PDF or PowerPoint
 app-file-filter-png = PNG
 app-ai-start-failed = Couldn't start AI control: { $error }
 # When something a person did can't be done (details go to the log).
@@ -1516,22 +1516,88 @@ import-page-count = { $count ->
    *[other] { $count } pages
 }
 import-pages-all = All pages
+import-slide-count = { $count ->
+    [one] 1 slide
+   *[other] { $count } slides
+}
+import-slides-all = All slides
 import-pages-from = From
 import-pages-to = to
 import-progress = Page { $done } of { $total }
+import-progress-slides = Slide { $done } of { $total }
 import-page-name = Page { $n }
+import-slide-name = Slide { $n }
 sheet-import = Import
 import-done-title = { $count ->
     [one] Imported 1 page
    *[other] Imported { $count } pages
 }
+import-done-title-slides = { $count ->
+    [one] Imported 1 slide
+   *[other] Imported { $count } slides
+}
 import-note-skipped = { $count ->
     [one] 1 page couldn't be read and was left out.
    *[other] { $count } pages couldn't be read and were left out.
 }
+import-note-hidden = { $count ->
+    [one] 1 hidden slide was left out.
+   *[other] { $count } hidden slides were left out.
+}
+import-note-chart = { $count ->
+    [one] 1 chart was left out.
+   *[other] { $count } charts were left out.
+}
+import-note-smartart = { $count ->
+    [one] 1 SmartArt graphic was left out.
+   *[other] { $count } SmartArt graphics were left out.
+}
+import-note-table = { $count ->
+    [one] 1 table was left out.
+   *[other] { $count } tables were left out.
+}
+import-note-equation = { $count ->
+    [one] 1 equation was left out.
+   *[other] { $count } equations were left out.
+}
+import-note-media = { $count ->
+    [one] 1 video or sound came in as a picture.
+   *[other] { $count } videos and sounds came in as pictures.
+}
+import-note-as-picture = { $count ->
+    [one] 1 embedded object came in as a picture.
+   *[other] { $count } embedded objects came in as pictures.
+}
+import-note-shape = { $count ->
+    [one] 1 shape Zebra doesn't have was left out. Its text was kept.
+   *[other] { $count } shapes Zebra doesn't have were left out. Their text was kept.
+}
+import-note-metafile = { $count ->
+    [one] 1 EMF or WMF picture was left out.
+   *[other] { $count } EMF or WMF pictures were left out.
+}
+import-note-picture = { $count ->
+    [one] 1 picture in another format was left out.
+   *[other] { $count } pictures in other formats were left out.
+}
+import-note-flip = { $count ->
+    [one] 1 flipped object is shown unflipped.
+   *[other] { $count } flipped objects are shown unflipped.
+}
+import-note-gradient = { $count ->
+    [one] 1 gradient became a solid colour.
+   *[other] { $count } gradients became solid colours.
+}
+import-note-other = { $count ->
+    [one] 1 other object was left out.
+   *[other] { $count } other objects were left out.
+}
 import-failed-title = “{ $name }” can't be imported
-import-error-unsupported = Zebra can import PDF files.
+import-error-unsupported = Zebra can import PDF and PowerPoint (.pptx) files.
 import-error-damaged = The file is damaged or isn't a PDF.
+import-error-damaged-pptx = The file is damaged or isn't a PowerPoint presentation.
+import-error-old-ppt = This is an older PowerPoint file. Save it as .pptx in PowerPoint or Keynote first.
+import-error-all-hidden = All the slides you chose are hidden.
 import-error-encrypted = The file is protected with a password.
 import-error-no-engine = Zebra's PDF reader is missing. Reinstall Zebra.
 import-error-read = The file can't be read.

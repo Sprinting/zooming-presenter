@@ -164,7 +164,7 @@ fn index_answers_match_brute_force_on_random_decks() {
                             name: String::new(),
                             placeholder: false,
                             group: None,
-                            kind: ElementKind::Frame(FrameData { style: FrameStyle::Bracket, color: None }),
+                            kind: ElementKind::Frame(FrameData { style: FrameStyle::Bracket, color: None, slide: false }),
                         };
                         brute_frame_pos(&ed.doc, &probe.bounds())
                     });

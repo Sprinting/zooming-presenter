@@ -224,15 +224,17 @@ enum Cmd {
         #[arg(long, requires = "x")]
         y: Option<f64>,
     },
-    /// File › Import…: a PDF's pages as pictures inside one frame, with a
-    /// path step each, right of what is on the canvas, as one undo step.
+    /// File › Import…: a PDF's pages as pictures, or a PowerPoint (.pptx)
+    /// file's slides as text, shapes and pictures, each page or slide in a
+    /// frame inside one frame, with a path step each, right of what is on
+    /// the canvas, as one undo step.
     Import {
-        /// The .pdf file.
+        /// The .pdf or .pptx file.
         file: PathBuf,
-        /// First page (1-based; default 1).
+        /// First page or slide (1-based; default 1).
         #[arg(long)]
         from: Option<u64>,
-        /// Last page (default: the last).
+        /// Last page or slide (default: the last).
         #[arg(long)]
         to: Option<u64>,
     },

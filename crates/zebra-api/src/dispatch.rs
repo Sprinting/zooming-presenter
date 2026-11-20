@@ -290,7 +290,8 @@ impl Dispatcher {
                     o.last = last.unwrap_or(usize::MAX);
                     let pages = r.page_count();
                     if o.first > pages {
-                        return Err(zebra_import::ImportError::Read(format!("the file has {pages} pages; `from` is {}", o.first)));
+                        let what = if r.kind() == "PowerPoint" { "slides" } else { "pages" };
+                        return Err(zebra_import::ImportError::Read(format!("the file has {pages} {what}; `from` is {}", o.first)));
                     }
                     r.read(&o, &zebra_import::Control::default())
                 });
@@ -679,6 +680,8 @@ fn import_error(e: zebra_import::ImportError) -> RpcError {
         E::NotSupported => "unsupported",
         E::Damaged(_) => "damaged",
         E::Encrypted => "encrypted",
+        E::OldPowerPoint => "unsupported",
+        E::AllHidden => "empty",
         E::NoEngine(_) => "no_engine",
         E::Read(_) => "io",
         E::Cancelled => "cancelled",
@@ -686,6 +689,8 @@ fn import_error(e: zebra_import::ImportError) -> RpcError {
     let r = RpcError::app(code, e.to_string());
     match e {
         E::NotSupported => r.hint(format!("Zebra imports: {}", zebra_import::EXTENSIONS.join(", "))),
+        E::OldPowerPoint => r.hint("open it in PowerPoint or Keynote and save it as .pptx, then import that"),
+        E::AllHidden => r.hint("choose slides that are shown, or show the hidden ones in PowerPoint first"),
         _ => r,
     }
 }

@@ -32,7 +32,7 @@ pub fn text(s: &str, style: TextStyle) -> ElementKind {
 }
 
 pub fn frame(style: FrameStyle) -> ElementKind {
-    ElementKind::Frame(FrameData { style, color: None })
+    ElementKind::Frame(FrameData { style, color: None, slide: false })
 }
 
 pub fn shape(shape: ShapeKind, fill: Option<&str>, stroke: Option<&str>, sw: f64) -> ElementKind {

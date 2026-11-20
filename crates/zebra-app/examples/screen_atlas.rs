@@ -259,6 +259,32 @@ fn import_range(h: &mut H, pdf: &std::path::Path, from: f64, to: f64) {
     wait(h, 1.5);
 }
 
+/// File › Import… of a PowerPoint file (the import tests' fixture).
+fn import_slides(a: &mut Atlas) {
+    let pptx = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../zebra-import/tests/fixtures/deck16x9.pptx");
+    a.section("File › Import… a PowerPoint file");
+    let p = pptx.clone();
+    a.run("Import sheet: which slides", false, false, move |h| {
+        zebra_app::import_ui::start(h.state_mut(), p);
+        until_read(h);
+    });
+    let p = pptx.clone();
+    a.run("Slides imported, and what came in differently", false, false, move |h| {
+        import_range(h, &p, 1.0, 8.0);
+        wait(h, 2.0);
+    });
+    let p = pptx.clone();
+    a.run("Presenting an imported slide: deck-style", false, false, move |h| {
+        import_range(h, &p, 1.0, 8.0);
+        h.state_mut().sheet = None;
+        perform(h, Action::PresentStart);
+        wait(h, 1.0);
+        // The sample's two steps come first: step 2 (from 0) is slide 1.
+        let _ = h.state_mut().editor.view(ViewCommand::GotoStep { step: 2 }, HUMAN);
+        wait(h, 3.0);
+    });
+}
+
 fn import_pages(a: &mut Atlas, pdf: PathBuf) {
     use zebra_app::import_ui::Flow;
     a.section("File › Import…");
@@ -284,7 +310,7 @@ fn import_pages(a: &mut Atlas, pdf: PathBuf) {
         for _ in 0..7 {
             ctl.page_done();
         }
-        h.state_mut().import = Some(Flow::Running { path: p, rx, ctl, total: 27 });
+        h.state_mut().import = Some(Flow::Running { path: p, rx, ctl, total: 27, slides: false });
     });
     a.run("After an import that left a page out", false, false, |h| {
         let notes = std::collections::BTreeMap::from([(zebra_core::import::ImportNote::PageSkipped, 1usize)]);
@@ -823,6 +849,10 @@ fn main() {
             zebra_app::sample::demo(h.state_mut(), &ctx, "embed,empty,diagram=process");
             settle(h, 6);
         });
+    }
+
+    if want("import") || want("pptx") {
+        import_slides(&mut a);
     }
 
     // File › Import…: needs PDFium (ZEBRA_PDFIUM) and a PDF (ZEBRA_ATLAS_PDF).
