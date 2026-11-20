@@ -107,6 +107,11 @@ pub fn subset(file: &[u8], index: u32, keep: &BTreeSet<u16>) -> Option<Vec<u8>> 
     out_tables.sort_by_key(|(t, _)| *t);
     // Write an sfnt: header, records, then each table padded to 4 bytes.
     let n = out_tables.len();
+    // The header's searchRange (16 times a power of two up to n) is a u16:
+    // 4096 tables or more don't fit (audit T-W5). No real font is close.
+    if n >= 4096 {
+        return None;
+    }
     let mut es = 0u16;
     while (1usize << (es + 1)) <= n {
         es += 1;
@@ -680,6 +685,21 @@ mod tests {
         sbix.extend([0, 72, 0, 72]);
         let f = sfnt(&[maxp(60000), (*b"sbix", sbix)]);
         assert!(subset(&f, 0, &[1u16].into_iter().collect()).is_none());
+    }
+
+    /// Audit T-W5: 4096 or more tables overflowed the u16 header fields (a
+    /// panic in debug builds, a wrong header in release).
+    #[test]
+    fn a_font_with_too_many_tables_is_refused() {
+        let mut tables = vec![maxp(1)];
+        for i in 0..5000u32 {
+            let t = (0x6100_0000 + i).to_be_bytes();
+            tables.push((t, vec![]));
+        }
+        let f = sfnt(&tables);
+        assert!(subset(&f, 0, &BTreeSet::new()).is_none());
+        let ok = sfnt(&[maxp(1), (*b"abcd", vec![1, 2, 3, 4])]);
+        assert!(subset(&ok, 0, &BTreeSet::new()).is_some());
     }
 
     #[test]
