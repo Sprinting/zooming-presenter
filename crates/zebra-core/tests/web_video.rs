@@ -224,7 +224,7 @@ fn copying_a_web_video_carries_its_poster() {
 /// refuses a format 2 file as newer, never dropping the web video.
 #[test]
 fn the_format_version_says_web_videos() {
-    assert_eq!(FORMAT_VERSION, 2);
+    assert!(FORMAT_VERSION >= 2);
     let version = |ed: &Editor| serde_json::from_str::<serde_json::Value>(&io::to_json(&ed.doc)).unwrap()["format_version"].as_u64().unwrap();
     let mut ed = Editor::default();
     ed.apply(cmd(json!({"op":"add_text","text":"Hello"})), Origin::Human).unwrap();

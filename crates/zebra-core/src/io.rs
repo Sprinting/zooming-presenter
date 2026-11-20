@@ -50,10 +50,14 @@ pub fn required_version(doc: &Document) -> u32 {
         ElementKind::Icon(i) => new_slot(&Some(i.color.clone())),
         ElementKind::Connector(c) => new_slot(&Some(c.color.clone())),
         ElementKind::Image(i) => i.symbol.as_ref().is_some_and(|s| new_slot(&s.color) || new_slot(&s.color2)),
-        ElementKind::Video(_) | ElementKind::Table(_) => false,
+        ElementKind::Video(_) | ElementKind::Table(_) | ElementKind::Chart(_) => false,
     };
     if doc.elements.values().any(uses_new_slot) {
         v = v.max(2);
+    }
+    // 3: charts.
+    if doc.elements.values().any(|e| matches!(e.kind, ElementKind::Chart(_))) {
+        v = v.max(3);
     }
     v.min(crate::FORMAT_VERSION)
 }

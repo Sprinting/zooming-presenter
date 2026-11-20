@@ -7,7 +7,7 @@
 //! * when a file is opened ([`repair`], [`repair_json`]): a file written by
 //!   an older build, another program or a text editor is brought back
 //!   inside them instead of crashing the app later.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::error::{ZError, ZResult};
 use crate::model::*;
@@ -145,6 +145,11 @@ pub fn element(e: &Element) -> ZResult<()> {
                 return Err(ZError::invalid(format!("'{}': {what}", e.id)));
             }
         }
+        ElementKind::Chart(c) => {
+            if let Err(what) = c.check() {
+                return Err(ZError::invalid(format!("'{}': {what}", e.id)));
+            }
+        }
         ElementKind::Frame(_) => {}
     }
     Ok(())
@@ -179,6 +184,9 @@ pub fn repair_json(v: &mut serde_json::Value) {
     for e in els.values_mut() {
         if let Some(k) = e.get_mut("kind").filter(|k| k.get("type").and_then(|t| t.as_str()) == Some("table")) {
             repair_table_json(k);
+        }
+        if let Some(k) = e.get_mut("kind").filter(|k| k.get("type").and_then(|t| t.as_str()) == Some("chart")) {
+            repair_chart_json(k);
         }
         for (part, key, default) in [("transform", "x", 0.0), ("transform", "y", 0.0), ("transform", "rotation", 0.0), ("transform", "scale", 1.0), ("size", "w", 100.0), ("size", "h", 100.0)] {
             if let Some(n) = e.get_mut(part).and_then(|p| p.get_mut(key)) {
@@ -262,6 +270,69 @@ fn repair_table_json(k: &mut serde_json::Value) {
         if o.get(key).is_some_and(|x| !ok(x, good)) {
             o.remove(key);
         }
+    }
+}
+
+/// A chart as read from a file, made readable: a type or look this build
+/// doesn't know becomes the default, its data is read as a table's is,
+/// and any setting that doesn't read goes back to its default. [`repair`]
+/// then brings the values in range and cuts the data to the limits.
+fn repair_chart_json(k: &mut serde_json::Value) {
+    use crate::chart::{ChartLink, ChartLook, ChartType, SeriesFormat, SeriesIn};
+    use crate::table::DataFormat;
+    use serde::Deserialize;
+    use serde_json::{json, Value};
+    let Some(o) = k.as_object_mut() else { return };
+    match o.get_mut("data") {
+        Some(d) if d.is_object() => repair_table_json(d),
+        _ => {
+            o.insert("data".into(), json!({"cells": [[""]], "columns": [], "rows": []}));
+        }
+    }
+    let checks: [(&str, fn(&Value) -> bool); 20] = [
+        ("chart_type", |x| ChartType::deserialize(x).is_ok()),
+        ("look", |x| ChartLook::deserialize(x).is_ok()),
+        ("series_in", |x| SeriesIn::deserialize(x).is_ok()),
+        ("link", |x| x.is_null() || ChartLink::deserialize(x).is_ok()),
+        ("number", |x| DataFormat::deserialize(x).is_ok()),
+        ("title", |x| x.is_string()),
+        ("x_title", |x| x.is_string()),
+        ("y_title", |x| x.is_string()),
+        ("legend", |x| x.is_boolean()),
+        ("border", |x| x.is_boolean()),
+        ("value_labels", |x| x.is_boolean()),
+        ("gridlines", |x| x.is_boolean()),
+        ("font_size", |x| x.as_f64().is_some()),
+        ("gap", |x| x.as_f64().is_some()),
+        ("gap_sets", |x| x.as_f64().is_some()),
+        ("hole", |x| x.as_f64().is_some()),
+        ("axis_min", |x| x.is_null() || x.as_f64().is_some()),
+        ("axis_max", |x| x.is_null() || x.as_f64().is_some()),
+        ("axis_step", |x| x.is_null() || x.as_f64().is_some()),
+        ("totals", |x| x.is_array()),
+    ];
+    for (key, good) in checks {
+        if o.get(key).is_some_and(|x| !good(x)) {
+            o.remove(key);
+        }
+    }
+    if let Some(Value::Array(t)) = o.get_mut("totals") {
+        t.retain(|x| x.as_u64().is_some_and(|n| n < crate::chart::MAX_CATEGORIES as u64));
+        t.truncate(crate::chart::MAX_CATEGORIES);
+    }
+    match o.get_mut("series") {
+        Some(Value::Array(list)) => {
+            list.truncate(crate::chart::MAX_SERIES);
+            for x in list.iter_mut() {
+                if SeriesFormat::deserialize(&*x).is_err() {
+                    *x = json!({});
+                }
+            }
+        }
+        Some(_) => {
+            o.remove("series");
+        }
+        None => {}
     }
 }
 
@@ -364,6 +435,9 @@ pub fn repair(doc: &mut Document) -> usize {
                 // body text size; measuring afterwards fits the rest.
                 t.repair(24.0);
             }
+            ElementKind::Chart(c) => {
+                c.repair(24.0);
+            }
             ElementKind::Frame(_) => {}
         }
         if element(e).is_err() {
@@ -372,6 +446,36 @@ pub fn repair(doc: &mut Document) -> usize {
     }
     for id in &drop {
         doc.elements.remove(id);
+    }
+    // A chart linked to a table that isn't there (or to anything else)
+    // draws its own data; a range outside its table is clipped to it.
+    let tables: HashMap<ElementId, (usize, usize)> = doc
+        .elements
+        .iter()
+        .filter_map(|(k, e)| match &e.kind {
+            ElementKind::Table(t) => Some((k.clone(), (t.n_rows(), t.n_cols()))),
+            _ => None,
+        })
+        .collect();
+    for e in doc.elements.values_mut() {
+        if let ElementKind::Chart(c) = &mut e.kind {
+            let Some(l) = &mut c.link else { continue };
+            match tables.get(&l.table) {
+                None => {
+                    c.link = None;
+                    fixed += 1;
+                }
+                Some(&(rows, cols)) => {
+                    if let Some(r) = l.range {
+                        let clipped = r.clip(rows, cols);
+                        if clipped != Some(r) {
+                            l.range = clipped;
+                            fixed += 1;
+                        }
+                    }
+                }
+            }
+        }
     }
     // Draw order: every element once.
     let before = doc.z_order.len();

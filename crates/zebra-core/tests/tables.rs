@@ -167,7 +167,7 @@ fn files_round_trip_and_save_the_lowest_version_they_need() {
     run(&mut plain, json!({"op": "add_shape", "shape": "rectangle", "fill": "theme:shape5"})).unwrap();
     assert_eq!(required_version(&plain.doc), 2);
     // A version from the future is refused with a message.
-    let future = json.replacen("\"format_version\": 2", "\"format_version\": 3", 1);
+    let future = json.replacen("\"format_version\": 2", &format!("\"format_version\": {}", FORMAT_VERSION + 1), 1);
     let e = io::from_json(&future).unwrap_err();
     assert_eq!(e.code, "bad_file");
     assert!(e.message.contains("newer than this app"), "{}", e.message);

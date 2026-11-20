@@ -15,6 +15,7 @@ use crate::model::*;
 use crate::theme::{valid_color, Theme};
 use crate::view::{Mode, Permission, ViewState};
 
+mod chart_cmds;
 mod table_cmds;
 
 /// Who issued a change. Shown in history and the activity panel.
@@ -418,8 +419,15 @@ impl Editor {
         let mut calc = crate::calc::Calc::new();
         for (i, e) in doc.elements.values_mut().enumerate() {
             // Formulas worked out afresh (TODAY() moves on), from the inputs.
-            if let ElementKind::Table(t) = &mut e.kind {
-                calc.recalc(&e.id, t);
+            match &mut e.kind {
+                ElementKind::Table(t) => {
+                    calc.recalc(&e.id, t);
+                }
+                // A chart's own data (kept while linked, for unlinking).
+                ElementKind::Chart(c) if crate::calc::has_formulas(&c.data) => {
+                    calc.recalc(&e.id, &mut c.data);
+                }
+                _ => {}
             }
             measure_text(measure, &theme, e);
             if i % 1024 == 0 {
@@ -867,7 +875,7 @@ impl Editor {
         let doc = &self.doc;
         let calc = self.calc.get_mut().unwrap_or_else(|p| p.into_inner());
         if !calc.is_empty() {
-            calc.retain(|id| doc.elements.get(id).is_some_and(|e| matches!(e.kind, ElementKind::Table(_))));
+            calc.retain(|id| doc.elements.get(id).is_some_and(|e| matches!(e.kind, ElementKind::Table(_) | ElementKind::Chart(_))));
         }
     }
 
@@ -1071,6 +1079,9 @@ impl Editor {
             // came in (add_table, add_element, paste, duplicate).
             let theme = self.theme();
             self.table_settled(&id, &theme);
+        }
+        if matches!(self.doc.elements[&id].kind, ElementKind::Chart(_)) {
+            self.chart_settled(&id);
         }
         out.created.push(id.clone());
         Ok(id)
@@ -1276,6 +1287,7 @@ impl Editor {
             | Command::SetColumn { .. }
             | Command::SetRow { .. }
             | Command::SortTable { .. }) => self.apply_table(c, out)?,
+            c @ (Command::AddChart { .. } | Command::SetChartData { .. } | Command::FormatChart { .. } | Command::LinkChart { .. } | Command::UnlinkChart { .. }) => self.apply_chart(c, out)?,
             Command::AddDiagram { diagram, x, y, width } => {
                 let Some(d) = crate::diagrams::get(&diagram) else {
                     return Err(ZError::invalid(format!("unknown diagram '{diagram}'")).values(crate::diagrams::ALL.iter().map(|d| d.key.to_string()).collect()));
@@ -1930,6 +1942,10 @@ impl Editor {
                 let ids = self.expand(&ids, false);
                 let groups: BTreeSet<String> = ids.iter().filter_map(|id| self.doc.elements[id].group.clone()).collect();
                 let set: HashSet<&ElementId> = ids.iter().collect();
+                // Charts that follow a table going keep what they show.
+                if ids.iter().any(|id| matches!(self.doc.elements[id].kind, ElementKind::Table(_))) {
+                    out.changed.extend(self.unlink_from_deleted(&set));
+                }
                 self.z_mut().retain(|z| !set.contains(z));
                 for id in &ids {
                     self.note(id);
@@ -2002,6 +2018,14 @@ impl Editor {
                         // with it and comes loose from one that wasn't.
                         for end in [&mut c.from, &mut c.to] {
                             end.element = end.element.as_ref().and_then(|t| new_id.get(t).cloned());
+                        }
+                    }
+                    if let ElementKind::Chart(c) = &mut e.kind {
+                        // A chart copied with its table follows the copy.
+                        if let Some(l) = &mut c.link {
+                            if let Some(t) = new_id.get(&l.table) {
+                                l.table = t.clone();
+                            }
                         }
                     }
                     let nid = new_id[&old].clone();
@@ -3392,6 +3416,7 @@ fn default_size(k: &ElementKind) -> (f64, f64) {
         ElementKind::Icon(_) => (96.0, 96.0),
         ElementKind::Connector(_) => (0.0, 0.0),
         ElementKind::Table(_) => (0.0, 0.0),
+        ElementKind::Chart(_) => (crate::chart::DEFAULT_W, crate::chart::DEFAULT_H),
     }
 }
 
@@ -3435,6 +3460,16 @@ fn validate_element(e: &Element, doc: &Document) -> ZResult<()> {
             check(&d.stroke)?;
         }
         ElementKind::Frame(d) => check(&d.color)?,
+        ElementKind::Chart(c) => {
+            if let Err(what) = c.check() {
+                return Err(ZError::invalid(what));
+            }
+            if let Some(l) = &c.link {
+                if !matches!(doc.elements.get(&l.table).map(|e| &e.kind), Some(ElementKind::Table(_))) {
+                    return Err(ZError::new("not_found", format!("no table '{}' to link to", l.table)).hint("link a chart to a table's id (b1...)"));
+                }
+            }
+        }
         ElementKind::Table(t) => {
             for f in &t.cell_formats {
                 for c in [&f.format.fill, &f.format.color, &f.format.border.as_ref().and_then(|b| b.color.clone())] {
@@ -3815,6 +3850,18 @@ fn link_error(e: crate::weblink::LinkError) -> ZError {
     ZError::new(e.code(), e.message())
 }
 
+/// What a `format_chart` does, for its undo step.
+pub fn chart_format_label(f: &ChartFormat) -> &'static str {
+    let only = |set: bool| set && *f == ChartFormat { chart_type: f.chart_type, look: f.look, ..Default::default() };
+    if only(f.chart_type.is_some() && f.look.is_none()) {
+        "Change chart type"
+    } else if only(f.look.is_some() && f.chart_type.is_none()) {
+        "Change chart style"
+    } else {
+        "Format chart"
+    }
+}
+
 pub fn command_label(c: &Command) -> String {
     match c {
         Command::AddElement { element } => format!("Add {}", element.kind.type_name()),
@@ -3885,6 +3932,11 @@ pub fn command_label(c: &Command) -> String {
         Command::SetColumn { .. } => "Change column".into(),
         Command::SetRow { .. } => "Change row height".into(),
         Command::SortTable { .. } => "Sort".into(),
+        Command::AddChart { .. } => "Add chart".into(),
+        Command::SetChartData { .. } => "Edit chart data".into(),
+        Command::FormatChart { format, .. } => chart_format_label(format).into(),
+        Command::LinkChart { .. } => "Link to table".into(),
+        Command::UnlinkChart { .. } => "Unlink chart".into(),
     }
 }
 

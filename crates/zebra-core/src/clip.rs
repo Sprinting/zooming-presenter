@@ -22,7 +22,17 @@ impl Clip {
     pub fn of(editor: &Editor, ids: &[ElementId]) -> Clip {
         let doc = &editor.doc;
         let wanted: BTreeSet<ElementId> = editor.expand(&doc.expand_groups(ids), true).into_iter().collect();
-        let elements: Vec<Element> = doc.z_order.iter().filter(|id| wanted.contains(*id)).filter_map(|id| doc.get(id).cloned()).collect();
+        let mut elements: Vec<Element> = doc.z_order.iter().filter(|id| wanted.contains(*id)).filter_map(|id| doc.get(id).cloned()).collect();
+        // A chart copied without the table it follows takes the values it
+        // shows with it.
+        let body = editor.theme().text_style(crate::model::TextStyle::Body).size;
+        for e in &mut elements {
+            if let ElementKind::Chart(c) = &mut e.kind {
+                if c.link.as_ref().is_some_and(|l| !wanted.contains(&l.table)) {
+                    c.bake(doc, body);
+                }
+            }
+        }
         let mut assets = BTreeMap::new();
         for e in &elements {
             for key in asset_keys(e) {
@@ -96,6 +106,15 @@ impl Editor {
             if let ElementKind::Connector(c) = &mut kind {
                 for end in [&mut c.from, &mut c.to] {
                     end.element = end.element.as_deref().and_then(|id| new_id.get(id).cloned());
+                }
+            }
+            if let ElementKind::Chart(c) = &mut kind {
+                // Copied with its table (Clip::of unlinked the others).
+                if let Some(l) = &mut c.link {
+                    match new_id.get(l.table.as_str()) {
+                        Some(t) => l.table = t.clone(),
+                        None => c.link = None,
+                    }
                 }
             }
             // Text that sizes itself keeps doing so.
