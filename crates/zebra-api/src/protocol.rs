@@ -493,7 +493,11 @@ fn expand_tilde(s: &str) -> String {
     s.to_string()
 }
 
-const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+/// Most bytes of a picture sent inline as `data_base64` (its base64 is a
+/// third longer, and the whole request is one line of at most 128 MB).
+/// By `path` a picture can be any size, as one the person drops: the app
+/// copies the file instead of reading it into memory.
+pub const MAX_INLINE_IMAGE: u64 = 64 << 20;
 
 /// Deserialize a [`Command`], accepting `{"op":"add_image","path":"/abs.png"}`.
 pub fn parse_command(mut v: Value) -> Result<Command, RpcError> {
@@ -504,11 +508,9 @@ pub fn parse_command(mut v: Value) -> Result<Command, RpcError> {
         let path = abs_path(o.get("path"), "add_image")?.unwrap_or_default();
         // A device (/dev/zero), FIFO or socket says it is 0 bytes long
         // and never stops when read.
-        let meta = zebra_core::media::regular_file(&path)
-            .map_err(|e| RpcError::app("io", format!("cannot read image '{}': {e}", path.display())))?;
-        if meta.len() > MAX_IMAGE_BYTES {
-            return Err(RpcError::invalid(format!("image is {} bytes; the limit is {MAX_IMAGE_BYTES}", meta.len())));
-        }
+        zebra_core::media::regular_file(&path).map_err(|e| RpcError::app("io", format!("cannot read image '{}': {e}", path.display())))?;
+        // Any size, as for a picture the person drops: the app checks the
+        // header (a picture it can't scale down is `too_big`).
         // The app reads the file itself (copied and mapped, not loaded).
         if !o.contains_key("alt") {
             if let Some(stem) = path.file_stem() {
@@ -516,6 +518,17 @@ pub fn parse_command(mut v: Value) -> Result<Command, RpcError> {
             }
         }
         o.insert("path".into(), Value::String(path.to_string_lossy().into_owned()));
+    }
+    // Inline pictures: what one request line can carry sensibly. Bigger
+    // ones go by path, up to the app's own limit.
+    if matches!(o.get("op").and_then(|x| x.as_str()), Some("add_image" | "replace_image" | "add_asset")) {
+        if let Some(b64) = o.get("data_base64").and_then(|x| x.as_str()) {
+            let bytes = (b64.trim().len() as u64 / 4) * 3;
+            if bytes > MAX_INLINE_IMAGE {
+                return Err(RpcError::app("too_big", format!("data_base64 holds about {} MB; inline pictures are at most {} MB", bytes >> 20, MAX_INLINE_IMAGE >> 20))
+                    .hint("send the picture as `path` (an absolute file path) instead: by path it can be any size"));
+            }
+        }
     }
     // Media commands read their file in the app (videos are copied, not
     // loaded); the path must be absolute because the agent's working

@@ -52,7 +52,7 @@ Drag each onto the canvas, or try File > Open / File > Import as the name sugges
 T=~/Downloads/zebra-test-media
 zebractl new
 zebractl apply "{\"op\":\"add_video\",\"path\":\"$T/big/video-2048MB.mp4\",\"x\":0,\"y\":0}"
-zebractl add image "$T/big/picture-217MB.png" --x 2000 --y 0
+zebractl add image "$T/big/picture-217MB.png" --x 2000 --y 0             # works: agents get the app's 256 MB limit
 zebractl add image "$T/big/picture-over-limit-300MB.png" --x 0 --y 2000   # expect too_big
 zebractl import "$T/big/deck-with-2048MB-video.pptx"
 zebractl save "$T/test.zebra"
