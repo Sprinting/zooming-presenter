@@ -143,6 +143,19 @@ pub struct TextEditState {
     /// A width handle is being dragged: (right handle, world point of the
     /// opposite top corner, which stays put).
     pub width_drag: Option<(bool, Vec2)>,
+    /// A press on the selected words, or the drag it became (spec 18c).
+    pub drag: Option<crate::text_drag::TextDrag>,
+    /// Select these characters when the field next starts (after words
+    /// moved inside the box).
+    pub pending_sel: Option<(usize, usize)>,
+    /// The selection's right-click menu is open.
+    pub sel_menu: bool,
+    /// The pointer was on the selected words last frame (or their drag or
+    /// menu is going on).
+    pub on_words: bool,
+    /// The text as laid out last frame, and where it was drawn (screen):
+    /// where each character is, for the drag and for tests.
+    pub laid_out: Option<(std::sync::Arc<egui::Galley>, Pos2)>,
 }
 
 pub struct CanvasState {
@@ -1328,6 +1341,11 @@ pub fn begin_new_text(app: &mut ZebraApp, p: Pos2) {
         caret_seen: None,
         caret_follow: false,
         width_drag: None,
+        drag: None,
+        pending_sel: None,
+        sel_menu: false,
+        on_words: false,
+        laid_out: None,
     });
     let _ = app.editor.view(ViewCommand::ClearSelection, H);
 }
@@ -1382,6 +1400,11 @@ pub fn begin_text_on_shape(app: &mut ZebraApp, shape: ElementId) {
         caret_seen: None,
         caret_follow: false,
         width_drag: None,
+        drag: None,
+        pending_sel: None,
+        sel_menu: false,
+        on_words: false,
+        laid_out: None,
     });
     app.select(vec![shape]);
 }
@@ -1429,6 +1452,11 @@ pub fn begin_edit_existing(app: &mut ZebraApp, id: ElementId) {
         caret_seen: None,
         caret_follow: false,
         width_drag: None,
+        drag: None,
+        pending_sel: None,
+        sel_menu: false,
+        on_words: false,
+        laid_out: None,
     });
     app.select(vec![id]);
 }
@@ -1456,22 +1484,23 @@ fn keep_orphan(app: &mut ZebraApp, t: &mut TextEditState) -> bool {
     true
 }
 
-/// Apply the in-place edit as one command (Add text / Edit text).
-pub fn commit_text_edit(app: &mut ZebraApp) {
-    let Some(mut t) = app.canvas.text.take() else { return };
+/// Apply the in-place edit as one command (Add text / Edit text). Returns
+/// the text box the edit left on the canvas, if any.
+pub fn commit_text_edit(app: &mut ZebraApp) -> Option<ElementId> {
+    let mut t = app.canvas.text.take()?;
     // A width drag still open ends with the edit, as its own undo step.
     if t.width_drag.take().is_some() && t.id.is_some() {
         app.editor.commit_as(&crate::app::HUMAN);
     }
     if !keep_orphan(app, &mut t) {
-        return;
+        return None;
     }
     let text = t.buf.trim_end().to_string();
     zebra_core::rich::edit_text(&mut t.rich, &text);
     match &t.id {
         None => {
             if text.trim().is_empty() {
-                return;
+                return None;
             }
             // Centre of the box as laid out on screen.
             let half = Vec2::new(t.size_px.x as f64, t.size_px.y as f64) * (0.5 / t.zoom);
@@ -1511,15 +1540,16 @@ pub fn commit_text_edit(app: &mut ZebraApp) {
                 cmds.push(Command::Group { ids: vec![h.id.clone(), id], id: None });
             }
             let r = app.editor.apply_batch(cmds, Some(crate::t!("canvas-undo-add-text")), H);
-            if let Some(out) = app.report(r) {
-                app.select(out.created);
-            }
+            let out = app.report(r)?;
+            let made = out.created.iter().find(|c| matches!(app.editor.doc.get(c).map(|e| &e.kind), Some(ElementKind::Text(_)))).cloned();
+            app.select(out.created);
+            made
         }
         Some(id) => {
-            let Some(ElementKind::Text(old)) = app.editor.doc.get(id).map(|e| e.kind.clone()) else { return };
+            let Some(ElementKind::Text(old)) = app.editor.doc.get(id).map(|e| e.kind.clone()) else { return None };
             if text.trim().is_empty() {
                 app.apply(Command::Delete { ids: vec![id.clone()] });
-                return;
+                return None;
             }
             let mut patch = ElementPatch::default();
             if text != old.text {
@@ -1547,6 +1577,7 @@ pub fn commit_text_edit(app: &mut ZebraApp) {
                 let r = app.editor.apply_batch(vec![Command::Update { id: id.clone(), patch }], Some(crate::t!("canvas-undo-edit-text")), H);
                 app.report(r);
             }
+            Some(id.clone())
         }
     }
 }
@@ -1794,6 +1825,9 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     // The spelling menu belongs to this edit: a click in it must not end it.
     let spell_open = t.spell_word.is_some();
     let canvas_rect = app.canvas.rect;
+    // Words being dragged stay in the box, dimmed, until the drop.
+    let dim = t.drag.as_ref().filter(|d| d.moving && !d.cancelled).map(|d| d.sel);
+    let wrap_px = t.wrap.map(|w| (w * t.scale * zoom) as f32);
     let r = area.show(ctx, |ui| {
         // The text stays inside the canvas: typed past its edge, it ran
         // over the inspector.
@@ -1804,7 +1838,10 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         // text wrap a few letters per line while typing.
         ui.set_min_width(width);
         let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
-            let job = rich_job(&rich_now, buf.as_str(), &theme2, &font2, &font_name, style_weight, color, wrap);
+            let mut job = rich_job(&rich_now, buf.as_str(), &theme2, &font2, &font_name, style_weight, color, wrap);
+            if dim.is_some() {
+                crate::text_drag::fade(&mut job, dim, crate::text_drag::DIM_ALPHA);
+            }
             let g = ui.fonts_mut(|f| f.layout_job(job));
             indent_empty_list_rows(g, &rich_now, buf.as_str(), font2.size)
         };
@@ -1824,8 +1861,39 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
             // steps under its id, and this one field edits every text, so
             // ⌘Z here brought back what was typed into the last one.
             ui.ctx().data_mut(|d| d.remove::<egui::text_edit::TextEditState>(edit_id));
+            // Words just moved inside the box stay selected where they landed.
+            if let Some((a, b)) = t.pending_sel.take() {
+                let mut st = egui::text_edit::TextEditState::default();
+                st.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(a), egui::text::CCursor::new(b))));
+                st.store(ui.ctx(), edit_id);
+                t.sel = (a, b);
+            }
+        }
+        // egui keeps a field's selection only while the field has the keys:
+        // shown without them it drops to a caret. A press on the selected
+        // words, Esc during their drag and their menu all take the keys
+        // away for a moment, so they are given back first.
+        if !t.focused_once || t.drag.is_some() || t.sel_menu {
+            ui.memory_mut(|m| m.request_focus(edit_id));
+        }
+        // The selected words' own widgets and their menu are part of the
+        // field: a click on them is not a click elsewhere, which would take
+        // the field's keys (and so its selection) away, as egui's own
+        // completion popup arranges for itself.
+        // Dragged words stay in the box, dimmed: not drawn as a selection.
+        if dim.is_some() {
+            let v = ui.visuals_mut();
+            v.selection.bg_fill = Color32::TRANSPARENT;
+            v.selection.stroke.color = color.gamma_multiply(crate::text_drag::DIM_ALPHA);
+            // The only caret while dragging is the one where the words go.
+            v.text_cursor.stroke.color = Color32::TRANSPARENT;
+        }
+        let surrender = ui.ctx().options(|o| o.input_options.surrender_focus_on);
+        if t.on_words {
+            ui.ctx().options_mut(|o| o.input_options.surrender_focus_on = egui::SurrenderFocusOn::Never);
         }
         let out = edit.show(ui);
+        ui.ctx().options_mut(|o| o.input_options.surrender_focus_on = surrender);
         let resp = out.response.clone();
         if !t.focused_once {
             resp.request_focus();
@@ -1927,6 +1995,9 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                     t.spell_word = None;
                     ui.close();
                 }
+                // The edit-mode menu always offers it; it works on a selection.
+                crate::widgets::menu_separator(ui);
+                crate::widgets::menu_row(ui, None, &crate::actions::Action::MoveToNewTextBox.label(), None, false);
             });
             if !keep {
                 t.spell_word = None;
@@ -1949,9 +2020,26 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
             }
         }
         let caret = out.cursor_range.map(|c| out.galley.pos_from_cursor(c.primary).translate(out.galley_pos.to_vec2()));
-        (resp, caret, width_hit, on_handle)
+        // Selected words: press and drag them out, or to another place.
+        let sel_now = out.cursor_range.map_or(t.sel, |c| {
+            let (a, b) = (usize::from(c.primary.index), usize::from(c.secondary.index));
+            (a.min(b), a.max(b))
+        });
+        let field = crate::text_drag::Field {
+            galley: &out.galley,
+            origin: out.galley_pos - egui::vec2(out.galley.rect.left(), 0.0),
+            rect: r,
+            canvas: if app_rect_valid { canvas_rect } else { ui.ctx().content_rect() },
+            id: edit_id,
+            sel: sel_now,
+            wrap: wrap_px,
+        };
+        let piece_job = |p: &TextData| rich_job(p, &p.text, &theme2, &font2, &font_name, style_weight, color, wrap_px.unwrap_or(f32::INFINITY));
+        let words = crate::text_drag::interact(ui, &mut t, &field, &piece_job);
+        t.laid_out = Some((out.galley.clone(), field.origin));
+        (resp, caret, width_hit, on_handle, words)
     });
-    let (resp, caret, width_hit, on_handle) = r.inner;
+    let (resp, caret, width_hit, on_handle, words) = r.inner;
     if let Some((right, started, stopped, at)) = width_hit {
         text_width_handle(app, &mut t, resp.rect, right, started, at, ts.size * 0.6);
         if stopped && t.width_drag.take().is_some() && t.id.is_some() {
@@ -2172,7 +2260,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     app.canvas.text_toolbar = Some(tb.response.rect);
     let over_toolbar = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| tb.response.rect.contains(p));
     let link_open = t.link_draft.is_some();
-    if (refocus && !link_open) || (resp.lost_focus() && (over_toolbar || on_handle || link_open || spell_open) && !committed) {
+    if (refocus && !link_open) || (resp.lost_focus() && (over_toolbar || on_handle || link_open || spell_open || words.keep_focus) && !committed) {
         if !link_open {
             resp.request_focus();
         }
@@ -2183,6 +2271,10 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     if committed {
         commit_text_edit(app);
         app.canvas.text_toolbar = None;
+    } else if let Some(d) = words.drop {
+        crate::text_drag::apply(app, d);
+    } else if words.move_out {
+        app.queued.push(crate::actions::Action::MoveToNewTextBox);
     }
 }
 

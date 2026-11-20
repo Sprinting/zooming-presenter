@@ -34,6 +34,7 @@ pub mod sheets;
 pub mod sidebar;
 pub mod spell;
 pub mod style;
+pub mod text_drag;
 pub mod theme_editor;
 pub mod thumbs;
 pub mod widgets;

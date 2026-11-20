@@ -637,8 +637,9 @@ impl ZebraApp {
 
     pub fn perform(&mut self, ctx: &Context, a: Action) {
         use Action::*;
-        // Commit any in-place text edit first so actions see the final text.
-        if !matches!(a, Undo | Redo) {
+        // Commit any in-place text edit first so actions see the final text
+        // (Move to New Text Box needs the selection in it, and commits it).
+        if !matches!(a, Undo | Redo | MoveToNewTextBox) {
             crate::canvas::commit_text_edit(self);
         }
         let is_quit = a == Quit;
@@ -939,6 +940,7 @@ impl ZebraApp {
             Settings => self.show_settings = true,
             ShapeLibrary => self.library.toggle(),
             Bold | Italic | Underline if self.canvas.text.is_some() => self.canvas.text_menu = Some(a.clone()),
+            MoveToNewTextBox => crate::text_drag::move_to_new_box(self),
             Group => {
                 let ids = self.editable_selection();
                 let members = self.editor.doc.expand_groups(&ids);
@@ -1646,6 +1648,10 @@ impl ZebraApp {
                         continue;
                     }
                 }
+            }
+            // Esc while dragging words cancels the drag, and only that.
+            if key == egui::Key::Escape && crate::text_drag::cancel(self) {
+                continue;
             }
             let Some(action) = crate::keymap::action_for(modifiers, key) else { continue };
             let action = &action;
