@@ -23,6 +23,7 @@ fn engine() -> bool {
         }
     }
     if std::env::var_os("ZEBRA_PDFIUM").is_none() {
+        assert!(std::env::var_os("ZEBRA_SKIP_PDF").is_some(), "PDFium not found: run scripts/fetch-pdfium.sh for this platform or set ZEBRA_PDFIUM (ZEBRA_SKIP_PDF=1 skips the PDF tests)");
         eprintln!("SKIPPED: PDFium not found (scripts/fetch-pdfium.sh linux-x64, or ZEBRA_PDFIUM)");
         return false;
     }
@@ -102,16 +103,16 @@ fn import_adds_pages_as_one_undo_step() {
     c.call("describe", json!({})).unwrap();
     assert_eq!(rpc_err(c.call("import", json!({"path": pdf, "from": 9}))).kind(), "io");
 
-    // M1: a PDF of more than 200 pages needs `to`, and at most 2,000
-    // pages come in at a time; nothing is drawn before the refusal.
+    // M1: a PDF of more than 200 pages needs `to`, as the sheet asks a
+    // person; nothing is drawn before the refusal. Any range may be asked.
     let atlas = dir.join("Atlas.pdf");
     std::fs::write(&atlas, zebra_pdf::samples::many_pages(30_000)).unwrap();
     c.call("describe", json!({})).unwrap();
-    for ask in [json!({"path": atlas}), json!({"path": atlas, "from": 1}), json!({"path": atlas, "from": 1, "to": 2001})] {
+    for ask in [json!({"path": atlas}), json!({"path": atlas, "from": 1})] {
         let e = rpc_err(c.call("import", ask.clone()));
-        assert_eq!(e.kind(), "too_many_pages", "{ask}: {e}");
+        assert_eq!(e.kind(), "need_range", "{ask}: {e}");
         assert_eq!(e.data["pages"], 30_000);
-        assert!(e.message.contains("30000 pages") && e.message.contains("2000"), "{e}");
+        assert!(e.message.contains("30000 pages") && !e.message.contains("at most"), "{e}");
         assert!(e.hint_text().unwrap().contains(r#""to":200"#), "{e:?}");
     }
     let out = c.call("import", json!({"path": atlas, "from": 29_998, "to": 30_000})).unwrap();

@@ -22,6 +22,7 @@ fn engine() -> bool {
         }
     }
     if std::env::var_os("ZEBRA_PDFIUM").is_none() {
+        assert!(std::env::var_os("ZEBRA_SKIP_PDF").is_some(), "PDFium not found: run scripts/fetch-pdfium.sh for this platform or set ZEBRA_PDFIUM (ZEBRA_SKIP_PDF=1 skips the PDF tests)");
         eprintln!("SKIPPED: PDFium not found");
         return false;
     }
@@ -99,10 +100,11 @@ fn cancel_stops_the_12_gb_page() {
     assert!(heap().saturating_sub(before) < 1 << 30);
 }
 
-/// Three pages that need too much: two placeholders, then the import
-/// stops at the third and keeps the pages before it.
+/// Three pages that need too much: three placeholders, and every other
+/// page comes in too; the import never stops, as Preview never stops
+/// showing a PDF's pages.
 #[test]
-fn three_bad_pages_stop_the_import_there() {
+fn bad_pages_never_stop_the_import() {
     if !engine() {
         return;
     }
@@ -112,18 +114,22 @@ fn three_bad_pages_stop_the_import_there() {
     assert_eq!(reader.page_count(), 7);
     let deck = reader.read(&opts(), &Control::default()).unwrap();
     eprintln!("3 bad pages of 7: {:?}, app heap +{} MB", t.elapsed(), heap().saturating_sub(before) >> 20);
-    assert_eq!(deck.pages.len(), 4, "pages 1–4 (two of them placeholders)");
-    assert_eq!(deck.notes.get(&ImportNote::Placeholder), Some(&2));
-    assert_eq!(deck.notes.get(&ImportNote::Stopped), Some(&5));
-    assert_eq!(ImportNote::Stopped.english(5), "stopped at page 5: the rest of this PDF couldn't be read");
-    assert_eq!(deck.pages.iter().map(|p| p.name.clone()).collect::<Vec<_>>(), ["Page 1", "Page 2", "Page 3", "Page 4"]);
-    // The same PDF again this session: refused when opened.
-    let again = zebra_import::open_bytes(unique(some_slow_pages(7, &[1, 2, 4]), "three"), "three".into());
-    assert_eq!(again.err(), Some(ImportError::TooDemanding));
+    assert_eq!(deck.pages.len(), 7, "every page, three of them placeholders");
+    assert_eq!(deck.notes.get(&ImportNote::Placeholder), Some(&3));
+    assert_eq!(ImportNote::Placeholder.english(3), "3 pages that couldn't be drawn shown as placeholders");
+    assert_eq!(deck.pages.iter().map(|p| p.name.clone()).collect::<Vec<_>>(), (1..=7).map(|i| format!("Page {i}")).collect::<Vec<_>>());
+    // The same PDF again this session: opens, and the bad pages are
+    // placeholders at once.
+    let t = Instant::now();
+    let again = zebra_import::open_bytes(unique(some_slow_pages(7, &[1, 2, 4]), "three"), "three".into()).unwrap();
+    let deck = again.read(&opts(), &Control::default()).unwrap();
+    assert_eq!(deck.pages.len(), 7);
+    assert_eq!(deck.notes.get(&ImportNote::Placeholder), Some(&3));
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
 }
 
-/// M1: 30,000 pages are counted at once; reading them all is refused
-/// (at most 2,000 at a time); 1 to 200 come in.
+/// M1: 30,000 pages are counted at once, and any range comes in: here
+/// the last 200.
 #[test]
 fn a_30000_page_pdf_imports_a_range() {
     if !engine() {
@@ -134,10 +140,7 @@ fn a_30000_page_pdf_imports_a_range() {
     let reader = zebra_import::open_bytes(many_pages(30_000), "many".into()).unwrap();
     assert_eq!(reader.page_count(), 30_000);
     let counted = t.elapsed();
-    assert_eq!(reader.read(&opts(), &Control::default()).err(), Some(ImportError::TooManyPages { pages: 30_000 }));
     let mut o = opts();
-    o.last = zebra_import::pdf::MAX_PAGES + 1;
-    assert_eq!(reader.read(&o, &Control::default()).err(), Some(ImportError::TooManyPages { pages: 30_000 }));
     o.first = 29_801;
     o.last = 30_000;
     let ctl = Control::default();
@@ -148,6 +151,25 @@ fn a_30000_page_pdf_imports_a_range() {
     assert_eq!(deck.pages[0].name, "Page 29801");
     eprintln!("30,000 pages: counted in {counted:?}, 200 read in {:?}, app heap +{} MB", t2.elapsed(), heap().saturating_sub(before) >> 20);
     assert!(heap().saturating_sub(before) < 200 << 20);
+}
+
+/// B3: no page ceiling. 2,500 pages (more than the 2,000 Zebra once cut
+/// imports at) all come in, in order, with progress for each.
+#[test]
+fn a_2500_page_pdf_imports_whole() {
+    if !engine() {
+        return;
+    }
+    let before = heap();
+    let t = Instant::now();
+    let reader = zebra_import::open_bytes(unique(many_pages(2_500), "2500"), "2500".into()).unwrap();
+    let ctl = Control::default();
+    let deck = reader.read(&opts(), &ctl).unwrap();
+    eprintln!("2,500 pages imported in {:?}, app heap +{} MB", t.elapsed(), heap().saturating_sub(before) >> 20);
+    assert_eq!(deck.pages.len(), 2_500);
+    assert_eq!(ctl.done(), 2_500);
+    assert_eq!(deck.pages[2_499].name, "Page 2500");
+    assert!(deck.notes.is_empty(), "{:?}", deck.notes);
 }
 
 #[test]

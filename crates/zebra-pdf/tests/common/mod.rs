@@ -17,6 +17,7 @@ pub fn engine() -> bool {
     }
     let ok = std::env::var_os("ZEBRA_PDFIUM").is_some();
     if !ok {
+        assert!(std::env::var_os("ZEBRA_SKIP_PDF").is_some(), "PDFium not found: run scripts/fetch-pdfium.sh for this platform or set ZEBRA_PDFIUM (ZEBRA_SKIP_PDF=1 skips the PDF tests)");
         eprintln!("SKIPPED: PDFium not found (run scripts/fetch-pdfium.sh linux-x64 or set ZEBRA_PDFIUM)");
     }
     ok

@@ -80,7 +80,8 @@ fn failed(app: &mut ZebraApp, path: &Path, e: ImportError) {
         ImportError::NoEngine(_) => crate::t!("import-error-no-engine"),
         ImportError::Read(_) => crate::t!("import-error-read"),
         ImportError::TooDemanding => crate::t!("import-error-too-demanding"),
-        ImportError::TooManyPages { .. } => crate::t!("import-range-too-many", max = group(zebra_import::pdf::MAX_PAGES)),
+        // Only the API asks for a range this way; the sheet asks itself.
+        ImportError::NeedRange { .. } => crate::t!("import-error-read"),
         ImportError::Cancelled => return,
         ImportError::BetaOff => {
             crate::beta_ui::offer(app, zebra_core::beta::BetaFeature::PptxImport, crate::beta_ui::Pending::Import(path.to_path_buf()));
@@ -122,7 +123,6 @@ pub fn note_lines(notes: &BTreeMap<ImportNote, usize>, slides: &BTreeMap<ImportN
                 (ImportNote::Gradient, _) => crate::t!("import-note-gradient", count = c),
                 (ImportNote::Other, _) => crate::t!("import-note-other", count = c),
                 (ImportNote::Placeholder, _) => crate::t!("import-note-placeholder", count = c),
-                (ImportNote::Stopped, _) => crate::t!("import-note-stopped", page = group(c as usize)),
             }
         })
         .collect()
@@ -164,13 +164,11 @@ pub fn choose(path: PathBuf, reader: Box<dyn Reader>, pages: usize, slides: bool
     Flow::Choose { path, reader, pages, all: !many, from: 1.0, to: to as f64, slides, many }
 }
 
-/// The pages a sheet would import (1-based, inclusive), and whether that
-/// many may be imported at once.
-fn chosen(pages: usize, all: bool, from: f64, to: f64, slides: bool) -> (usize, usize, bool) {
+/// The pages a sheet would import (1-based, inclusive). Any number of
+/// pages can be imported at once, as Preview opens any number.
+fn chosen(pages: usize, all: bool, from: f64, to: f64) -> (usize, usize) {
     let (first, last) = if all { (1, pages) } else { (from.round().max(1.0) as usize, (to.round().max(1.0) as usize).min(pages.max(1))) };
-    let first = first.min(last);
-    let ok = slides || last + 1 - first <= zebra_import::pdf::MAX_PAGES;
-    (first, last, ok)
+    (first.min(last), last)
 }
 
 /// `n` with its thousands grouped, as the person's numbers are written:
@@ -275,7 +273,6 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
         Cancel,
     }
     let mut act = Do::Nothing;
-    let mut can_import = true;
     egui::Area::new(block_id).order(egui::Order::Foreground).fixed_pos(content.min).show(ctx, |ui| {
         let r = ui.allocate_rect(content, egui::Sense::click_and_drag());
         ui.painter().rect_filled(r.rect, 0.0, Color32::from_black_alpha(if p.dark { 40 } else { 14 }));
@@ -360,15 +357,6 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
                                     }
                                 });
                             }
-                            let (_, _, ok) = chosen(*pages, *all, *from, *to, *slides);
-                            can_import = ok;
-                            if !ok {
-                                ui.add_space(6.0);
-                                ui.vertical_centered(|ui| {
-                                    let msg = crate::t!("import-range-too-many", max = group(zebra_import::pdf::MAX_PAGES));
-                                    ui.add(egui::Label::new(RichText::new(msg).font(style::ui_font(11.0)).color(p.weak)).wrap().halign(egui::Align::Center));
-                                });
-                            }
                         }
                         Flow::Running { ctl, total, slides, .. } => {
                             let done = ctl.done().min(*total);
@@ -392,13 +380,11 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
                     let wdt = ui.available_width();
                     if matches!(flow, Flow::Choose { .. }) {
                         let label = crate::t!("sheet-import");
-                        let sense = if can_import { egui::Sense::click() } else { egui::Sense::hover() };
-                        let (rect, resp) = ui.allocate_exact_size(Vec2::new(wdt, w::H_REGULAR + 2.0), sense);
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::DefaultButton, can_import, &label));
-                        let fill = if can_import { style::accent() } else { style::accent().gamma_multiply(0.45) };
-                        ui.painter().rect_filled(rect, w::RADIUS, fill);
+                        let (rect, resp) = ui.allocate_exact_size(Vec2::new(wdt, w::H_REGULAR + 2.0), egui::Sense::click());
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::DefaultButton, true, &label));
+                        ui.painter().rect_filled(rect, w::RADIUS, style::accent());
                         ui.painter().text(rect.center(), Align2::CENTER_CENTER, &label, style::ui_font(13.0), w::on_accent());
-                        if resp.clicked() && can_import {
+                        if resp.clicked() {
                             act = Do::Import;
                         }
                         ui.add_space(2.0);
@@ -412,7 +398,7 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
         if i.key_pressed(egui::Key::Escape) {
             act = Do::Cancel;
         }
-        if i.key_pressed(egui::Key::Enter) && act == Do::Nothing && can_import {
+        if i.key_pressed(egui::Key::Enter) && act == Do::Nothing {
             act = Do::Import;
         }
     });
@@ -427,13 +413,9 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
             app.import = None;
         }
         Do::Import => {
-            if let Some(Flow::Choose { path, reader, pages, all, from, to, slides, many }) = app.import.take() {
-                let (first, last, ok) = chosen(pages, all, from, to, slides);
-                if ok {
-                    run(app, path, reader, first, last);
-                } else {
-                    app.import = Some(Flow::Choose { path, reader, pages, all, from, to, slides, many });
-                }
+            if let Some(Flow::Choose { path, reader, pages, all, from, to, .. }) = app.import.take() {
+                let (first, last) = chosen(pages, all, from, to);
+                run(app, path, reader, first, last);
             }
         }
     }

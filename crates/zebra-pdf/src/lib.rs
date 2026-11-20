@@ -7,8 +7,9 @@
 //! app watches and kills when it uses more than [`limits::BUDGET`] of
 //! memory or runs past a deadline, or when the person cancels. A page
 //! that kills a helper is given up on for the session (its picture
-//! shows instead); a PDF that kills it [`limits::KILLS_PER_PDF`] times,
-//! or while opening, is given up on whole. New helpers start on demand,
+//! shows instead), however many pages that is: the PDF's other pages are
+//! still drawn, as Preview keeps showing the pages it can. A PDF that
+//! kills it while opening is given up on whole. New helpers start on demand,
 //! after a growing wait when they keep dying, so one file can't make the
 //! app start processes without end.
 //!

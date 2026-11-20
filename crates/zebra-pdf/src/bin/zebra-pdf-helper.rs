@@ -223,7 +223,7 @@ fn handle(pdfium: &'static Pdfium, doc: &mut Option<Open>, req: Request, mut fds
             drop(fds);
             match pdfium.load_pdf_from_reader(src, None) {
                 Ok(d) => {
-                    let pages = (d.pages().len().max(0) as u32).min(wire::MAX_PAGES);
+                    let pages = d.pages().len().max(0) as u32;
                     *doc = Some(Open { page: None, doc: d });
                     Reply::Opened { pages }
                 }

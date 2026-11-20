@@ -16,6 +16,7 @@ use zebra_pdf::samples::*;
 
 fn engine() -> bool {
     if std::env::var_os("ZEBRA_PDFIUM").is_none() {
+        assert!(std::env::var_os("ZEBRA_SKIP_PDF").is_some(), "PDFium not found: run scripts/fetch-pdfium.sh for this platform or set ZEBRA_PDFIUM (ZEBRA_SKIP_PDF=1 skips the PDF tests)");
         eprintln!("SKIPPED: PDFium not found (set ZEBRA_PDFIUM)");
         return false;
     }
@@ -73,25 +74,19 @@ fn a_30000_page_pdf_asks_with_1_to_200_filled_in() {
         h.render().unwrap().save(Path::new(&dir).join("import-many-pages.png")).unwrap();
     }
 
-    // More than 2,000: said under the range, and Import does nothing.
+    // Any range can be asked for (Preview opens any number of pages):
+    // 2,051 pages is no more refused than 51 (B3).
     if let Some(Flow::Choose { from, to, .. }) = &mut h.state_mut().import {
         (*from, *to) = (250.0, 2300.0);
     }
     h.run_steps(3);
-    h.get_by_label("At most 2,000 pages at a time.");
-    if let Some(dir) = std::env::var_os("ZEBRA_SHOTS") {
-        h.render().unwrap().save(Path::new(&dir).join("import-many-pages-too-many.png")).unwrap();
-    }
-    h.get_by_label(&zebra_app::i18n::tr("sheet-import")).click();
-    h.run_steps(2);
-    assert!(range(h.state()).is_some(), "still asking");
+    assert!(h.query_by_label_contains("at a time").is_none());
 
     // A range the person typed: those pages come in, one undo step.
     if let Some(Flow::Choose { from, to, .. }) = &mut h.state_mut().import {
         (*from, *to) = (250.0, 300.0);
     }
     h.run_steps(2);
-    assert!(h.query_by_label("At most 2,000 pages at a time.").is_none());
     h.get_by_label(&zebra_app::i18n::tr("sheet-import")).click();
     until(&mut h, 120, |a| a.import.is_none());
     let pages: Vec<String> = h.state().editor.doc.elements.values().filter(|e| matches!(&e.kind, zebra_core::ElementKind::Image(i) if i.page.is_some())).map(|e| e.id.clone()).collect();

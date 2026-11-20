@@ -300,9 +300,6 @@ impl Pool {
         match page {
             Some(p) => {
                 e.bad_pages.insert(p);
-                if e.bad_pages.len() >= limits::KILLS_PER_PDF {
-                    e.dead = true;
-                }
             }
             None => e.dead = true,
         }

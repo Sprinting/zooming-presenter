@@ -13,8 +13,8 @@
 //! PDFium never runs in Zebra's own process: it runs in the helper
 //! ([`zebra_pdf`]), which the app kills when a page takes too much memory
 //! or time, or when the person cancels. A page that can't be drawn comes
-//! in as a placeholder (noted); after [`zebra_pdf::limits::KILLS_PER_PDF`]
-//! such pages the import stops there, keeping the pages before.
+//! in as a placeholder (noted) and the import goes on, as Preview does:
+//! however many pages fail, every page of the range is there.
 use zebra_core::import::{asset_from, ImportNote, ImportedDeck, ImportedItem, ImportedPage};
 use zebra_core::{AssetBytes, Element, ElementKind, ImageData, PageRef, Size, Transform};
 use zebra_pdf::{Lane, PdfError, Pool};
@@ -32,10 +32,9 @@ pub const PREVIEW_PX: u32 = 512;
 /// frame is 800 wide). Pages keep their sizes relative to each other.
 pub const PAGE_UNITS: f64 = 1000.0;
 /// A PDF with more pages than this asks which to import first (File ›
-/// Import… fills in 1 to this; the API wants `to`).
+/// Import… fills in 1 to this; the API wants `to`). Any range can be
+/// asked for: there is no most.
 pub const ASK_ABOVE_PAGES: usize = 200;
-/// Most pages of a PDF imported at once, whatever is asked.
-pub const MAX_PAGES: usize = 2000;
 /// The placeholder for a page that can't be drawn: light grey.
 const PLACEHOLDER_GREY: u8 = 0xe5;
 
@@ -134,15 +133,20 @@ impl Reader for PdfReader {
         let _release = Release;
         let cancel = || ctl.cancelled();
         let range = crate::page_range(opts, self.pages);
-        if range.len() > MAX_PAGES {
-            return Err(ImportError::TooManyPages { pages: self.pages });
-        }
         if range.is_empty() {
             return Err(ImportError::Damaged("PDF"));
         }
         let mut deck = ImportedDeck { title: self.title.clone(), ..Default::default() };
         let (pdf_key, pdf) = (self.key.clone(), zebra_core::Asset { ext: "pdf".into(), bytes: self.bytes.clone(), width: 0, height: 0 });
-        let sizes = pool.sizes(Lane::Import, &self.key, &self.bytes, range.start as u32, (range.end - 1) as u32, &cancel)?;
+        // Page sizes, asked for in replies the helper may send.
+        let mut sizes = Vec::with_capacity(range.len());
+        let step = zebra_pdf::wire::MAX_SIZES as usize;
+        let mut first = range.start;
+        while first < range.end {
+            let last = (first + step).min(range.end) - 1;
+            sizes.extend(pool.sizes(Lane::Import, &self.key, &self.bytes, first as u32, last as u32, &cancel)?);
+            first = last + 1;
+        }
         // World units per point, from the largest page asked for.
         let largest = sizes.iter().map(|(w, h)| w.max(*h)).fold(0.0f64, f64::max);
         let k = PAGE_UNITS / largest.max(1.0);
@@ -181,33 +185,22 @@ impl Reader for PdfReader {
                     Ok(p) => image::RgbImage::from_raw(p.px.0, p.px.1, p.rgb).map(|img| (p.w_pt, p.h_pt, p.text, img)),
                     Err(PdfError::Cancelled) => return Err(ImportError::Cancelled),
                     Err(e @ (PdfError::NoHelper(_) | PdfError::NoEngine(_) | PdfError::Io(_))) => return Err(e.into()),
-                    Err(PdfError::TooDemanding) => {
-                        if pool.given_up(&self.key, None) {
-                            // Too many pages like this: stop here, keep
-                            // what came in before.
-                            deck.notes.insert(ImportNote::Stopped, i + 1);
-                            break;
-                        }
-                        let (w, h) = size_of(i);
-                        if tx.send((i, w, h, String::new(), None)).is_err() {
-                            break;
-                        }
-                        *deck.notes.entry(ImportNote::Placeholder).or_default() += 1;
-                        continue;
-                    }
                     Err(_) => None,
                 };
-                match page {
-                    Some((w, h, alt, img)) => {
-                        if tx.send((i, w, h, alt, Some(img))).is_err() {
-                            break;
-                        }
-                    }
-                    // A page PDFium can't open is left out, not the whole file.
+                let (w, h, alt, img) = match page {
+                    Some((w, h, alt, img)) => (w, h, alt, Some(img)),
+                    // A page that takes too much memory or time, that
+                    // PDFium can't open, or whose pixels don't add up,
+                    // comes in as a placeholder the size of the page, and
+                    // the import goes on.
                     None => {
-                        *deck.notes.entry(ImportNote::PageSkipped).or_default() += 1;
-                        ctl.page_done();
+                        let (w, h) = size_of(i);
+                        *deck.notes.entry(ImportNote::Placeholder).or_default() += 1;
+                        (w, h, String::new(), None)
                     }
+                };
+                if tx.send((i, w, h, alt, img)).is_err() {
+                    break;
                 }
             }
             drop(tx);
@@ -220,7 +213,7 @@ impl Reader for PdfReader {
         let mut encoded = encoded.into_inner().unwrap_or_else(|e| e.into_inner());
         encoded.sort_by_key(|e| e.0);
         if encoded.is_empty() {
-            return Err(if deck.notes.contains_key(&ImportNote::Stopped) { ImportError::TooDemanding } else { ImportError::Damaged("PDF") });
+            return Err(ImportError::Damaged("PDF"));
         }
         for (i, w, h, alt, bytes) in encoded {
             let Ok((key, asset)) = asset_from(bytes) else {

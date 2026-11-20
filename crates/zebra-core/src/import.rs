@@ -135,13 +135,9 @@ pub enum ImportNote {
     /// Slide layouts, masters or themes that couldn't be read were left out
     /// (their slides came in without their design).
     Design,
-    /// PDF pages that needed too much memory or time to draw came in as
-    /// grey placeholders.
+    /// PDF pages that couldn't be drawn (too much memory or time, or
+    /// PDFium couldn't open them) came in as grey placeholders.
     Placeholder,
-    /// The import stopped at a PDF page (the count is that page's number,
-    /// 1-based): too many of its pages needed too much memory or time.
-    /// The pages before it came in.
-    Stopped,
 }
 
 /// Most formatted spans an imported text box keeps (the text renderer
@@ -149,7 +145,7 @@ pub enum ImportNote {
 pub const MAX_IMPORT_SPANS: usize = 60_000;
 
 impl ImportNote {
-    pub const ALL: [ImportNote; 19] = [
+    pub const ALL: [ImportNote; 18] = [
         ImportNote::PageSkipped,
         ImportNote::HiddenSlide,
         ImportNote::Chart,
@@ -168,14 +164,12 @@ impl ImportNote {
         ImportNote::Simplified,
         ImportNote::Design,
         ImportNote::Placeholder,
-        ImportNote::Stopped,
     ];
 
     /// English, for the API and the undo history of agents.
     pub fn english(self, n: usize) -> String {
         let (one, many) = match self {
-            ImportNote::Stopped => return format!("stopped at page {n}: the rest of this PDF couldn't be read"),
-            ImportNote::Placeholder => ("page that needed too much memory or time shown as a placeholder", "pages that needed too much memory or time shown as placeholders"),
+            ImportNote::Placeholder => ("page that couldn't be drawn shown as a placeholder", "pages that couldn't be drawn shown as placeholders"),
             ImportNote::PageSkipped => ("unreadable page left out", "unreadable pages left out"),
             ImportNote::HiddenSlide => ("hidden slide left out", "hidden slides left out"),
             ImportNote::Chart => ("chart left out", "charts left out"),

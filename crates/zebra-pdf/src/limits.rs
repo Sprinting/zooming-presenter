@@ -23,9 +23,6 @@ pub const POLL: Duration = Duration::from_millis(25);
 pub const IDLE: Duration = Duration::from_secs(60);
 /// ...and leaves by itself after this long with nothing to do.
 pub const SELF_IDLE: Duration = Duration::from_secs(90);
-/// Pages of one PDF that may kill a helper before the whole PDF is left
-/// alone for the session.
-pub const KILLS_PER_PDF: usize = 3;
 /// Wait before starting a helper again after `deaths` in a row:
 /// 0, 0.5, 1, 2, 4 … 30 s.
 pub fn backoff(deaths: u32) -> Duration {

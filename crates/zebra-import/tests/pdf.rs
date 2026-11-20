@@ -3,9 +3,9 @@
 //! page; damaged files give an error, never a panic.
 //!
 //! Needs PDFium: `scripts/fetch-pdfium.sh linux-x64` (or mac-arm64) puts
-//! it in target/pdfium/, or set ZEBRA_PDFIUM. Without it these tests say
-//! so and pass. With it, the PDF helper must be built first: `cargo build
-//! -p zebra-pdf --bin zebra-pdf-helper`.
+//! it in target/pdfium/, or set ZEBRA_PDFIUM. Without it these tests
+//! fail (ZEBRA_SKIP_PDF=1 skips them, and says so). The PDF helper must
+//! be built first: `cargo build -p zebra-pdf --bin zebra-pdf-helper`.
 use zebra_core::{Editor, Element, ElementKind, Origin, StepTarget};
 use zebra_import::{Control, ImportError, ImportNote, Options};
 
@@ -21,6 +21,7 @@ fn engine() -> bool {
         }
     }
     if std::env::var_os("ZEBRA_PDFIUM").is_none() {
+        assert!(std::env::var_os("ZEBRA_SKIP_PDF").is_some(), "PDFium not found: run scripts/fetch-pdfium.sh for this platform or set ZEBRA_PDFIUM (ZEBRA_SKIP_PDF=1 skips the PDF tests)");
         eprintln!("SKIPPED: PDFium not found (run scripts/fetch-pdfium.sh linux-x64 or set ZEBRA_PDFIUM)");
         return false;
     }
@@ -274,7 +275,7 @@ fn damaged_files_give_an_error_not_a_panic() {
         }
     }
     assert!(matches!(zebra_import::open(std::path::Path::new("/nonexistent/file.pdf")), Err(ImportError::Read(_))));
-    assert_eq!(ImportNote::ALL.len(), 19);
+    assert_eq!(ImportNote::ALL.len(), 18);
 }
 
 /// PDFs for `cargo run -p zebra-pdf --example bench` (the helper against

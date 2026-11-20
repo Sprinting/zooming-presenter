@@ -272,7 +272,7 @@ enum Cmd {
         #[arg(long)]
         from: Option<u64>,
         /// Last page or slide (default: the last). A PDF of more than 200
-        /// pages needs it; at most 2,000 pages are imported at a time.
+        /// pages needs it; any number of pages can be imported.
         #[arg(long)]
         to: Option<u64>,
     },

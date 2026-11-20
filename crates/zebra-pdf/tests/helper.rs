@@ -132,9 +132,11 @@ fn a_hung_or_growing_helper_is_killed() {
         assert!(t.elapsed() < Duration::from_millis(1500));
     }
     assert!(p.stats().peak < (300 + 200) << 20);
-    // Three pages of one PDF: the whole PDF is given up on.
-    assert!(p.given_up("k", Some(4)));
-    assert_eq!(p.open(Lane::Draw, "k", &b, &no), Err(PdfError::TooDemanding));
+    // Three pages of one PDF given up on: the PDF's other pages are still
+    // drawn, as Preview keeps showing the pages it can.
+    assert!(!p.given_up("k", Some(4)));
+    assert_eq!(p.open(Lane::Draw, "k", &b, &no), Ok(5));
+    assert!(p.rect(Lane::Draw, "k", &b, 4, (64, 64), (0, 0, 64, 64), &no).is_ok());
 }
 
 /// A helper that answers wrongly (a compromised one could): garbage, a

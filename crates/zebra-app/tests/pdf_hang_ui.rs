@@ -5,7 +5,8 @@
 //! waits on the helper, and none takes more than about 100 ms.
 //!
 //! Needs PDFium and the PDF helper (`cargo build -p zebra-pdf --bin
-//! zebra-pdf-helper`); without PDFium it says so and passes.
+//! zebra-pdf-helper`) and a GPU (software Vulkan will do); without PDFium
+//! it fails (ZEBRA_SKIP_PDF=1 skips it).
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,6 +18,7 @@ use zebra_pdf::{Lane, Pool};
 
 fn engine() -> bool {
     if std::env::var_os("ZEBRA_PDFIUM").is_none() {
+        assert!(std::env::var_os("ZEBRA_SKIP_PDF").is_some(), "PDFium not found: run scripts/fetch-pdfium.sh for this platform or set ZEBRA_PDFIUM (ZEBRA_SKIP_PDF=1 skips the PDF tests)");
         eprintln!("SKIPPED: PDFium not found (set ZEBRA_PDFIUM)");
         return false;
     }

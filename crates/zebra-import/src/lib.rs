@@ -56,14 +56,16 @@ pub enum ImportError {
     /// is one, see `zebra_core::beta`).
     #[error("importing PowerPoint is a beta feature, and beta features are off")]
     BetaOff,
-    /// The PDF needs more memory or time than Zebra gives it (its helper
-    /// was stopped while opening it, or on too many of its pages).
+    /// The PDF needs more memory or time than Zebra gives it to open it
+    /// (its helper was stopped while opening it). Pages that need too
+    /// much come in as placeholders instead.
     #[error("the PDF needs too much memory or time to read")]
     TooDemanding,
-    /// More pages asked for than are imported at once
-    /// ([`pdf::MAX_PAGES`]); `pages`: how many the file has.
-    #[error("the file has {pages} pages; at most {max} are imported at a time", max = pdf::MAX_PAGES)]
-    TooManyPages { pages: usize },
+    /// An agent asked for every page of a PDF with more than
+    /// [`pdf::ASK_ABOVE_PAGES`] without saying which (`to`), as the
+    /// import sheet asks a person; `pages`: how many the file has.
+    #[error("the file has {pages} pages; say which to import")]
+    NeedRange { pages: usize },
 }
 
 /// Progress and cancel, shared with whoever started the import.

@@ -14,8 +14,8 @@ pub const MAX_FRAME: usize = 4096 * 4096 * 4 + 4096;
 pub const MAX_KEY: usize = 256;
 /// Longest page text sent back (bytes; the client cuts it to 120 chars).
 pub const MAX_TEXT: usize = 1024;
-/// Most pages a PDF may claim.
-pub const MAX_PAGES: u32 = 1_000_000;
+/// Most pages a PDF may claim: PDFium's own most (a C `int`).
+pub const MAX_PAGES: u32 = i32::MAX as u32;
 /// Most page sizes in one reply.
 pub const MAX_SIZES: u32 = 100_000;
 /// Bytes of a PDF sent inside an Open frame (bigger ones go as a file).
