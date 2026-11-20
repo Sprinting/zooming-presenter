@@ -695,3 +695,21 @@ fn absurd_stroke_width_is_refused() {
     ed.apply(cmd(serde_json::json!({"op":"add_connector","id":"c9","from":{"x":0,"y":0},"to":{"x":10,"y":0}})), Origin::agent("a")).unwrap();
     assert!(ed.apply(cmd(serde_json::json!({"op":"update","id":"c9","patch":{"stroke_width":1e15}})), Origin::agent("a")).is_err());
 }
+
+/// Hostile-input audit L4: `next_id` u64::MAX in a file overflowed (a
+/// panic in debug builds) on the next new element.
+#[test]
+fn next_id_at_the_top_of_u64_is_repaired() {
+    let ed = sample();
+    let mut v: serde_json::Value = serde_json::from_str(&io::to_json(&ed.doc)).unwrap();
+    v["next_id"] = serde_json::json!(u64::MAX);
+    let doc = io::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+    let max = doc.elements.keys().filter_map(|k| k.trim_start_matches(|c: char| !c.is_ascii_digit()).parse::<u64>().ok()).max().unwrap_or(0);
+    assert_eq!(doc.next_id, max + 1);
+    let mut ed = Editor::new(doc);
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","shape":"ellipse","x":0,"y":0})), Origin::Human).unwrap();
+    // And the counter itself wraps rather than overflowing.
+    ed.doc.next_id = u64::MAX;
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","shape":"ellipse","x":0,"y":0})), Origin::Human).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","shape":"ellipse","x":0,"y":0})), Origin::Human).unwrap();
+}

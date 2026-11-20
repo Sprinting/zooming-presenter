@@ -1076,7 +1076,7 @@ impl Document {
     pub fn alloc_id(&mut self, prefix: &str) -> ElementId {
         loop {
             let id = format!("{prefix}{}", self.next_id);
-            self.next_id += 1;
+            self.next_id = self.next_id.wrapping_add(1);
             if !self.elements.contains_key(&id) {
                 return id;
             }

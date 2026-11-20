@@ -82,7 +82,7 @@ impl Editor {
         for e in &clip.elements {
             let id = loop {
                 let id = format!("{}{n}", e.kind.id_prefix());
-                n += 1;
+                n = n.wrapping_add(1);
                 if !taken.contains(&id) {
                     break id;
                 }

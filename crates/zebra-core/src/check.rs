@@ -305,6 +305,14 @@ pub fn repair(doc: &mut Document) -> usize {
         s.dwell = s.dwell.filter(|d| fin(*d) && *d > 0.0);
         s.builds.retain(|b| els.contains_key(b));
     }
+    // An absurd id counter (u64::MAX overflowed, hostile-input audit L4)
+    // counts on from the largest number in use instead. A lower one is
+    // kept: new ids skip the ones taken, and a sound file reopens as it
+    // was saved.
+    if doc.next_id > u64::MAX / 2 {
+        doc.next_id = doc.elements.keys().filter_map(|k| k.trim_start_matches(|c: char| !c.is_ascii_digit()).parse::<u64>().ok()).max().map_or(1, |m| m.saturating_add(1));
+        fixed += 1;
+    }
     doc.play.autoplay = doc.play.autoplay.filter(|d| fin(*d) && *d > 0.0);
     if let Some(s) = &mut doc.soundtrack {
         if !fin(s.volume) {
