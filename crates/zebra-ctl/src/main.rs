@@ -333,6 +333,29 @@ enum Add {
         #[arg(long)]
         alt: Option<String>,
     },
+    /// Add a web video from an https link, as Insert › Web Video… does:
+    /// MP4, MOV or M4V files and HLS streams play from the link; YouTube
+    /// and Vimeo links become a video card. Zebra checks the link first
+    /// (up to 10 s) and says why when it doesn't play. Only the link and a
+    /// poster are kept in the deck.
+    WebVideo {
+        url: String,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        x: f64,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        y: f64,
+        /// World width (height follows the video's shape).
+        #[arg(long)]
+        width: Option<f64>,
+        #[arg(long)]
+        alt: Option<String>,
+        /// Seconds into the video to start (default: the link's own t=).
+        #[arg(long)]
+        start: Option<f64>,
+        /// Seconds into the video to stop.
+        #[arg(long)]
+        end: Option<f64>,
+    },
     /// Add a shape: rectangle | ellipse | triangle | line | arrow.
     Shape {
         shape: String,
@@ -576,6 +599,14 @@ fn run(cli: Cli) -> Result<()> {
                     let mut m = json!({ "op": "add_image", "path": abs(&file)?, "x": x, "y": y });
                     if let Some(w) = width { m["width"] = json!(w) }
                     if let Some(a) = alt { m["alt"] = json!(a) }
+                    m
+                }
+                Add::WebVideo { url, x, y, width, alt, start, end } => {
+                    let mut m = json!({ "op": "add_web_video", "url": url, "x": x, "y": y });
+                    if let Some(w) = width { m["width"] = json!(w) }
+                    if let Some(a) = alt { m["alt"] = json!(a) }
+                    if let Some(s) = start { m["start"] = json!(s) }
+                    if let Some(e) = end { m["end"] = json!(e) }
                     m
                 }
                 Add::Shape { shape, x, y, w, h, fill } => {

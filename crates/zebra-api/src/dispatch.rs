@@ -27,6 +27,9 @@ pub(crate) struct Pending {
     /// The `document` the call named (id or name); None = the front one.
     document: Option<String>,
     deadline: Instant,
+    /// Its web video links were checked (and downloads fetched) on a
+    /// worker; it runs now.
+    web_done: bool,
 }
 
 /// The id of the document a call is for: the one it names (by id, then by
@@ -131,7 +134,7 @@ impl Dispatcher {
                     self.deferred.retain(|w| w.client != client);
                 }
                 Inbound::Call { client, id, origin, call, document } => {
-                    let p = Pending { client, id, origin, call, document, deadline: Instant::now() + HUMAN_GRACE };
+                    let p = Pending { client, id, origin, call, document, deadline: Instant::now() + HUMAN_GRACE, web_done: false };
                     let must_queue = self.deferred.iter().any(|q| q.client == client)
                         || self.jobs.iter().any(|j| j.client == client)
                         || (p.call.mutates() && gesture(docs, p.document.as_deref()));
@@ -151,6 +154,18 @@ impl Dispatcher {
                 Ok(JobDone::Reply(r)) => {
                     let job = self.jobs.remove(j);
                     reply(server, job.client, &job.id, r);
+                }
+                Ok(JobDone::Web(done)) => {
+                    let job = self.jobs.remove(j);
+                    let WebDone { pending, result, files } = *done;
+                    match result {
+                        Ok(()) => self.run(server, docs, pending),
+                        Err(e) => reply(server, job.client, &job.id, Err(e)),
+                    }
+                    // The deck has its own copy of a downloaded clip now.
+                    for f in files {
+                        let _ = std::fs::remove_file(f);
+                    }
                 }
                 Ok(JobDone::Import(done)) => {
                     let job = self.jobs.remove(j);
@@ -305,6 +320,37 @@ impl Dispatcher {
                 Err(e) => reply(server, p.client, &p.id, Err(RpcError::app("io", format!("cannot start an import thread: {e}")))),
             }
             return;
+        }
+        // Web video links are checked, and downloads fetched, on a worker
+        // (the network can take seconds); the call runs when that is done.
+        if !p.web_done {
+            let tasks = web_tasks(&p.call, editor);
+            if !tasks.is_empty() {
+                let seen = self.seen.get(&(doc.clone(), p.origin.display())).copied();
+                // Nothing is fetched for a call that would be refused.
+                let allowed = need_edit(editor.view.agent_permission, "add_web_video")
+                    .and_then(|_| check_agent_allowed(editor))
+                    .and_then(|_| if p.origin.is_agent() { check_read(editor, seen) } else { Ok(()) });
+                if let Err(e) = allowed {
+                    return reply(server, p.client, &p.id, Err(e));
+                }
+                let (tx, rx) = std::sync::mpsc::channel();
+                let waker = server.inner.shared.waker.clone();
+                let (client, id) = (p.client, p.id.clone());
+                let mut pending = p;
+                let spawned = std::thread::Builder::new().name("zebra-web-video".into()).spawn(move || {
+                    let mut files = vec![];
+                    let result = fetch_web(&mut pending.call, &tasks, &mut files);
+                    pending.web_done = true;
+                    let _ = tx.send(JobDone::Web(Box::new(WebDone { pending, result, files })));
+                    waker();
+                });
+                match spawned {
+                    Ok(_) => self.jobs.push(Job { client, id, rx }),
+                    Err(e) => reply(server, client, &id, Err(RpcError::app("io", format!("cannot start a thread: {e}")))),
+                }
+                return;
+            }
         }
         // Captures and exports render a snapshot on a worker so the window
         // never stalls on a big render; the reply is sent when it's done.
@@ -676,6 +722,8 @@ pub(crate) struct Job {
 pub(crate) enum JobDone {
     /// The reply, as is.
     Reply(Result<Value, RpcError>),
+    /// Web video links checked: run the call (or reply with why not).
+    Web(Box<WebDone>),
     /// A file read for `import`, to add to its document.
     Import(Box<ImportDone>),
 }
@@ -846,6 +894,99 @@ fn check_read(editor: &Editor, seen: Option<u64>) -> Result<(), RpcError> {
         .hint("read it again (`describe`, or `query` for the parts you are changing), then retry"))
 }
 
+pub(crate) struct WebDone {
+    pending: Pending,
+    result: Result<(), RpcError>,
+    /// Downloaded clips, removed once the call has run.
+    files: Vec<std::path::PathBuf>,
+}
+
+/// Network work a call needs before it can run.
+enum WebTask {
+    /// Check the link of the `add_web_video` at this index.
+    Check(usize),
+    /// Download this link for the `download_video` at this index.
+    Download(usize, String),
+}
+
+fn commands_of(call: &mut Call) -> &mut [Command] {
+    match call {
+        Call::Apply { command, .. } => std::slice::from_mut(command),
+        Call::Batch { commands, .. } => commands,
+        _ => &mut [],
+    }
+}
+
+/// Which commands of a call need the network: every `add_web_video` (its
+/// link is checked even when the agent says what it is), and each
+/// `download_video` of a web video file without a `path`.
+fn web_tasks(call: &Call, editor: &Editor) -> Vec<WebTask> {
+    let cmds: &[Command] = match call {
+        Call::Apply { command, .. } => std::slice::from_ref(command),
+        Call::Batch { commands, .. } => commands,
+        _ => &[],
+    };
+    let mut out = vec![];
+    for (i, c) in cmds.iter().enumerate() {
+        match c {
+            Command::AddWebVideo { .. } => out.push(WebTask::Check(i)),
+            Command::DownloadVideo { id, path: None } => {
+                if let Some(zebra_core::ElementKind::Video(zebra_core::VideoData { link: Some(l), .. })) = editor.doc.get(id).map(|e| &e.kind) {
+                    if l.kind == zebra_core::LinkKind::File {
+                        out.push(WebTask::Download(i, l.url.clone()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn link_error(e: zebra_media::link::LinkError) -> RpcError {
+    RpcError::app(e.code(), e.message())
+}
+
+/// On a worker: check links (filling in what was found and a poster) and
+/// download clips (filling in their `path`).
+fn fetch_web(call: &mut Call, tasks: &[WebTask], files: &mut Vec<std::path::PathBuf>) -> Result<(), RpcError> {
+    let checker = zebra_media::link::Checker::from_env();
+    let backend = zebra_media::platform();
+    let cmds = commands_of(call);
+    for t in tasks {
+        match t {
+            WebTask::Check(i) => {
+                let Some(Command::AddWebVideo { url, poster_base64, alt, found, .. }) = cmds.get_mut(*i) else { continue };
+                let c = checker.check(url).map_err(link_error)?;
+                *found = Some(zebra_core::LinkFound { kind: c.kind, width: c.width, height: c.height, duration: c.duration });
+                if poster_base64.as_deref().is_none_or(|p| p.trim().is_empty()) {
+                    // A card's thumbnail; a file's first frame where this
+                    // Mac can take it; a stream has none until it plays.
+                    let png = c.poster.clone().or_else(|| (c.kind == zebra_core::LinkKind::File).then(|| backend.poster_png_url(url, 0.0, 1280).ok()).flatten());
+                    *poster_base64 = png.map(|p| base64::engine::general_purpose::STANDARD.encode(p));
+                }
+                if alt.trim().is_empty() {
+                    *alt = c.title.clone().unwrap_or_default();
+                }
+            }
+            WebTask::Download(i, url) => {
+                let Some(Command::DownloadVideo { path, .. }) = cmds.get_mut(*i) else { continue };
+                let dir = zebra_core::media::cache_dir().join("downloads");
+                std::fs::create_dir_all(&dir).map_err(|e| RpcError::app("io", format!("cannot make the download folder: {e}")))?;
+                let ext = zebra_core::weblink::parse(url)
+                    .and_then(|u| u.path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()))
+                    .filter(|e| matches!(e.as_str(), "mp4" | "mov" | "m4v"))
+                    .unwrap_or_else(|| "mp4".into());
+                let file = dir.join(format!("{}-{}.{ext}", std::process::id(), files.len()));
+                checker.download(url, &file, &std::sync::atomic::AtomicBool::new(false)).map_err(link_error)?;
+                *path = Some(file.to_string_lossy().to_string());
+                files.push(file);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Before commands run: a poster `at` a time in the video becomes that
 /// frame's picture, and `save_theme` with `to_library` is checked (it
 /// writes into the person's own files, like `save`). Returns the ids of
@@ -870,6 +1011,9 @@ fn prepare(cmds: &mut [Command], editor: &Editor) -> Result<Vec<String>, RpcErro
                 let Some(zebra_core::ElementKind::Video(v)) = editor.doc.get(id).map(|e| &e.kind) else {
                     return Err(RpcError::app("not_found", format!("no video '{id}'")).hint("`query` {\"q\":\"elements\",\"kind\":\"video\"} lists them"));
                 };
+                if v.link.is_some() {
+                    return Err(RpcError::app("unsupported", "a web video's frames aren't kept in the deck").hint("pass data_base64 or path with a picture, or download_video first"));
+                }
                 let a = editor.doc.assets.get(&v.asset).ok_or_else(|| RpcError::app("bad_file", format!("the video '{id}' has no data")))?;
                 let file = zebra_core::media::materialize(&v.asset, &a.ext, &a.bytes).map_err(|e| RpcError::app("io", e.to_string()))?;
                 let png = zebra_media::platform().poster_png(file.path(), secs, 1280).map_err(|e| {
