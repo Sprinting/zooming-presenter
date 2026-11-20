@@ -439,18 +439,36 @@ pub fn default_socket_path(name: &str) -> std::io::Result<PathBuf> {
     if dir.join(format!("{name}.sock")).as_os_str().len() > 100 {
         dir = PathBuf::from(format!("/tmp/zebra-{uid}"));
     }
-    ensure_private_dir(&dir)?;
+    own_socket_dir(&dir, uid)?;
     sweep_dead_sockets(&dir);
-    // Refuse a directory someone else owns.
-    let meta = fs::metadata(&dir)?;
-    use std::os::unix::fs::MetadataExt;
-    if meta.uid() != uid {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("{} is owned by another user", dir.display()),
-        ));
-    }
     Ok(dir.join(format!("{name}.sock")))
+}
+
+/// Make `dir` (if needed) and check it is a real folder `uid` owns before
+/// anything is done in it: in a shared /tmp another user can plant a
+/// symlink there to a folder the victim owns, which a followed check
+/// passes, so it was chmodded and its `*.sock` files swept (hostile-input
+/// audit L3). Links are refused, not followed.
+fn own_socket_dir(dir: &Path, uid: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    if let Err(e) = fs::create_dir_all(dir) {
+        // A planted link to nowhere: refused below, not created through.
+        if fs::symlink_metadata(dir).is_err() {
+            return Err(e);
+        }
+    }
+    let meta = fs::symlink_metadata(dir)?;
+    let refuse = |why: &str| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("{} {why}", dir.display())));
+    if meta.file_type().is_symlink() {
+        return refuse("is a symbolic link");
+    }
+    if !meta.is_dir() {
+        return refuse("is not a folder");
+    }
+    if meta.uid() != uid {
+        return refuse("is owned by another user");
+    }
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
 }
 
 /// Remove `<pid>.sock` / `<pid>-<n>.sock` files whose process is gone
@@ -467,6 +485,32 @@ pub fn sweep_dead_sockets(dir: &Path) {
         if !pid_alive(pid) {
             let _ = fs::remove_file(&path);
         }
+    }
+}
+
+#[cfg(test)]
+mod socket_dir_tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_planted_symlink_is_refused_and_its_target_untouched() {
+        let base = std::env::temp_dir().join(format!("zebra-l3-{}", std::process::id()));
+        let target = base.join("victim");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(target.join("2147483000.sock"), b"").unwrap();
+        let link = base.join("zebra-uid");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        // SAFETY: getuid never fails.
+        let uid = unsafe { libc::getuid() };
+        assert!(super::own_socket_dir(&link, uid).is_err());
+        assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o755);
+        assert!(target.join("2147483000.sock").exists());
+        // A real folder is fine and made private.
+        let real = base.join("real");
+        super::own_socket_dir(&real, uid).unwrap();
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o700);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
 
