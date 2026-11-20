@@ -198,6 +198,31 @@ fn smartart_drawings_that_name_themselves_are_read_once() {
     }
 }
 
+/// R1: a run's link comes in only for http, https and mailto; any other
+/// (`javascript:` reached the web player) leaves its words plain.
+#[test]
+fn only_web_and_mail_links_come_in() {
+    let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    use zebra_import::pptx::web_link;
+    for bad in ["javascript:alert(1)", "JAVASCRIPT:alert(1)", " javascript:alert(1)", "java\tscript:alert(1)", "java\nscript:x", "\u{0}javascript:x", "file:///etc/passwd", "data:text/html,<b>", "vbscript:x", "http:x", "https://", "mailto:", "slide2.xml", "", "  "] {
+        assert_eq!(web_link(bad), None, "{bad:?}");
+    }
+    assert_eq!(web_link("HTTPS://Example.com/A?b=1").as_deref(), Some("https://Example.com/A?b=1"));
+    assert_eq!(web_link(" http://e.x/ ").as_deref(), Some("http://e.x/"));
+    assert_eq!(web_link("MailTo:a@b.c").as_deref(), Some("mailto:a@b.c"));
+    // End to end: the fixture's link, then the same run linking elsewhere.
+    let parts = unpack(&fixture("deck16x9.pptx"));
+    let rels = String::from_utf8(fixture_part("deck16x9.pptx", "ppt/slides/_rels/slide3.xml.rels")).unwrap();
+    for (target, want) in [("https://example.com/", Some("https://example.com/")), ("javascript:alert(1)", None), ("HTTP://example.com/", Some("http://example.com/")), ("file:///etc/passwd", None)] {
+        let r = rels.replace("https://example.com/", &target.replace('&', "&amp;"));
+        let d = read(pack(&patch(&parts, &[("ppt/slides/_rels/slide3.xml.rels", r.into_bytes())], &[]))).unwrap();
+        let t = texts(&d).into_iter().find(|t| t.text.starts_with("Bold italic")).unwrap();
+        assert!(t.text.contains("link"), "the words stay");
+        let links: Vec<Option<&str>> = t.spans.iter().filter_map(|s| s.format.link.as_deref()).map(Some).collect();
+        assert_eq!(links.first().copied().flatten(), want, "{target}");
+    }
+}
+
 /// T-W3: a missing, broken or hostile part used to make the whole file
 /// "damaged". Now the slide it belongs to is left out and named, or a
 /// design part is left out and noted, and the rest comes in.

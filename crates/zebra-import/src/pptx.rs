@@ -1320,12 +1320,16 @@ impl<'a> SlideReader<'a> {
         out
     }
 
-    /// The URL a run's link relationship points at (web and mail links
-    /// only; links to other slides are left out).
+    /// The URL a run's link relationship points at: web and mail links
+    /// only ([`web_link`]). Links to other slides, and links that would run
+    /// something (`javascript:`, `file:`…), are left out: the run's words
+    /// stay, plain.
     fn link(&self, id: &str) -> Option<String> {
         let r = self.index.rel(self.part, id)?;
-        let t = r.target.trim();
-        (r.target_mode == TargetMode::External || t.contains("://") || t.starts_with("mailto:")).then(|| t.to_string()).filter(|t| !t.is_empty())
+        if r.target_mode != TargetMode::External && !r.target.contains(':') {
+            return None;
+        }
+        web_link(&r.target)
     }
 
     /// Paragraph `index` at `level`'s properties, from the master's text
@@ -1415,6 +1419,21 @@ impl<'a> SlideReader<'a> {
             return None;
         }
         resolve_color_value_to_hex_with_theme(Some(c), Some(&self.theme)).map(|h| h.to_ascii_lowercase())
+    }
+}
+
+/// `url` when it is a web or mail link (http, https or mailto, in any
+/// case; its scheme is written in lower case), else None. Spaces round it
+/// and tabs and line breaks inside are dropped first, as browsers drop
+/// them (`java\tscript:` is `javascript:` to a browser).
+pub fn web_link(url: &str) -> Option<String> {
+    let url: String = url.trim_matches(|c: char| c.is_whitespace() || c.is_control()).chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
+    let (scheme, rest) = url.split_once(':')?;
+    let scheme = scheme.to_ascii_lowercase();
+    match scheme.as_str() {
+        "http" | "https" if rest.starts_with("//") && rest.len() > 2 => Some(format!("{scheme}:{rest}")),
+        "mailto" if !rest.is_empty() => Some(format!("{scheme}:{rest}")),
+        _ => None,
     }
 }
 
