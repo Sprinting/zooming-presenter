@@ -1086,7 +1086,6 @@ web-video-failed = Video couldn't play
 # $site is YouTube or Vimeo.
 web-video-card-playing = { $site } video playing
 web-video-close = Close
-web-video-play = Play
 ## ---- end web_video_ui.rs ----
 
 

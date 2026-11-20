@@ -181,6 +181,7 @@ fn poll(app: &mut ZebraApp) {
     let now = app.editor.view.now;
     let Some(mut s) = app.web_sheet.take() else { return };
     let phase = std::mem::replace(&mut s.phase, Phase::Editing);
+    let busy = !matches!(phase, Phase::Editing);
     s.phase = match phase {
         Phase::Editing => Phase::Editing,
         Phase::Checking { url, rx, started } => match rx.try_recv() {
@@ -242,6 +243,10 @@ fn poll(app: &mut ZebraApp) {
             }
         }
     };
+    if busy && matches!(s.phase, Phase::Editing) {
+        // The answer is a problem: back to the field to fix the link.
+        s.focus = true;
+    }
     app.web_sheet = Some(s);
 }
 
@@ -511,40 +516,54 @@ pub fn size_text(bytes: u64) -> String {
 pub fn inspector_rows(app: &mut ZebraApp, ui: &mut egui::Ui, id: &str, v: &zebra_core::VideoData) {
     let Some(link) = v.link.clone() else { return };
     let weak = ui.visuals().weak_text_color();
+    let site = weblink::site_name(&link);
     w::row(ui, &crate::t!("web-video-link"), |ui| {
-        ui.label(RichText::new(weblink::site_name(&link)).font(style::ui_font(13.0))).on_hover_text(&link.url);
-        if w::push_button_ext(ui, &crate::t!("web-video-copy-link"), w::Size::Small, true, None).on_hover_text(crate::t!("web-video-copy-link-tip")).clicked() {
+        // A long host name is cut short; the whole link shows on hover.
+        ui.add(egui::Label::new(RichText::new(&site).font(style::ui_font(13.0))).truncate()).on_hover_text(&link.url);
+    });
+    let busy = app.media.downloads.contains_key(id);
+    w::row(ui, "", |ui| {
+        if w::push_button_ext(ui, &crate::t!("web-video-copy-link"), w::Size::Regular, true, None).on_hover_text(crate::t!("web-video-copy-link-tip")).clicked() {
             ui.ctx().copy_text(link.url.clone());
             app.toast(crate::t!("web-video-link-copied"));
         }
     });
-    if link.kind.is_card() {
-        ui.label(RichText::new(crate::t!("web-video-card-note", site = weblink::site_name(&link))).size(11.0).color(weak));
-        return;
-    }
-    if link.kind == LinkKind::Live {
-        ui.label(RichText::new(crate::t!("web-video-live")).size(11.0).color(weak));
-    }
-    w::row(ui, "", |ui| match app.media.downloads.get(id) {
-        Some(d) => {
-            let text = match d.fraction() {
-                Some(f) => crate::t!("web-video-downloading", percent = ((f * 100.0).floor() as i64)),
-                None => crate::t!("web-video-downloading-size", size = size_text(d.bytes())),
-            };
-            ui.add(egui::Spinner::new().size(12.0));
-            ui.label(RichText::new(text).font(style::ui_font(11.0)).color(weak));
-            if w::push_button_ext(ui, &crate::t!("sheet-cancel"), w::Size::Small, true, None).clicked() {
-                cancel_download(app, id);
-            }
-        }
-        None => {
-            let file = link.kind == LinkKind::File;
-            let tip = if file { crate::t!("web-video-download-tip") } else { crate::t!("web-video-download-stream-tip") };
+    // Its own row: the inspector is too narrow for both side by side.
+    if !link.kind.is_card() && !busy {
+        let file = link.kind == LinkKind::File;
+        let tip = if file { crate::t!("web-video-download-tip") } else { crate::t!("web-video-download-stream-tip") };
+        w::row(ui, "", |ui| {
             if w::push_button_ext(ui, &crate::t!("web-video-download"), w::Size::Regular, file, None).on_hover_text(tip).clicked() {
                 download(app, id);
             }
-        }
-    });
+        });
+    }
+    if let Some(d) = app.media.downloads.get(id) {
+        let text = match d.fraction() {
+            Some(f) => crate::t!("web-video-downloading", percent = ((f * 100.0).floor() as i64)),
+            None => crate::t!("web-video-downloading-size", size = size_text(d.bytes())),
+        };
+        // Cancel where Download was, the progress under it.
+        w::row(ui, "", |ui| {
+            if w::push_button_ext(ui, &crate::t!("sheet-cancel"), w::Size::Regular, true, None).clicked() {
+                cancel_download(app, id);
+            }
+        });
+        w::row(ui, "", |ui| {
+            ui.add(egui::Spinner::new().size(12.0));
+            ui.label(RichText::new(text).font(style::ui_font(11.0)).color(weak));
+        });
+    }
+    let note = if link.kind.is_card() {
+        Some(crate::t!("web-video-card-note", site = site))
+    } else if link.kind == LinkKind::Live {
+        Some(crate::t!("web-video-live"))
+    } else {
+        None
+    };
+    if let Some(note) = note {
+        ui.add(egui::Label::new(RichText::new(note).size(11.0).color(weak)).wrap());
+    }
 }
 
 // ----------------------------------------------------------------------
