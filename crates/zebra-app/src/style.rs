@@ -14,6 +14,8 @@ pub const ACCENT: Color32 = Color32::from_rgb(0x00, 0x7a, 0xff);
 pub const AGENT: Color32 = Color32::from_rgb(0x8b, 0x5c, 0xf6);
 /// Snapping guides.
 pub const GUIDE: Color32 = Color32::from_rgb(0xff, 0x3d, 0x7f);
+/// systemRed: error lines under fields.
+pub const RED: Color32 = Color32::from_rgb(0xff, 0x3b, 0x30);
 /// Path line and badges: a dark slate line with round badges.
 pub const PATH: Color32 = Color32::from_rgb(0x2c, 0x3e, 0x50);
 /// Kept for compatibility; the Play button now uses the accent.

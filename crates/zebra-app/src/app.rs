@@ -168,6 +168,8 @@ pub struct ZebraApp {
     pub sheet: Option<crate::sheets::SheetKind>,
     /// File › Import… under way (its sheet is up).
     pub import: Option<crate::import_ui::Flow>,
+    /// Insert › Web Video…'s sheet.
+    pub web_sheet: Option<crate::web_video_ui::Sheet>,
     /// Use native NSAlert sheets and system dialogs (macOS with a window);
     /// off in UI tests, where sheets are drawn in egui.
     pub native_dialogs: bool,
@@ -412,6 +414,7 @@ impl ZebraApp {
             note: None,
             sheet: None,
             import: None,
+            web_sheet: None,
             native_dialogs: cfg!(target_os = "macos") && has_window,
             #[cfg(target_os = "macos")]
             open_sheet: None,
@@ -822,6 +825,7 @@ impl ZebraApp {
             }
             InsertFrame => crate::canvas::insert_frame(self),
             InsertVideo => crate::media_ui::insert_video_dialog(self),
+            InsertWebVideo => crate::web_video_ui::open(self),
             InsertMusic => crate::media_ui::soundtrack_dialog(self),
             ReplaceImage => {
                 if let [id] = self.selection().as_slice() {
@@ -914,7 +918,11 @@ impl ZebraApp {
                 // The Play button is disabled; this covers the shortcut.
                 self.toast(crate::t!("app-toast-nothing-to-play"));
             }
-            PresentStart => self.view_cmd(ViewCommand::Present { step: None }),
+            PresentStart => {
+                // From the first step, every video card starts over.
+                self.media.card_resume.clear();
+                self.view_cmd(ViewCommand::Present { step: None })
+            }
             PresentCurrent => {
                 let step = self.current_step();
                 self.view_cmd(ViewCommand::Present { step });

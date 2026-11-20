@@ -62,6 +62,9 @@ pub enum Action {
     ShapeLibrary,
     /// Insert › Video… (stream 2 fills it in).
     InsertVideo,
+    /// Insert › Web Video…: a video from an https link, or a YouTube or
+    /// Vimeo card.
+    InsertWebVideo,
     /// Insert › Audio… (stream 2 fills it in).
     // Format (whole text box until rich text runs land; stream 3 routes
     // these to the text selection while editing)
@@ -165,6 +168,7 @@ impl Action {
             WrapInFrame => crate::t!("action-wrap-in-frame"),
             ShapeLibrary => crate::t!("action-insert-symbols"),
             InsertVideo => crate::t!("action-insert-video"),
+            InsertWebVideo => crate::t!("action-insert-web-video"),
             Bold => crate::t!("action-bold"),
             Italic => crate::t!("action-italic"),
             Underline => crate::t!("action-underline"),
@@ -232,7 +236,7 @@ impl Action {
         v.extend([
             InsertFrame, InsertImage, InsertLayout, InsertDiagram, InsertSymbols, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
             FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ShowShortcuts, Settings, ShapeLibrary,
-            InsertVideo, InsertMusic, ReplaceImage, CropImage, PlayPauseVideo, Group, Ungroup,
+            InsertVideo, InsertWebVideo, InsertMusic, ReplaceImage, CropImage, PlayPauseVideo, Group, Ungroup,
             TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, TogglePresenterView, PlaybackOptions, ToggleAiControl, ToggleActivity,
             PauseAgents, StopAgents, FollowAgent, RevertAgent, ThemeEditor, Acknowledgements,
         ]);
