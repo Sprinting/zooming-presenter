@@ -40,7 +40,8 @@ Drag each onto the canvas, or try File > Open / File > Import as the name sugges
 - `hostile/picture-named-video.mov`: should be added as a picture, or refused; either is fine
 - `hostile/cut-off-video.mp4`, `hostile/cut-off.pptx`, `hostile/lying-sizes.mp4`
 - `hostile/disk-image-named.png`: claims to be 4 GB. Should be refused instantly, without reading 4 GB.
-- `hostile/bomb-document.zebra`: 1 MB on disk, 1 GB unpacked. Opening it should say it's too large, and memory should not jump.
+- `hostile/bomb-document.zebra`: 1 MB on disk, 1 GB of spaces and then a real document. It opens (spaces are allowed), after a few seconds, and memory should not jump.
+- `hostile/bomb-numbers.zebra`: 6 MB on disk, a document of 3 billion zeros that would need about 144 GB. Opening it says it needs more memory than this Mac has, and memory should not jump.
 - `hostile/bomb-picture.zebra`: 2 MB on disk, 2 GB unpacked. It opens with a missing picture, and memory stays flat.
 - `hostile/bomb-media.pptx`: its video unpacks to 2 GB. The import works or reports the video as broken, and memory stays flat.
 - `hostile/pipe.png`: a named pipe. Should be refused at once, not hang.
@@ -59,7 +60,8 @@ zebractl add image "$T/hostile/too-wide.png" --x 0 --y 0                 # expec
 zebractl import "$T/big/deck-with-2048MB-video.pptx"
 zebractl save "$T/test.zebra"
 for f in "$T"/hostile/*; do zebractl add image "$f" --x 0 --y 0; done   # every one an error, app still up
-zebractl open "$T/hostile/bomb-document.zebra" --force                  # expect bad_file
+zebractl open "$T/hostile/bomb-document.zebra" --force                  # opens
+zebractl open "$T/hostile/bomb-numbers.zebra" --force                   # expect bad_file, "needs about … MB of memory"
 footprint Zebra | head -5
 ```
 

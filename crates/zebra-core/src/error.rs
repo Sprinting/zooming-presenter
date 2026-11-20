@@ -26,7 +26,7 @@ pub enum About {
     Picture,
     /// A video poster over its limit.
     Poster,
-    /// A document over [`crate::io::MAX_DOCUMENT_JSON`].
+    /// A document that needs more memory to open than [`crate::io::memory_budget`].
     Document,
     /// A file still being written by an earlier save.
     Saving,

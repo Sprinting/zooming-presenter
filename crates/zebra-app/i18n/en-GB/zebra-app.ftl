@@ -51,7 +51,7 @@ app-toast-agent-switched-ai-off = { $name } turned off AI control. To turn it on
 app-open-failed-title = The document “{ $name }” could not be opened.
 app-open-failed-newer = It was made by a newer version of Zebra.
 app-open-failed-not-zebra = It isn't a Zebra presentation, or it's damaged.
-app-open-failed-too-large = It's too large for Zebra to open.
+app-open-failed-too-large = It needs more memory than this Mac has.
 app-open-failed-missing = The file no longer exists.
 app-open-failed-permission = You don't have permission to read it.
 app-open-failed-unreadable = The file couldn't be read.
@@ -1826,7 +1826,7 @@ history-sort-table = Sort
 app-error-too-big = That's too large. Nothing was changed.
 app-error-picture-too-big = This picture is too large to open.
 app-error-poster-too-big = This picture is too large to use as a poster.
-app-error-document-too-big = This document is too large for Zebra to open.
+app-error-document-too-big = This presentation needs more memory than this Mac has.
 app-error-saving = The document is still being saved. Try again in a moment.
 
 ## Beta features (Settings › General): the offer where a person reaches
