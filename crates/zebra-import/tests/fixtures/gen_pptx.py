@@ -3,8 +3,8 @@
 
     python3 gen_pptx.py OUT_DIR
 
-Needs python-pptx (1.0.2) and Pillow. Writes deck16x9.pptx and deck4x3.pptx
-to OUT_DIR; copy them next to this script. Run it from a scratch directory,
+Needs python-pptx (1.0.2) and Pillow. Writes deck16x9.pptx, deck4x3.pptx and
+extras.pptx to OUT_DIR; copy them next to this script. Run it from a scratch directory,
 not from here, so nothing else lands in the fixtures folder.
 """
 import copy
@@ -25,6 +25,8 @@ from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
 MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+P = "http://schemas.openxmlformats.org/presentationml/2006/main"
+A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 CX1 = "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex"
 
 
@@ -219,8 +221,39 @@ def deck4x3(out):
     prs.save(out)
 
 
+def master_shape(master, sid, name, prst, box, fill):
+    """A shape on the slide master (python-pptx adds shapes to slides only)."""
+    x, y, w, h = (str(int(v)) for v in box)
+    sp = etree.fromstring(
+        f'<p:sp xmlns:p="{P}" xmlns:a="{A}"><p:nvSpPr><p:cNvPr id="{sid}" name="{name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
+        f'<p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm><a:prstGeom prst="{prst}"><a:avLst/></a:prstGeom>{fill}</p:spPr></p:sp>'
+    )
+    master.shapes._spTree.append(sp)
+
+
+def extras(out):
+    """What the follow-ups to the first import cover (spec 17b)."""
+    prs = Presentation()
+    master = prs.slide_master
+    # Decorations every slide shows: a shape Zebra doesn't have and a
+    # gradient; each is noted once, however many slides show it.
+    master_shape(master, 90, "Gear", "gear6", (Inches(9), Inches(6.5), Inches(0.8), Inches(0.8)),
+                 '<a:solidFill><a:srgbClr val="808080"/></a:solidFill>')
+    master_shape(master, 91, "Band", "rect", (0, Inches(7.2), Inches(10), Inches(0.3)),
+                 '<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="1F4E79"/></a:gs>'
+                 '<a:gs pos="100000"><a:srgbClr val="9DC3E6"/></a:gs></a:gsLst></a:gradFill>')
+
+    # 1-3. Slides showing the master's decorations.
+    for n in range(3):
+        s = blank(prs)
+        tb = s.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+        tb.text_frame.text = f"Extras {n + 1}"
+    prs.save(out)
+
+
 if __name__ == "__main__":
     out = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     out.mkdir(parents=True, exist_ok=True)
     deck16x9(out / "deck16x9.pptx")
     deck4x3(out / "deck4x3.pptx")
+    extras(out / "extras.pptx")

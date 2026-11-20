@@ -193,6 +193,19 @@ fn a_4_by_3_deck_brings_pictures_kept_for_a_chart_and_a_video() {
 }
 
 #[test]
+fn what_the_master_shows_on_every_slide_is_noted_once() {
+    let ed = editor();
+    let deck = read("extras.pptx", &ed);
+    // The master's gradient band comes in on every slide; its gear can't.
+    for p in &deck.pages[..3] {
+        let bands = p.items.iter().filter(|i| matches!(&i.element.kind, ElementKind::Shape(s) if s.fill.as_deref() == Some("#1f4e79"))).count();
+        assert_eq!(bands, 1, "{}", p.name);
+    }
+    assert_eq!(deck.notes.get(&ImportNote::Shape), Some(&1), "{:?}", deck.notes);
+    assert_eq!(deck.notes.get(&ImportNote::Gradient), Some(&1), "{:?}", deck.notes);
+}
+
+#[test]
 fn on_the_canvas_slides_are_frames_with_steps_and_one_undo_removes_them() {
     let mut ed = editor();
     ed.apply(serde_json::from_value(serde_json::json!({"op":"add_frame","id":"f1","x":0,"y":0,"w":800,"h":600,"add_to_path":true})).unwrap(), Origin::Human).unwrap();

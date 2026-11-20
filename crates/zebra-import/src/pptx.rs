@@ -18,7 +18,7 @@
 //! What has no Zebra match comes in as the picture the file keeps of it,
 //! when it keeps one, or is left out; either way it is counted in the
 //! deck's notes ([`ImportNote`]).
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ooxml_drawingml::{resolve_color_value_to_hex_with_theme, style_fill, style_outline, ColorValue, ShapeFill, ShapeOutline, Theme as DmlTheme, ThemeFormatScheme};
 use pptx_parse::{
@@ -95,6 +95,7 @@ impl Reader for PptxReader {
         let mut deck = ImportedDeck { title: self.title.clone(), ..Default::default() };
         let mut pending = vec![];
         let mut media = BTreeMap::new();
+        let mut counted = BTreeSet::new();
         for i in crate::page_range(opts, pkg.slides.len()) {
             if ctl.cancelled() {
                 return Err(ImportError::Cancelled);
@@ -105,7 +106,7 @@ impl Reader for PptxReader {
                 ctl.page_done();
                 continue;
             }
-            let mut r = SlideReader::new(pkg, slide, k, (sw, sh), &mut deck, &mut media);
+            let mut r = SlideReader::new(pkg, slide, k, (sw, sh), &mut deck, &mut media, &mut counted);
             r.read();
             let SlideReader { items, pending: texts, .. } = r;
             let page = deck.pages.len();
@@ -272,10 +273,23 @@ struct SlideReader<'a> {
     groups: usize,
     /// The part whose objects are being read (for its links).
     part: &'a str,
+    /// Masters, layouts and inherited backgrounds whose notes are counted
+    /// already: what every slide shows of them is noted once per import.
+    counted: &'a mut BTreeSet<String>,
+    /// Reading something whose notes are counted already.
+    quiet: bool,
 }
 
 impl<'a> SlideReader<'a> {
-    fn new(pkg: &'a PptxPackage, slide: &'a Slide, k: f64, size: (i64, i64), deck: &'a mut ImportedDeck, media: &'a mut BTreeMap<String, Option<String>>) -> Self {
+    fn new(
+        pkg: &'a PptxPackage,
+        slide: &'a Slide,
+        k: f64,
+        size: (i64, i64),
+        deck: &'a mut ImportedDeck,
+        media: &'a mut BTreeMap<String, Option<String>>,
+        counted: &'a mut BTreeSet<String>,
+    ) -> Self {
         let layout = slide.layout_part_path.as_deref().and_then(|p| pkg.layouts.iter().find(|l| l.part_path == p)).or_else(|| pkg.layouts.first());
         let master = pptx_parse::master_for_layout(pkg, layout).or_else(|| pkg.masters.first());
         let theme = pptx_parse::slide_theme(pkg, Some(&slide.part_path), layout.map(|l| l.part_path.as_str()));
@@ -285,26 +299,38 @@ impl<'a> SlideReader<'a> {
             .or_else(|| pkg.themes.first())
             .map(|t| t.format_scheme.clone())
             .unwrap_or_default();
-        SlideReader { pkg, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path }
+        SlideReader { pkg, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false }
     }
 
     fn note(&mut self, n: ImportNote) {
-        *self.deck.notes.entry(n).or_default() += 1;
+        if !self.quiet {
+            *self.deck.notes.entry(n).or_default() += 1;
+        }
+    }
+
+    /// Count notes from here on only if `key` (an inherited part) hasn't
+    /// had its notes counted yet.
+    fn count_once(&mut self, key: String) {
+        self.quiet = !self.counted.insert(key);
     }
 
     fn read(&mut self) {
         self.background();
+        self.quiet = false;
         let show = self.slide.show_master_shapes;
         if let (Some(m), true) = (self.master, show && self.layout.is_none_or(|l| l.show_master_shapes)) {
             self.part = &m.part_path;
+            self.count_once(m.part_path.clone());
             self.walk(&m.shapes, None, &[], None, Role::Inherited);
         }
         if let (Some(l), true) = (self.layout, show) {
             self.part = &l.part_path;
+            self.count_once(l.part_path.clone());
             self.walk(&l.shapes, None, &[], None, Role::Inherited);
         }
         let (pkg, slide) = (self.pkg, self.slide);
         self.part = &slide.part_path;
+        self.quiet = false;
         let source = pkg.slide_source(&slide.part_path);
         self.walk(&slide.shapes, source.map(|s| s.shapes.as_slice()), &[], None, Role::Slide);
         if let Some(src) = source {
@@ -323,9 +349,18 @@ impl<'a> SlideReader<'a> {
         let pkg_bg = |fill: &Option<ShapeFill>, pic: &Option<Box<pptx_parse::PictureFill>>, rf: &Option<ooxml_drawingml::StyleReference>| {
             (fill.is_some() || pic.is_some() || rf.is_some()).then(|| (fill.clone(), pic.clone(), rf.clone()))
         };
+        // Whose background it is: an inherited one is noted once.
         let found = pkg_bg(&self.slide.background, &self.slide.background_picture, &self.slide.background_reference)
-            .or_else(|| self.layout.and_then(|l| pkg_bg(&l.background, &l.background_picture, &l.background_reference)))
-            .or_else(|| self.master.and_then(|m| pkg_bg(&m.background, &m.background_picture, &m.background_reference)));
+            .map(|b| (b, None))
+            .or_else(|| self.layout.and_then(|l| Some((pkg_bg(&l.background, &l.background_picture, &l.background_reference)?, Some(&l.part_path)))))
+            .or_else(|| self.master.and_then(|m| Some((pkg_bg(&m.background, &m.background_picture, &m.background_reference)?, Some(&m.part_path)))));
+        let (found, owner) = match found {
+            Some((b, owner)) => (Some(b), owner),
+            None => (None, None),
+        };
+        if let Some(p) = owner {
+            self.count_once(format!("{p}#background"));
+        }
         let (w, h) = (self.size.0 as f64, self.size.1 as f64);
         let all = Placed { cx: w / 2.0, cy: h / 2.0, w, h, rot: 0.0, flip_h: false, flip_v: false };
         let (fill, pic, rf) = found.unwrap_or_default();
