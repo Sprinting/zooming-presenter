@@ -291,6 +291,30 @@ fn a_broken_slide_is_left_out_and_the_rest_comes_in() {
     assert_eq!(d.pages.len(), 1);
 }
 
+/// A slide of alike runs packs far tighter than a picture may (20,000 runs
+/// of one letter, 266 to 1, were cut short and the slide left out): a
+/// part's own size cap is its bound, not its packing ratio.
+#[test]
+fn a_tightly_packed_slide_comes_in() {
+    let run = r#"<a:r><a:rPr lang="en-GB" sz="1800"/><a:t>x</a:t></a:r>"#;
+    let one = s(slide(&text_box(2, &format!("<a:p>{}</a:p>", run.repeat(40_000)))));
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in unpack(&deck(&[one], &[], &[])) {
+        z.start_file(name.as_str(), zip::write::SimpleFileOptions::default().compression_level(Some(9))).unwrap();
+        z.write_all(&bytes).unwrap();
+    }
+    let bytes = z.finish().unwrap().into_inner();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let f = zip.by_name("ppt/slides/slide1.xml").unwrap();
+    let ratio = f.size() / f.compressed_size().max(1);
+    drop(f);
+    assert!(ratio > 200, "packs only {ratio} to 1");
+    let d = read(bytes).unwrap();
+    assert_eq!(d.pages.len(), 1);
+    assert!(d.slides.is_empty(), "{:?}", d.slides);
+    assert_eq!(texts(&d)[0].text.chars().count(), 40_000);
+}
+
 /// T-W3: 10,000 slides were "damaged" (BetterOffice reads at most 5000
 /// zip entries, and its budgets were the whole deck's). They come in, a
 /// batch at a time, the heap not growing with the deck.

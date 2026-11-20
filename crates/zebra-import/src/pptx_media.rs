@@ -74,13 +74,19 @@ impl MediaSource {
     }
 
     /// Any part's bytes (not only media), at most `max` unpacked; None when
-    /// it is missing, can't be unpacked, or is bigger.
+    /// it is missing, can't be unpacked, or is bigger. `max` is the only
+    /// bound: XML packs far tighter than [`MAX_RATIO`] (a slide of 20,000
+    /// alike runs, 266 to 1).
     pub fn read_part(&self, path: &str, max: u64) -> Option<Vec<u8>> {
-        self.with_entry(path, |r, limit| {
-            let mut v = Vec::with_capacity(limit.min(max).min(1 << 20) as usize);
-            r.take(max.saturating_add(1)).read_to_end(&mut v).ok()?;
-            (v.len() as u64 <= max).then_some(v)
-        })
+        let i = *self.entries.get(path)?;
+        let mut zip = self.zip.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = zip.by_index(i).ok()?;
+        if entry.size() > max {
+            return None;
+        }
+        let mut v = Vec::with_capacity(entry.size().min(1 << 20) as usize);
+        entry.take(max.saturating_add(1)).read_to_end(&mut v).ok()?;
+        (v.len() as u64 <= max).then_some(v)
     }
 
     /// Run `f` with a reader of part `path`, limited to what it may
@@ -89,11 +95,6 @@ impl MediaSource {
         if !is_media(path) {
             return None;
         }
-        self.with_entry(path, f)
-    }
-
-    /// [`Self::with_part`] for any part.
-    fn with_entry<T>(&self, path: &str, f: impl FnOnce(&mut dyn Read, u64) -> Option<T>) -> Option<T> {
         let i = *self.entries.get(path)?;
         let mut zip = self.zip.lock().unwrap_or_else(|e| e.into_inner());
         let entry = zip.by_index(i).ok()?;
