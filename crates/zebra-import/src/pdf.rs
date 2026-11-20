@@ -1,4 +1,4 @@
-//! PDF pages through PDFium, each page as one picture.
+//! PDF pages, each page as one picture, read and drawn by the PDF helper.
 //!
 //! The PDF goes into the document once, as an asset; each page becomes a
 //! picture element pointing at its page ([`zebra_core::PageRef`]), over a
@@ -10,15 +10,14 @@
 //! page; the picture is only a preview, so a 300-page PDF costs a few MB
 //! of pictures, not hundreds.
 //!
-//! PDFium is a separate library, loaded at run time by full path from the
-//! app bundle and never from the system's search paths.
-use std::cell::RefCell;
-use std::path::PathBuf;
-use std::sync::OnceLock;
-
-use pdfium_render::prelude::*;
+//! PDFium never runs in Zebra's own process: it runs in the helper
+//! ([`zebra_pdf`]), which the app kills when a page takes too much memory
+//! or time, or when the person cancels. A page that can't be drawn comes
+//! in as a placeholder (noted); after [`zebra_pdf::limits::KILLS_PER_PDF`]
+//! such pages the import stops there, keeping the pages before.
 use zebra_core::import::{asset_from, ImportNote, ImportedDeck, ImportedItem, ImportedPage};
 use zebra_core::{AssetBytes, Element, ElementKind, ImageData, PageRef, Size, Transform};
+use zebra_pdf::{Lane, PdfError, Pool};
 
 use crate::{Control, ImportError, Options, Reader};
 
@@ -32,43 +31,30 @@ pub const PREVIEW_PX: u32 = 512;
 /// Long side of the largest page on the canvas, world units (a default
 /// frame is 800 wide). Pages keep their sizes relative to each other.
 pub const PAGE_UNITS: f64 = 1000.0;
+/// A PDF with more pages than this asks which to import first (File ›
+/// Import… fills in 1 to this; the API wants `to`).
+pub const ASK_ABOVE_PAGES: usize = 200;
+/// Most pages of a PDF imported at once, whatever is asked.
+pub const MAX_PAGES: usize = 2000;
+/// The placeholder for a page that can't be drawn: light grey.
+const PLACEHOLDER_GREY: u8 = 0xe5;
 
-/// Where PDFium is: inside the app (Zebra.app/Contents/Frameworks on the
-/// Mac, beside the program elsewhere). Debug builds and tests also take
-/// `ZEBRA_PDFIUM` (the library file); see scripts/fetch-pdfium.sh.
-pub fn library_path() -> Option<PathBuf> {
-    #[cfg(debug_assertions)]
-    if let Some(p) = std::env::var_os("ZEBRA_PDFIUM").map(PathBuf::from) {
-        return p.is_file().then_some(p);
-    }
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    let name = Pdfium::pdfium_platform_library_name();
-    let p = if cfg!(target_os = "macos") { dir.parent()?.join("Frameworks").join(name) } else { dir.join(name) };
-    p.is_file().then_some(p)
-}
-
-/// The loaded PDFium (bound once per process).
-pub fn pdfium() -> Result<&'static Pdfium, ImportError> {
-    static PDFIUM: OnceLock<Result<Pdfium, String>> = OnceLock::new();
-    PDFIUM
-        .get_or_init(|| {
-            let p = library_path().ok_or_else(|| "libpdfium not found".to_string())?;
-            Pdfium::bind_to_library(&p).map(Pdfium::new).map_err(|e| format!("{e}"))
-        })
-        .as_ref()
-        .map_err(|e| ImportError::NoEngine(e.clone()))
-}
-
-/// Can PDFs be imported here (is PDFium in place and loadable)?
+/// Can PDFs be imported here (is the helper in place, and can it load
+/// PDFium)?
 pub fn available() -> bool {
-    pdfium().is_ok()
+    Pool::global().check().is_ok()
 }
 
-fn load_error(e: PdfiumError) -> ImportError {
-    match e {
-        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError | PdfiumInternalError::SecurityError) => ImportError::Encrypted,
-        _ => ImportError::Damaged("PDF"),
+impl From<PdfError> for ImportError {
+    fn from(e: PdfError) -> ImportError {
+        match e {
+            PdfError::NoHelper(s) | PdfError::NoEngine(s) => ImportError::NoEngine(s),
+            PdfError::Encrypted => ImportError::Encrypted,
+            PdfError::Damaged | PdfError::Page => ImportError::Damaged("PDF"),
+            PdfError::TooDemanding => ImportError::TooDemanding,
+            PdfError::Cancelled => ImportError::Cancelled,
+            PdfError::Io(s) => ImportError::Read(s),
+        }
     }
 }
 
@@ -84,8 +70,8 @@ impl PdfReader {
     /// `bytes` mapped from the person's file are copied to a spill file of
     /// the document's own first (streamed, not read into memory): the
     /// document must not depend on a file the person may move or change.
-    pub fn new(bytes: AssetBytes, title: String) -> Result<PdfReader, ImportError> {
-        let lib = pdfium()?;
+    /// Then the helper counts the pages (`ctl` cancels).
+    pub fn new(bytes: AssetBytes, title: String, ctl: &Control) -> Result<PdfReader, ImportError> {
         let (key, bytes) = if bytes.is_mapped() && bytes.len() >= zebra_core::media::SPILL_MIN {
             zebra_core::media::spill_reader(&mut std::io::Cursor::new(&bytes[..]), "pdf").map_err(|e| ImportError::Read(e.to_string()))?
         } else {
@@ -96,10 +82,11 @@ impl PdfReader {
             };
             (key, bytes)
         };
-        let pages = {
-            let doc = lib.load_pdf_from_byte_slice(&bytes, None).map_err(load_error)?;
-            doc.pages().len() as usize
-        };
+        let pool = Pool::global();
+        let pages = pool.open(Lane::Import, &key, &bytes, &|| ctl.cancelled());
+        // The person may take a while to choose pages: no helper meanwhile.
+        pool.release(Lane::Import);
+        let pages = pages? as usize;
         if pages == 0 {
             return Err(ImportError::Damaged("PDF"));
         }
@@ -107,12 +94,10 @@ impl PdfReader {
     }
 }
 
-/// A page drawn at `w` x `h` pixels, white behind: RGB rows.
-fn render(page: &PdfPage, w: u32, h: u32) -> Option<image::RgbImage> {
-    let cfg = PdfRenderConfig::new().set_target_size(w as i32, h as i32).render_form_data(true).render_annotations(true);
-    let bmp = page.render_with_config(&cfg).ok()?;
-    let rgba = image::RgbaImage::from_raw(bmp.width() as u32, bmp.height() as u32, bmp.as_rgba_bytes())?;
-    Some(image::DynamicImage::ImageRgba8(rgba).to_rgb8())
+/// Pixel size of a `w` x `h` page with `long` pixels on its long side.
+fn fit(w: f64, h: f64, long: u32) -> (u32, u32) {
+    let k = long as f64 / w.max(h).max(1.0);
+    (((w * k).round() as u32).clamp(1, long), ((h * k).round() as u32).clamp(1, long))
 }
 
 /// PNG bytes, in a buffer no bigger than they are (a growing Vec has up
@@ -124,22 +109,18 @@ fn encode(img: &image::RgbImage) -> Vec<u8> {
     png
 }
 
-/// The page's first line of text, for the picture's description.
-fn first_line(page: &PdfPage) -> String {
-    let all = page.text().map(|t| t.all()).unwrap_or_default();
-    let line = all.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    let mut s: String = line.chars().take(120).collect();
-    if s.len() < line.len() {
-        s.push('…');
+/// Stops the import's helper however the import ends.
+struct Release;
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        Pool::global().release(Lane::Import);
     }
-    s
 }
 
-/// Pixel size of a `w` x `h` page with `long` pixels on its long side.
-fn fit(w: f64, h: f64, long: u32) -> (u32, u32) {
-    let k = long as f64 / w.max(h).max(1.0);
-    (((w * k).round() as u32).max(1), ((h * k).round() as u32).max(1))
-}
+/// A page read: its index, size in points, alt text and picture
+/// (None: a placeholder).
+type Page = (usize, f64, f64, String, Option<image::RgbImage>);
 
 impl Reader for PdfReader {
     fn kind(&self) -> &'static str {
@@ -149,17 +130,30 @@ impl Reader for PdfReader {
         self.pages
     }
     fn read(&self, opts: &Options, ctl: &Control) -> Result<ImportedDeck, ImportError> {
-        let lib = pdfium()?;
-        let doc = lib.load_pdf_from_byte_slice(&self.bytes, None).map_err(load_error)?;
+        let pool = Pool::global();
+        let _release = Release;
+        let cancel = || ctl.cancelled();
+        let range = crate::page_range(opts, self.pages);
+        if range.len() > MAX_PAGES {
+            return Err(ImportError::TooManyPages { pages: self.pages });
+        }
+        if range.is_empty() {
+            return Err(ImportError::Damaged("PDF"));
+        }
         let mut deck = ImportedDeck { title: self.title.clone(), ..Default::default() };
         let (pdf_key, pdf) = (self.key.clone(), zebra_core::Asset { ext: "pdf".into(), bytes: self.bytes.clone(), width: 0, height: 0 });
-        let range = crate::page_range(opts, self.pages);
+        let sizes = pool.sizes(Lane::Import, &self.key, &self.bytes, range.start as u32, (range.end - 1) as u32, &cancel)?;
         // World units per point, from the largest page asked for.
-        let largest = range.clone().filter_map(|i| doc.pages().page_size(i as i32).ok()).map(|r| r.width().value.max(r.height().value)).fold(0.0f32, f32::max);
-        let k = PAGE_UNITS / (largest as f64).max(1.0);
-        // Pages are drawn here, one at a time (PDFium is single-threaded),
-        // and encoded on two workers meanwhile.
-        let (tx, rx) = std::sync::mpsc::sync_channel::<(usize, f64, f64, String, image::RgbImage)>(2);
+        let largest = sizes.iter().map(|(w, h)| w.max(*h)).fold(0.0f64, f64::max);
+        let k = PAGE_UNITS / largest.max(1.0);
+        // A page whose size can't be read is the size of the largest.
+        let size_of = |i: usize| match sizes.get(i - range.start) {
+            Some(&(w, h)) if w > 0.0 && h > 0.0 => (w, h),
+            _ => (largest.max(1.0), largest.max(1.0)),
+        };
+        // Pages are drawn in the helper, one at a time (PDFium is
+        // single-threaded), and encoded here on two workers meanwhile.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Page>(2);
         let rx = std::sync::Mutex::new(rx);
         let encoded = std::sync::Mutex::new(vec![]);
         let result = std::thread::scope(|s| {
@@ -167,9 +161,14 @@ impl Reader for PdfReader {
                 s.spawn(|| {
                     loop {
                         let Ok((i, w, h, alt, img)) = rx.lock().unwrap_or_else(|e| e.into_inner()).recv() else { return };
-                        let bytes = encode(&img);
-                        drop(img);
-                        encoded.lock().unwrap_or_else(|e| e.into_inner()).push((i, w, h, alt, bytes));
+                        let bytes = match img {
+                            Some(img) => encode(&img),
+                            None => {
+                                let (pw, ph) = fit(w, h, PREVIEW_PX);
+                                encode(&image::RgbImage::from_pixel(pw, ph, image::Rgb([PLACEHOLDER_GREY; 3])))
+                            }
+                        };
+                        encoded.lock().unwrap_or_else(|e| e.into_inner()).push((i, w * k, h * k, alt, bytes));
                         ctl.page_done();
                     }
                 });
@@ -178,18 +177,33 @@ impl Reader for PdfReader {
                 if ctl.cancelled() {
                     return Err(ImportError::Cancelled);
                 }
-                // A page PDFium can't open is left out, not the whole file.
-                let drawn = doc.pages().get(i as i32).ok().and_then(|page| {
-                    let (w, h) = (page.width().value as f64, page.height().value as f64);
-                    let (pw, ph) = fit(w, h, PREVIEW_PX);
-                    Some((w, h, first_line(&page), render(&page, pw, ph)?))
-                });
-                match drawn {
+                let page = match pool.preview(Lane::Import, &self.key, &self.bytes, i as u32, PREVIEW_PX, &cancel) {
+                    Ok(p) => image::RgbImage::from_raw(p.px.0, p.px.1, p.rgb).map(|img| (p.w_pt, p.h_pt, p.text, img)),
+                    Err(PdfError::Cancelled) => return Err(ImportError::Cancelled),
+                    Err(e @ (PdfError::NoHelper(_) | PdfError::NoEngine(_) | PdfError::Io(_))) => return Err(e.into()),
+                    Err(PdfError::TooDemanding) => {
+                        if pool.given_up(&self.key, None) {
+                            // Too many pages like this: stop here, keep
+                            // what came in before.
+                            deck.notes.insert(ImportNote::Stopped, i + 1);
+                            break;
+                        }
+                        let (w, h) = size_of(i);
+                        if tx.send((i, w, h, String::new(), None)).is_err() {
+                            break;
+                        }
+                        *deck.notes.entry(ImportNote::Placeholder).or_default() += 1;
+                        continue;
+                    }
+                    Err(_) => None,
+                };
+                match page {
                     Some((w, h, alt, img)) => {
-                        if tx.send((i, w * k, h * k, alt, img)).is_err() {
+                        if tx.send((i, w, h, alt, Some(img))).is_err() {
                             break;
                         }
                     }
+                    // A page PDFium can't open is left out, not the whole file.
                     None => {
                         *deck.notes.entry(ImportNote::PageSkipped).or_default() += 1;
                         ctl.page_done();
@@ -206,7 +220,7 @@ impl Reader for PdfReader {
         let mut encoded = encoded.into_inner().unwrap_or_else(|e| e.into_inner());
         encoded.sort_by_key(|e| e.0);
         if encoded.is_empty() {
-            return Err(ImportError::Damaged("PDF"));
+            return Err(if deck.notes.contains_key(&ImportNote::Stopped) { ImportError::TooDemanding } else { ImportError::Damaged("PDF") });
         }
         for (i, w, h, alt, bytes) in encoded {
             let Ok((key, asset)) = asset_from(bytes) else {
@@ -232,43 +246,18 @@ impl Reader for PdfReader {
     }
 }
 
-thread_local! {
-    /// The PDF last drawn from on this thread, open (by asset key).
-    static OPEN: RefCell<Option<(String, PdfDocument<'static>)>> = const { RefCell::new(None) };
-}
-
 /// Draw part of page `index` of the PDF `bytes` (asset key `key`) for
 /// the renderer (see `zebra_render::pages`): `rect` (x, y, width, height)
 /// of the page drawn `page_px` pixels big, as straight RGBA rows. Runs on
-/// the image cache's workers; each keeps the PDF it last drew from open.
+/// the image cache's workers and export threads; the helper keeps the
+/// PDF it last drew from open. None when the page can't be drawn (its
+/// picture shows instead; see [`take_draw_failures`]).
 pub fn raster(key: &str, bytes: &AssetBytes, index: u32, page_px: (u32, u32), rect: (u32, u32, u32, u32)) -> Option<Vec<u8>> {
-    let lib = pdfium().ok()?;
-    let (x, y, w, h) = rect;
-    if w == 0 || h == 0 || w > 4096 || h > 4096 {
-        return None;
-    }
-    OPEN.with(|open| {
-        let mut open = open.borrow_mut();
-        if open.as_ref().is_none_or(|(k, _)| k != key) {
-            *open = None;
-            let doc = lib.load_pdf_from_byte_vec(bytes.to_vec(), None).ok()?;
-            *open = Some((key.to_string(), doc));
-        }
-        let (_, doc) = open.as_ref()?;
-        let page = doc.pages().get(i32::try_from(index).ok()?).ok()?;
-        let mut bmp = PdfBitmap::empty(w as i32, h as i32, PdfBitmapFormat::BGRA).ok()?;
-        let (pw, ph) = (i32::try_from(page_px.0).ok()?, i32::try_from(page_px.1).ok()?);
-        let cfg = PdfRenderConfig::new()
-            .set_target_size(pw, ph)
-            .set_origin(-(x as i32), -(y as i32))
-            .render_form_data(true)
-            .render_annotations(true);
-        page.render_into_bitmap_with_config(&mut bmp, &cfg).ok()?;
-        let mut px = bmp.as_rgba_bytes();
-        // Opaque, like the page's picture.
-        for p in px.chunks_exact_mut(4) {
-            p[3] = 255;
-        }
-        Some(px)
-    })
+    Pool::global().rect(Lane::Draw, key, bytes, index, page_px, rect, &|| false).ok()
+}
+
+/// The PDFs (asset keys) that `mine` claims some of whose pages couldn't
+/// be drawn sharper: each PDF once per session, for a note.
+pub fn take_draw_failures(mine: impl Fn(&str) -> bool) -> Vec<String> {
+    Pool::global().take_draw_failures(mine)
 }

@@ -4,7 +4,8 @@
 //!
 //! Needs PDFium: `scripts/fetch-pdfium.sh linux-x64` (or mac-arm64) puts
 //! it in target/pdfium/, or set ZEBRA_PDFIUM. Without it these tests say
-//! so and pass.
+//! so and pass. With it, the PDF helper must be built first: `cargo build
+//! -p zebra-pdf --bin zebra-pdf-helper`.
 use zebra_core::{Editor, Element, ElementKind, Origin, StepTarget};
 use zebra_import::{Control, ImportError, ImportNote, Options};
 
@@ -19,11 +20,16 @@ fn engine() -> bool {
             unsafe { std::env::set_var("ZEBRA_PDFIUM", p) };
         }
     }
-    let ok = zebra_import::pdf::available();
-    if !ok {
+    if std::env::var_os("ZEBRA_PDFIUM").is_none() {
         eprintln!("SKIPPED: PDFium not found (run scripts/fetch-pdfium.sh linux-x64 or set ZEBRA_PDFIUM)");
+        return false;
     }
-    ok
+    // PDFium is here, so the PDF tests must run: the helper has to be
+    // built (it is another package's program, which `cargo test -p
+    // zebra-import` doesn't build).
+    assert!(zebra_pdf::helper_path().is_some(), "build the PDF helper first: cargo build -p zebra-pdf --bin zebra-pdf-helper");
+    assert!(zebra_import::pdf::available(), "the PDF helper can't load PDFium");
+    true
 }
 
 fn cmd(j: serde_json::Value) -> zebra_core::Command {
@@ -268,5 +274,5 @@ fn damaged_files_give_an_error_not_a_panic() {
         }
     }
     assert!(matches!(zebra_import::open(std::path::Path::new("/nonexistent/file.pdf")), Err(ImportError::Read(_))));
-    assert_eq!(ImportNote::ALL.len(), 17);
+    assert_eq!(ImportNote::ALL.len(), 19);
 }
