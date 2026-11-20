@@ -286,3 +286,96 @@ fn pasting_tab_separated_cells() {
     assert_eq!(table_ui::defuse("-12"), "-12");
     assert_eq!(table_ui::defuse("-x"), "'-x");
 }
+
+#[test]
+fn pasted_formulas_move_their_references() {
+    let mut h = harness();
+    table_with_cell(&mut h);
+    let id = the_table(&h).0;
+    h.state_mut()
+        .editor
+        .apply(serde_json::from_value(serde_json::json!({"op": "set_cells", "id": id, "at": "A2", "values": [[1], [2], [3], ["=SUM(A2:A4)", "=$A$2+A2"]]})).unwrap(), H)
+        .unwrap();
+    h.run_steps(2);
+    // Copy A5:B5.
+    let p = cell(&h, 4, 0);
+    click_at(&mut h, p, PointerButton::Primary);
+    key(&mut h, Key::ArrowRight, Modifiers::SHIFT);
+    h.state_mut().queued.push(Action::Copy);
+    h.run_steps(2);
+    let text = h.state().table_clip.clone().expect("copied").text;
+    // Two columns right: relative parts move, $ parts stay.
+    let p = cell(&h, 4, 2);
+    click_at(&mut h, p, PointerButton::Primary);
+    let s = h.state().canvas.table.clone().unwrap();
+    table_ui::paste_cells(h.state_mut(), &s, &text);
+    h.run_steps(2);
+    assert_eq!(input(&h, 4, 2), "=SUM(C2:C4)");
+    assert_eq!(input(&h, 4, 3), "=$A$2+C2");
+    // Four rows up: the range would leave the table.
+    let p = cell(&h, 0, 0);
+    click_at(&mut h, p, PointerButton::Primary);
+    let s = h.state().canvas.table.clone().unwrap();
+    table_ui::paste_cells(h.state_mut(), &s, &text);
+    h.run_steps(2);
+    assert_eq!(input(&h, 0, 0), "=SUM(#REF!)");
+    assert_eq!(input(&h, 0, 1), "=$A$2+#REF!");
+    assert!(matches!(&the_table(&h).1.cells[0][0].value, Some(zebra_core::table::CellValue::Error { .. })));
+}
+
+#[test]
+fn the_formula_bar_colours_references_and_accepts_or_cancels() {
+    let mut h = harness();
+    table_with_cell(&mut h);
+    type_text(&mut h, "=");
+    let p = cell(&h, 2, 1);
+    click_at(&mut h, p, PointerButton::Primary);
+    type_text(&mut h, "*2+");
+    // Far enough in time from the last click not to be a double click.
+    h.run_steps(20);
+    let p = cell(&h, 3, 2);
+    click_at(&mut h, p, PointerButton::Primary);
+    assert_eq!(h.state().canvas.table.as_ref().unwrap().edit.as_ref().unwrap().text, "=B3*2+C4");
+    shot(&mut h, "formula-bar.png");
+    // No transform handles while a cell is selected.
+    assert!(table_ui::active(h.state()));
+    // ✓ accepts, the cell stays selected.
+    h.get_by_label(&tr("table-formula-accept")).click();
+    h.run_steps(3);
+    assert_eq!(input(&h, 1, 0), "=B3*2+C4");
+    assert!(!table_ui::editing(h.state()));
+    // × cancels.
+    type_text(&mut h, "=1");
+    h.get_by_label(&tr("table-formula-cancel")).click();
+    h.run_steps(3);
+    assert_eq!(input(&h, 1, 0), "=B3*2+C4");
+    assert!(!table_ui::editing(h.state()));
+}
+
+#[test]
+fn gridlines_are_four_independent_toggles() {
+    let mut h = harness();
+    table_with_cell(&mut h);
+    let inspector_x = h.state().canvas.rect.right();
+    h.get_all_by_label(&tr("inspector-tab-table")).find(|n| n.rect().left() > inspector_x).unwrap().click();
+    h.run_steps(4);
+    let g = |h: &Harness<'static, ZebraApp>| the_table(h).1.gridlines;
+    let before = g(&h);
+    h.get_by_label(&tr("table-gridlines-vertical")).click();
+    h.run_steps(3);
+    h.get_by_label(&tr("table-gridlines-outline")).click();
+    h.run_steps(3);
+    let after = g(&h).expect("gridlines set");
+    assert!(after.vertical && after.outline, "both on together: {after:?} (was {before:?})");
+    if after.horizontal {
+        h.get_by_label(&tr("table-gridlines-horizontal")).click();
+        h.run_steps(3);
+        assert!(!g(&h).unwrap().horizontal && g(&h).unwrap().vertical, "row lines off alone");
+    }
+    // All Gridlines turns both kinds of inner line on.
+    h.get_by_label(&tr("table-gridlines-all")).click();
+    h.run_steps(3);
+    let all = g(&h).unwrap();
+    assert!(all.horizontal && all.vertical && all.outline, "{all:?}");
+    shot(&mut h, "inspector-table.png");
+}

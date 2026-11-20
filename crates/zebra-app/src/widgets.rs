@@ -193,6 +193,23 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, enabled: bool, active: bo
     resp
 }
 
+/// A bezel button with an icon that stays pressed while `on` (one of a row
+/// of independent toggles, such as a table's gridlines).
+pub fn icon_toggle(ui: &mut Ui, icon: Icon, on: bool, label: &str) -> Response {
+    let p = pal(ui);
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(34.0, H_REGULAR), Sense::click());
+    resp.widget_info(|| WidgetInfo::selected(Role::Button, true, on, label));
+    if ui.is_rect_visible(rect) {
+        paint_bezel(ui, rect, on || resp.is_pointer_button_down_on(), true);
+        if on {
+            ui.painter().rect_filled(rect.shrink(1.5), RADIUS - 1.0, p.segment_on);
+        }
+        let c = if on { accent() } else { p.text };
+        paint_icon(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(15.0)), icon, c);
+    }
+    resp.on_hover_text(label)
+}
+
 // ----------------------------------------------------------------------
 // Toolbar item: icon over a 10 pt label (Keynote's unified toolbar).
 

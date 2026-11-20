@@ -171,7 +171,14 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
         ui.set_width(ui.available_width() - 4.0);
         let theme = app.editor.theme();
         let mut insp = Insp { app, el: el.clone(), sel: sel.clone(), theme, patch: None, gesture: false };
-        header(&mut insp, ui, &p);
+        // A table's own tabs start with their sections, as in the mockups:
+        // "Table" over the Table tab would say it twice.
+        let table_tab = matches!(el.kind, ElementKind::Table(_)) && matches!(tab, Tab::Table | Tab::Cell | Tab::Text);
+        if !(table_tab && sel.len() == 1) {
+            header(&mut insp, ui, &p);
+        } else {
+            ui.add_space(4.0);
+        }
         if sel.len() > 1 {
             match tab {
                 Tab::Arrange => arrange_multi(&mut insp, ui),

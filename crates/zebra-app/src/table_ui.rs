@@ -7,6 +7,8 @@
 //! edits the cell. Esc goes back up a level at a time.
 //!
 //! Every change goes through zebra-core table commands, one undo step each.
+use std::ops::Range;
+
 use egui::{Align2, Color32, Key, Modifiers, Painter, Pos2, Rect as ERect, Shape, Stroke, Ui};
 use zebra_core::table::{self, Border, BorderEdges, CellFormat, CellInput, CellRange, CellType, DataFormat, Gridlines, Limit, LineStyle, Negative, TableData, TableStyle, VAlign};
 use zebra_core::{Align, Command, Element, ElementId, ElementKind, ElementPatch, Origin, TextStyle, Vec2};
@@ -696,16 +698,28 @@ fn copy_cells(app: &mut ZebraApp, s: &TableSel) {
     if let Ok(mut c) = arboard::Clipboard::new() {
         let _ = c.set_text(text.clone());
     }
-    // Pasted back into a table, the cells keep their formulas.
-    app.table_clip = Some((text.clone(), inputs));
+    // Pasted back into a table, the cells keep their formulas (their
+    // relative references moved by how far they went).
+    let r = s.range();
+    app.table_clip = Some(TableClip { text: text.clone(), inputs, from: (r.r0, r.c0) });
     app.clipboard_marker = Some(text);
+}
+
+/// Cells copied from a table: the text the system clipboard got, and the
+/// inputs (formulas) with where they came from.
+#[derive(Debug, Clone)]
+pub struct TableClip {
+    pub text: String,
+    pub inputs: Vec<Vec<String>>,
+    pub from: (usize, usize),
 }
 
 /// Pasted text fills cells from the selection's top-left; the table
 /// grows to take it.
 pub fn paste_cells(app: &mut ZebraApp, s: &TableSel, text: &str) {
-    let grid = match app.table_clip.as_ref().filter(|(t, _)| t == text) {
-        Some((_, inputs)) => inputs.clone(),
+    let ours = app.table_clip.as_ref().filter(|c| c.text == text).cloned();
+    let mut grid = match &ours {
+        Some(c) => c.inputs.clone(),
         None => match table::parse_delimited(text) {
             Ok(g) => g,
             Err(l) => {
@@ -718,12 +732,19 @@ pub fn paste_cells(app: &mut ZebraApp, s: &TableSel, text: &str) {
         return;
     }
     let r = s.range();
-    if let Some((_, t)) = table(app, &s.id) {
-        let rows = (r.r0 + grid.len()).max(t.n_rows());
-        let cols = (r.c0 + grid.iter().map(|g| g.len()).max().unwrap_or(0)).max(t.n_cols());
-        if let Some(l) = Limit::of_size(rows, cols) {
-            app.note(limit_message(l));
-            return;
+    let Some((_, t)) = table(app, &s.id) else { return };
+    let rows = (r.r0 + grid.len()).max(t.n_rows());
+    let cols = (r.c0 + grid.iter().map(|g| g.len()).max().unwrap_or(0)).max(t.n_cols());
+    if let Some(l) = Limit::of_size(rows, cols) {
+        app.note(limit_message(l));
+        return;
+    }
+    // Our own cells: relative references move with them, as in Numbers;
+    // one that would leave the table becomes #REF!.
+    if let Some(c) = &ours {
+        let (dr, dc) = (r.r0 as i64 - c.from.0 as i64, r.c0 as i64 - c.from.1 as i64);
+        for cell in grid.iter_mut().flatten() {
+            *cell = table::refs::shift(cell, dr, dc, rows, cols);
         }
     }
     if let Some(l) = grid.iter().flatten().find_map(|c| Limit::of_input(c)) {
@@ -811,34 +832,7 @@ const REF_COLOURS: [Color32; 4] = [Color32::from_rgb(0x2f, 0x7d, 0xd8), Color32:
 
 /// The cell references in a formula ("B2", "A1:C3"), outside strings.
 pub fn references(formula: &str) -> Vec<CellRange> {
-    let mut out = vec![];
-    let b = formula.as_bytes();
-    let mut i = 0;
-    let mut in_str = false;
-    while i < b.len() {
-        let ch = b[i];
-        if ch == b'"' {
-            in_str = !in_str;
-            i += 1;
-            continue;
-        }
-        let starts = !in_str && (ch.is_ascii_alphabetic() || ch == b'$') && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_'));
-        if starts {
-            let j = (i..b.len()).find(|&k| !(b[k].is_ascii_alphanumeric() || b[k] == b'$' || b[k] == b':')).unwrap_or(b.len());
-            let word = formula[i..j].replace('$', "");
-            if j < b.len() && b[j] == b'(' {
-                i = j;
-                continue;
-            }
-            if let Some(r) = CellRange::parse(&word) {
-                out.push(r);
-            }
-            i = j;
-            continue;
-        }
-        i += 1;
-    }
-    out
+    table::refs::scan(formula).iter().map(|t| t.range()).collect()
 }
 
 pub fn overlay(app: &mut ZebraApp, ui: &mut Ui, painter: &Painter) {
@@ -876,6 +870,9 @@ pub fn overlay(app: &mut ZebraApp, ui: &mut Ui, painter: &Painter) {
     let bar_fill = if p.dark { Color32::from_gray(58) } else { Color32::from_gray(232) };
     let bar_on = accent.gamma_multiply(0.25);
     let text_c = p.weak;
+    // The table's outline (its transform handles show only at table level).
+    let whole = quad(app, &e, 0.0, top, l.width(), l.height());
+    painter.add(Shape::closed_line(whole.to_vec(), Stroke::new(1.0, accent)));
     // Column letters.
     for c in c_lo..=c_hi {
         let on = c >= range.c0 && c <= range.c1;
@@ -963,47 +960,49 @@ fn cell_field(app: &mut ZebraApp, ctx: &egui::Context, e: &Element, t: &TableDat
     if alt_enter {
         edit.text.push('\n');
     }
-    let area = egui::Area::new(id.with("area")).fixed_pos(rect.min).order(egui::Order::Foreground).constrain(false);
     let canvas = app.canvas.rect;
     let formula = edit.text.starts_with('=');
-    area.show(ctx, |ui| {
-        ui.set_clip_rect(canvas);
-        let width = rect.width().max(60.0);
-        let frame = egui::Frame::NONE.fill(p.field).stroke(Stroke::new(2.0, style::accent())).inner_margin(egui::Margin::symmetric(4, 2));
-        frame.show(ui, |ui| {
-            ui.set_min_size(egui::vec2(width - 8.0, (rect.height() - 4.0).max(size)));
-            let te = egui::TextEdit::multiline(&mut edit.text).font(font.clone()).text_color(p.text).frame(egui::Frame::NONE).desired_width(width - 8.0).desired_rows(1).lock_focus(true).id(id);
-            let out = te.show(ui);
-            if !edit.focused {
-                out.response.request_focus();
-                // The caret at the end.
-                let mut st = out.state.clone();
-                let n = edit.text.chars().count();
-                st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(n))));
-                st.store(ui.ctx(), id);
-                edit.focused = true;
-            }
-        });
-    });
+    // Text is typed in the cell; a formula in the formula bar below it,
+    // the cell showing what is being written.
+    let mut bar = None;
     if formula {
-        // Above the column letters, out of the way of the cells a click
-        // adds, and letting clicks through.
-        let top = screen(app, e, 0.0, l.caption);
-        let at = egui::pos2(top.x, (top.y - BAR - 26.0).max(canvas.top() + 4.0));
-        egui::Area::new(id.with("hint")).fixed_pos(at).order(egui::Order::Foreground).interactable(false).show(ctx, |ui| {
+        // In the document's colours, as the cell is drawn.
+        let th = app.editor.theme();
+        let (paper, ink) = (style::c32(th.color(&"theme:background".to_string())), style::c32(th.color(&"theme:body".to_string())));
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, id.with("cell"))).with_clip_rect(canvas);
+        painter.rect(rect, 0.0, paper, Stroke::new(2.0, style::accent()), egui::StrokeKind::Outside);
+        painter.rect_filled(rect, 0.0, style::accent().gamma_multiply(0.08));
+        let galley = painter.layout_no_wrap(edit.text.clone(), font.clone(), ink);
+        let y = rect.center().y - galley.size().y / 2.0;
+        let x = if galley.size().x + 8.0 > rect.width() { rect.right() - 4.0 - galley.size().x } else { rect.left() + 4.0 };
+        painter.with_clip_rect(rect.intersect(canvas)).galley(egui::pos2(x, y), galley, ink);
+        // Under the table, as in the mockup, so it never covers a cell a
+        // click would add (on screen, if the table runs off the bottom).
+        let whole = ERect::from_points(&quad(app, e, 0.0, l.caption, l.width(), l.height()));
+        bar = formula_bar(ctx, id, &mut edit, egui::pos2(rect.left(), whole.bottom() + 30.0), canvas, &p);
+    } else {
+        let area = egui::Area::new(id.with("area")).fixed_pos(rect.min).order(egui::Order::Foreground).constrain(false);
+        area.show(ctx, |ui| {
             ui.set_clip_rect(canvas);
-            egui::Frame::NONE.fill(p.field).stroke(Stroke::new(0.6, p.control_edge)).corner_radius(4.0).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(crate::t!("table-formula-hint")).font(style::ui_font(11.0)).color(p.weak)).wrap_mode(egui::TextWrapMode::Extend));
+            let width = rect.width().max(60.0);
+            let frame = egui::Frame::NONE.fill(p.field).stroke(Stroke::new(2.0, style::accent())).inner_margin(egui::Margin::symmetric(4, 2));
+            frame.show(ui, |ui| {
+                ui.set_min_size(egui::vec2(width - 8.0, (rect.height() - 4.0).max(size)));
+                let te = egui::TextEdit::multiline(&mut edit.text).font(font.clone()).text_color(p.text).frame(egui::Frame::NONE).desired_width(width - 8.0).desired_rows(1).lock_focus(true).id(id);
+                let out = te.show(ui);
+                focus_once(ui, &out, &mut edit, id);
             });
         });
     }
     if let Some(st) = &mut app.canvas.table {
         st.edit = Some(edit);
     }
-    if esc {
+    if esc || bar == Some(false) {
         if let Some(st) = &mut app.canvas.table {
             st.edit = None;
         }
+    } else if bar == Some(true) {
+        commit_edit(app, None);
     } else if enter {
         commit_edit(app, Some((1, 0)));
     } else if tab {
@@ -1011,6 +1010,114 @@ fn cell_field(app: &mut ZebraApp, ctx: &egui::Context, e: &Element, t: &TableDat
     } else if back_tab {
         commit_edit(app, Some((0, -1)));
     }
+}
+
+/// Focus a field the first frame it shows, with the caret at the end.
+fn focus_once(ui: &Ui, out: &egui::text_edit::TextEditOutput, edit: &mut CellEdit, id: egui::Id) {
+    if !edit.focused {
+        out.response.request_focus();
+        let mut st = out.state.clone();
+        let n = edit.text.chars().count();
+        st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(n))));
+        st.store(ui.ctx(), id);
+        edit.focused = true;
+    }
+}
+
+/// The formula bar: the formula with each reference a token in the
+/// colour its cells are outlined in, then Cancel (×) and Accept (✓).
+/// Returns Some(true) for Accept, Some(false) for Cancel.
+fn formula_bar(ctx: &egui::Context, id: egui::Id, edit: &mut CellEdit, at: Pos2, canvas: ERect, p: &Palette) -> Option<bool> {
+    let font = style::ui_font(15.0);
+    let mut out = None;
+    let (text_c, weak) = (p.text, p.weak);
+    let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
+        let text = buf.as_str();
+        let mut job = egui::text::LayoutJob::default();
+        let plain = egui::TextFormat { font_id: font.clone(), color: text_c, ..Default::default() };
+        // Pieces: (byte range, colour, space before). A token has room
+        // each side for its box; the leading "=" is dimmed.
+        let mut pieces: Vec<(Range<usize>, Color32, f32)> = vec![];
+        let mut pad = 0.0;
+        let plain_run = |pieces: &mut Vec<(Range<usize>, Color32, f32)>, r: Range<usize>, pad: &mut f32| {
+            if r.is_empty() {
+                return;
+            }
+            if r.start == 0 && text.starts_with('=') {
+                pieces.push((0..1, weak, *pad));
+                *pad = 0.0;
+                if r.end > 1 {
+                    pieces.push((1..r.end, text_c, 0.0));
+                }
+            } else {
+                pieces.push((r, text_c, *pad));
+                *pad = 0.0;
+            }
+        };
+        let mut at = 0;
+        for (i, tok) in table::refs::scan(text).iter().enumerate() {
+            plain_run(&mut pieces, at..tok.span.start, &mut pad);
+            pieces.push((tok.span.clone(), REF_COLOURS[i % REF_COLOURS.len()], 5.0));
+            pad = 5.0;
+            at = tok.span.end;
+        }
+        plain_run(&mut pieces, at..text.len(), &mut pad);
+        for (r, c, lead) in pieces {
+            job.append(&text[r], lead, egui::TextFormat { color: c, ..plain.clone() });
+        }
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+    egui::Area::new(id.with("bar")).fixed_pos(at).order(egui::Order::Foreground).constrain_to(canvas.shrink(4.0)).show(ctx, |ui| {
+        let frame = egui::Frame::NONE.fill(p.field).stroke(Stroke::new(1.0, p.control_edge)).corner_radius(8.0).inner_margin(egui::Margin::symmetric(10, 6)).shadow(egui::epaint::Shadow { offset: [0, 2], blur: 8, spread: 0, color: Color32::from_black_alpha(40) });
+        frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let te = egui::TextEdit::multiline(&mut edit.text).frame(egui::Frame::NONE).desired_rows(1).desired_width(260.0).lock_focus(true).layouter(&mut layouter).id(id);
+                let o = te.show(ui);
+                let galley = o.galley.clone();
+                let origin = o.galley_pos;
+                // A box round each reference, in its colour.
+                let text = edit.text.clone();
+                for (i, tok) in table::refs::scan(&text).iter().enumerate() {
+                    let (a, b) = (text[..tok.span.start].chars().count(), text[..tok.span.end].chars().count());
+                    let ra = galley.pos_from_cursor(egui::text::CCursor::new(a));
+                    let rb = galley.pos_from_cursor(egui::text::CCursor::new(b));
+                    let r = ERect::from_min_max(egui::pos2(ra.min.x - 4.0, ra.min.y), egui::pos2(rb.min.x + 4.0, ra.max.y)).translate(origin.to_vec2()).expand2(egui::vec2(0.0, 1.0));
+                    let col = REF_COLOURS[i % REF_COLOURS.len()];
+                    ui.painter().rect(r, 5.0, col.gamma_multiply(0.14), Stroke::new(1.0, col.gamma_multiply(0.7)), egui::StrokeKind::Inside);
+                }
+                focus_once(ui, &o, edit, id);
+                ui.add_space(6.0);
+                if bar_button(ui, &crate::t!("table-formula-cancel"), false).clicked() {
+                    out = Some(false);
+                }
+                if bar_button(ui, &crate::t!("table-formula-accept"), true).clicked() {
+                    out = Some(true);
+                }
+            });
+        })
+        .response
+        .on_hover_text(crate::t!("table-formula-hint"));
+    });
+    out
+}
+
+/// × (red) or ✓ (green), drawn.
+fn bar_button(ui: &mut Ui, label: &str, accept: bool) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    let col = if accept { Color32::from_rgb(0x2e, 0x9e, 0x5b) } else { Color32::from_rgb(0xd9, 0x3b, 0x30) };
+    if resp.hovered() {
+        ui.painter().rect_filled(r, 4.0, col.gamma_multiply(0.15));
+    }
+    let c = r.center();
+    let st = Stroke::new(1.8, col);
+    if accept {
+        ui.painter().line(vec![c + egui::vec2(-5.0, 0.5), c + egui::vec2(-1.5, 4.0), c + egui::vec2(5.0, -4.0)], st);
+    } else {
+        ui.painter().line_segment([c + egui::vec2(-4.0, -4.0), c + egui::vec2(4.0, 4.0)], st);
+        ui.painter().line_segment([c + egui::vec2(4.0, -4.0), c + egui::vec2(-4.0, 4.0)], st);
+    }
+    resp.on_hover_text(label)
 }
 
 // ----------------------------------------------------------------------
@@ -1197,7 +1304,6 @@ pub fn table_tab(insp: &mut Insp, ui: &mut Ui) {
             insp.set(ElementPatch { table_style: Some(s), header_columns, ..Default::default() });
         }
     });
-    w::separator(ui);
     w::section(ui, &crate::t!("table-section-headers"), |ui| {
         let n = t.n_rows() as f64;
         for (label, now, which) in [(crate::t!("table-header-rows"), t.header_rows, 0), (crate::t!("table-header-columns"), t.header_columns, 1), (crate::t!("table-footer-rows"), t.footer_rows, 2)] {
@@ -1217,7 +1323,6 @@ pub fn table_tab(insp: &mut Insp, ui: &mut Ui) {
             });
         }
     });
-    w::separator(ui);
     w::section(ui, "", |ui| {
         let mut named = t.show_name;
         if w::checkbox(ui, &mut named, &crate::t!("table-name")).changed() {
@@ -1237,26 +1342,41 @@ pub fn table_tab(insp: &mut Insp, ui: &mut Ui) {
             insp.set(ElementPatch { banded: Some(banded), ..Default::default() });
         }
     });
-    w::separator(ui);
     w::section(ui, &crate::t!("table-section-gridlines"), |ui| {
         let th = insp.theme.clone();
         let look = zebra_core::table_style::look(t, &th);
         let now = Gridlines { horizontal: look.row_rule.is_some(), vertical: look.column_rule.is_some(), outline: look.outline.is_some() };
-        let tips = [crate::t!("table-gridlines-horizontal"), crate::t!("table-gridlines-vertical"), crate::t!("table-gridlines-outline")];
-        let labelled = [Seg::Text(tips[0].as_str()), Seg::Text(tips[1].as_str()), Seg::Text(tips[2].as_str())];
-        if let Some(i) = w::segmented_toggles(ui, &[now.horizontal, now.vertical, now.outline], &labelled, Some(ui.available_width())) {
-            let mut g = now;
-            match i {
-                0 => g.horizontal = !g.horizontal,
-                1 => g.vertical = !g.vertical,
-                _ => g.outline = !g.outline,
+        // Four independent toggles, as in the mockup: all inner lines,
+        // rows, columns, outline.
+        let mut g = now;
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let both = now.horizontal && now.vertical;
+            if w::icon_toggle(ui, crate::icons::Icon::GridAll, both, &crate::t!("table-gridlines-all")).clicked() {
+                g.horizontal = !both;
+                g.vertical = !both;
+                changed = true;
             }
+            if w::icon_toggle(ui, crate::icons::Icon::GridRows, now.horizontal, &crate::t!("table-gridlines-horizontal")).clicked() {
+                g.horizontal = !now.horizontal;
+                changed = true;
+            }
+            if w::icon_toggle(ui, crate::icons::Icon::GridColumns, now.vertical, &crate::t!("table-gridlines-vertical")).clicked() {
+                g.vertical = !now.vertical;
+                changed = true;
+            }
+            if w::icon_toggle(ui, crate::icons::Icon::GridOutline, now.outline, &crate::t!("table-gridlines-outline")).clicked() {
+                g.outline = !now.outline;
+                changed = true;
+            }
+        });
+        if changed {
             insp.set(ElementPatch { gridlines: Some(g), ..Default::default() });
         }
     });
-    w::separator(ui);
     w::section(ui, "", |ui| {
-        w::row(ui, &crate::t!("table-font-size"), |ui| {
+        w::row_w(ui, &crate::t!("table-font-size"), 96.0, |ui| {
             let label = |f: f64| if (f - 1.0).abs() < 1e-9 { crate::t!("table-font-size-theme") } else { format!("{}%", (f * 100.0).round()) };
             popup(ui, "table-font-size", &label(t.font_size), 110.0, |ui| {
                 for f in [0.6, 0.75, 0.9, 1.0, 1.15, 1.3, 1.5, 2.0] {
@@ -1353,7 +1473,6 @@ pub fn cell_tab(insp: &mut Insp, ui: &mut Ui) {
             });
         }
     });
-    w::separator(ui);
     w::section(ui, &crate::t!("table-section-column-type"), |ui| {
         let col = t.columns.get(c).map(|x| x.format.clone()).unwrap_or_default();
         let wdt = ui.available_width();
@@ -1369,7 +1488,6 @@ pub fn cell_tab(insp: &mut Insp, ui: &mut Ui) {
         });
         w::caption(ui, crate::t!("table-column-type-note"));
     });
-    w::separator(ui);
     w::section(ui, &crate::t!("table-section-fill"), |ui| {
         let current = own.fill.clone().unwrap_or_default();
         let wdt = ui.available_width();
@@ -1385,7 +1503,6 @@ pub fn cell_tab(insp: &mut Insp, ui: &mut Ui) {
             format_cells(insp, range, CellFormat { fill: Some(k), ..Default::default() });
         }
     });
-    w::separator(ui);
     w::section(ui, &crate::t!("table-section-border"), |ui| {
         let names = [
             (BorderEdges::All, crate::t!("table-border-all")),
@@ -1443,7 +1560,6 @@ pub fn text_tab(insp: &mut Insp, ui: &mut Ui) {
             format_cells(insp, range, fmt);
         }
     });
-    w::separator(ui);
     w::section(ui, &crate::t!("table-section-alignment"), |ui| {
         let shown = t.shown(range.r0, range.c0, None);
         let mut a = t.align_at(range.r0, range.c0, &shown);
@@ -1460,7 +1576,6 @@ pub fn text_tab(insp: &mut Insp, ui: &mut Ui) {
             format_cells(insp, range, CellFormat { valign: Some(v), ..Default::default() });
         }
     });
-    w::separator(ui);
     w::section(ui, &crate::t!("table-section-text-colour"), |ui| {
         let current = f.color.clone().unwrap_or_default();
         if w::menu_check(ui, current.is_empty(), &crate::t!("table-text-colour-style"), None).clicked() && !current.is_empty() {

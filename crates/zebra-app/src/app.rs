@@ -160,7 +160,7 @@ pub struct ZebraApp {
     pub clipboard_marker: Option<String>,
     /// Cells copied from a table: the text put on the clipboard and the
     /// cells' inputs, so pasting them back into a table keeps formulas.
-    pub table_clip: Option<(String, Vec<Vec<String>>)>,
+    pub table_clip: Option<crate::table_ui::TableClip>,
     pub paste_count: u32,
     pub recent: Vec<PathBuf>,
     pub toast: Option<Toast>,

@@ -632,7 +632,8 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
         _ => None,
     };
     let sel = app.selection();
-    let sb = if path_mode { None } else { selection_box(app, &sel) };
+    // Cells selected in a table: no transform handles (they show at table level).
+    let sb = if path_mode || crate::table_ui::active(app) { None } else { selection_box(app, &sel) };
     let handle_under = pointer.and_then(|p| sb.as_ref().and_then(|b| hit_handle(b, p)));
     let badge_under = if path_mode { pointer.and_then(|p| badge_at(app, p)) } else { None };
     app.canvas.step_hover = badge_under;
@@ -872,7 +873,7 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
     }
     // Then the transform handles.
     let sel = app.selection();
-    if let Some(sb) = selection_box(app, &sel).filter(|_| sole_connector(app).is_none()) {
+    if let Some(sb) = selection_box(app, &sel).filter(|_| sole_connector(app).is_none() && !crate::table_ui::active(app)) {
         match hit_handle(&sb, start) {
             Some(Handle::Rotate) => {
                 let ids = app.editable_selection();
@@ -2689,6 +2690,8 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
     if !path_mode && app.canvas.text.is_none() {
         if let Some(id) = sole_connector(app) {
             draw_connector_handles(app, painter, &id);
+        } else if crate::table_ui::active(app) {
+            // Cells selected: the table's outline only (table_ui draws it).
         } else if let Some(sb) = selection_box(app, &ed.view.selection.clone()) {
             draw_transform_tool(app, painter, &sb);
         }
