@@ -282,3 +282,27 @@ fn limits_are_said_in_the_inspector() {
     assert!(h.query_by_label_contains("so the axis steps automatically").is_some(), "a too-fine step is said");
     shot(&mut h, "inspector-axis-limits.png");
 }
+
+/// The mini UX pass in light mode: the chart tabs and the Chart Data
+/// window (screenshots with ZEBRA_SHOTS).
+#[test]
+fn chart_screens_in_light_mode() {
+    let mut h = harness();
+    h.ctx.set_visuals(egui::Visuals::light());
+    h.run_steps(2);
+    h.state_mut().queued.push(Action::InsertChart(ChartType::Line));
+    h.run_steps(6);
+    assert!(data_open(&h));
+    shot(&mut h, "light-chart-data.png");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    let inspector_x = h.state().canvas.rect.right();
+    for (label, file) in [("inspector-tab-chart", "light-inspector-chart.png"), ("inspector-tab-axis", "light-inspector-axis.png"), ("inspector-tab-series", "light-inspector-series.png")] {
+        h.get_all_by_label(&tr(label)).find(|n| n.rect().left() > inspector_x).unwrap_or_else(|| panic!("tab {label}")).click();
+        h.run_steps(4);
+        shot(&mut h, file);
+    }
+    // The Chart Style swatches show the chart's own type.
+    h.get_all_by_label(&tr("inspector-tab-chart")).find(|n| n.rect().left() > inspector_x).unwrap().click();
+    h.run_steps(4);
+    shot(&mut h, "light-inspector-chart-line.png");
+}

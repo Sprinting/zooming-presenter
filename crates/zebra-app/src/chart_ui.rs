@@ -647,8 +647,9 @@ fn format(insp: &mut Insp, f: ChartFormat) {
     insp.app.apply(Command::FormatChart { id, format: f });
 }
 
-/// A small column chart in look `l`, in the theme.
-fn look_thumb(ui: &mut Ui, th: &Theme, l: ChartLook, size: egui::Vec2, on: bool) -> egui::Response {
+/// A small chart of type `t` in look `l`, in the theme: as in Keynote,
+/// the Chart Style swatches show the chart's own type.
+fn look_thumb(ui: &mut Ui, th: &Theme, t: ChartType, l: ChartLook, size: egui::Vec2, on: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let name = look_name(l);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, &name));
@@ -659,6 +660,21 @@ fn look_thumb(ui: &mut Ui, th: &Theme, l: ChartLook, size: egui::Vec2, on: bool)
         painter.rect_filled(rect.shrink(5.0), 2.0, style::c32(th.color(&th.frame_fill)));
     }
     let inner = rect.shrink(9.0);
+    if t != ChartType::Column {
+        // Other types: their own drawing, in the look's colours.
+        let mut k2 = Thumb::of(th);
+        if l == ChartLook::Tints {
+            k2.c = [k.c[0].gamma_multiply(0.45), k.c[0], k.c[0].gamma_multiply(0.7)];
+        }
+        if l == ChartLook::Outline {
+            k2.c = k2.c.map(|c| c.gamma_multiply(0.6));
+        }
+        paint_type(&painter, inner, t, &k2);
+        let p = Palette::of(ui.ctx());
+        let border = if on { Stroke::new(2.0, style::accent()) } else if resp.hovered() { Stroke::new(1.0, p.weak) } else { Stroke::new(1.0, p.border) };
+        painter.rect_stroke(rect.shrink(1.0), 4.0, border, egui::StrokeKind::Inside);
+        return resp.on_hover_text(name);
+    }
     let at = |x: f32, y: f32| Pos2::new(inner.left() + x * inner.width(), inner.top() + y * inner.height());
     let (a, b) = if l == ChartLook::Tints { (k.c[0].gamma_multiply(0.45), k.c[0]) } else { (k.c[0], k.c[1]) };
     if l != ChartLook::Labelled {
@@ -731,7 +747,7 @@ pub fn chart_tab(insp: &mut Insp, ui: &mut Ui) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = gap;
                 for l in row {
-                    if look_thumb(ui, &th, *l, egui::vec2(cw, (cw * 0.62).round()), c.look == *l).clicked() && c.look != *l {
+                    if look_thumb(ui, &th, c.chart_type, *l, egui::vec2(cw, (cw * 0.62).round()), c.look == *l).clicked() && c.look != *l {
                         format(insp, ChartFormat { look: Some(*l), ..Default::default() });
                     }
                 }
@@ -828,7 +844,7 @@ fn bound_row(insp: &mut Insp, ui: &mut Ui, id: &str, label: &str, now: Option<f6
     w::row_w(ui, label, 120.0, |ui| {
         let key = egui::Id::unique(("chart-bound", id, insp.el.id.clone()));
         let mut text: String = ui.data(|d| d.get_temp(key)).unwrap_or_else(|| now.map(table::plain_number).unwrap_or_default());
-        let r = w::text_field(ui, &mut text, 96.0, &crate::t!("chart-axis-auto"));
+        let r = w::text_field(ui, &mut text, ui.available_width(), &crate::t!("chart-axis-auto"));
         if r.changed() {
             ui.data_mut(|d| d.insert_temp(key, text.clone()));
         }
