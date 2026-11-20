@@ -976,8 +976,6 @@ canvas-menu-add-text = Add Text
 canvas-menu-edit-text = Edit Text
 canvas-menu-replace-icon = Replace Icon…
 
-# Pasting more than 100,000 characters at once: nothing is pasted.
-paste-too-long = Too long to paste into one text box.
 ## ---- end canvas.rs ----
 
 
@@ -1378,6 +1376,26 @@ spell-ignore = Ignore Spelling
 ## Help › Acknowledgements
 action-acknowledgements = Acknowledgements
 credits-title = Acknowledgements
+# View › Show Document Warnings (Keynote's Warnings window).
+action-show-document-warnings = Show Document Warnings
+warnings-title = Document Warnings
+warnings-none = There are no warnings.
+warnings-copy = Copy
+warning-media-disk-full = { $kind ->
+    [picture] A picture
+    [video] A video
+    [sound] A sound
+    [font] A font
+   *[other] A media file
+} couldn't be unpacked because the disk is full. It shows as missing.
+warning-media-unreadable = { $kind ->
+    [picture] A picture
+    [video] A video
+    [sound] A sound
+    [font] A font
+   *[other] A media file
+} couldn't be read. It shows as missing.
+warning-import = { $file }: { $text }
 credits-clip-art = Symbols
 credits-icons = Icons
 credits-fonts = Fonts
@@ -1668,10 +1686,6 @@ import-note-other = { $count ->
 import-note-skipped-slides = { $count ->
     [one] Slide { $slides } couldn't be read and was left out.
    *[other] Slides { $slides } couldn't be read and were left out.
-}
-import-note-text-cut = { $count ->
-    [one] Text on slide { $slides } was cut to 100,000 characters.
-   *[other] Text on slides { $slides } was cut to 100,000 characters.
 }
 import-note-simplified = { $count ->
     [one] Some formatting on slide { $slides } was simplified.

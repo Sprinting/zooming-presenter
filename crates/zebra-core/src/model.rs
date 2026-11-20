@@ -42,6 +42,11 @@ pub struct Document {
     /// Background music for the whole presentation (plays while presenting).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soundtrack: Option<Soundtrack>,
+    /// Document Warnings: what opening or importing couldn't bring in
+    /// (see [`crate::warnings`]). For this session only.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub warnings: crate::warnings::Warnings,
 }
 
 /// Playback options for the whole presentation (the autoplay menu).
@@ -222,6 +227,7 @@ impl Default for Document {
             themes: vec![],
             play: PlaySettings::default(),
             soundtrack: None,
+            warnings: Default::default(),
         }
     }
 }

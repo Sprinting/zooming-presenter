@@ -126,6 +126,8 @@ pub enum Action {
     About,
     /// Credits and licences of the clip art, icons and fonts.
     Acknowledgements,
+    /// What opening or importing couldn't bring in (Keynote's Warnings).
+    ShowDocumentWarnings,
 }
 
 impl Action {
@@ -222,6 +224,7 @@ impl Action {
             ThemeEditor => crate::t!("action-theme-editor"),
             About => crate::t!("action-about"),
             Acknowledgements => crate::t!("action-acknowledgements"),
+            ShowDocumentWarnings => crate::t!("action-show-document-warnings"),
         }
     }
 
@@ -245,7 +248,7 @@ impl Action {
             FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ShowShortcuts, Settings, ShapeLibrary,
             InsertVideo, InsertWebVideo, InsertMusic, ReplaceImage, CropImage, PlayPauseVideo, Group, Ungroup,
             TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, TogglePresenterView, PlaybackOptions, ToggleAiControl, ToggleActivity,
-            PauseAgents, StopAgents, FollowAgent, RevertAgent, ThemeEditor, Acknowledgements,
+            PauseAgents, StopAgents, FollowAgent, RevertAgent, ThemeEditor, Acknowledgements, ShowDocumentWarnings,
         ]);
         for t in zebra_core::Theme::ids() {
             v.push(SetTheme(t));

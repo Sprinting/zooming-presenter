@@ -28,7 +28,7 @@ pub struct ImportedDeck {
     pub notes: BTreeMap<ImportNote, usize>,
     /// The slides (1-based, ascending) a note is about, for the notes that
     /// name them: slides left out ([`ImportNote::PageSkipped`] from a
-    /// PowerPoint file), [`ImportNote::TextCut`], [`ImportNote::Simplified`].
+    /// PowerPoint file), [`ImportNote::Simplified`].
     /// The note's count is then the number of slides.
     pub slides: BTreeMap<ImportNote, Vec<usize>>,
     /// Music the file plays across its pages (an asset in `assets`); it
@@ -126,9 +126,6 @@ pub enum ImportNote {
     Gradient,
     /// Other objects (ink, add-in content…) were left out.
     Other,
-    /// Text boxes longer than [`crate::rich::MAX_INSERT_CHARS`] were cut
-    /// to that many characters (the paste limit).
-    TextCut,
     /// Formatting past [`MAX_IMPORT_SPANS`] style changes in a box was
     /// dropped (the rest takes the box's own style).
     Simplified,
@@ -145,7 +142,7 @@ pub enum ImportNote {
 pub const MAX_IMPORT_SPANS: usize = 60_000;
 
 impl ImportNote {
-    pub const ALL: [ImportNote; 18] = [
+    pub const ALL: [ImportNote; 17] = [
         ImportNote::PageSkipped,
         ImportNote::HiddenSlide,
         ImportNote::Chart,
@@ -160,7 +157,6 @@ impl ImportNote {
         ImportNote::Flip,
         ImportNote::Gradient,
         ImportNote::Other,
-        ImportNote::TextCut,
         ImportNote::Simplified,
         ImportNote::Design,
         ImportNote::Placeholder,
@@ -184,7 +180,6 @@ impl ImportNote {
             ImportNote::Flip => ("flipped object shown unflipped", "flipped objects shown unflipped"),
             ImportNote::Gradient => ("gradient made a solid colour", "gradients made solid colours"),
             ImportNote::Other => ("other object left out", "other objects left out"),
-            ImportNote::TextCut => ("slide with text cut to 100,000 characters", "slides with text cut to 100,000 characters"),
             ImportNote::Simplified => ("slide with formatting simplified", "slides with formatting simplified"),
             ImportNote::Design => ("slide design that couldn't be read", "slide designs that couldn't be read"),
         };

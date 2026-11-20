@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use zebra_core::import::{ImportedDeck, MAX_IMPORT_SPANS};
-use zebra_core::rich::MAX_INSERT_CHARS;
 use zebra_core::{Editor, ElementKind, Origin, TextData};
 use zebra_import::{Control, ImportError, ImportNote, Options};
 
@@ -245,20 +244,22 @@ fn a_broken_slide_is_left_out_and_the_rest_comes_in() {
         // Over BetterOffice's 4 MB attribute limit, well formed: only the
         // parser finds it, and the batch is halved to find it.
         s(slide(&format!(r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="{}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#, "x".repeat(5 << 20)))),
-        // Over the 8 MB a slide may be.
+        // 9 MB of text: comes in whole (no size limit, as in Keynote).
         s(slide(&words(2, &"y".repeat(9 << 20)))),
         ok("Nine"),
     ];
     let bytes = deck(&slides, &[], &[]);
     let d = read(bytes.clone()).unwrap();
     let got: Vec<&str> = texts(&d).iter().map(|t| t.text.as_str()).collect();
-    assert_eq!(got, ["One", "Three", "Five", "Six", "Nine"]);
-    assert_eq!(d.slides[&ImportNote::PageSkipped], [2, 4, 7, 8]);
-    assert_eq!(d.notes[&ImportNote::PageSkipped], 4);
+    assert_eq!(got.len(), 6);
+    assert_eq!(got[4].len(), 9 << 20);
+    assert_eq!([got[0], got[1], got[2], got[3], got[5]], ["One", "Three", "Five", "Six", "Nine"]);
+    assert_eq!(d.slides[&ImportNote::PageSkipped], [2, 4, 7]);
+    assert_eq!(d.notes[&ImportNote::PageSkipped], 3);
     // The missing layout of slide 6.
     assert_eq!(d.notes.get(&ImportNote::Design), Some(&1));
     let names: Vec<&str> = d.pages.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, ["Slide 1", "Slide 3", "Slide 5", "Slide 6", "Slide 9"]);
+    assert_eq!(names, ["Slide 1", "Slide 3", "Slide 5", "Slide 6", "Slide 8", "Slide 9"]);
     import(&d);
     // A range reads only what it asks for.
     let mut opts = Options::all(Editor::default().theme());
@@ -322,8 +323,19 @@ fn a_tightly_packed_slide_comes_in() {
 fn a_slide_over_a_limit_is_too_big_not_damaged() {
     let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let ok = |t: &str| s(slide(&words(2, t)));
-    // Over 8 MB of XML.
+    // 9 MB of XML comes in: the only bound is what its parse takes against
+    // the memory budget (half the Mac's memory), as Keynote has no limit.
     let huge = || s(slide(&format!("<!-- {} -->", "x".repeat(9 << 20))));
+    assert!(read(deck(&[ok("A"), huge()], &[], &[])).unwrap().slides.is_empty());
+    // Past the budget (here made 8 MB of XML's worth): left out.
+    zebra_core::io::set_memory_budget(Some(8 << 20).map(|x: u64| x * 55));
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            zebra_core::io::set_memory_budget(None);
+        }
+    }
+    let _reset = Reset;
     // Under 8 MB but more shapes than the parser reads (100,000).
     let crowded = || s(slide(&"<p:sp/>".repeat(100_001)));
     for (name, big) in [("XML", huge as fn() -> S), ("shapes", crowded)] {
@@ -366,10 +378,10 @@ fn ten_thousand_slides_come_in() {
 }
 
 /// T-C5: a box with more runs than text layout can take (65,536 styles
-/// crashed parley) keeps 60,000 spans and says so; a box longer than paste
-/// allows is cut there and says so. All-bold runs were quadratic to read.
+/// crashed parley) keeps 60,000 spans and says so; a long box comes in
+/// whole, as in Keynote. All-bold runs were quadratic to read.
 #[test]
-fn long_text_is_cut_and_its_formatting_simplified() {
+fn long_text_comes_in_whole_and_its_formatting_simplified() {
     let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let run = |b: bool, t: &str| format!(r#"<a:r><a:rPr b="{}"/><a:t>{t}</a:t></a:r>"#, b as u8);
     // Bold, italic, underlined, plain, again: 75,000 spans in 100,000
@@ -386,10 +398,9 @@ fn long_text_is_cut_and_its_formatting_simplified() {
     let tx = texts(&d);
     assert_eq!(tx[1].spans.len(), MAX_IMPORT_SPANS);
     assert_eq!(tx[1].text.chars().count(), 100_000);
-    assert_eq!(tx[2].text.chars().count(), MAX_INSERT_CHARS);
+    assert_eq!(tx[2].text.chars().count(), 450_000, "all the text, as in Keynote");
     assert!(tx[2].bold);
     assert_eq!(d.slides[&ImportNote::Simplified], [2]);
-    assert_eq!(d.slides[&ImportNote::TextCut], [3]);
     // Laid out on a canvas without a panic.
     let t = Instant::now();
     import(&d);
@@ -398,7 +409,8 @@ fn long_text_is_cut_and_its_formatting_simplified() {
 
 /// T-M4, T-M5: a SmartArt data part of 1.5M empty points (34 MB) took a
 /// gigabyte; a 300 MB one 600 MB; 500 MB of parts nothing uses 580 MB.
-/// None of them is unpacked now.
+/// Parts nothing uses are never unpacked; SmartArt past the memory budget
+/// is left out and noted.
 #[test]
 fn big_smartart_and_unused_parts_cost_little_memory() {
     let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
@@ -444,7 +456,18 @@ fn big_smartart_and_unused_parts_cost_little_memory() {
         }
         z.finish().unwrap().into_inner()
     };
-    for (what, bytes) in [("1.5M points", huge), ("300 MB attribute", attr), ("300k points", many), ("86k points", under), ("1 GB unused", junk)] {
+    // SmartArt has no size limit of its own (Keynote has none): a part
+    // whose parse would pass the memory budget is left out, noted. Here
+    // the budget is made what a 2 MB part takes, to keep the test small.
+    zebra_core::io::set_memory_budget(Some((2 << 20) * 55));
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            zebra_core::io::set_memory_budget(None);
+        }
+    }
+    let reset = Reset;
+    for (what, bytes) in [("1.5M points", huge), ("300 MB attribute", attr), ("300k points", many.clone()), ("86k points", under), ("1 GB unused", junk)] {
         let ((d, pages), grew) = peak(|| {
             let d = read(bytes).unwrap();
             let pages = d.pages.len();
@@ -455,6 +478,17 @@ fn big_smartart_and_unused_parts_cost_little_memory() {
         assert!(grew < 64 * MB, "{what}: heap +{} MB", grew / MB);
         drop(d);
     }
+    // With the real budget the 6.6 MB part is read, at what its parse costs.
+    drop(reset);
+    let ((d, smart), grew) = peak(|| {
+        let d = read(many).unwrap();
+        let smart = d.notes.get(&ImportNote::SmartArt).copied();
+        (d, smart)
+    });
+    eprintln!("300k points, read: heap +{} MB", grew / MB);
+    assert_eq!(d.pages.len(), 4);
+    let as_it_was = read(fixture("smartart.pptx")).unwrap().notes.get(&ImportNote::SmartArt).copied();
+    assert_eq!(smart, as_it_was, "read, not left out: {:?}", d.notes);
 }
 
 /// T-W10: an MP4 saying it lasts 0xfffffffe seconds (or "unknown", all

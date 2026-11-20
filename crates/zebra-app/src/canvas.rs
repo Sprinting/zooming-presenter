@@ -1839,22 +1839,6 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     // selection it indents.
     let mid_line = caret.is_some_and(|c| c > 0 && t.buf.chars().nth(c - 1) != Some('\n') && rich::para(&t.rich, rich::paragraph_of(&t.rich, c)).0 == ListKind::None);
     if focused {
-        // A paste over what one box takes at once (100,000 characters):
-        // nothing goes in, and a note says why. The text field would
-        // otherwise take it all.
-        let mut too_long = false;
-        ctx.input_mut(|i| {
-            i.events.retain(|e| match e {
-                egui::Event::Paste(p) if rich::too_long_to_insert(p) => {
-                    too_long = true;
-                    false
-                }
-                _ => true,
-            })
-        });
-        if too_long {
-            app.toast(crate::t!("paste-too-long"));
-        }
         ctx.input_mut(|i| {
             // Backspace there outdents, as in TextEdit and Pages, instead of
             // joining the paragraph to the one before.

@@ -31,6 +31,13 @@ fn engine() -> bool {
 }
 
 /// Anonymous memory of this process.
+/// These tests each keep PDF helpers busy: run one at a time, so the
+/// timings they check aren't another test's load.
+static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    ONE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn heap() -> u64 {
     zebra_pdf::sys::footprint(std::process::id()).unwrap_or(0)
 }
@@ -48,6 +55,7 @@ fn opts() -> Options {
 
 #[test]
 fn the_12_gb_page_comes_in_as_a_placeholder() {
+    let _one = one_at_a_time();
     if !engine() {
         return;
     }
@@ -79,6 +87,7 @@ fn the_12_gb_page_comes_in_as_a_placeholder() {
 /// Cancelled within 5 s, the app under 1 GB.
 #[test]
 fn cancel_stops_the_12_gb_page() {
+    let _one = one_at_a_time();
     if !engine() {
         return;
     }
@@ -105,6 +114,7 @@ fn cancel_stops_the_12_gb_page() {
 /// showing a PDF's pages.
 #[test]
 fn bad_pages_never_stop_the_import() {
+    let _one = one_at_a_time();
     if !engine() {
         return;
     }
@@ -135,6 +145,7 @@ fn bad_pages_never_stop_the_import() {
 /// the last 200.
 #[test]
 fn a_30000_page_pdf_imports_a_range() {
+    let _one = one_at_a_time();
     if !engine() {
         return;
     }
@@ -160,6 +171,7 @@ fn a_30000_page_pdf_imports_a_range() {
 /// imports at) all come in, in order, with progress for each.
 #[test]
 fn a_2500_page_pdf_imports_whole() {
+    let _one = one_at_a_time();
     if !engine() {
         return;
     }
@@ -177,6 +189,7 @@ fn a_2500_page_pdf_imports_whole() {
 
 #[test]
 fn empty_and_damaged_pdfs_are_errors() {
+    let _one = one_at_a_time();
     if !engine() {
         return;
     }

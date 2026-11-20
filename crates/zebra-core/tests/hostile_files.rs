@@ -112,8 +112,7 @@ fn zip_bombs_are_refused_without_the_memory() {
 
     // An asset of 256 MB of zeros named .png is dropped from its first
     // bytes. One that starts as a real PNG and goes on with zeros is read
-    // only as far as 100x its compressed size, to a spill file: it is
-    // kept as a broken picture (drawn as missing), never 256 MB.
+    // whole, as nothing is ever cut (B8), to a spill file, not memory.
     let mut head = png(4, 4);
     head.truncate(head.len() - 12); // no IEND: zeros follow the header
     let bomb = zip_with(|z| {
@@ -129,10 +128,20 @@ fn zip_bombs_are_refused_without_the_memory() {
     let before = heap();
     let doc = io::load_bytes(&bomb).unwrap();
     assert_eq!(doc.assets.keys().collect::<Vec<_>>(), ["fakepng"]);
-    assert!(doc.assets["fakepng"].bytes.len() < 64 << 20, "{}", doc.assets["fakepng"].bytes.len());
+    assert_eq!(doc.assets["fakepng"].bytes.len(), head.len() + (256 << 20), "read whole");
+    assert!(doc.assets["fakepng"].bytes.is_mapped(), "spilled, not in memory");
     if let (Some(a), Some(b)) = (before, heap()) {
         assert!(b.saturating_sub(a) < 64 << 20, "heap grew {} MB", (b - a) >> 20);
     }
+    drop(doc);
+    // With the disk nearly full it stops before filling it, and the
+    // person is told which one is missing and why.
+    media::set_free_space_for_tests(Some(media::SPACE_MARGIN - 1));
+    let doc = io::load_bytes(&bomb).unwrap();
+    media::set_free_space_for_tests(None);
+    assert!(doc.assets.is_empty());
+    assert_eq!(doc.warnings.0, vec![warnings::Warning::AssetNotRead { key: "fakepng".into(), kind: warnings::MediaWord::Picture, disk_full: true }]);
+    assert!(doc.warnings[0].english().contains("disk is full"));
 
     // A real document with a real deflated picture still opens.
     let pic = png(64, 64);

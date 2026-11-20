@@ -19,48 +19,6 @@ fn char_len(s: &str) -> usize {
     s.chars().count()
 }
 
-/// Most characters one paste or insert puts into a text box. More is
-/// refused whole (a note says it is too long for one box), not cut: a
-/// megabyte of text in one box laid out on every frame froze the window.
-pub const MAX_INSERT_CHARS: usize = 100_000;
-
-/// Whether `text` is more than one paste may put into a box.
-pub fn too_long_to_insert(text: &str) -> bool {
-    // Counting stops past the limit: a 1 GB paste isn't walked twice.
-    text.chars().nth(MAX_INSERT_CHARS).is_some()
-}
-
-/// The error for an agent's command that would put more than
-/// [`MAX_INSERT_CHARS`] into one text box at once: `add_text`, an `update`
-/// whose text grows by more, or `add_element` with such a text. None for
-/// everything else. `doc` is where an update's box is now.
-pub fn insert_error(cmd: &crate::command::Command, doc: &crate::model::Document) -> Option<crate::error::ZError> {
-    use crate::command::Command;
-    use crate::model::ElementKind;
-    let (text, before) = match cmd {
-        Command::AddText { text, .. } => (text.as_str(), 0),
-        Command::AddElement { element } => match &element.kind {
-            ElementKind::Text(t) => (t.text.as_str(), 0),
-            _ => return None,
-        },
-        Command::Update { id, patch } => {
-            let text = patch.text.as_deref()?;
-            let before = match doc.get(id).map(|e| &e.kind) {
-                Some(ElementKind::Text(t)) => char_len(&t.text),
-                _ => 0,
-            };
-            (text, before)
-        }
-        _ => return None,
-    };
-    // Counted only as far as needed.
-    let n = text.chars().take(before + MAX_INSERT_CHARS + 1).count();
-    (n > before + MAX_INSERT_CHARS).then(|| {
-        crate::error::ZError::invalid(format!("that adds more than {MAX_INSERT_CHARS} characters to one text box at once"))
-            .hint("split the text into several boxes, or add it in parts")
-    })
-}
-
 /// Merge `top` over `base`: set fields in `top` win; empty strings clear.
 fn overlay(base: &SpanFormat, top: &SpanFormat) -> SpanFormat {
     fn pick<T: Clone>(b: &Option<T>, t: &Option<T>) -> Option<T> {

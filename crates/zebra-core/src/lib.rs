@@ -38,6 +38,7 @@ pub mod diagrams;
 pub mod templates;
 pub mod theme;
 pub mod view;
+pub mod warnings;
 pub mod weblink;
 
 pub use camera::{Camera, CameraFlight};

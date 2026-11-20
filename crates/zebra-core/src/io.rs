@@ -114,7 +114,9 @@ fn read_zip(bytes: &[u8], map: Option<&Arc<crate::media::MappedFile>>) -> ZResul
     // to disk for nothing. Just opened, nothing else can need them: there
     // is no undo history yet, and a save would leave them out anyway.
     let used: std::collections::BTreeSet<String> = doc.used_assets().into_iter().map(str::to_string).collect();
-    doc.assets = read_assets(&mut z, map, Some(&used))?;
+    let mut warnings = vec![];
+    doc.assets = read_assets(&mut z, map, Some(&used), &mut warnings)?;
+    doc.warnings.extend(warnings);
     Ok(doc)
 }
 
@@ -245,16 +247,15 @@ fn from_reader(r: impl Read) -> ZResult<Document> {
     from_value(v)
 }
 
-/// Largest inflation a compressed asset may claim. Zebra stores assets
-/// uncompressed; a picture or video another tool deflated shrinks by a
-/// few percent, a font or SVG by 3-10x. A zip bomb is 1000x.
+/// Compressed assets up to this size are read into memory; bigger ones
+/// stream to a spill file.
 #[cfg(not(target_arch = "wasm32"))]
-const MAX_INFLATE: u64 = 100;
+const SMALL_ASSET: u64 = 1 << 20;
 
 #[cfg(not(target_arch = "wasm32"))]
 /// The assets in a `.zebra` zip (mapped when `map` is the file and they
 /// are stored uncompressed). Assets are only read as far as their headers.
-fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc<crate::media::MappedFile>>, only: Option<&std::collections::BTreeSet<String>>) -> ZResult<std::collections::BTreeMap<String, Asset>> {
+fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc<crate::media::MappedFile>>, only: Option<&std::collections::BTreeSet<String>>, warnings: &mut Vec<crate::warnings::Warning>) -> ZResult<std::collections::BTreeMap<String, Asset>> {
     let bad = |m: String| ZError::new("bad_file", m);
     let mut assets = std::collections::BTreeMap::new();
     for i in 0..z.len() {
@@ -277,27 +278,30 @@ fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc
         let data = match mapped {
             Some(m) => m,
             None => {
-                // Compressed (or no mapping): read at most what the entry
-                // could honestly hold, so a 2 MB zip can't ask for 2 GB.
-                // The type is checked from the first bytes before the
-                // rest is read. Big ones go to a spill file, not the heap.
-                let limit = f.size().min(f.compressed_size().saturating_mul(MAX_INFLATE).max(1 << 20));
+                // Compressed (or no mapping): read all of it, whatever its
+                // size or how well it packed (nothing is cut). The type is
+                // checked from the first bytes before the rest is read.
+                // Up to 1 MB stays in memory; past that it streams to a
+                // spill file, which stops before the disk fills, so a zip
+                // bomb takes neither memory nor the disk.
                 let mut head = Vec::new();
-                (&mut f).take(limit.min(4096)).read_to_end(&mut head).map_err(|e| bad(e.to_string()))?;
+                (&mut f).take(4096).read_to_end(&mut head).map_err(|e| bad(e.to_string()))?;
                 if !plausible_asset(_ext, &head) {
                     continue;
                 }
-                let rest = limit - head.len() as u64;
-                let mut r = std::io::Cursor::new(head).chain((&mut f).take(rest));
-                if limit >= 1 << 20 {
+                let mut data = head;
+                (&mut f).take((SMALL_ASSET + 1).saturating_sub(data.len() as u64)).read_to_end(&mut data).map_err(|e| bad(e.to_string()))?;
+                if data.len() as u64 <= SMALL_ASSET {
+                    data.into()
+                } else {
+                    let mut r = std::io::Cursor::new(data).chain(&mut f);
                     match crate::media::spill_reader(&mut r, &safe_ext(_ext)) {
                         Ok((_, b)) => b,
-                        Err(_) => continue,
+                        Err(e) => {
+                            warnings.push(crate::warnings::Warning::AssetNotRead { key: key.to_string(), kind: crate::warnings::MediaWord::of_ext(_ext), disk_full: e.kind() == std::io::ErrorKind::StorageFull });
+                            continue;
+                        }
                     }
-                } else {
-                    let mut data = Vec::new();
-                    r.read_to_end(&mut data).map_err(|e| bad(e.to_string()))?;
-                    data.into()
                 }
             }
         };
@@ -446,7 +450,7 @@ fn mapped_assets(path: &Path) -> ZResult<Vec<(String, AssetBytes)>> {
     let ioe = |e: std::io::Error| ZError::new("io", format!("{}: {e}", path.display()));
     let map = Arc::new(map_document(path).map_err(ioe)?);
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(&map[..])).map_err(|e| ZError::new("bad_file", e.to_string()))?;
-    Ok(read_assets(&mut z, Some(&map), None)?.into_iter().filter(|(_, a)| a.bytes.is_mapped()).map(|(k, a)| (k, a.bytes)).collect())
+    Ok(read_assets(&mut z, Some(&map), None, &mut vec![])?.into_iter().filter(|(_, a)| a.bytes.is_mapped()).map(|(k, a)| (k, a.bytes)).collect())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -721,7 +725,7 @@ pub fn load_autosave(path: &Path, base: Option<&Path>) -> ZResult<Document> {
         let from = (|| -> Option<std::collections::BTreeMap<String, Asset>> {
             let map = Arc::new(map_document(b).ok()?);
             let mut z = zip::ZipArchive::new(std::io::Cursor::new(&map[..])).ok()?;
-            read_assets(&mut z, Some(&map), Some(&want)).ok()
+            read_assets(&mut z, Some(&map), Some(&want), &mut vec![]).ok()
         })();
         for (k, a) in from.into_iter().flatten() {
             doc.assets.insert(k, a);

@@ -107,7 +107,7 @@ call takes no params.
 |---|---|---|
 | `ping` | – | `"pong"` (allowed before `hello`) |
 | `describe` | – | `{"outline": "…text…"}`: a compact outline of the presentation (start here) |
-| `state` | – | mode, step, selection, agent_selection, camera, agent_camera, revision, dirty, file, agent_permission, agent_paused, human_editing, can_undo, … |
+| `state` | – | mode, step, selection, agent_selection, camera, agent_camera, revision, dirty, file, warnings (what opening or importing couldn't bring in, as View › Show Document Warnings lists), agent_permission, agent_paused, human_editing, can_undo, … |
 | `query` | `{"query": {"q": …}}` (or `{"query": "path"}`) | depends on the query; see the reference below |
 | `commands` | – | the catalogue: every command, view command and query, each with its description, params, an example and its JSON schema |
 | `schema` | – | full JSON Schemas for `Command`, `ViewCommand`, `Query` and capture targets, plus the event and method lists |

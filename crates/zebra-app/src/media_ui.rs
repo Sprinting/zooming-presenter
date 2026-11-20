@@ -923,10 +923,6 @@ pub fn paste_from_system(app: &mut ZebraApp) -> bool {
         if crate::table_ui::paste_as_table(app, &text) {
             return true;
         }
-        if zebra_core::rich::too_long_to_insert(&text) {
-            app.toast(crate::t!("paste-too-long"));
-            return true;
-        }
         if !text.trim().is_empty() {
             let cmd = Command::AddText { text, x: at.x, y: at.y, style: Default::default(), scale: Some(1.0 / app.editor.view.camera.zoom), place: None, id: None, on: None, color: None };
             if let Some(out) = app.apply(cmd) {

@@ -42,6 +42,7 @@ pub mod text_drag;
 pub mod theme_editor;
 pub mod thumbs;
 pub mod widgets;
+pub mod warnings_ui;
 pub mod words;
 pub mod welcome;
 pub mod window_frames;

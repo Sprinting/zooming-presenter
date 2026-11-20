@@ -254,14 +254,8 @@ fn a_client_that_never_reads_its_replies_is_dropped() {
     let host = Host::start(Permission::Edit);
     let mut c = host.connect("writer");
     c.call("describe", json!({})).unwrap();
-    // A box of 1 MB, put in 100,000 characters at a time (the most one
-    // insert takes).
-    let mut text = String::new();
-    while text.len() < 1 << 20 {
-        text.push_str(&"y".repeat(100_000));
-        let op = if text.len() == 100_000 { json!({"op":"add_text","id":"big","text":text}) } else { json!({"op":"update","id":"big","patch":{"text":text}}) };
-        c.call("apply", json!({ "command": op })).unwrap();
-    }
+    // A box of 1 MB.
+    c.call("apply", json!({ "command": {"op":"add_text","id":"big","text":"y".repeat(1 << 20)} })).unwrap();
     let mut deaf = UnixStream::connect(&host.socket).unwrap();
     writeln!(deaf, "{}", json!({"jsonrpc":"2.0","id":1,"method":"hello","params":{"name":"deaf","token":host.token}})).unwrap();
     let mut gone = false;
@@ -316,20 +310,14 @@ fn saves_run_aside_one_at_a_time() {
     h.stop().unwrap();
 }
 
-/// M2 of the hostile-input audit: an agent's text insert is held to what
-/// the person can paste, 100,000 characters into one box at once.
+/// Kartik (21 Nov): no limit on text in one insert, for agents as for
+/// the person's paste (Keynote has none).
 #[test]
-fn an_agent_inserts_at_most_100000_characters_into_one_box() {
+fn an_agent_inserts_any_amount_of_text_into_one_box() {
     let h = start(Permission::Edit);
     let mut c = connect(&h, "big-text");
     let text = |n: usize| "a".repeat(n);
-    let r = c.call("apply", json!({"command": {"op":"add_text","id":"t","text":text(100_001)}}));
-    let e = rpc_err(r);
-    assert_eq!(e.code, -32602, "{e:?}");
-    assert!(e.message.contains("100000"), "{e:?}");
-    c.call("apply", json!({"command": {"op":"add_text","id":"t","text":text(100_000)}})).expect("100,000 go in");
-    let r = c.call("apply", json!({"command": {"op":"update","id":"t","patch":{"text":text(200_001)}}}));
-    rpc_err(r);
-    let r = c.call("batch", json!({"commands": [{"op":"add_text","text":"ok"}, {"op":"add_text","text":text(100_001)}]}));
-    rpc_err(r);
+    c.call("apply", json!({"command": {"op":"add_text","id":"t","text":text(1_000_001)}})).expect("a million go in");
+    c.call("apply", json!({"command": {"op":"update","id":"t","patch":{"text":text(2_000_001)}}})).expect("and two");
+    c.call("batch", json!({"commands": [{"op":"add_text","text":"ok"}, {"op":"add_text","text":text(100_001)}]})).expect("in a batch too");
 }

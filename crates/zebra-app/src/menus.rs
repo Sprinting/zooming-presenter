@@ -90,6 +90,8 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
                 A(ToggleSidebar),
                 A(ToggleProperties),
                 A(ToggleActivity),
+                Sep,
+                A(ShowDocumentWarnings),
             ],
         ),
         (crate::t!("menu-path"), vec![A(TogglePathEdit), A(AddToPath), A(AddCurrentView), Sep, A(AutoPath), A(ClearPath)]),
@@ -186,6 +188,7 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
         SelectAll | FitAll | ExportPdf | ExportPng | ExportHtml | PresentStart | AutoPath | AddCurrentView | AddToPath => has_doc,
         PresentCurrent => has_doc && !app.editor.doc.path.is_empty(),
         ClearPath => !app.editor.doc.path.is_empty(),
+        ShowDocumentWarnings => !app.editor.doc.warnings.is_empty(),
         ToggleLock => {
             let sel = app.selection();
             let locked = !sel.is_empty() && sel.iter().all(|id| app.editor.doc.get(id).is_some_and(|e| e.locked));
