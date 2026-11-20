@@ -36,6 +36,9 @@ pub enum Action {
     Duplicate,
     Delete,
     SelectAll,
+    /// Edit › Select Frame Only (Option-click): the selected frame on its
+    /// own, to move, resize or turn without what it holds.
+    SelectFrameOnly,
     Deselect,
     // Insert / tools
     SetTool(Tool),
@@ -145,6 +148,7 @@ impl Action {
             Duplicate => crate::t!("action-duplicate"),
             Delete => crate::t!("action-delete"),
             SelectAll => crate::t!("action-select-all"),
+            SelectFrameOnly => crate::t!("action-select-frame-only"),
             Deselect => crate::t!("action-deselect"),
             SetTool(t) => crate::t!("action-set-tool", tool = tool_name(*t)),
             FrameTool => crate::t!("action-frame-tool"),
@@ -220,7 +224,7 @@ impl Action {
         use Action::*;
         let mut v = vec![
             New, NewFromSample, ShowTemplates, SaveAsTemplate, Open, Save, SaveAs, Import, ExportPdf, ExportPng, ExportHtml, Undo, Redo, Cut, Copy, Paste, Duplicate, Delete,
-            SelectAll, Deselect,
+            SelectAll, SelectFrameOnly, Deselect,
         ];
         for t in TOOLS {
             v.push(SetTool(t.0));

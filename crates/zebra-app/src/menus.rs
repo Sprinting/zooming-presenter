@@ -40,7 +40,7 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
         ),
         (
             crate::t!("menu-edit"),
-            vec![A(Undo), A(Redo), Sep, A(Cut), A(Copy), A(Paste), A(Delete), A(Duplicate), Sep, A(SelectAll), A(Deselect)],
+            vec![A(Undo), A(Redo), Sep, A(Cut), A(Copy), A(Paste), A(Delete), A(Duplicate), Sep, A(SelectAll), A(SelectFrameOnly), A(Deselect)],
         ),
         (
             crate::t!("menu-insert"),
@@ -179,6 +179,8 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
         // (a picture, files, text): Paste takes those too.
         Paste => !app.clipboard.is_empty() || crate::media_ui::system_clipboard_has_content(),
         Deselect => has_sel || crate::sidebar::list_focused(app) || app.step_pick.is_some(),
+        // One frame selected, with what it holds or already on its own.
+        SelectFrameOnly => matches!(app.editor.view.selection.as_slice(), [id] if app.editor.doc.get(id).is_some_and(|e| e.is_frame() && !e.locked)),
         SelectAll | FitAll | ExportPdf | ExportPng | ExportHtml | PresentStart | AutoPath | AddCurrentView | AddToPath => has_doc,
         PresentCurrent => has_doc && !app.editor.doc.path.is_empty(),
         ClearPath => !app.editor.doc.path.is_empty(),

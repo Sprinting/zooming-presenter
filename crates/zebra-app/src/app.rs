@@ -775,6 +775,11 @@ impl ZebraApp {
             }
             SelectAll if crate::sidebar::list_focused(self) => crate::sidebar::select_all_steps(self),
             SelectAll => self.view_cmd(ViewCommand::SelectAll),
+            SelectFrameOnly => {
+                if let [id] = self.selection().as_slice() {
+                    crate::canvas::select_frame_only(self, id.clone());
+                }
+            }
             Deselect if self.step_pick.is_some() => crate::sidebar::cancel_pick(self),
             Deselect if crate::sidebar::list_focused(self) => self.path_focus = false,
             Deselect => {
@@ -1707,7 +1712,9 @@ impl ZebraApp {
         // A run of nudges of the same objects is one undo step, like a drag.
         let (n, now) = (self.editor.history().len(), self.editor.view.now);
         let run = self.editor.history().last().is_some_and(|h| h.origin == H && h.label == label && h.ids == ids && now - h.time < 1.0);
-        let r = self.editor.apply_batch(vec![Command::Move { ids, dx: w.x, dy: w.y, with_contents: true }], Some(label), H);
+        // A frame selected on its own moves alone.
+        let with_contents = self.editor.frame_only().is_none();
+        let r = self.editor.apply_batch(vec![Command::Move { ids, dx: w.x, dy: w.y, with_contents }], Some(label), H);
         if r.is_ok() && run && self.editor.history().len() == n + 1 {
             self.editor.merge_last_two_steps();
         }

@@ -321,7 +321,11 @@ fn style_tab(insp: &mut Insp, ui: &mut Ui) {
                     }
                 });
                 let n = insp.app.editor.frame_contents(&el.id).len();
-                w::caption(ui, crate::t!("inspector-frame-contains", count = n));
+                if n > 0 && insp.app.editor.frame_only() == Some(&el.id) {
+                    w::caption(ui, crate::t!("inspector-frame-only", count = n));
+                } else {
+                    w::caption(ui, crate::t!("inspector-frame-contains", count = n));
+                }
             });
             w::section(ui, &crate::t!("inspector-section-colour"), |ui| {
                 let cur = f.color.clone().unwrap_or_default();
