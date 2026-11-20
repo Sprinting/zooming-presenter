@@ -18,7 +18,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 
-use base64::Engine;
 use egui::{Color32, Pos2, RichText, Vec2 as EVec2};
 use zebra_core::weblink::{self, LinkError};
 use zebra_core::{Command, ElementId, ElementKind, LinkFound, LinkKind, Vec2};
@@ -258,7 +257,7 @@ fn insert(app: &mut ZebraApp, s: &Sheet, url: &str, c: Checked, poster: Option<V
         y: s.at.y,
         width: Some(s.width),
         alt: c.title.clone().unwrap_or_default(),
-        poster_base64: poster.map(|p| base64::engine::general_purpose::STANDARD.encode(p)),
+        poster_base64: None,
         autoplay: true,
         looping: false,
         muted: false,
@@ -266,6 +265,7 @@ fn insert(app: &mut ZebraApp, s: &Sheet, url: &str, c: Checked, poster: Option<V
         end: None,
         id: None,
         found: Some(LinkFound { kind: c.kind, width: c.width, height: c.height, duration: c.duration }),
+        poster_png: poster.map(zebra_core::PosterBytes),
     };
     if let Some(out) = app.apply(cmd) {
         app.select(out.created);

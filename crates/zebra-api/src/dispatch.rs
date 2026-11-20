@@ -956,7 +956,7 @@ fn fetch_web(call: &mut Call, tasks: &[WebTask], files: &mut Vec<std::path::Path
     for t in tasks {
         match t {
             WebTask::Check(i) => {
-                let Some(Command::AddWebVideo { url, poster_base64, alt, found, .. }) = cmds.get_mut(*i) else { continue };
+                let Some(Command::AddWebVideo { url, poster_base64, alt, found, poster_png, .. }) = cmds.get_mut(*i) else { continue };
                 let started = std::time::Instant::now();
                 let c = checker.check(url).map_err(link_error)?;
                 *found = Some(zebra_core::LinkFound { kind: c.kind, width: c.width, height: c.height, duration: c.duration });
@@ -970,7 +970,7 @@ fn fetch_web(call: &mut Call, tasks: &[WebTask], files: &mut Vec<std::path::Path
                     let png = c.poster.clone().or_else(|| {
                         (c.kind == zebra_core::LinkKind::File && !left.is_zero()).then(|| backend.poster_png_url(url, at, 1280, left).ok()).flatten()
                     });
-                    *poster_base64 = png.map(|p| base64::engine::general_purpose::STANDARD.encode(p));
+                    *poster_png = png.map(zebra_core::PosterBytes);
                 }
                 if alt.trim().is_empty() {
                     *alt = c.title.clone().unwrap_or_default();

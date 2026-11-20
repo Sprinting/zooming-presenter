@@ -217,6 +217,10 @@ pub enum Command {
         /// What checking the link found. Zebra fills it in; leave it out.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         found: Option<LinkFound>,
+        /// A poster already in memory (the check's frame or the site's
+        /// thumbnail), instead of `poster_base64`. Not part of the API.
+        #[serde(skip)]
+        poster_png: Option<PosterBytes>,
     },
     /// Keep a web video's clip in the deck: it becomes an ordinary video
     /// in the same place, with the same size, poster, trim and settings,
@@ -616,6 +620,18 @@ fn d_connector_width() -> f64 {
 }
 
 /// One end of a new connector: stuck to `element`, or at world x, y.
+/// A web video's poster picture (PNG or JPEG) handed to
+/// [`Command::AddWebVideo`] by Zebra itself. Its debug form is its size,
+/// not its bytes.
+#[derive(Clone, PartialEq)]
+pub struct PosterBytes(pub Vec<u8>);
+
+impl std::fmt::Debug for PosterBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PosterBytes({} bytes)", self.0.len())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
 pub struct EndSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]

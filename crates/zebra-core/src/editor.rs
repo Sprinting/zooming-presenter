@@ -1369,7 +1369,7 @@ impl Editor {
                 e.transform.scale = world_w / nw;
                 out.changed.push(id);
             }
-            Command::AddWebVideo { url, x, y, width, alt, poster_base64, autoplay, looping, muted, start, end, id, found } => {
+            Command::AddWebVideo { url, x, y, width, alt, poster_base64, autoplay, looping, muted, start, end, id, found, poster_png } => {
                 let (u, site) = crate::weblink::classify(&url).map_err(link_error)?;
                 // The site decides a card; checking the link decides the rest.
                 let kind = match (site.kind(), &found) {
@@ -1377,10 +1377,17 @@ impl Editor {
                     (None, Some(f)) if !f.kind.is_card() => f.kind,
                     (None, _) => crate::weblink::guess_kind(&u, &site),
                 };
-                let poster = match poster_base64.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-                    Some(p) => {
-                        web_poster_fits(p)?;
-                        Some(self.load_media(p, None, MediaKind::Image)?.0)
+                // Checked from its header, then kept like any picture
+                // (spilled to a mapped file when it is big enough).
+                let png = match (poster_png, poster_base64.as_deref().map(str::trim).filter(|p| !p.is_empty())) {
+                    (Some(b), _) => Some(b.0),
+                    (None, Some(p)) => Some(decode_web_poster(p)?),
+                    (None, None) => None,
+                };
+                let poster = match png {
+                    Some(b) => {
+                        web_poster_fits(&b)?;
+                        Some(self.add_asset(b)?)
                     }
                     None => None,
                 };
@@ -3619,31 +3626,35 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
     Ok(())
 }
 
-/// A web video link's problem as an API error, with the sheet's words.
 /// Most of a web video's poster, as bytes (`poster_base64` is a third
 /// more).
 pub const WEB_POSTER_MAX_BYTES: usize = 8 * 1024 * 1024;
 
-/// A web video's poster within its limits: at most 8 MB, and a picture
-/// within `weblink::poster_fits`, read from its header before anything is
-/// decoded.
-fn web_poster_fits(b64: &str) -> ZResult<()> {
+/// `poster_base64` as bytes, refused before decoding when it is too long.
+fn decode_web_poster(b64: &str) -> ZResult<Vec<u8>> {
     if b64.len() > WEB_POSTER_MAX_BYTES.div_ceil(3) * 4 + 4 {
         return Err(ZError::new("too_large", "poster_base64 is over 8 MB").hint("use a JPEG or PNG under 8 MB"));
     }
-    let bytes = base64::engine::general_purpose::STANDARD
+    base64::engine::general_purpose::STANDARD
         .decode(b64)
-        .map_err(|e| ZError::invalid(format!("poster_base64 is not valid base64: {e}")))?;
+        .map_err(|e| ZError::invalid(format!("poster_base64 is not valid base64: {e}")))
+}
+
+/// A web video's poster within its limits: at most 8 MB, and a picture
+/// within `weblink::poster_fits`, read from its header before anything is
+/// decoded.
+fn web_poster_fits(bytes: &[u8]) -> ZResult<()> {
     if bytes.len() > WEB_POSTER_MAX_BYTES {
-        return Err(ZError::new("too_large", "poster_base64 is over 8 MB").hint("use a JPEG or PNG under 8 MB"));
+        return Err(ZError::new("too_large", "the poster is over 8 MB").hint("use a JPEG or PNG under 8 MB"));
     }
-    let (_, w, h) = image_info(&bytes)?;
+    let (_, w, h) = image_info(bytes)?;
     if !crate::weblink::poster_fits(w, h) {
         return Err(ZError::new("too_large", format!("the poster is {w}x{h}; it can be at most 8192 pixels a side and 40 million in all")).hint("use a smaller picture"));
     }
     Ok(())
 }
 
+/// A web video link's problem as an API error, with the sheet's words.
 fn link_error(e: crate::weblink::LinkError) -> ZError {
     ZError::new(e.code(), e.message())
 }

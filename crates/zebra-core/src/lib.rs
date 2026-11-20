@@ -36,7 +36,7 @@ pub mod view;
 pub mod weblink;
 
 pub use camera::{Camera, CameraFlight};
-pub use command::{Command, ElementPatch, LinkFound, NewElement, Query, QueryResult, ViewCommand, ZOrderOp};
+pub use command::{Command, ElementPatch, LinkFound, PosterBytes, NewElement, Query, QueryResult, ViewCommand, ZOrderOp};
 pub use editor::{command_label, Editor, FontFace, HistoryEntry, Labeler, Origin, Outcome, Phrase, Prepared, TextMeasure};
 pub use error::{ZError, ZResult};
 pub use geom::{Rect, Transform, Vec2};
