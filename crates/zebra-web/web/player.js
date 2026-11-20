@@ -195,12 +195,29 @@ function sync() {
   duck();
 }
 
+// A web video's link the browser can play here: files always try; an HLS
+// stream only where the browser plays HLS itself (Safari).
+function webSource(info) {
+  if (!info.link || !/^https:\/\//i.test(info.link)) return null;
+  if (info.kind === 'file') return info.link;
+  if (info.kind === 'stream' || info.kind === 'live') {
+    var t = document.createElement('video');
+    return t.canPlayType('application/vnd.apple.mpegurl') ? info.link : null;
+  }
+  return null;
+}
+// A link that can't play in the page: the poster stays, a click opens it.
+function openLink(info) {
+  if (info.link && /^https:\/\//i.test(info.link)) window.open(info.link, '_blank', 'noopener');
+}
 function videoFor(id) {
   if (videos[id]) return videos[id];
   var info = M.videos[id];
-  if (!info || !media[info.asset]) return null;
+  if (!info) return null;
+  var src = info.link ? webSource(info) : media[info.asset];
+  if (!src || info.failed) return null;
   var v = document.createElement('video');
-  v.src = media[info.asset];
+  v.src = src;
   v.playsInline = true;
   v.setAttribute('playsinline', '');
   v.preload = 'auto';
@@ -216,6 +233,17 @@ function videoFor(id) {
   });
   v.addEventListener('play', playingChanged);
   v.addEventListener('pause', playingChanged);
+  if (info.link) {
+    // Not allowed or gone: back to the poster; the next click opens it.
+    v.addEventListener('error', function () {
+      info.failed = true;
+      v.pause();
+      v.classList.remove('on');
+      v.remove();
+      delete videos[id];
+      playingChanged();
+    });
+  }
   mediaLayer.appendChild(v);
   videos[id] = v;
   return v;
@@ -233,9 +261,42 @@ function playVideo(id) {
   wake();
 }
 function toggleVideo(id) {
+  var info = M.videos[id];
+  if (info && info.embed) { openCard(info); return; }
   var v = videoFor(id);
-  if (!v) return;
+  if (!v) { if (info) openLink(info); return; }
   if (v.paused) playVideo(id); else v.pause();
+}
+// A YouTube or Vimeo card: the site's own embed player over a dimmed
+// page. Esc, a click outside or the close button closes it.
+var card = null;
+function openCard(info) {
+  if (card || !/^https:\/\/(www\.youtube-nocookie\.com|player\.vimeo\.com)\//.test(info.embed)) return;
+  card = document.createElement('div');
+  card.id = 'zw-card';
+  var box = document.createElement('div');
+  var f = document.createElement('iframe');
+  f.src = info.embed;
+  f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+  f.allowFullscreen = true;
+  f.referrerPolicy = 'strict-origin-when-cross-origin';
+  f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox');
+  if (info.alt) f.title = info.alt;
+  var x = document.createElement('button');
+  x.textContent = '\u00d7';
+  x.setAttribute('aria-label', L.close);
+  x.addEventListener('click', closeCard);
+  box.appendChild(f);
+  box.appendChild(x);
+  card.appendChild(box);
+  card.addEventListener('click', function (e) { if (e.target === card) closeCard(); });
+  document.body.appendChild(card);
+  f.focus();
+}
+function closeCard() {
+  if (!card) return;
+  card.remove();
+  card = null;
 }
 function playingChanged() {
   var ids = Object.keys(videos).filter(function (id) { return !videos[id].paused; });
@@ -332,6 +393,8 @@ function active() {
 
 function bind() {
   window.addEventListener('keydown', function (e) {
+    // An open card's player has every key but Esc, which closes it.
+    if (card) { if (e.key === 'Escape') { e.preventDefault(); closeCard(); } return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     var c = null;
     switch (e.key) {

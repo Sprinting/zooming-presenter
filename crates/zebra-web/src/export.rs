@@ -36,6 +36,8 @@ pub struct Labels {
     pub pause: String,
     /// Shown if the browser can't run the player.
     pub unsupported: String,
+    /// A video card's close button (for screen readers).
+    pub close: String,
 }
 
 impl Default for Labels {
@@ -49,6 +51,7 @@ impl Default for Labels {
             play: "Play".into(),
             pause: "Pause".into(),
             unsupported: "This browser can't show this presentation. Try a current Safari, Chrome or Firefox.".into(),
+            close: "Close".into(),
         }
     }
 }
@@ -189,10 +192,20 @@ pub fn build(renderer: &Renderer, editor: &Editor, labels: &Labels, inline_limit
         .elements
         .values()
         .filter_map(|e| match &e.kind {
-            ElementKind::Video(v) => Some((
-                e.id.as_str(),
-                json!({"asset": v.asset, "loop": v.looping, "muted": v.muted, "start": v.start, "end": v.end, "alt": v.alt, "poster": v.poster}),
-            )),
+            ElementKind::Video(v) => {
+                let mut j = json!({"asset": v.asset, "loop": v.looping, "muted": v.muted, "start": v.start, "end": v.end, "alt": v.alt, "poster": v.poster});
+                // A web video plays from its link where the browser can
+                // (else its poster stays, and a click opens the link); a
+                // card opens its site's own embed player.
+                if let Some(l) = &v.link {
+                    j["link"] = json!(l.url);
+                    j["kind"] = json!(l.kind);
+                    if l.kind.is_card() {
+                        j["embed"] = json!(zebra_core::weblink::embed_url(l, v.start, v.end, true, None));
+                    }
+                }
+                Some((e.id.as_str(), j))
+            }
             _ => None,
         })
         .collect();

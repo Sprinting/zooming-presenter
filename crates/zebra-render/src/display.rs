@@ -851,6 +851,26 @@ impl Ctx<'_> {
                 if !playing {
                     play_badge(items, &lr, a);
                 }
+                if let Some(link) = v.link.as_ref().filter(|l| l.kind.is_card()) {
+                    // A video card: the site's name at the bottom left, and
+                    // how far it was watched along the bottom edge.
+                    let name = zebra_core::weblink::site_name(link);
+                    let t = zebra_core::TextData { text: name, style: zebra_core::TextStyle::Body, bold: true, ..Default::default() };
+                    let layout = self.r.fonts.layout(&t, th, None);
+                    let (lw, lh) = (layout.width.max(1e-9), layout.height.max(1e-9));
+                    let k = (h * 0.055).max(1e-9) / lh;
+                    let pad = h * 0.03;
+                    let (bw, bh) = (lw * k + pad * 1.4, lh * k + pad * 0.6);
+                    let (x0, y1) = (lr.x0 + pad, lr.y1 - pad);
+                    fill(items, &RoundedRect::new(x0, y1 - bh, x0 + bw, y1, bh * 0.22), a, [0, 0, 0, 150]);
+                    let transform = *a * Affine::translate((x0 + pad * 0.7, y1 - bh + pad * 0.3)) * Affine::scale(k);
+                    items.push(Item::Text { layout, transform, color: [255, 255, 255, 240], run_colors: Arc::from([]) });
+                    if let Some(f) = self.o.card_progress.get(&e.id).filter(|f| f.is_finite() && **f > 0.0) {
+                        let line = (h * 0.012).max(1e-9);
+                        fill(items, &Rect::new(lr.x0, lr.y1 - line, lr.x1, lr.y1), a, [255, 255, 255, 90]);
+                        fill(items, &Rect::new(lr.x0, lr.y1 - line, lr.x0 + w * f.min(1.0) as f64, lr.y1), a, [255, 59, 48, 255]);
+                    }
+                }
             }
             ElementKind::Ink(ink) => {
                 if ink.points.is_empty() {
