@@ -287,6 +287,9 @@ impl Editor {
 fn fit_text(ed: &Editor, theme: &crate::Theme, e: &mut Element, b: SourceBox) {
     let ElementKind::Text(t) = &e.kind else { return };
     let align = t.align;
+    // Text that sizes itself aligns its paragraphs within its widest line;
+    // the source aligned them within its box.
+    let mixed = !t.fixed_width && t.paras.iter().any(|p| p.align.is_some_and(|a| a != align));
     crate::editor::measure_text(&*ed.measure, theme, e);
     let src_w = (b.x1 - b.x0).max(1.0);
     let w = e.size.w * e.transform.scale;
@@ -294,6 +297,16 @@ fn fit_text(ed: &Editor, theme: &crate::Theme, e: &mut Element, b: SourceBox) {
     // more and the text is made smaller so lines stay where they were.
     if w > src_w * 1.04 && w > 0.0 {
         e.transform.scale *= src_w * 1.04 / w;
+    }
+    if mixed {
+        // As wide as the box (or its widest line, a hair over the box), so
+        // a centred line is centred on the box and a right-aligned one
+        // ends at its right edge. Nothing rewraps: every line fits.
+        e.size.w = (src_w / e.transform.scale).max(e.size.w * 1.001);
+        if let ElementKind::Text(t) = &mut e.kind {
+            t.fixed_width = true;
+        }
+        crate::editor::measure_text(&*ed.measure, theme, e);
     }
     if e.transform.rotation.abs() > 0.5 {
         // Turned text keeps its centre.

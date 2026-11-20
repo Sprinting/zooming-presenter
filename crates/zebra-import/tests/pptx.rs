@@ -251,6 +251,20 @@ fn on_the_canvas_slides_are_frames_with_steps_and_one_undo_removes_them() {
         let slide = ed.doc.elements.values().find(|f| matches!(&f.kind, ElementKind::Frame(fd) if fd.slide) && ed.doc.frame_contents(&f.id).contains(&e.id));
         assert!(slide.is_some(), "{:?} outside its slide", e.kind);
     }
+    // A box that doesn't wrap, with a left-aligned and a centred line: the
+    // centred line is centred on the box (8 inches from 1 inch, inset 0.1
+    // inch each side), not on the longer line above it.
+    let slide3 = ed.doc.elements.values().find(|f| f.name == "Slide 3").unwrap();
+    let left = slide3.transform.x - slide3.size.w / 2.0;
+    let runs = ed.doc.elements.values().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text.starts_with("Bold "))).unwrap();
+    let ElementKind::Text(t) = &runs.kind else { unreachable!() };
+    assert!(t.fixed_width && t.paras[1].align == Some(Align::Center));
+    let inch = 1000.0 / 13.333;
+    assert!((runs.transform.x - (left + 5.0 * inch)).abs() < 0.5, "{} vs {}", runs.transform.x, left + 5.0 * inch);
+    assert!((runs.size.w * runs.transform.scale - 7.8 * inch).abs() < 0.5, "{}", runs.size.w * runs.transform.scale);
+    // One alignment throughout: the text still sizes itself.
+    let big = ed.doc.elements.values().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text == "Big words")).unwrap();
+    assert!(matches!(&big.kind, ElementKind::Text(t) if !t.fixed_width));
     assert_eq!(ed.undo_label().as_deref(), Some("Import deck16x9.pptx (You)"));
     ed.undo(Origin::Human).unwrap();
     assert_eq!(ed.doc.elements, before.elements);
