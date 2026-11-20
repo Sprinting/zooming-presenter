@@ -259,3 +259,39 @@ fn edge_tolerance_matches_brute_force() {
     assert_eq!(ed.frame_contents("f"), vec!["s".to_string()]);
     assert_eq!(ed.frame_contents("f"), ed.doc.frame_contents("f"));
 }
+
+/// H3 of the 20 Nov audit: a frame holding a big group judged the whole
+/// group again for every member (20k members took over a minute in
+/// release for frame_contents, moving the frame and parent_frames).
+#[test]
+fn a_big_group_in_a_frame_is_judged_once() {
+    let mut ed = Editor::default();
+    ed.apply(cmd(json!({"op":"add_frame","id":"f","x":0,"y":0,"w":100000,"h":100000})), H).unwrap();
+    ed.apply(cmd(json!({"op":"add_shape","id":"s","shape":"rectangle","x":0,"y":0,"w":10,"h":10})), H).unwrap();
+    let one = ed.doc.get("s").unwrap().clone();
+    let n = 5_000;
+    for i in 0..n {
+        let mut e = one.clone();
+        e.id = format!("m{i}");
+        e.transform.x = (i % 100) as f64 * 20.0 - 1000.0;
+        e.transform.y = (i / 100) as f64 * 20.0 - 1000.0;
+        e.group = Some("g".into());
+        ed.doc.z_order.push(e.id.clone());
+        ed.doc.elements.insert(e.id.clone(), e);
+    }
+    ed.reindex();
+    let at = std::time::Instant::now();
+    assert_eq!(ed.frame_contents("f").len(), n + 1);
+    assert_eq!(ed.doc.frame_contents("f").len(), n + 1);
+    assert_eq!(ed.parent_frames().len(), n + 1);
+    assert_eq!(ed.parent_frame("m7").as_deref(), Some("f"));
+    let took = at.elapsed();
+    eprintln!("{n} members: {took:?}");
+    assert!(took.as_secs_f32() < 10.0, "took {took:?}");
+    // One member outside: the frame holds none of the group.
+    ed.doc.elements.get_mut("m0").unwrap().transform.x = 1e7;
+    ed.reindex();
+    assert_eq!(ed.frame_contents("f"), vec!["s".to_string()]);
+    assert_eq!(ed.doc.frame_contents("f"), vec!["s".to_string()]);
+    assert!(ed.parent_frames().get("m7").is_none());
+}

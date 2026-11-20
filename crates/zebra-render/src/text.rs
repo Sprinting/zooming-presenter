@@ -390,7 +390,25 @@ impl Fonts {
         if let Some(l) = g.cache.get(&key) {
             return l.clone();
         }
-        let l = Arc::new(do_layout(&mut g, &key, style.size as f32));
+        // parley panics on what it can't hold (more than 65,535 styles in a
+        // paragraph, audit of 20 Nov C5), and this runs on the UI thread:
+        // a text it can't lay out is laid out plain, else left empty.
+        let size = style.size as f32;
+        let l = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| do_layout(&mut g, &key, size)))
+            .or_else(|_| {
+                let plain = Key { spans: vec![], ..key.clone() };
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| do_layout(&mut g, &plain, size)))
+            })
+            .unwrap_or_else(|_| TextLayout {
+                text: Arc::from(""),
+                width: 0.0,
+                height: 0.0,
+                runs: vec![],
+                formats: vec![],
+                decorations: vec![],
+                links: vec![],
+            });
+        let l = Arc::new(l);
         g.misses += 1;
         if g.cache.len() >= CACHE_HARD_LIMIT {
             // Nobody is marking frames: start a new generation ourselves.
@@ -811,12 +829,18 @@ const BULLETS: [&str; 3] = ["\u{2022}", "\u{25E6}", "\u{25AA}"];
 
 /// Lays out each paragraph on its own (so each can have its own indent,
 /// list marker and alignment) and stacks them.
+/// Style changes pushed to parley for one paragraph, under its 65,535.
+const MAX_STYLE_PUSHES: usize = 60_000;
+/// Spans a text can format: a span's brush holds its index + 1 in a u16.
+const MAX_BRUSH_SPANS: usize = u16::MAX as usize - 1;
+
 fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
     let t = data_of(key);
     let Inner { font_cx, layout_cx, fallbacks, .. } = g;
     let wrap = key.wrap_bits.map(|b| f64::from_bits(b) as f32);
     let paras: Vec<&str> = t.text.split('\n').collect();
     let formats: Vec<SpanFormat> = t.spans.iter().map(|s| s.format.clone()).collect();
+    let spans_sorted = t.spans.windows(2).all(|w| w[0].end <= w[1].start);
 
     // Paragraph text with its list marker, and where the text starts.
     struct P {
@@ -874,11 +898,24 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
             b.push_default(StyleProperty::FontStyle(FontStyle::Italic));
         }
         let pchars = p.text[p.marker_len..].chars().count();
-        for (si, s) in t.spans.iter().enumerate() {
+        // parley holds at most 65,535 styles in a paragraph, and a span's
+        // brush holds its index in a u16: past either, the characters keep
+        // the box's own style. Sorted spans (normalized, as open and every
+        // edit leave them) start at the first that reaches this paragraph.
+        let first = if spans_sorted { t.spans.partition_point(|s| s.end <= p.char0) } else { 0 };
+        let mut pushes = 0;
+        for (si, s) in t.spans.iter().enumerate().skip(first).take(MAX_BRUSH_SPANS.saturating_sub(first)) {
+            if spans_sorted && s.start >= p.char0 + pchars {
+                break;
+            }
             let (a, z) = (s.start.max(p.char0), s.end.min(p.char0 + pchars));
             if a >= z {
                 continue;
             }
+            if pushes + 4 > MAX_STYLE_PUSHES {
+                break;
+            }
+            pushes += 4;
             let body = &p.text[p.marker_len..];
             let r = p.marker_len + rich::byte_at(body, a - p.char0)..p.marker_len + rich::byte_at(body, z - p.char0);
             let f = &s.format;
@@ -895,7 +932,7 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
             let n = (si + 1) as u16;
             b.push(StyleProperty::Brush([n as u8, (n >> 8) as u8, 0, 0]), r);
         }
-        for (r, fams) in extra {
+        for (r, fams) in extra.iter().take(MAX_STYLE_PUSHES.saturating_sub(pushes)) {
             let list: Vec<FontFamilyName> =
                 std::iter::once(&key.family).chain(fams).map(|f| FontFamilyName::named(f)).collect();
             b.push(StyleProperty::FontFamily(FontFamily::List(list.into())), r.clone());
@@ -1060,6 +1097,34 @@ pub fn wrap_for(t: &TextData, size_w: f64) -> Option<f64> {
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+
+    /// C5 of the 20 Nov audit: more than 65,535 formatted spans in a text
+    /// panicked parley ("too many styles") on the UI thread. Past what
+    /// parley holds the characters keep the box's style; the rest is laid
+    /// out as before.
+    #[test]
+    fn a_text_with_70000_spans_lays_out() {
+        let fonts = Fonts::new();
+        let theme = Theme::by_id("classic").unwrap();
+        let n = 70_000;
+        let mut t = TextData { text: "ab".repeat(n), ..Default::default() };
+        t.spans = (0..n)
+            .map(|i| zebra_core::model::TextSpan {
+                start: 2 * i,
+                end: 2 * i + 1,
+                format: SpanFormat { bold: Some(true), italic: Some(i % 2 == 0), ..Default::default() },
+            })
+            .collect();
+        let l = fonts.layout(&t, &theme, Some(2000.0));
+        assert!(!l.runs.is_empty() && l.height > 0.0);
+        // Many paragraphs, each formatted, still lay out in one pass.
+        let mut t = TextData { text: vec!["ab"; n].join("\n"), ..Default::default() };
+        t.spans = (0..n).map(|i| zebra_core::model::TextSpan { start: 3 * i, end: 3 * i + 1, format: SpanFormat { bold: Some(true), ..Default::default() } }).collect();
+        let at = std::time::Instant::now();
+        let l = fonts.layout(&t, &theme, None);
+        assert!(l.height > 0.0);
+        assert!(at.elapsed().as_secs() < 60, "took {:?}", at.elapsed());
+    }
 
     /// W8: above the soft limit every miss counted as a frame and threw
     /// out nearly the whole cache, so each text was laid out again on

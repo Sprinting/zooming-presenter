@@ -266,7 +266,11 @@ pub fn tick(app: &mut ZebraApp) {
             false
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => true,
-        Err(_) => false,
+        // The worker died without a word: say so, not nothing.
+        Err(_) => {
+            msgs.push(crate::t!("export-toast-failed", error = crate::t!("export-error-unexpected")));
+            false
+        }
     });
     for m in msgs {
         app.toast(m);
@@ -278,7 +282,10 @@ pub fn tick(app: &mut ZebraApp) {
             false
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => true,
-        Err(_) => false,
+        Err(_) => {
+            pages.push(Err(crate::t!("export-error-unexpected")));
+            false
+        }
     });
     for r in pages {
         match r {
@@ -725,6 +732,10 @@ pub fn paste_from_system(app: &mut ZebraApp) -> bool {
     if let Ok(text) = c.get_text() {
         if app.clipboard_marker.as_deref() == Some(text.as_str()) {
             return false;
+        }
+        if zebra_core::rich::too_long_to_insert(&text) {
+            app.toast(crate::t!("paste-too-long"));
+            return true;
         }
         if !text.trim().is_empty() {
             let cmd = Command::AddText { text, x: at.x, y: at.y, style: Default::default(), scale: Some(1.0 / app.editor.view.camera.zoom), place: None, id: None, on: None, color: None };

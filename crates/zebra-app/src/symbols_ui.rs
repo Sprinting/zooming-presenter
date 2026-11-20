@@ -60,7 +60,9 @@ impl Symbols {
         let wake = ctx.clone();
         let _ = std::thread::Builder::new().name("zebra-symbol-tiles".into()).spawn(move || {
             while let Ok(job) = jrx.recv() {
-                let img = library().and_then(|lib| draw_tile(lib, job.0, job.1));
+                // A symbol that panics the renderer gets no tile; the
+                // thread lives on for the others.
+                let img = crate::files::caught(|| library().and_then(|lib| draw_tile(lib, job.0, job.1))).flatten();
                 if rtx.send((job, img)).is_err() {
                     return;
                 }

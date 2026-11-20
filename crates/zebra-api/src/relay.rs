@@ -14,6 +14,8 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -24,7 +26,8 @@ use crate::client::Client;
 pub const IDLE: Duration = Duration::from_secs(10 * 60);
 
 /// The relay socket for `name` on the Zebra instance at `zebra_socket`:
-/// next to it, named from the instance and a hash of the agent name.
+/// next to it, named from the instance and a 64-bit hash of the agent
+/// name (32 bits let two agent names share one relay; audit L5).
 pub fn socket_for(zebra_socket: &Path, name: &str) -> PathBuf {
     // FNV-1a: stable across runs and builds (unlike DefaultHasher).
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -33,8 +36,27 @@ pub fn socket_for(zebra_socket: &Path, name: &str) -> PathBuf {
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
     let stem = zebra_socket.file_stem().and_then(|s| s.to_str()).unwrap_or("zebra");
-    zebra_socket.with_file_name(format!("{stem}.agent{:08x}.sock", h as u32))
+    zebra_socket.with_file_name(format!("{stem}.agent{h:016x}.sock"))
 }
+
+/// Connect to the relay at `relay_socket` and say hello, checking it is
+/// the relay for `name`: should two names ever share a socket, the call
+/// goes elsewhere instead of acting as the other agent.
+pub fn connect(relay_socket: &Path, name: &str, token: &str) -> Result<Client, crate::client::ClientError> {
+    let mut c = Client::connect(relay_socket)?;
+    let v = c.call("hello", json!({ "name": name, "token": token }))?;
+    if v.get("relay").and_then(Value::as_bool) != Some(true) || v.get("name").and_then(Value::as_str) != Some(name) {
+        return Err(crate::client::ClientError::Io(std::io::Error::other(format!("{} is not the relay for {name:?}", relay_socket.display()))));
+    }
+    Ok(c)
+}
+
+/// A zebractl process that sends nothing (or reads nothing) for this long
+/// is dropped; the others go on.
+pub const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Most zebractl processes served at once; more are turned away (and fall
+/// back to their own connection).
+pub const MAX_CLIENTS: usize = 16;
 
 /// Run the relay in this process until Zebra goes away or it idles out.
 pub fn run(zebra_socket: &Path, token: &str, name: &str, relay_socket: &Path) -> anyhow::Result<()> {
@@ -52,19 +74,51 @@ pub fn run(zebra_socket: &Path, token: &str, name: &str, relay_socket: &Path) ->
     use std::os::fd::AsRawFd;
     let lfd = listener.as_raw_fd();
     let _cleanup = RemoveOnDrop(relay_socket.to_path_buf());
+    // Each zebractl process is served on its own thread, so one that
+    // connects and says nothing stalls only itself; their calls share the
+    // one upstream connection in turn.
+    let upstream = Arc::new(Mutex::new(upstream));
+    let active = Arc::new(AtomicUsize::new(0));
+    let gone = Arc::new(AtomicBool::new(false));
+    let (token, name) = (Arc::<str>::from(token), Arc::<str>::from(name));
     let mut last = Instant::now();
     loop {
+        if gone.load(Ordering::SeqCst) {
+            return Ok(()); // Zebra closed our connection
+        }
         match listener.accept() {
             Ok((stream, _)) => {
-                stream.set_nonblocking(false)?;
-                if serve(stream, &mut upstream, token, name).is_err() {
-                    // Zebra closed our connection.
-                    return Ok(());
-                }
                 last = Instant::now();
+                // On macOS an accepted socket inherits the listener's
+                // O_NONBLOCK; a read could then fail before the request
+                // arrives. Blocking, with timeouts, instead.
+                if stream.set_nonblocking(false).is_err()
+                    || stream.set_read_timeout(Some(CLIENT_TIMEOUT)).is_err()
+                    || stream.set_write_timeout(Some(CLIENT_TIMEOUT)).is_err()
+                    || active.load(Ordering::SeqCst) >= MAX_CLIENTS
+                {
+                    continue; // dropped: that zebractl connects directly
+                }
+                active.fetch_add(1, Ordering::SeqCst);
+                let (up, act, gone2, tok, nm) = (upstream.clone(), active.clone(), gone.clone(), token.clone(), name.clone());
+                let spawned = std::thread::Builder::new().name("zebractl-relay-client".into()).spawn(move || {
+                    if serve(stream, &up, &tok, &nm).is_err() {
+                        gone2.store(true, Ordering::SeqCst);
+                    }
+                    act.fetch_sub(1, Ordering::SeqCst);
+                });
+                if spawned.is_err() {
+                    active.fetch_sub(1, Ordering::SeqCst);
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                if last.elapsed() > IDLE || upstream_closed(&upstream) {
+                let busy = active.load(Ordering::SeqCst) > 0;
+                if busy {
+                    last = Instant::now();
+                }
+                // A call in progress holds the connection: it isn't closed.
+                let closed = upstream.try_lock().map(|u| upstream_closed(&u)).unwrap_or(false);
+                if (!busy && last.elapsed() > IDLE) || closed {
                     return Ok(());
                 }
                 // Sleep until a zebractl call connects; wake once a second
@@ -92,7 +146,7 @@ impl Drop for RemoveOnDrop {
 
 /// Answer one zebractl process: its `hello` locally (the relay already
 /// said hello), everything else forwarded. Err = Zebra is gone.
-fn serve(stream: UnixStream, upstream: &mut Client, token: &str, name: &str) -> Result<(), ()> {
+fn serve(stream: UnixStream, upstream: &Mutex<Client>, token: &str, name: &str) -> Result<(), ()> {
     let mut reader = BufReader::new(match stream.try_clone() {
         Ok(s) => s,
         Err(_) => return Ok(()),
@@ -105,7 +159,9 @@ fn serve(stream: UnixStream, upstream: &mut Client, token: &str, name: &str) -> 
     loop {
         line.clear();
         match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => return Ok(()), // the zebractl process finished
+            // The zebractl process finished, or said nothing for
+            // CLIENT_TIMEOUT.
+            Ok(0) | Err(_) => return Ok(()),
             Ok(_) => {}
         }
         let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else { continue };
@@ -126,7 +182,8 @@ fn serve(stream: UnixStream, upstream: &mut Client, token: &str, name: &str) -> 
         } else if !authed {
             unauthenticated(&id)
         } else {
-            match upstream.raw(msg) {
+            let r = upstream.lock().unwrap_or_else(|e| e.into_inner()).raw(msg);
+            match r {
                 Ok(v) => v,
                 Err(crate::client::ClientError::Rpc(e)) => json!({"jsonrpc": "2.0", "id": id, "error": e.to_json()}),
                 Err(_) => return Err(()),

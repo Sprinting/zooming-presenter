@@ -227,3 +227,34 @@ fn an_imported_pdf_page_plays_from_its_picture_without_the_pdf() {
     assert_eq!(ed.doc, before);
     assert_eq!(ed.doc.assets[&pic_key].width, 64);
 }
+
+/// Hostile-input audit L1 (and R1): only http, https and mailto links are
+/// handed to the page to open; a `javascript:` link from an imported deck
+/// is a plain click.
+#[test]
+fn only_web_and_mail_links_open() {
+    let r = Renderer::new();
+    for (url, opens) in [("https://example.com", true), ("MAILTO:a@b.c", true), ("javascript:alert(1)", false), (" JavaScript:alert(1)", false), ("data:text/html,x", false), ("file:///etc/passwd", false)] {
+        let mut ed = deck(&r);
+        let f: zebra_core::Command = serde_json::from_value(serde_json::json!({"op":"format_text","id":"t1","find":"Hello web","format":{"link":url}})).unwrap();
+        ed.apply(f, H).unwrap();
+        let mut p = player_for(&r, &ed);
+        let mut t = 0.0;
+        settle(&mut p, &mut t);
+        let c = ed.camera_for_step(0);
+        let at = c.world_to_screen(zebra_core::Vec2::new(0.0, -200.0), zebra_core::Vec2::new(640.0, 400.0));
+        let got = p.click(at.x, at.y);
+        assert_eq!(matches!(got, Click::Link(_)), opens, "{url}: {got:?}");
+    }
+}
+
+/// Audit R1, player side: the page script itself opens only http, https
+/// and mailto links, whatever the player hands it.
+#[test]
+fn the_page_script_checks_the_scheme_before_opening() {
+    let js = include_str!("../web/player.js");
+    assert!(js.contains("function safeLink(u) { return /^\\s*(https?:\\/\\/|mailto:)/i.test(u); }"), "allow-list present");
+    for line in js.lines().filter(|l| l.contains("window.open(")) {
+        assert!(line.contains("safeLink("), "every window.open is behind safeLink: {line}");
+    }
+}

@@ -295,6 +295,9 @@ impl Shell {
                 w.untitled_no = self.untitled_seq;
             }
         }
+        for w in &mut self.windows {
+            w.untitled_floor = self.untitled_seq.max(1);
+        }
         let mut spawn = vec![];
         for w in &mut self.windows {
             spawn.append(&mut w.spawn);
@@ -673,6 +676,14 @@ impl eframe::App for Shell {
                 }
                 _ => self.tab_into = None,
             }
+        }
+    }
+
+    /// A clean quit: no reopened document crashed the app, so none is
+    /// asked about at the next launch.
+    fn on_exit(&mut self) {
+        for w in &mut self.windows {
+            w.clear_opening_marker(true);
         }
     }
 

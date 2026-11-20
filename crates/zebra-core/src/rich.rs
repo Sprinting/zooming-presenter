@@ -19,6 +19,48 @@ fn char_len(s: &str) -> usize {
     s.chars().count()
 }
 
+/// Most characters one paste or insert puts into a text box. More is
+/// refused whole (a note says it is too long for one box), not cut: a
+/// megabyte of text in one box laid out on every frame froze the window.
+pub const MAX_INSERT_CHARS: usize = 100_000;
+
+/// Whether `text` is more than one paste may put into a box.
+pub fn too_long_to_insert(text: &str) -> bool {
+    // Counting stops past the limit: a 1 GB paste isn't walked twice.
+    text.chars().nth(MAX_INSERT_CHARS).is_some()
+}
+
+/// The error for an agent's command that would put more than
+/// [`MAX_INSERT_CHARS`] into one text box at once: `add_text`, an `update`
+/// whose text grows by more, or `add_element` with such a text. None for
+/// everything else. `doc` is where an update's box is now.
+pub fn insert_error(cmd: &crate::command::Command, doc: &crate::model::Document) -> Option<crate::error::ZError> {
+    use crate::command::Command;
+    use crate::model::ElementKind;
+    let (text, before) = match cmd {
+        Command::AddText { text, .. } => (text.as_str(), 0),
+        Command::AddElement { element } => match &element.kind {
+            ElementKind::Text(t) => (t.text.as_str(), 0),
+            _ => return None,
+        },
+        Command::Update { id, patch } => {
+            let text = patch.text.as_deref()?;
+            let before = match doc.get(id).map(|e| &e.kind) {
+                Some(ElementKind::Text(t)) => char_len(&t.text),
+                _ => 0,
+            };
+            (text, before)
+        }
+        _ => return None,
+    };
+    // Counted only as far as needed.
+    let n = text.chars().take(before + MAX_INSERT_CHARS + 1).count();
+    (n > before + MAX_INSERT_CHARS).then(|| {
+        crate::error::ZError::invalid(format!("that adds more than {MAX_INSERT_CHARS} characters to one text box at once"))
+            .hint("split the text into several boxes, or add it in parts")
+    })
+}
+
 /// Merge `top` over `base`: set fields in `top` win; empty strings clear.
 fn overlay(base: &SpanFormat, top: &SpanFormat) -> SpanFormat {
     fn pick<T: Clone>(b: &Option<T>, t: &Option<T>) -> Option<T> {
@@ -54,25 +96,70 @@ fn is_plain(f: &SpanFormat) -> bool {
 /// paragraph count and drops trailing default entries.
 pub fn normalize(t: &mut TextData) {
     let n = char_len(&t.text);
+    // One sorted sweep over the span edges. Overlaying the covering spans in
+    // order is, field by field, "the last span that sets it wins", so each
+    // field keeps the indices of the covering spans that set it and reads
+    // the largest. O(spans log spans); a nested loop was O(spans²), which a
+    // pptx with 100k runs turned into minutes.
+    let live: Vec<(usize, usize, usize)> =
+        t.spans.iter().enumerate().map(|(i, s)| (s.start.min(n), s.end.min(n), i)).filter(|(a, b, _)| a < b).collect();
     let mut cuts: Vec<usize> = vec![0, n];
-    for s in &t.spans {
-        cuts.push(s.start.min(n));
-        cuts.push(s.end.min(n));
+    for &(a, b, _) in &live {
+        cuts.push(a);
+        cuts.push(b);
     }
     cuts.sort_unstable();
     cuts.dedup();
+    let mut starts: Vec<(usize, usize)> = live.iter().map(|&(a, _, i)| (a, i)).collect();
+    let mut ends: Vec<(usize, usize)> = live.iter().map(|&(_, b, i)| (b, i)).collect();
+    starts.sort_unstable();
+    ends.sort_unstable();
+    let sets = |f: &SpanFormat| -> [bool; 7] {
+        [
+            f.bold.is_some(),
+            f.italic.is_some(),
+            f.underline.is_some(),
+            f.strike.is_some(),
+            f.color.is_some(),
+            f.link.is_some(),
+            f.size.is_some(),
+        ]
+    };
+    let mut setters: [std::collections::BTreeSet<usize>; 7] = Default::default();
+    let (mut si, mut ei) = (0, 0);
     let mut out: Vec<TextSpan> = vec![];
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);
-        if a >= b {
-            continue;
-        }
-        let mut f = SpanFormat::default();
-        for s in &t.spans {
-            if s.start.min(n) <= a && s.end.min(n) >= b {
-                f = overlay(&f, &s.format);
+        while ei < ends.len() && ends[ei].0 <= a {
+            let i = ends[ei].1;
+            for (k, on) in sets(&t.spans[i].format).into_iter().enumerate() {
+                if on {
+                    setters[k].remove(&i);
+                }
             }
+            ei += 1;
         }
+        while si < starts.len() && starts[si].0 <= a {
+            let i = starts[si].1;
+            for (k, on) in sets(&t.spans[i].format).into_iter().enumerate() {
+                if on {
+                    setters[k].insert(i);
+                }
+            }
+            si += 1;
+        }
+        let top = |k: usize| setters[k].last().map(|&i| &t.spans[i].format);
+        // The same clean-up `overlay` does: empty strings clear, size 1 is
+        // plain.
+        let f = overlay(&SpanFormat::default(), &SpanFormat {
+            bold: top(0).and_then(|f| f.bold),
+            italic: top(1).and_then(|f| f.italic),
+            underline: top(2).and_then(|f| f.underline),
+            strike: top(3).and_then(|f| f.strike),
+            color: top(4).and_then(|f| f.color.clone()),
+            link: top(5).and_then(|f| f.link.clone()),
+            size: top(6).and_then(|f| f.size),
+        });
         if is_plain(&f) {
             continue;
         }
@@ -294,6 +381,33 @@ pub fn para(t: &TextData, i: usize) -> (ListKind, u8, Align) {
 // ----------------------------------------------------------------------
 // Moving words: drag text out of a box, or to another place in it.
 
+/// `start..end` (characters) widened to whole graphemes, so "e" plus a
+/// combining accent, a flag or a ZWJ family emoji is never cut in two.
+/// A backwards range comes back as it was.
+pub fn whole_graphemes(text: &str, start: usize, end: usize) -> (usize, usize) {
+    use unicode_segmentation::UnicodeSegmentation;
+    if start >= end {
+        return (start, end);
+    }
+    let (mut a, mut b) = (start, end);
+    let mut at = 0;
+    for g in text.graphemes(true) {
+        let next = at + g.chars().count();
+        if at < start && start < next {
+            a = at;
+        }
+        if at < end && end < next {
+            b = next;
+            break;
+        }
+        if next >= end {
+            break;
+        }
+        at = next;
+    }
+    (a, b)
+}
+
 /// The characters `start..end` of `t` as a text of their own, the way a
 /// dragged selection becomes a new box: the box's own settings (style,
 /// colour, alignment, bold, italic, bullets, width mode), the characters'
@@ -301,8 +415,11 @@ pub fn para(t: &TextData, i: usize) -> (ListKind, u8, Align) {
 /// each paragraph wholly inside the range. A part of a paragraph comes out
 /// as a plain paragraph. Spaces and line breaks at either end are dropped.
 pub fn slice(t: &TextData, start: usize, end: usize) -> TextData {
+    let (start, end) = whole_graphemes(&t.text, start, end);
     let chars: Vec<char> = t.text.chars().collect();
-    let (mut a, mut b) = (start.min(chars.len()), end.min(chars.len()));
+    let a = start.min(chars.len());
+    // A backwards range is empty, not a panic.
+    let (mut a, mut b) = (a, end.min(chars.len()).max(a));
     while a < b && chars[a].is_whitespace() {
         a += 1;
     }
@@ -495,6 +612,10 @@ pub fn cut(t: &mut TextData, start: usize, end: usize) -> Vec<(usize, usize)> {
 pub fn move_within(t: &mut TextData, start: usize, end: usize, to: usize, copy: bool) -> Option<(usize, usize)> {
     let n = char_len(&t.text);
     let (start, end, to) = (start.min(n), end.min(n), to.min(n));
+    // Whole graphemes, as `slice` takes them; a drop point inside one goes
+    // to its start.
+    let (start, end) = whole_graphemes(&t.text, start, end);
+    let to = if to < n { whole_graphemes(&t.text, to, to + 1).0 } else { to };
     if start >= end || (start..=end).contains(&to) {
         return None;
     }
@@ -699,6 +820,101 @@ mod tests {
         for part in ["Why **zebras** have *stripes*", "- flies get [confused](https://example.com)", "  - really ~~maybe~~", "1. first", "2. second"] {
             assert!(md.contains(part), "{part} missing from {md}");
         }
+    }
+
+    /// W8 of the 20 Nov audit: `slice` is public, so a backwards range is
+    /// guarded here and not only by its callers.
+    #[test]
+    fn a_backwards_slice_is_empty() {
+        let t = TextData { text: "one\ntwo".into(), ..Default::default() };
+        assert_eq!(slice(&t, 5, 2).text, "");
+        assert_eq!(slice(&t, 99, 0).text, "");
+        assert_eq!(slice(&t, 0, 3).text, "one");
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::*;
+
+    /// The old nested loop, kept as the reference.
+    fn slow(t: &TextData) -> Vec<TextSpan> {
+        let n = char_len(&t.text);
+        let mut cuts: Vec<usize> = vec![0, n];
+        for s in &t.spans {
+            cuts.push(s.start.min(n));
+            cuts.push(s.end.min(n));
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut out: Vec<TextSpan> = vec![];
+        for w in cuts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let mut f = SpanFormat::default();
+            for s in &t.spans {
+                if s.start.min(n) <= a && s.end.min(n) >= b {
+                    f = overlay(&f, &s.format);
+                }
+            }
+            if is_plain(&f) {
+                continue;
+            }
+            match out.last_mut() {
+                Some(last) if last.end == a && last.format == f => last.end = b,
+                _ => out.push(TextSpan { start: a, end: b, format: f }),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_sweep_matches_the_nested_loop() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = |m: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        };
+        for _ in 0..2000 {
+            let mut t = TextData { text: "x".repeat(rnd(30) as usize), ..Default::default() };
+            for _ in 0..rnd(12) {
+                let pick = |r: u64| match r {
+                    0 => None,
+                    1 => Some(false),
+                    _ => Some(true),
+                };
+                let format = SpanFormat {
+                    bold: pick(rnd(3)),
+                    italic: pick(rnd(3)),
+                    underline: pick(rnd(4)),
+                    strike: pick(rnd(5)),
+                    color: [None, Some(""), Some("#ff0000"), Some("accent")][rnd(4) as usize].map(String::from),
+                    link: [None, Some(""), Some("https://a.example")][rnd(3) as usize].map(String::from),
+                    size: [None, Some(1.0), Some(2.0), Some(f64::NAN), Some(-1.0)][rnd(5) as usize],
+                };
+                let (a, b) = (rnd(40) as usize, rnd(40) as usize);
+                t.spans.push(TextSpan { start: a, end: b, format });
+            }
+            let want = slow(&t);
+            normalize(&mut t);
+            assert_eq!(t.spans, want);
+        }
+    }
+
+    /// H1 of the 20 Nov audit: 100k nested runs took minutes.
+    #[test]
+    fn a_hundred_thousand_runs_normalize_quickly() {
+        let n = 100_000;
+        let mut t = TextData { text: "x".repeat(2 * n), ..Default::default() };
+        for i in 0..n {
+            let format = SpanFormat { bold: Some(i % 2 == 0), size: Some(1.0 + (i % 3) as f64), ..Default::default() };
+            t.spans.push(TextSpan { start: i, end: 2 * n - i, format });
+        }
+        let at = std::time::Instant::now();
+        normalize(&mut t);
+        assert!(at.elapsed().as_secs_f32() < 5.0, "took {:?}", at.elapsed());
+        assert_eq!(t.spans.first().map(|s| s.start), Some(0));
     }
 }
 

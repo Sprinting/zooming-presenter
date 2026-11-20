@@ -199,7 +199,9 @@ impl Player {
             .rev()
             .filter(|e| !hidden.contains(&e.id) && e.bounds().contains(w))
             .find_map(|e| self.renderer.link_at(ed, e, w));
-        if let Some(url) = link {
+        // The same three schemes the app opens: a `javascript:` link from
+        // an imported deck must not reach window.open (audit L1, R1).
+        if let Some(url) = link.filter(|u| safe_link(u)) {
             return Click::Link(url);
         }
         let tol = 5.0 / ed.view.camera.zoom;
@@ -387,3 +389,9 @@ impl Player {
 pub mod ffi;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod export;
+
+/// http, https and mailto links only (any case, leading spaces ignored).
+fn safe_link(url: &str) -> bool {
+    let u = url.trim_start().to_ascii_lowercase();
+    ["http://", "https://", "mailto:"].iter().any(|p| u.starts_with(p))
+}

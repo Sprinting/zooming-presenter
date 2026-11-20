@@ -28,6 +28,36 @@ fn world(v: f64) -> bool {
     v.abs() <= WORLD_LIMIT
 }
 
+/// Line widths and corner radii may always be this big (local units),
+/// whatever the element's size: the inspector offers up to 200, and a
+/// shape shrunk below its outline's width must stay editable.
+pub const LINE_FLOOR: f64 = 200.0;
+
+/// Most a shape's outline width or corner radius may be: its larger side
+/// (but at least [`LINE_FLOOR`]). Absurd widths made renderers allocate
+/// gigabytes or panic (hostile-input audit C3).
+pub fn shape_line_limit(size: &Size) -> f64 {
+    size.w.max(size.h).max(LINE_FLOOR)
+}
+
+/// Most a connector's or ink stroke's width may be: the diagonal of the
+/// element and of its points (but at least [`LINE_FLOOR`]).
+fn line_limit<'a>(size: &Size, pts: impl Iterator<Item = (f64, f64)>) -> f64 {
+    let (mut x0, mut y0, mut x1, mut y1) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for (x, y) in pts {
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    size.w.hypot(size.h).max((x1 - x0).hypot(y1 - y0)).max(LINE_FLOOR)
+}
+
+fn connector_limit(size: &Size, d: &ConnectorData) -> f64 {
+    line_limit(size, [(d.from.x, d.from.y), (d.to.x, d.to.y)].into_iter())
+}
+
+fn ink_limit(size: &Size, d: &InkData) -> f64 {
+    line_limit(size, d.points.iter().map(|p| (p.x, p.y)))
+}
+
 /// A key the editor made (`content_key`): safe as a file name. Anything
 /// with a path separator or a dot could leave the media cache folder.
 pub fn safe_asset_key(key: &str) -> bool {
@@ -68,10 +98,19 @@ pub fn element(e: &Element) -> ZResult<()> {
             if !(fin(d.stroke_width) && d.stroke_width >= 0.0 && fin(d.corner_radius) && d.corner_radius >= 0.0) {
                 return bad("stroke width or corner radius");
             }
+            let limit = shape_line_limit(&e.size);
+            if d.stroke_width > limit || d.corner_radius > limit {
+                return Err(ZError::invalid(format!("'{}': stroke width and corner radius are at most {limit}", e.id))
+                    .hint("at most the shape's larger side, or 200"));
+            }
         }
         ElementKind::Ink(d) => {
             if !(world(d.width) && d.width > 0.0) || d.points.iter().any(|p| !(world(p.x) && world(p.y))) {
                 return bad("an ink point or width");
+            }
+            let limit = ink_limit(&e.size, d);
+            if d.width > limit {
+                return Err(ZError::invalid(format!("'{}': ink width is at most {limit}", e.id)).hint("at most the drawing's diagonal, or 200"));
             }
         }
         ElementKind::Icon(d) => {
@@ -82,6 +121,10 @@ pub fn element(e: &Element) -> ZResult<()> {
         ElementKind::Connector(d) => {
             if !(world(d.width) && d.width > 0.0) || [&d.from, &d.to].iter().any(|p| !(world(p.x) && world(p.y) && fin(p.dir.x) && fin(p.dir.y))) {
                 return bad("a connector end or width");
+            }
+            let limit = connector_limit(&e.size, d);
+            if d.width > limit {
+                return Err(ZError::invalid(format!("'{}': connector width is at most {limit}", e.id)).hint("at most the connector's length, or 200"));
             }
         }
         ElementKind::Image(d) => {
@@ -144,6 +187,12 @@ pub fn repair(doc: &mut Document) -> usize {
     let mut fixed = 0;
     let mut drop = vec![];
     for (id, e) in doc.elements.iter_mut() {
+        // The map key is the element's id: code that collects `e.id` looks
+        // it up by key again.
+        if e.id != *id {
+            e.id = id.clone();
+            fixed += 1;
+        }
         if element(e).is_ok() {
             continue;
         }
@@ -186,12 +235,19 @@ pub fn repair(doc: &mut Document) -> usize {
                 if !(fin(d.corner_radius) && d.corner_radius >= 0.0) {
                     d.corner_radius = 0.0;
                 }
+                let limit = shape_line_limit(&e.size);
+                d.stroke_width = d.stroke_width.min(limit);
+                // Drawn no rounder than half the shorter side anyway.
+                if d.corner_radius > limit {
+                    d.corner_radius = (e.size.w.min(e.size.h) / 2.0).min(limit);
+                }
             }
             ElementKind::Ink(d) => {
                 d.points.retain(|p| world(p.x) && world(p.y));
                 if !(world(d.width) && d.width > 0.0) {
                     d.width = 4.0;
                 }
+                d.width = d.width.min(ink_limit(&e.size, d));
             }
             ElementKind::Icon(d) => d.stroke_width = 2.0,
             ElementKind::Connector(d) => {
@@ -206,6 +262,7 @@ pub fn repair(doc: &mut Document) -> usize {
                         p.dir = crate::geom::Vec2::ZERO;
                     }
                 }
+                d.width = d.width.min(connector_limit(&e.size, d));
             }
             ElementKind::Image(d) => {
                 d.crop = d.crop.filter(|c| fin(c.x) && fin(c.y) && fin(c.w) && fin(c.h)).map(|c| c.clamped()).filter(|c| !c.is_full());
@@ -247,6 +304,43 @@ pub fn repair(doc: &mut Document) -> usize {
         s.duration = s.duration.filter(|d| fin(*d) && *d >= 0.0);
         s.dwell = s.dwell.filter(|d| fin(*d) && *d > 0.0);
         s.builds.retain(|b| els.contains_key(b));
+    }
+    // An absurd id counter (u64::MAX overflowed, hostile-input audit L4)
+    // counts on from the largest number in use instead. A lower one is
+    // kept: new ids skip the ones taken, and a sound file reopens as it
+    // was saved.
+    if doc.next_id > u64::MAX / 2 {
+        doc.next_id = doc.elements.keys().filter_map(|k| k.trim_start_matches(|c: char| !c.is_ascii_digit()).parse::<u64>().ok()).max().map_or(1, |m| m.saturating_add(1));
+        fixed += 1;
+    }
+    // A custom theme without an id can't be chosen; one with a built-in's id
+    // would hide that built-in.
+    let before = doc.themes.len();
+    doc.themes.retain(|t| !t.id.trim().is_empty() && !crate::theme::Theme::is_builtin(&t.id));
+    fixed += before - doc.themes.len();
+    // Custom theme weights a file can hold (u16) but save_theme refuses:
+    // the nearest weight in range. The renderer draws the nearest face.
+    for t in &mut doc.themes {
+        if t.name.trim().is_empty() {
+            t.name = t.id.clone();
+            fixed += 1;
+        }
+        for s in [&mut t.title, &mut t.subtitle, &mut t.body] {
+            let d = crate::theme::TextStyleDef::default();
+            if !(fin(s.size) && s.size > 0.0) {
+                s.size = d.size;
+                fixed += 1;
+            }
+            if s.font.trim().is_empty() {
+                s.font = d.font;
+                fixed += 1;
+            }
+            let w = s.weight.clamp(1, 1000);
+            if w != s.weight {
+                s.weight = w;
+                fixed += 1;
+            }
+        }
     }
     doc.play.autoplay = doc.play.autoplay.filter(|d| fin(*d) && *d > 0.0);
     if let Some(s) = &mut doc.soundtrack {

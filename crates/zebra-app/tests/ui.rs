@@ -659,3 +659,38 @@ fn panes_resize_by_their_edges_and_collapse_past_the_minimum() {
     h.run_steps(2);
     assert_eq!(h.state().sidebar_w, kept, "reopens at the width it had before the drag");
 }
+
+/// W1 of the 20 Nov audit: krilla panics on some fonts, and the export
+/// thread died with the export "running" for ever and nothing said. A
+/// panic in an export is now reported, and the next export still works.
+#[test]
+fn an_export_that_panics_says_it_could_not_export() {
+    let mut h = harness(Some("sample"));
+    let dir = std::env::temp_dir().join(format!("zebra-export-panic-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let bad = dir.join("bad.pdf");
+    zebra_app::files::export_in_background(h.state_mut(), bad.clone(), |_, _| panic!("a font the PDF writer can't take"));
+    let mut said = None;
+    for _ in 0..200 {
+        h.run_steps(1);
+        said = h.state().toast.as_ref().map(|t| t.text.clone()).filter(|t| *t != zebra_app::t!("export-toast-exporting"));
+        if said.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let failed = zebra_app::t!("export-toast-failed", error = zebra_app::t!("export-error-unexpected"));
+    assert_eq!(said.as_deref(), Some(failed.as_str()));
+    assert!(!bad.exists());
+    let good = dir.join("good.pdf");
+    zebra_app::files::export_in_background(h.state_mut(), good.clone(), |_, _| Ok(b"%PDF-1.7".to_vec()));
+    for _ in 0..200 {
+        h.run_steps(1);
+        if good.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(good.exists(), "the next export works");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -18,6 +18,9 @@ image.workspace = true
 base64.workspace = true
 dirs.workspace = true
 ruzstd.workspace = true
+# Grapheme boundaries for split_text and slices; already in the tree via
+# egui and parley.
+unicode-segmentation = "1.13"
 
 # .zebra files. Not in the web player (wasm32): zip pulls in getrandom's
 # wasm-bindgen backend there, and the player reads document.json directly.

@@ -332,3 +332,25 @@ fn moved_words_keep_their_formatting_and_dont_take_their_neighbours() {
     assert_eq!(rich::common_format(&t, 11, 14).bold, Some(true));
     assert_eq!(rich::common_format(&t, 0, 4).bold, Some(true));
 }
+
+/// W2 of the 20 Nov audit: a range that ends or starts inside a grapheme
+/// takes the whole grapheme, so no box is left with a stray accent, half a
+/// flag or half a ZWJ family.
+#[test]
+fn splits_take_whole_graphemes() {
+    for (body, start, end, want_new, want_left) in [
+        ("Cafe\u{301} au lait", 3, 4, "e\u{301}", "Caf au lait"),
+        ("Cafe\u{301} au lait", 4, 5, "e\u{301}", "Caf au lait"),
+        ("flag 🇬🇧 here", 5, 6, "🇬🇧", "flag here"),
+        ("us 👨\u{200d}👩\u{200d}👧 too", 4, 6, "👨\u{200d}👩\u{200d}👧", "us too"),
+    ] {
+        let mut ed = ed_with(body);
+        let new = split(&mut ed, json!({"id":"t1","start":start,"end":end}));
+        assert_eq!(text(&ed, &new).text, want_new, "{body}");
+        assert_eq!(text(&ed, "t1").text, want_left, "{body}");
+    }
+    assert_eq!(rich::whole_graphemes("abc", 2, 1), (2, 1), "backwards ranges are left alone");
+    let mut t = TextData { text: "x e\u{301} y".into(), ..Default::default() };
+    let (a, e) = rich::move_within(&mut t, 2, 3, 0, false).unwrap();
+    assert_eq!(t.text.chars().skip(a).take(e - a).collect::<String>(), "e\u{301}", "a move takes the accent too");
+}

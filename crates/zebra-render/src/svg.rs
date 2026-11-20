@@ -85,12 +85,127 @@ pub fn rasterize(svg: &[u8], style: &SvgStyle, w: u32, h: u32) -> Option<Vec<u8>
     }
     let (dx, dy) = ((w as f64 - size.width() as f64 * k) / 2.0, (h as f64 - size.height() as f64 * k) / 2.0);
     let t = tiny_skia::Transform::from_row(k as f32, 0.0, 0.0, k as f32, dx as f32, dy as f32);
+    if !affordable(&tree, t, w, h) {
+        return None;
+    }
     resvg::render(&tree, t, &mut pm.as_mut());
     let mut px = pm.take();
     if style.sticker {
         sticker(&mut px, w as usize, h as usize, (w.max(h) as f64 * 0.028).max(1.5));
     }
     Some(px)
+}
+
+/// Largest side an SVG is drawn at; a bigger level is drawn at this and
+/// scaled.
+pub const MAX_RASTER_SIDE: u32 = 4096;
+/// Most work (pixels times kernel taps) one filter primitive may cost.
+/// resvg's morphology looks at every pixel of its (2r+1)^2 window, so
+/// `radius=100000` was hours of work; blurs are box blurs, whose cost
+/// doesn't grow with the deviation.
+const MAX_FILTER_WORK: f64 = (1u64 << 28) as f64;
+/// Largest filter region, in pixels at the size drawn.
+const MAX_FILTER_AREA: f32 = 16384.0 * 16384.0;
+/// Largest pattern tile resvg may draw, in pixels: it allocates the whole
+/// tile (a 5,000,000-unit tile asked for 655 TB and aborted, audit T-C2).
+/// Masks and clip paths are drawn canvas-sized, so the raster cap bounds
+/// them.
+const MAX_TILE_AREA: f32 = 8192.0 * 8192.0;
+/// Most nodes in one SVG (clip paths, masks and patterns included).
+const MAX_NODES: usize = 100_000;
+
+/// Whether `tree` drawn with `t` into `w`x`h` pixels stays cheap enough to
+/// draw at all. A 277-byte SVG with `feMorphology radius=100000` pinned a
+/// core for minutes (hostile-input audit H5); such pictures are drawn as
+/// the "unreadable picture" placeholder instead.
+fn affordable(tree: &usvg::Tree, t: tiny_skia::Transform, w: u32, h: u32) -> bool {
+    let mut c = Cost { nodes: 0, canvas: w as f64 * h as f64, w: w as f64, h: h as f64 };
+    c.group(tree.root(), t) && c.nodes <= MAX_NODES
+}
+
+struct Cost {
+    nodes: usize,
+    canvas: f64,
+    w: f64,
+    h: f64,
+}
+
+impl Cost {
+    fn group(&mut self, g: &usvg::Group, t: tiny_skia::Transform) -> bool {
+        self.nodes += 1;
+        if self.nodes > MAX_NODES {
+            return false;
+        }
+        let (sx, sy) = t.pre_concat(g.abs_transform()).get_scale();
+        for f in g.filters() {
+            let r = f.rect();
+            let area = r.width() * sx * r.height() * sy;
+            if !(area <= MAX_FILTER_AREA) {
+                return false;
+            }
+            // resvg clips the region to the canvas.
+            let region = (area as f64).min(self.canvas);
+            for p in f.primitives() {
+                use usvg::filter::Kind;
+                let taps = match p.kind() {
+                    Kind::Morphology(m) => {
+                        let rx = (m.radius_x().get() as f64 * sx as f64).min(self.w);
+                        let ry = (m.radius_y().get() as f64 * sy as f64).min(self.h);
+                        (2.0 * rx + 1.0) * (2.0 * ry + 1.0)
+                    }
+                    Kind::ConvolveMatrix(m) => m.matrix().columns() as f64 * m.matrix().rows() as f64,
+                    Kind::Turbulence(tb) => tb.num_octaves() as f64,
+                    _ => 1.0,
+                };
+                if !(region * taps <= MAX_FILTER_WORK) {
+                    return false;
+                }
+            }
+        }
+        for n in g.children() {
+            let ok = match n {
+                usvg::Node::Group(c) => self.group(c, t),
+                usvg::Node::Path(p) => {
+                    self.nodes += 1;
+                    let at = t.pre_concat(p.abs_transform());
+                    if !p.data().bounds().transform(at).is_some_and(|b| near(b.left()) && near(b.right()) && near(b.top()) && near(b.bottom())) {
+                        return false;
+                    }
+                    let paints = p.fill().map(|f| f.paint()).into_iter().chain(p.stroke().map(|s| s.paint()));
+                    self.nodes <= MAX_NODES && paints.into_iter().all(|paint| tile_ok(paint, at))
+                }
+                _ => {
+                    self.nodes += 1;
+                    self.nodes <= MAX_NODES
+                }
+            };
+            // Clip paths, masks, patterns and filter images hold trees too.
+            let mut sub_ok = true;
+            n.subroots(|sub| sub_ok = sub_ok && self.group(sub, t));
+            if !(ok && sub_ok) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Farthest a path may reach from the picture, in pixels at the size
+/// drawn. tiny-skia panics on coordinates around 1e9 (one panicked again
+/// while unwinding and aborted; audit T-C3); usvg's tree can't be edited,
+/// so such pictures are refused rather than clamped.
+const MAX_COORD: f32 = 1e6;
+
+fn near(v: f32) -> bool {
+    v.abs() <= MAX_COORD
+}
+
+/// A pattern's tile, drawn with `t`, is within [`MAX_TILE_AREA`].
+fn tile_ok(paint: &usvg::Paint, t: tiny_skia::Transform) -> bool {
+    let usvg::Paint::Pattern(p) = paint else { return true };
+    let (sx, sy) = t.pre_concat(p.transform()).get_scale();
+    let r = p.rect();
+    r.width() * sx * r.height() * sy <= MAX_TILE_AREA
 }
 
 /// Squared distance from each pixel to the nearest pixel where `inside`
@@ -288,6 +403,60 @@ mod tests {
         let px = rasterize(svg, &style, 20, 20).unwrap();
         assert_eq!(at(&px, 20, 2, 10), [200, 100, 0, 255]);
         assert_eq!(at(&px, 20, 17, 10), [10, 20, 30, 255]);
+    }
+
+    /// Hostile-input audit H5: this 8 KB SVG (feMorphology radius 100000)
+    /// pinned a core for minutes. Now it is refused at once.
+    #[test]
+    fn a_morphology_bomb_is_refused_quickly() {
+        let svg = include_bytes!("../tests/data/blur.svg");
+        let t = std::time::Instant::now();
+        assert!(rasterize(svg, &SvgStyle::default(), 400, 400).is_none());
+        assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
+    }
+
+    /// Ordinary filters still draw, a big blur too (box blurs cost the same
+    /// at any deviation).
+    #[test]
+    fn ordinary_filters_still_draw() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><filter id="f"><feGaussianBlur stdDeviation="30"/><feMorphology radius="1"/></filter><rect x="20" y="20" width="60" height="60" fill="red" filter="url(#f)"/></svg>"#;
+        let px = rasterize(svg, &SvgStyle::default(), 1000, 1000).unwrap();
+        assert!(at(&px, 1000, 500, 500)[3] > 0);
+    }
+
+    /// Audit T-C2: a pattern tile of 5,000,000 units (and a fuzzed EMF's
+    /// conversion) made resvg allocate terabytes and abort.
+    #[test]
+    fn huge_pattern_tiles_are_refused() {
+        for svg in [&include_bytes!("../tests/data/pattern-bomb.svg")[..], &include_bytes!("../tests/data/emf-pattern-bomb.svg")[..]] {
+            assert!(rasterize(svg, &SvgStyle::default(), 400, 400).is_none());
+        }
+        let ok = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><pattern id="p" patternUnits="userSpaceOnUse" width="10" height="10"><rect width="5" height="5" fill="red"/></pattern></defs><rect width="100" height="100" fill="url(#p)"/></svg>"#;
+        let px = rasterize(ok, &SvgStyle::default(), 400, 400).unwrap();
+        assert!(at(&px, 400, 5, 5)[3] > 0);
+    }
+
+    /// Audit T-C3: paths reaching ~1e9 px made tiny-skia panic (one of
+    /// them again while unwinding, which aborts).
+    #[test]
+    fn far_flung_paths_are_refused() {
+        for svg in [
+            &include_bytes!("../tests/data/tinyskia-curve.svg")[..],
+            &include_bytes!("../tests/data/tinyskia-rect.svg")[..],
+            &include_bytes!("../tests/data/meta-crash-22912.svg")[..],
+        ] {
+            assert!(rasterize(svg, &SvgStyle::default(), 480, 320).is_none());
+        }
+    }
+
+    #[test]
+    fn too_many_nodes_are_refused() {
+        let mut svg = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">"#);
+        for _ in 0..100_001 {
+            svg.push_str(r#"<rect width="1" height="1"/>"#);
+        }
+        svg.push_str("</svg>");
+        assert!(rasterize(svg.as_bytes(), &SvgStyle::default(), 10, 10).is_none());
     }
 
     #[test]

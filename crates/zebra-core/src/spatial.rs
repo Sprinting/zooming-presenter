@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::editor::Editor;
 use crate::geom::{Rect, Vec2};
-use crate::model::{Document, Element, ElementId, ElementKind, FRAME_EDGE_TOLERANCE, frame_holds_with};
+use crate::model::{Document, Element, ElementId, ElementKind, FRAME_EDGE_TOLERANCE, GroupVerdicts, frame_holds_memo};
 
 /// How far an element may draw past its box (strokes, arrowheads, a
 /// connector's label), in world units. The renderer culls with it.
@@ -465,21 +465,22 @@ impl SpatialIndex {
 
     /// [`frame_holds`](crate::model::frame_holds), with group members
     /// from the index.
-    fn holds<'d>(&self, doc: &'d Document, f: &Element, e: &'d Element) -> bool {
-        frame_holds_with(f, e, |g| self.groups.get(g).into_iter().flatten().filter_map(|&h| doc.elements.get(&self.slot(h).id)))
+    /// `memo` lives for one query, so each group is judged once per frame.
+    fn holds<'d>(&self, doc: &'d Document, f: &'d Element, e: &'d Element, memo: &mut GroupVerdicts<'d>) -> bool {
+        frame_holds_memo(f, e, |g| self.groups.get(g).into_iter().flatten().filter_map(|&h| doc.elements.get(&self.slot(h).id)), memo)
     }
 
     /// Smallest frame (then lowest in the draw order) that holds `e`
     /// ([`frame_holds`](crate::model::frame_holds)). Same answer as
     /// [`Document::parent_frame`].
-    fn parent_of<'d>(&'d self, doc: &'d Document, e: &'d Element) -> Option<&'d Slot> {
+    fn parent_of<'d>(&'d self, doc: &'d Document, e: &'d Element, memo: &mut GroupVerdicts<'d>) -> Option<&'d Slot> {
         // A frame holding `e` holds its points, so its box is at least as
         // wide and as tall as theirs, less the edge tolerance (a few parts
         // in 10^9 of its size).
         let b = Rect::from_points(e.held_points())?;
         let min = b.width().max(b.height()) * (1.0 - 1e3 * FRAME_EDGE_TOLERANCE);
         self.frames_near(&b, min)
-            .filter(|f| f.id != e.id && doc.elements.get(&f.id).is_some_and(|fe| self.holds(doc, fe, e)))
+            .filter(|f| f.id != e.id && doc.elements.get(&f.id).is_some_and(|fe| self.holds(doc, fe, e, memo)))
             .min_by(|x, y| x.area.total_cmp(&y.area).then(x.rank.cmp(&y.rank)))
     }
 
@@ -530,9 +531,10 @@ impl Editor {
         let Some(ix) = self.spatial() else { return self.doc.frame_contents(frame_id) };
         let Some(f) = self.doc.elements.get(frame_id) else { return vec![] };
         let fb = f.visual_bounds();
+        let mut memo = GroupVerdicts::default();
         let mut v: Vec<(u64, &str)> = ix
             .near(&fb)
-            .filter(|s| s.id != f.id && self.doc.elements.get(&s.id).is_some_and(|e| ix.holds(&self.doc, f, e)))
+            .filter(|s| s.id != f.id && self.doc.elements.get(&s.id).is_some_and(|e| ix.holds(&self.doc, f, e, &mut memo)))
             .map(|s| (s.rank, s.id.as_str()))
             .collect();
         v.sort_unstable_by_key(|x| x.0);
@@ -543,25 +545,27 @@ impl Editor {
     pub fn parent_frame(&self, id: &str) -> Option<ElementId> {
         let Some(ix) = self.spatial() else { return self.doc.parent_frame(id) };
         let e = self.doc.elements.get(id)?;
-        ix.parent_of(&self.doc, e).map(|f| f.id.clone())
+        ix.parent_of(&self.doc, e, &mut GroupVerdicts::default()).map(|f| f.id.clone())
     }
 
     /// Every element's parent frame at once (elements in no frame are
     /// left out): for queries that need them all.
     pub fn parent_frames(&self) -> HashMap<&str, &str> {
         if let Some(ix) = self.spatial() {
-            return self.doc.elements.values().filter_map(|e| Some((e.id.as_str(), ix.parent_of(&self.doc, e)?.id.as_str()))).collect();
+            let mut memo = GroupVerdicts::default();
+            return self.doc.elements.values().filter_map(|e| Some((e.id.as_str(), ix.parent_of(&self.doc, e, &mut memo)?.id.as_str()))).collect();
         }
         // Frames smallest first (then back to front): the first that holds
         // an element is its parent.
         let mut frames: Vec<(f64, usize, &Element)> = self.doc.ordered().enumerate().filter(|(_, f)| f.is_frame()).map(|(z, f)| (f.drawn_area(), z, f)).collect();
         frames.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         let groups = self.doc.group_members();
+        let mut memo = GroupVerdicts::default();
         self.doc
             .elements
             .values()
             .filter_map(|e| {
-                let f = frames.iter().find(|(_, _, f)| frame_holds_with(f, e, |g| groups.get(g).into_iter().flatten().copied()))?;
+                let f = frames.iter().find(|(_, _, f)| frame_holds_memo(f, e, |g| groups.get(g).into_iter().flatten().copied(), &mut memo))?;
                 Some((e.id.as_str(), f.2.id.as_str()))
             })
             .collect()
@@ -612,14 +616,16 @@ impl Editor {
         let len = self.doc.z_order.len();
         let Some(ix) = self.spatial() else {
             let groups = self.doc.group_members();
+            let mut memo = GroupVerdicts::default();
             return self
                 .doc
                 .z_order
                 .iter()
-                .position(|o| self.doc.get(o).is_some_and(|x| frame_holds_with(f, x, |g| groups.get(g).into_iter().flatten().copied())))
+                .position(|o| self.doc.get(o).is_some_and(|x| frame_holds_memo(f, x, |g| groups.get(g).into_iter().flatten().copied(), &mut memo)))
                 .unwrap_or(len);
         };
-        let Some(lowest) = ix.near(&f.visual_bounds()).filter(|s| self.doc.elements.get(&s.id).is_some_and(|x| ix.holds(&self.doc, f, x))).map(|s| s.rank).min() else {
+        let mut memo = GroupVerdicts::default();
+        let Some(lowest) = ix.near(&f.visual_bounds()).filter(|s| self.doc.elements.get(&s.id).is_some_and(|x| ix.holds(&self.doc, f, x, &mut memo))).map(|s| s.rank).min() else {
             return len;
         };
         // z_order rises in rank: binary search for it.

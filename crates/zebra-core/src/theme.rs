@@ -7,7 +7,10 @@ use std::collections::BTreeMap;
 
 use crate::model::{ColorRef, Document, TextStyle};
 
+/// A field a file leaves out takes the body style of the classic theme, so
+/// a hand-made or damaged theme still opens (check.rs mends the rest).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
 pub struct TextStyleDef {
     /// Font family name. Renderers bundle these families.
     pub font: String,
@@ -81,7 +84,10 @@ pub fn bold_weight(style: u16, bold: Option<bool>) -> u16 {
     }
 }
 
+/// A field a file leaves out takes the classic theme's value, so a
+/// hand-made or damaged custom theme still opens.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
 pub struct Theme {
     pub id: String,
     pub name: String,
@@ -137,6 +143,19 @@ pub const MAX_LAYERS: usize = 3;
 
 fn ts(font: &str, color: &str, size: f64) -> TextStyleDef {
     TextStyleDef { font: font.into(), color: color.into(), size, weight: REGULAR }
+}
+
+impl Default for TextStyleDef {
+    fn default() -> Self {
+        ts("Sans", "#4a4a4a", 24.0)
+    }
+}
+
+impl Default for Theme {
+    /// Classic, with no id or name of its own.
+    fn default() -> Self {
+        Theme { id: String::new(), name: String::new(), ..Self::builtins().remove(0) }
+    }
 }
 
 impl Theme {

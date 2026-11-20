@@ -6758,6 +6758,7 @@ dependencies = [
  "serde_json",
  "similar",
  "thiserror 2.0.21",
+ "unicode-segmentation",
  "zip 9.6.1",
 ]
 
@@ -6813,10 +6814,12 @@ dependencies = [
  "eframe",
  "egui",
  "egui-wgpu",
+ "gif",
  "image",
  "krilla",
  "kurbo",
  "parley",
+ "png",
  "pollster",
  "resvg",
  "serde",

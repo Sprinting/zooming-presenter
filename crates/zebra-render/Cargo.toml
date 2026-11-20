@@ -21,6 +21,8 @@ unicode-script.workspace = true
 vello_cpu.workspace = true
 krilla.workspace = true
 image.workspace = true
+gif.workspace = true
+png.workspace = true
 resvg.workspace = true
 vello = { workspace = true, optional = true }
 eframe = { workspace = true, optional = true }

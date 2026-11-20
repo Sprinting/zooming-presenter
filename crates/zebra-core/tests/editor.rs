@@ -652,3 +652,188 @@ fn a_text_width_change_reads_back_as_fixed_and_undoes_to_auto() {
 fn cmd_query(j: serde_json::Value) -> Query {
     serde_json::from_value(j).unwrap()
 }
+
+/// Hostile-input audit H2: a file whose element key and `id` differ. Opening
+/// mends the id; an editor holding such a document anyway (no repair)
+/// refuses the command instead of panicking.
+#[test]
+fn element_key_and_id_mismatch_does_not_crash_delete() {
+    let mut ed = Editor::default();
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"s1","shape":"rectangle","x":0,"y":0})), Origin::Human).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"s2","shape":"ellipse","x":1400,"y":200})), Origin::Human).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"group","ids":["s1","s2"]})), Origin::Human).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&io::to_json(&ed.doc)).unwrap();
+    v["elements"]["s1"]["id"] = serde_json::json!("a");
+    let json = serde_json::to_string(&v).unwrap();
+
+    let doc = io::from_json(&json).unwrap();
+    assert_eq!(doc.elements["s1"].id, "s1", "opening sets the id to its key");
+    let mut opened = Editor::new(doc);
+    opened.apply(cmd(serde_json::json!({"op":"delete","ids":["s2"]})), Origin::Human).unwrap();
+    assert!(opened.doc.elements["s1"].group.is_none());
+
+    // Not repaired: refused, and the document is as it was.
+    ed.doc.elements.get_mut("s1").unwrap().id = "a".into();
+    let before = io::to_json(&ed.doc);
+    let r = ed.apply(cmd(serde_json::json!({"op":"delete","ids":["s2"]})), Origin::Human);
+    assert!(r.is_err());
+    assert_eq!(io::to_json(&ed.doc), before);
+}
+
+/// Hostile-input audit C3: widths that made renderers abort are refused by
+/// commands; ordinary ones (the inspector goes to 200) still go in, even on
+/// a small shape.
+#[test]
+fn absurd_stroke_width_is_refused() {
+    let mut ed = sample();
+    let s = ed.doc.elements.values().find(|e| matches!(e.kind, ElementKind::Shape(_))).unwrap().id.clone();
+    for bad in [serde_json::json!({"stroke_width": 1e19}), serde_json::json!({"stroke_width": 1e6}), serde_json::json!({"corner_radius": 1e9})] {
+        let r = ed.apply(cmd(serde_json::json!({"op":"update","id":s,"patch":bad})), Origin::agent("a"));
+        assert!(r.is_err(), "{bad}");
+    }
+    ed.apply(cmd(serde_json::json!({"op":"update","id":s,"patch":{"stroke_width":200.0,"w":10.0,"h":10.0}})), Origin::agent("a")).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"add_connector","id":"c9","from":{"x":0,"y":0},"to":{"x":10,"y":0}})), Origin::agent("a")).unwrap();
+    assert!(ed.apply(cmd(serde_json::json!({"op":"update","id":"c9","patch":{"stroke_width":1e15}})), Origin::agent("a")).is_err());
+}
+
+/// Hostile-input audit L4: `next_id` u64::MAX in a file overflowed (a
+/// panic in debug builds) on the next new element.
+#[test]
+fn next_id_at_the_top_of_u64_is_repaired() {
+    let ed = sample();
+    let mut v: serde_json::Value = serde_json::from_str(&io::to_json(&ed.doc)).unwrap();
+    v["next_id"] = serde_json::json!(u64::MAX);
+    let doc = io::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+    let max = doc.elements.keys().filter_map(|k| k.trim_start_matches(|c: char| !c.is_ascii_digit()).parse::<u64>().ok()).max().unwrap_or(0);
+    assert_eq!(doc.next_id, max + 1);
+    let mut ed = Editor::new(doc);
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","shape":"ellipse","x":0,"y":0})), Origin::Human).unwrap();
+    // And the counter itself wraps rather than overflowing.
+    ed.doc.next_id = u64::MAX;
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","shape":"ellipse","x":0,"y":0})), Origin::Human).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","shape":"ellipse","x":0,"y":0})), Origin::Human).unwrap();
+}
+
+/// H2 of the 20 Nov audit: pasting many shapes was O(N²) in sorting out
+/// which ids were the copies (99k shapes took 59 s in release).
+#[test]
+fn pasting_many_shapes_is_not_quadratic() {
+    let mut src = Editor::default();
+    src.apply(cmd(serde_json::json!({"op":"add_shape","id":"s","shape":"rectangle"})), Origin::Human).unwrap();
+    let one = src.doc.get("s").unwrap().clone();
+    // Debug build: 20k took 10.3 s before the fix and 1.5 s after; 30k
+    // takes 2.4 s.
+    let n = 30_000;
+    let elements = (0..n)
+        .map(|i| {
+            let mut e = one.clone();
+            e.id = format!("s{i}");
+            e.transform.x = (i % 200) as f64 * 120.0;
+            e.transform.y = (i / 200) as f64 * 120.0;
+            e
+        })
+        .collect();
+    let clip = zebra_core::clip::Clip { elements, assets: Default::default() };
+    let mut dst = Editor::default();
+    let at = std::time::Instant::now();
+    let out = dst.paste_clip(&clip, 0.0, 0.0, None, Origin::Human).unwrap();
+    let took = at.elapsed();
+    eprintln!("pasted {n} shapes in {took:?}");
+    assert_eq!(out.created.len(), n);
+    assert!(took.as_secs_f32() < 10.0, "took {took:?}");
+}
+
+/// A document with one custom theme, as a file holds it, for the theme
+/// repair tests.
+fn doc_json_with_theme(edit: impl FnOnce(&mut serde_json::Value)) -> String {
+    let mut ed = Editor::default();
+    let mut t = zebra_core::theme::Theme::resolve("classic");
+    t.id = "mine".into();
+    t.name = "Mine".into();
+    t.base = Some("classic".into());
+    ed.apply(Command::SaveTheme { theme: t, apply: true, to_library: false }, Origin::Human).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&zebra_core::io::to_json(&ed.doc)).unwrap();
+    edit(&mut v["themes"][0]);
+    v.to_string()
+}
+
+/// W7 of the 20 Nov audit: a theme weight of 0 or 65535 from a file is
+/// brought into 1..=1000 on open, so saving the theme again works.
+#[test]
+fn out_of_range_theme_weights_are_repaired_on_open() {
+    let json = doc_json_with_theme(|t| {
+        t["title"]["weight"] = 0.into();
+        t["body"]["weight"] = 65535.into();
+    });
+    let doc = zebra_core::io::from_json(&json).unwrap();
+    let t = &doc.themes[0];
+    assert_eq!((t.title.weight, t.subtitle.weight, t.body.weight), (1, 400, 1000));
+    let mut ed = Editor::default();
+    ed.doc = doc;
+    let theme = ed.doc.themes[0].clone();
+    ed.apply(Command::SaveTheme { theme, apply: true, to_library: false }, Origin::Human).expect("the repaired theme saves");
+}
+
+/// W4 of the 20 Nov audit: a custom theme missing a field ("missing
+/// field `title`") made the whole document fail to open.
+#[test]
+fn a_custom_theme_with_missing_fields_still_opens() {
+    let json = doc_json_with_theme(|t| {
+        let t = t.as_object_mut().unwrap();
+        t.remove("title");
+        t.remove("shapes");
+        t.remove("name");
+        let sub = t["subtitle"].as_object_mut().unwrap();
+        sub.remove("size");
+        sub.remove("font");
+        t["body"]["size"] = serde_json::json!(-3.0);
+    });
+    let doc = zebra_core::io::from_json(&json).expect("the document opens");
+    let t = &doc.themes[0];
+    let classic = zebra_core::theme::Theme::resolve("classic");
+    assert_eq!(t.id, "mine");
+    assert_eq!(t.name, "mine", "a missing name is the id");
+    assert_eq!(t.title, classic.title);
+    assert_eq!(t.shapes, classic.shapes);
+    assert_eq!((t.subtitle.font.as_str(), t.subtitle.size), ("Sans", 24.0));
+    assert_eq!(t.subtitle.color, classic.subtitle.color, "what the file had is kept");
+    assert_eq!(t.body.size, 24.0, "a size that can't draw is repaired");
+    let mut ed = Editor::default();
+    ed.doc = doc;
+    let theme = ed.doc.themes[0].clone();
+    ed.apply(Command::SaveTheme { theme, apply: true, to_library: false }, Origin::Human).expect("the repaired theme saves");
+    // A theme with no id can't be chosen, and one with a built-in's id
+    // would hide it: both go.
+    let json = doc_json_with_theme(|t| {
+        t.as_object_mut().unwrap().remove("id");
+    });
+    assert!(zebra_core::io::from_json(&json).unwrap().themes.is_empty());
+    let json = doc_json_with_theme(|t| t["id"] = "night".into());
+    assert!(zebra_core::io::from_json(&json).unwrap().themes.is_empty());
+}
+
+/// M2 of the hostile-input audit: one insert puts at most 100,000
+/// characters into a text box (the person's paste, and an agent's
+/// add_text, update or add_element).
+#[test]
+fn one_insert_takes_at_most_100000_characters() {
+    use zebra_core::rich::{insert_error, too_long_to_insert, MAX_INSERT_CHARS};
+    let ok = "é".repeat(MAX_INSERT_CHARS);
+    let over = "é".repeat(MAX_INSERT_CHARS + 1);
+    assert_eq!(MAX_INSERT_CHARS, 100_000);
+    assert!(!too_long_to_insert(&ok));
+    assert!(too_long_to_insert(&over));
+    let mut ed = Editor::default();
+    let add = |text: &str| cmd(serde_json::json!({"op":"add_text","id":"t","text":text}));
+    assert!(insert_error(&add(&ok), &ed.doc).is_none());
+    assert_eq!(insert_error(&add(&over), &ed.doc).map(|e| e.code), Some("invalid_params"));
+    ed.apply(add(&ok), Origin::Human).unwrap();
+    // An update counts what it adds: 100,000 more is fine, 100,001 isn't.
+    let update = |text: &str| cmd(serde_json::json!({"op":"update","id":"t","patch":{"text":text}}));
+    assert!(insert_error(&update(&format!("{ok}{ok}")), &ed.doc).is_none());
+    assert!(insert_error(&update(&format!("{ok}{over}")), &ed.doc).is_some());
+    assert!(insert_error(&update("short"), &ed.doc).is_none());
+    let element = |text: &str| cmd(serde_json::json!({"op":"add_element","element":{"kind":{"type":"text","text":text}}}));
+    assert!(insert_error(&element(&ok), &ed.doc).is_none());
+    assert!(insert_error(&element(&over), &ed.doc).is_some());
+}

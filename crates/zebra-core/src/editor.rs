@@ -880,14 +880,15 @@ impl Editor {
         if !self.doc.elements.contains_key(id) {
             return Err(ZError::not_found(id, self.doc.elements.keys().cloned()));
         }
-        Ok(self.el_mut(id))
+        self.el_mut(id)
     }
 
-    /// The element to change (see [`Editor::note`]). Panics if `id`
-    /// doesn't exist.
-    fn el_mut(&mut self, id: &str) -> &mut Element {
+    /// The element to change (see [`Editor::note`]). An error, never a
+    /// panic, if `id` doesn't exist: a damaged file can make ids that were
+    /// collected from elements miss their keys.
+    fn el_mut(&mut self, id: &str) -> ZResult<&mut Element> {
         self.note(id);
-        self.doc.elements.get_mut(id).expect("element exists")
+        self.doc.elements.get_mut(id).ok_or_else(|| missing(id))
     }
 
     fn check_ids(&self, ids: &[ElementId]) -> ZResult<()> {
@@ -1201,7 +1202,7 @@ impl Editor {
                     let g = self.doc.alloc_group_id();
                     for id in &ids {
                         if self.doc.elements.contains_key(id) {
-                            self.el_mut(id).group = Some(g.clone());
+                            self.el_mut(id)?.group = Some(g.clone());
                         }
                     }
                 }
@@ -1469,7 +1470,7 @@ impl Editor {
                     _ => None,
                 };
                 self.note(&id);
-                let e = self.doc.elements.get_mut(&id).expect("element exists");
+                let e = self.doc.elements.get_mut(&id).ok_or_else(|| missing(&id))?;
                 apply_patch(e, &patch)?;
                 if patch.text.is_some() {
                     // Typing into a placeholder makes it real content.
@@ -1497,7 +1498,7 @@ impl Editor {
                 if after != before {
                     let turn = after.rotation - before.rotation;
                     for t in riders {
-                        let r = self.el_mut(&t);
+                        let r = self.el_mut(&t)?;
                         let off = (r.transform.center() - before.center()).rotate_deg(turn);
                         let c = after.center() + off;
                         r.transform.x = c.x;
@@ -1511,7 +1512,7 @@ impl Editor {
                 self.check_ids(std::slice::from_ref(&id))?;
                 self.check_unlocked(std::slice::from_ref(&id))?;
                 self.note(&id);
-                let e = self.doc.elements.get_mut(&id).expect("element exists");
+                let e = self.doc.elements.get_mut(&id).ok_or_else(|| missing(&id))?;
                 let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
                 if let Some(c) = format.color.as_deref().filter(|c| !c.is_empty() && !valid_color(c)) {
                     return Err(ZError::invalid(format!("bad colour '{c}'")).values(Theme::COLOR_SLOTS.iter().map(|s| s.to_string()).collect()));
@@ -1544,7 +1545,7 @@ impl Editor {
                 self.check_ids(std::slice::from_ref(&id))?;
                 self.check_unlocked(std::slice::from_ref(&id))?;
                 self.note(&id);
-                let e = self.doc.elements.get_mut(&id).expect("element exists");
+                let e = self.doc.elements.get_mut(&id).ok_or_else(|| missing(&id))?;
                 let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
                 let count = t.text.split('\n').count();
                 let first = first.unwrap_or(0);
@@ -1566,6 +1567,9 @@ impl Editor {
                 if !(start < end && end <= n) {
                     return Err(ZError::invalid(format!("start..end ({start}..{end}) must be a range of the text's {n} characters")).hint("count in characters, end not included"));
                 }
+                // Whole graphemes: the new box and the cut agree, and an
+                // accent or emoji is never split between two boxes.
+                let (start, end) = crate::rich::whole_graphemes(&t.text, start, end);
                 let piece = crate::rich::slice(t, start, end);
                 if piece.text.is_empty() {
                     return Err(ZError::invalid(format!("characters {start}..{end} of {id} are only spaces")));
@@ -1595,7 +1599,7 @@ impl Editor {
                 let mut below = old.clone();
                 if !copy {
                     self.note(&id);
-                    let e = self.doc.elements.get_mut(&id).expect("element exists");
+                    let e = self.doc.elements.get_mut(&id).ok_or_else(|| missing(&id))?;
                     let ElementKind::Text(t) = &mut e.kind else { unreachable!("checked above") };
                     crate::rich::cut(t, start, end);
                     if t.text.trim().is_empty() {
@@ -1631,7 +1635,7 @@ impl Editor {
                     return Err(ZError::invalid("dx and dy must be finite"));
                 }
                 for id in self.moved(&ids, with_contents) {
-                    let e = self.el_mut(&id);
+                    let e = self.el_mut(&id)?;
                     e.transform.x += dx;
                     e.transform.y += dy;
                     out.changed.push(id);
@@ -1645,7 +1649,7 @@ impl Editor {
                 }
                 let about = about.map(|a| Vec2::new(a[0], a[1])).unwrap_or_else(|| self.bounds_of(&ids).center());
                 for id in self.moved(&ids, with_contents) {
-                    let e = self.el_mut(&id);
+                    let e = self.el_mut(&id)?;
                     let p = about + (e.transform.center() - about) * factor;
                     e.transform.x = p.x;
                     e.transform.y = p.y;
@@ -1662,7 +1666,7 @@ impl Editor {
                 }
                 let theme = self.theme();
                 self.note(&id);
-                let e = self.doc.elements.get_mut(&id).expect("element exists");
+                let e = self.doc.elements.get_mut(&id).ok_or_else(|| missing(&id))?;
                 let s = e.transform.scale;
                 let (ww, wh) = (e.size.w * s, e.size.h * s);
                 match &mut e.kind {
@@ -1705,7 +1709,7 @@ impl Editor {
                 }
                 let about = about.map(|a| Vec2::new(a[0], a[1])).unwrap_or_else(|| self.bounds_of(&ids).center());
                 for id in self.moved(&ids, with_contents) {
-                    let e = self.el_mut(&id);
+                    let e = self.el_mut(&id)?;
                     let p = about + (e.transform.center() - about).rotate_deg(degrees);
                     e.transform.x = p.x;
                     e.transform.y = p.y;
@@ -1747,7 +1751,7 @@ impl Editor {
                     _ => None,
                 }).collect();
                 for only in lone {
-                    self.el_mut(&only).group = None;
+                    self.el_mut(&only)?.group = None;
                     out.changed.push(only);
                 }
                 out.deleted.extend(ids);
@@ -1900,7 +1904,7 @@ impl Editor {
                     _ => self.doc.alloc_group_id(),
                 };
                 for m in &members {
-                    self.el_mut(m).group = Some(gid.clone());
+                    self.el_mut(m)?.group = Some(gid.clone());
                 }
                 out.changed.extend(members);
                 out.group = Some(gid);
@@ -1910,7 +1914,7 @@ impl Editor {
                 let members = self.doc.expand_groups(&ids);
                 self.check_unlocked(&members)?;
                 for m in &members {
-                    let e = self.el_mut(m);
+                    let e = self.el_mut(m)?;
                     if e.group.take().is_some() {
                         out.changed.push(m.clone());
                     }
@@ -2498,10 +2502,11 @@ impl Editor {
             }
         }
         for (id, t) in ids.iter().zip(targets) {
-            let b = self.doc.elements[id].bounds().center();
+            let Some(b) = self.doc.elements.get(id).map(|e| e.bounds().center()) else { continue };
             let d = t - b;
             for m in self.expand(std::slice::from_ref(id), true) {
-                let e = self.el_mut(&m);
+                self.note(&m);
+                let Some(e) = self.doc.elements.get_mut(&m) else { continue };
                 e.transform.x += d.x;
                 e.transform.y += d.y;
                 out.changed.push(m);
@@ -3556,6 +3561,11 @@ pub fn command_label(c: &Command) -> String {
         Command::AddSymbol { name, .. } => format!("Insert symbol {name}"),
         Command::AddDiagram { diagram, .. } => format!("Insert diagram: {diagram}"),
     }
+}
+
+/// An element an id was collected for has gone (or its key and id differ).
+fn missing(id: &str) -> ZError {
+    ZError::new("not_found", format!("element '{id}' not found"))
 }
 
 fn plural(n: usize, w: &str) -> String {

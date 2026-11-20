@@ -57,7 +57,8 @@ pub fn export_html_to(app: &mut ZebraApp, p: std::path::PathBuf) {
     let ctx = app.ctx.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("zebra-export".into()).spawn(move || {
-        let _ = tx.send(zebra_web::export::export(&renderer, &snap, &labels, &p).map_err(|e| e.message));
+        let r = caught(|| zebra_web::export::export(&renderer, &snap, &labels, &p).map_err(|e| e.message)).unwrap_or_else(|| Err(crate::t!("export-error-unexpected")));
+        let _ = tx.send(r);
         ctx.request_repaint();
     });
     match spawned {
@@ -67,6 +68,13 @@ pub fn export_html_to(app: &mut ZebraApp, p: std::path::PathBuf) {
         }
         Err(e) => app.toast(crate::t!("export-toast-failed", error = e.to_string())),
     }
+}
+
+/// `work`, or None if it panicked: a worker thread reports a bug in a
+/// library (krilla panics on some fonts, audit of 20 Nov W1) as a failure
+/// instead of dying with its job never finishing.
+pub fn caught<T>(work: impl FnOnce() -> T) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).ok()
 }
 
 /// Open an exported page in the default web browser (never inside Zebra).
@@ -93,12 +101,13 @@ pub fn export_in_background(
     let ctx = app.ctx.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("zebra-export".into()).spawn(move || {
-        let msg = match render(&renderer, &snap) {
-            Ok(bytes) => match std::fs::write(&path, bytes) {
+        let msg = match caught(|| render(&renderer, &snap)) {
+            Some(Ok(bytes)) => match std::fs::write(&path, bytes) {
                 Ok(()) => crate::t!("export-toast-exported", path = path.display().to_string()),
                 Err(e) => crate::t!("export-toast-failed", error = e.to_string()),
             },
-            Err(e) => crate::t!("export-toast-failed", error = e.message.as_str()),
+            Some(Err(e)) => crate::t!("export-toast-failed", error = e.message.as_str()),
+            None => crate::t!("export-toast-failed", error = crate::t!("export-error-unexpected")),
         };
         let _ = tx.send(msg);
         ctx.request_repaint();
@@ -199,7 +208,9 @@ pub fn remove_autosave(file: &Path) {
 /// Don't Save).
 pub fn remove_autosave_untitled(app: &ZebraApp) {
     app.autosave_job.cancel();
-    zebra_core::io::remove_autosave(&untitled_autosave(app));
+    let a = untitled_autosave(app);
+    let _ = std::fs::remove_file(opening_marker(&a));
+    zebra_core::io::remove_autosave(&a);
 }
 
 /// The person chose Don't Save: their unsaved changes are meant to go,
@@ -236,6 +247,53 @@ pub fn leftover_untitled() -> Vec<PathBuf> {
         .collect();
     v.sort();
     v.into_iter().map(|(_, p)| p).collect()
+}
+
+/// Seconds a reopened autosave must stay open before its "opening" marker
+/// goes: a document whose pictures crash the app does so within this.
+pub const OPENING_SECS: f64 = 5.0;
+
+/// Written next to an untitled autosave while it is being reopened
+/// (`X.zebra.autosave.opening`), removed once its window has shown it for
+/// [`OPENING_SECS`] or closed. Still there at the next launch: that launch
+/// died opening it, so it isn't reopened by itself again (hostile-input
+/// audit H4: anything that crashes on render crashed every launch).
+pub fn opening_marker(autosave: &Path) -> PathBuf {
+    let mut s = autosave.as_os_str().to_owned();
+    s.push(".opening");
+    PathBuf::from(s)
+}
+
+/// Mark `autosave` as being opened. Best effort: no marker, no protection.
+pub fn mark_opening(autosave: &Path) -> Option<PathBuf> {
+    let m = opening_marker(autosave);
+    std::fs::write(&m, b"").ok().map(|_| m)
+}
+
+/// Leftover autosaves split into (those to reopen, those the last launch
+/// died opening), in the same order.
+pub fn split_crashed(leftovers: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    leftovers.into_iter().partition(|p| !opening_marker(p).exists())
+}
+
+/// Move a leftover autosave the person gave up on to the Bin, with its
+/// marker. Elsewhere than the Mac (tests), it is deleted.
+pub fn trash_autosave(autosave: &Path) -> std::io::Result<()> {
+    let _ = std::fs::remove_file(opening_marker(autosave));
+    #[cfg(target_os = "macos")]
+    {
+        // Its media folder goes with it, so Put Back brings both.
+        let media = zebra_core::io::autosave_media_dir(autosave);
+        if media.is_dir() {
+            crate::mac::trash(&media)?;
+        }
+        crate::mac::trash(autosave)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        zebra_core::io::remove_autosave(autosave);
+        Ok(())
+    }
 }
 
 /// A sidecar newer than the file, if any (offer to restore it).

@@ -384,6 +384,9 @@ sheet-toast-nothing-to-revert = { $name } has no changes to revert.
 export-toast-exporting = Exporting…
 export-toast-exported = Exported { $path }
 export-toast-failed = Couldn't export: { $error }
+# The export stopped on a bug (in Zebra or a library it uses), not on
+# anything the person can fix. Fills { $error } above.
+export-error-unexpected = an unexpected error
 # A web page exported from a deck set in SF Pro, SF Mono, New York...
 export-toast-apple-ui-font = { $family } is licensed by Apple only for interface mock-ups, so its text went into the page as pictures. Consider Inter.
 app-file-filter-html = Web page
@@ -393,6 +396,11 @@ sheet-web-exported-message = One file that opens in any current browser.
 sheet-web-exported-folder-message = Saved as a folder: the video and audio are beside the page. Share the whole folder.
 sheet-open-in-browser = Open in Browser
 sheet-done = Done
+sheet-crashed-opening-title = Zebra quit while opening “{ $name }”.
+sheet-crashed-opening-message = Opening it again may make Zebra quit again.
+sheet-open-anyway = Open Anyway
+sheet-move-to-bin = Move to Bin
+sheet-keep-for-later = Keep for Later
 # The exported web page's control bar.
 web-full-screen = Full Screen
 web-play = Play
@@ -959,6 +967,8 @@ canvas-menu-add-text = Add Text
 canvas-menu-edit-text = Edit Text
 canvas-menu-replace-icon = Replace Icon…
 
+# Pasting more than 100,000 characters at once: nothing is pasted.
+paste-too-long = Too long to paste into one text box.
 ## ---- end canvas.rs ----
 
 

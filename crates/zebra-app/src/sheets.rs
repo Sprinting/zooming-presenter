@@ -34,6 +34,9 @@ pub enum SheetKind {
     WebExported { page: std::path::PathBuf, folder: bool },
     /// File › Import… is done: what came in as pictures or was left out.
     ImportNotes { title: String, message: String },
+    /// The last launch quit while opening this untitled document's
+    /// autosave (`name` as its window would have been titled).
+    CrashedOpening { path: std::path::PathBuf, name: String },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -89,6 +92,14 @@ fn spec(app: &ZebraApp, k: &SheetKind) -> Spec {
             title: crate::t!("sheet-full-control-title"),
             message: crate::t!("sheet-full-control-message"),
             buttons: vec![(crate::t!("sheet-allow-full-control"), Role::Default), (crate::t!("sheet-cancel"), Role::Cancel)],
+            warning: true,
+        },
+        SheetKind::CrashedOpening { name, .. } => Spec {
+            // The name stays on one line ("Untitled 2", not "Untitled" then
+            // "2" on the next).
+            title: crate::t!("sheet-crashed-opening-title", name = name.replace(' ', "\u{a0}")),
+            message: crate::t!("sheet-crashed-opening-message"),
+            buttons: vec![(crate::t!("sheet-open-anyway"), Role::Default), (crate::t!("sheet-move-to-bin"), Role::Normal), (crate::t!("sheet-keep-for-later"), Role::Cancel)],
             warning: true,
         },
         SheetKind::WebExported { page, folder } => {
@@ -151,6 +162,17 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
             if label == crate::t!("sheet-open-in-browser") {
                 crate::files::open_in_browser(&page);
             }
+        }
+        SheetKind::CrashedOpening { path, .. } => {
+            if label == crate::t!("sheet-open-anyway") {
+                app.queued.push(Action::ReopenAutosave(path));
+            } else if label == crate::t!("sheet-move-to-bin") {
+                if let Err(e) = crate::files::trash_autosave(&path) {
+                    eprintln!("zebra: could not move {} to the Bin: {e}", path.display());
+                }
+            }
+            // Keep for Later: left as it is, marker and all, so the next
+            // launch asks again.
         }
         SheetKind::RaisePermission => {
             if label == crate::t!("sheet-allow-full-control") {

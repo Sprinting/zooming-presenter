@@ -186,3 +186,36 @@ fn typing_a_step_number_while_presenting_jumps_there() {
     h.run_steps(2);
     assert_eq!(h.state().editor.view.present.step.map(|s| s >= 3), Some(true));
 }
+
+/// W6 of the 20 Nov audit: a digit typed by mistake opened the field, and
+/// then a clicker's Page Down or the arrows did nothing. Now they close the
+/// field and step as usual; Backspace to empty closes it too.
+#[test]
+fn clicker_keys_close_the_go_to_field_and_step() {
+    let mut h = harness(Some("sample"));
+    h.key_press(Key::F5);
+    h.run_steps(2);
+    assert_eq!(h.state().editor.view.present.step, Some(0));
+    h.event(Event::Text("2".into()));
+    h.run_steps(1);
+    assert_eq!(h.state().stage.jump.as_deref(), Some("2"));
+    h.key_press(Key::PageDown);
+    h.run_steps(2);
+    assert!(h.state().stage.jump.is_none(), "Page Down closes the field");
+    assert_eq!(h.state().editor.view.present.step, Some(1), "and steps on");
+    h.event(Event::Text("3".into()));
+    h.run_steps(1);
+    h.key_press(Key::ArrowLeft);
+    h.run_steps(2);
+    assert!(h.state().stage.jump.is_none());
+    assert_eq!(h.state().editor.view.present.step, Some(0), "the left arrow steps back");
+    // Backspace deletes the digit and, with the field empty, closes it,
+    // without stepping back.
+    h.event(Event::Text("3".into()));
+    h.run_steps(1);
+    h.key_press(Key::Backspace);
+    h.run_steps(2);
+    assert!(h.state().stage.jump.is_none(), "Backspace to empty closes the field");
+    assert_eq!(h.state().editor.view.present.step, Some(0));
+    assert_eq!(h.state().editor.view.mode, Mode::Present);
+}
