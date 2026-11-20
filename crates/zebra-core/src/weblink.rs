@@ -9,8 +9,11 @@ use crate::model::{LinkKind, VideoLink};
 /// Web Video sheet shows (the app shows its own translations of them).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkError {
-    /// Not a link at all (or one with a sign-in name in it).
+    /// Not a link at all.
     NotLink,
+    /// A link with a user name or password in it (`https://me:pw@…`),
+    /// which the deck would keep in plain sight.
+    Password,
     /// An http link: only https plays.
     Http,
     /// A web page, a picture, or a file that isn't a video.
@@ -27,6 +30,7 @@ impl LinkError {
     pub fn message(self) -> &'static str {
         match self {
             LinkError::NotLink => "This isn't a link. Give an https link to a video.",
+            LinkError::Password => "Links with a password in them can't be used.",
             LinkError::Http => "Use an https link.",
             LinkError::NotVideo => "This link isn't a video.",
             LinkError::SignIn => "This video needs a sign-in.",
@@ -38,6 +42,7 @@ impl LinkError {
     pub fn code(self) -> &'static str {
         match self {
             LinkError::NotLink => "not_a_link",
+            LinkError::Password => "password_in_link",
             LinkError::Http => "not_https",
             LinkError::NotVideo => "not_a_video",
             LinkError::SignIn => "sign_in",
@@ -190,6 +195,9 @@ pub fn site(u: &Url) -> Site {
 /// Check a link as text: an https link, and which site. `Http` for an
 /// http link, `NotLink` for anything else that isn't https.
 pub fn classify(s: &str) -> Result<(Url, Site), LinkError> {
+    if has_password(s) {
+        return Err(LinkError::Password);
+    }
     let u = parse(s).ok_or(LinkError::NotLink)?;
     match u.scheme.as_str() {
         "https" => {}
@@ -198,6 +206,25 @@ pub fn classify(s: &str) -> Result<(Url, Site), LinkError> {
     }
     let site = site(&u);
     Ok((u, site))
+}
+
+/// Most pixels a side of a web video's poster or size.
+pub const POSTER_MAX_SIDE: u32 = 8192;
+/// Most pixels in all of a poster (8192 x 4883): bigger is refused
+/// before it is decoded.
+pub const POSTER_MAX_PIXELS: u64 = 40_000_000;
+
+/// A poster (or a size a link claims) within the limits, and not empty.
+pub fn poster_fits(w: u32, h: u32) -> bool {
+    w > 0 && h > 0 && w <= POSTER_MAX_SIDE && h <= POSTER_MAX_SIDE && w as u64 * h as u64 <= POSTER_MAX_PIXELS
+}
+
+/// A link with a user name or password before its host
+/// (`https://me:secret@host/…`).
+pub fn has_password(s: &str) -> bool {
+    let Some((_, rest)) = s.trim().split_once("://") else { return false };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    rest[..end].contains('@')
 }
 
 /// Whether the text is an https link (Insert is dimmed until it is).
@@ -338,7 +365,10 @@ mod tests {
         assert_eq!(kind("ftp://example.com/a.mp4"), Err(LinkError::NotLink));
         assert_eq!(kind("example.com/a.mp4"), Err(LinkError::NotLink));
         assert_eq!(kind("https://"), Err(LinkError::NotLink));
-        assert_eq!(kind("https://user:pw@example.com/a.mp4"), Err(LinkError::NotLink), "no sign-in details kept in a deck");
+        assert_eq!(kind("https://user:pw@example.com/a.mp4"), Err(LinkError::Password), "no sign-in details kept in a deck");
+        assert_eq!(kind("https://user@example.com/a.mp4"), Err(LinkError::Password));
+        assert_eq!(LinkError::Password.message(), "Links with a password in them can't be used.");
+        assert_eq!(kind("https://example.com/talks/me@home.mp4"), Ok(Site::Web), "an @ after the host is part of the path");
         assert_eq!(kind("https://exa mple.com/a.mp4"), Err(LinkError::NotLink));
         assert_eq!(kind("  https://example.com/a.mp4 \n"), Ok(Site::Web), "spaces around are trimmed");
         assert!(is_https_link("https://cdn.example.com:8443/v.m3u8?x=1#y"));

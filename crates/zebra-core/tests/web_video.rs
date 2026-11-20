@@ -17,6 +17,22 @@ fn png(w: u32, h: u32) -> Vec<u8> {
     img.write_to(&mut out, image::ImageFormat::Png).unwrap();
     out.into_inner()
 }
+/// A PNG whose header claims `w` x `h` over one pixel of data (with the
+/// header's checksum fixed, so only its size is a lie).
+fn lying_png(w: u32, h: u32) -> Vec<u8> {
+    let mut b = png(1, 1);
+    b[16..20].copy_from_slice(&w.to_be_bytes());
+    b[20..24].copy_from_slice(&h.to_be_bytes());
+    let mut crc = !0u32;
+    for &x in &b[12..29] {
+        crc ^= x as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    b[29..33].copy_from_slice(&(!crc).to_be_bytes());
+    b
+}
 fn tmp(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("zebra-webvideo-test-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
@@ -83,7 +99,7 @@ fn links_are_checked_as_text() {
     let e = err(&mut ed, "http://cdn.example.com/talk.mp4");
     assert_eq!((e.code, e.message.as_str()), ("not_https", "Use an https link."));
     assert_eq!(err(&mut ed, "talk.mp4").code, "not_a_link");
-    assert_eq!(err(&mut ed, "https://me:secret@example.com/a.mp4").code, "not_a_link");
+    assert_eq!(err(&mut ed, "https://me:secret@example.com/a.mp4").code, "password_in_link");
     assert!(ed.doc.elements.is_empty());
     // Without a check (core alone): the kind from the link, 16:9.
     let id = ed.apply(cmd(json!({"op":"add_web_video","url":"https://example.com/live/index.m3u8"})), Origin::Human).unwrap().created[0].clone();
@@ -239,4 +255,42 @@ fn the_format_version_says_web_videos() {
     let mut s = String::new();
     std::io::Read::read_to_string(&mut z.by_name("document.json").unwrap(), &mut s).unwrap();
     assert!(s.starts_with("{\n  \"format_version\": 2"), "{}", &s[..40]);
+}
+
+/// Hostile input over the API: a password in the link, a poster too big
+/// to keep (bytes or pixels), sizes no screen has, NaN times. Each is
+/// refused or ignored, and the deck is as it was.
+#[test]
+fn hostile_web_videos_are_refused() {
+    let mut ed = Editor::default();
+    let add = |ed: &mut Editor, extra: serde_json::Value| {
+        let mut j = json!({"op":"add_web_video","url":"https://cdn.example.com/talk.mp4","x":0,"y":0});
+        for (k, v) in extra.as_object().unwrap() {
+            j[k] = v.clone();
+        }
+        ed.apply(cmd(j), Origin::Human)
+    };
+    let e = add(&mut ed, json!({"url":"https://me:secret@cdn.example.com/talk.mp4"})).unwrap_err();
+    assert_eq!((e.code, e.message.as_str()), ("password_in_link", "Links with a password in them can't be used."));
+
+    // Over 8 MB of poster: refused before it is decoded.
+    let big = "A".repeat(12 * 1024 * 1024);
+    assert_eq!(add(&mut ed, json!({"poster_base64": big})).unwrap_err().code, "too_large");
+    // A small file that claims to be 60000 pixels a side.
+    assert_eq!(add(&mut ed, json!({"poster_base64": b64(&lying_png(60000, 60000))})).unwrap_err().code, "too_large");
+    assert!(add(&mut ed, json!({"poster_base64": "not base64!"})).is_err());
+    assert!(add(&mut ed, json!({"poster_base64": b64(b"")})).is_ok(), "an empty poster is no poster");
+    ed.undo(Origin::Human).unwrap();
+    assert!(ed.doc.elements.is_empty() && ed.doc.used_assets().is_empty(), "nothing left behind");
+
+    // A size the link claims past any screen is not believed.
+    let out = add(&mut ed, json!({"found":{"kind":"file","width":4000000000u32,"height":3,"duration":5}})).unwrap();
+    let el = ed.doc.get(&out.created[0]).unwrap();
+    assert_eq!((el.size.w, el.size.h), (640.0, 360.0));
+    assert!(add(&mut ed, json!({"start": -1})).is_err());
+    assert!(add(&mut ed, json!({"start": 5, "end": 2})).is_err());
+    // Megabytes of link text.
+    let long = format!("https://cdn.example.com/{}.mp4", "a".repeat(2 * 1024 * 1024));
+    let _ = add(&mut ed, json!({"url": long}));
+    assert!(add(&mut ed, json!({"url": ""})).is_err());
 }

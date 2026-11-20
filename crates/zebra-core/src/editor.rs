@@ -1378,9 +1378,14 @@ impl Editor {
                     (None, _) => crate::weblink::guess_kind(&u, &site),
                 };
                 let poster = match poster_base64.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-                    Some(p) => Some(self.load_media(p, None, MediaKind::Image)?.0),
+                    Some(p) => {
+                        web_poster_fits(p)?;
+                        Some(self.load_media(p, None, MediaKind::Image)?.0)
+                    }
                     None => None,
                 };
+                // What the check found is only believed within the limits.
+                let found = found.filter(|f| f.width == 0 || crate::weblink::poster_fits(f.width, f.height));
                 let live = kind == LinkKind::Live;
                 let start = if live { 0.0 } else { start.or_else(|| crate::weblink::link_start(&u)).unwrap_or(0.0) };
                 if !start.is_finite() || start < 0.0 {
@@ -3615,6 +3620,30 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
 }
 
 /// A web video link's problem as an API error, with the sheet's words.
+/// Most of a web video's poster, as bytes (`poster_base64` is a third
+/// more).
+pub const WEB_POSTER_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// A web video's poster within its limits: at most 8 MB, and a picture
+/// within `weblink::poster_fits`, read from its header before anything is
+/// decoded.
+fn web_poster_fits(b64: &str) -> ZResult<()> {
+    if b64.len() > WEB_POSTER_MAX_BYTES.div_ceil(3) * 4 + 4 {
+        return Err(ZError::new("too_large", "poster_base64 is over 8 MB").hint("use a JPEG or PNG under 8 MB"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| ZError::invalid(format!("poster_base64 is not valid base64: {e}")))?;
+    if bytes.len() > WEB_POSTER_MAX_BYTES {
+        return Err(ZError::new("too_large", "poster_base64 is over 8 MB").hint("use a JPEG or PNG under 8 MB"));
+    }
+    let (_, w, h) = image_info(&bytes)?;
+    if !crate::weblink::poster_fits(w, h) {
+        return Err(ZError::new("too_large", format!("the poster is {w}x{h}; it can be at most 8192 pixels a side and 40 million in all")).hint("use a smaller picture"));
+    }
+    Ok(())
+}
+
 fn link_error(e: crate::weblink::LinkError) -> ZError {
     ZError::new(e.code(), e.message())
 }
