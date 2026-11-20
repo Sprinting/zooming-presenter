@@ -38,11 +38,13 @@ pub const INSPECTOR_MAX: f32 = 420.0;
 /// Dragging this far past the minimum collapses the pane, as in Keynote.
 const COLLAPSE_PAST: f32 = 60.0;
 
+/// A width from prefs or a drag, kept in range. A non-finite width (a
+/// hand-edited or damaged prefs file) is the default: `clamp` keeps NaN.
 pub fn clamp_sidebar(w: f32) -> f32 {
-    w.clamp(SIDEBAR_MIN, SIDEBAR_MAX)
+    if w.is_finite() { w.clamp(SIDEBAR_MIN, SIDEBAR_MAX) } else { SIDEBAR_W }
 }
 pub fn clamp_inspector(w: f32) -> f32 {
-    w.clamp(crate::inspector::WIDTH, INSPECTOR_MAX)
+    if w.is_finite() { w.clamp(crate::inspector::WIDTH, INSPECTOR_MAX) } else { crate::inspector::WIDTH }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -139,7 +141,7 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
 
     if app.show_sidebar {
         let r = egui::Panel::left("path")
-            .exact_size(app.sidebar_w)
+            .exact_size(clamp_sidebar(app.sidebar_w))
             .resizable(false)
             .frame(egui::Frame::new().fill(p.sidebar).inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 0 }).stroke(Stroke::new(1.0, p.border)))
             .show(ui, |ui| {
@@ -152,7 +154,7 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
 
     if app.show_props {
         let r = egui::Panel::right("inspector")
-            .exact_size(app.inspector_w)
+            .exact_size(clamp_inspector(app.inspector_w))
             .resizable(false)
             .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin { left: 16, right: 12, top: 0, bottom: 0 }).stroke(Stroke::new(1.0, p.border)))
             .show(ui, |ui| {
@@ -1113,4 +1115,21 @@ pub fn about(app: &mut ZebraApp, ctx: &egui::Context) {
 /// Secondary label colour for the current appearance.
 fn p_weak(ui: &Ui) -> Color32 {
     Palette::of(ui.ctx()).weak
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A damaged prefs file can hold NaN or infinite widths; they become the
+    /// defaults instead of reaching egui's panel layout.
+    #[test]
+    fn non_finite_pane_widths_are_the_defaults() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(clamp_sidebar(bad), SIDEBAR_W);
+            assert_eq!(clamp_inspector(bad), crate::inspector::WIDTH);
+        }
+        assert_eq!(clamp_sidebar(1e9), SIDEBAR_MAX);
+        assert_eq!(clamp_inspector(0.0), crate::inspector::WIDTH);
+    }
 }
