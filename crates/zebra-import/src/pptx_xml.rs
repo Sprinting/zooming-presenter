@@ -1,6 +1,6 @@
 //! What BetterOffice's model of a slide part leaves out, read from the
 //! part's own XML: runs' strike-through and the text styles it inherits
-//! from.
+//! from, and what a shape read from an `mc:Fallback` stands in for.
 //!
 //! Shapes are found by their `cNvPr/@id` (unique within a part), walking
 //! the shape tree the way the parser does: of an `mc:AlternateContent`,
@@ -26,6 +26,18 @@ pub(crate) struct PartInfo {
 #[derive(Debug, Default)]
 pub(crate) struct ShapeInfo {
     pub text: Option<TextStrike>,
+    /// What the shape stands in for, when it is an `mc:Fallback`'s.
+    pub stands_in: Option<StandIn>,
+}
+
+/// What an `mc:AlternateContent`'s choice the parser can't read holds,
+/// when its fallback is read instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StandIn {
+    /// A chart (PowerPoint 2016's chartex, or a classic one).
+    Chart,
+    /// Another graphic frame (an add-in's content, a new kind of object).
+    Graphic,
 }
 
 /// The strike-through a text body says, at each level of its cascade
@@ -54,12 +66,12 @@ pub(crate) enum StyleKind {
 pub(crate) fn part_info(pkg: &PptxPackage, part: &str) -> PartInfo {
     let mut info = PartInfo::default();
     let Some(bytes) = pkg.part_bytes(part) else { return info };
-    if !contains(bytes, b"strike=") {
+    if !(contains(bytes, b"strike=") || contains(bytes, b"AlternateContent")) {
         return info;
     }
     let Some(root) = parse(bytes) else { return info };
     if let Some(tree) = root.child("cSld").and_then(|c| c.child("spTree")) {
-        walk(tree, &mut info);
+        walk(tree, &mut info, None);
     }
     if let Some(styles) = root.child("txStyles") {
         for (i, name) in ["titleStyle", "bodyStyle", "otherStyle"].into_iter().enumerate() {
@@ -79,12 +91,14 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
 }
 
-fn walk(tree: &Elem, info: &mut PartInfo) {
+fn walk(tree: &Elem, info: &mut PartInfo, stands_in: Option<StandIn>) {
     for child in &tree.children {
         match child.local() {
             "AlternateContent" => {
                 if let Some(branch) = branch(child) {
-                    walk(branch, info);
+                    let choice = child.children.iter().find(|c| c.local() == "Choice");
+                    let stands_in = if branch.local() == "Fallback" { choice.and_then(stand_in) } else { None };
+                    walk(branch, info, stands_in);
                 }
             }
             "sp" | "cxnSp" | "pic" | "graphicFrame" | "grpSp" => {
@@ -96,11 +110,11 @@ fn walk(tree: &Elem, info: &mut PartInfo) {
                     .and_then(|c| c.attr("id"))
                     .and_then(|id| id.parse::<u32>().ok());
                 if let Some(id) = id {
-                    let shape = ShapeInfo { text: child.child("txBody").map(text_strike) };
+                    let shape = ShapeInfo { text: child.child("txBody").map(text_strike), stands_in };
                     info.shapes.entry(id).or_insert(shape);
                 }
                 if child.local() == "grpSp" {
-                    walk(child, info);
+                    walk(child, info, None);
                 }
             }
             _ => {}
@@ -122,6 +136,17 @@ fn branch(alt: &Elem) -> Option<&Elem> {
             })
     };
     alt.children.iter().find(|c| c.local() == "Choice" && supported(c)).or_else(|| alt.children.iter().find(|c| c.local() == "Fallback"))
+}
+
+/// What a choice the parser can't read holds, when it is something the
+/// import notes.
+fn stand_in(choice: &Elem) -> Option<StandIn> {
+    let content = choice.children.first()?;
+    if content.local() != "graphicFrame" {
+        return None;
+    }
+    let uri = content.child("graphic").and_then(|g| g.child("graphicData")).and_then(|d| d.attr("uri")).unwrap_or("");
+    Some(if uri.contains("/chart") { StandIn::Chart } else { StandIn::Graphic })
 }
 
 /// `strike` of an `a:rPr`/`a:defRPr`: sngStrike and dblStrike strike,

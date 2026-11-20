@@ -184,11 +184,13 @@ fn a_4_by_3_deck_brings_pictures_kept_for_a_chart_and_a_video() {
     }
     assert_eq!(deck.pages[0].name, "Chart with a picture");
     assert_eq!(deck.pages[0].notes, "Chart notes");
-    // The chart PowerPoint 2016 can't be drawn here: its picture comes in.
+    // The chart PowerPoint 2016 can't be drawn here: its picture comes in,
+    // and the summary says so.
     assert_eq!(kinds(&deck, 0), count(&[("shape:Rectangle", 1), ("text", 1), ("image", 1)]));
+    assert_eq!(deck.notes.get(&ImportNote::AsPicture), Some(&1));
     // The video: its poster.
     assert_eq!(kinds(&deck, 1), count(&[("shape:Rectangle", 1), ("image", 1)]));
-    assert_eq!(deck.notes, BTreeMap::from([(ImportNote::Media, 1)]));
+    assert_eq!(deck.notes, BTreeMap::from([(ImportNote::Media, 1), (ImportNote::AsPicture, 1)]));
     assert_eq!(deck.pages[2].name, "Four by three");
 }
 

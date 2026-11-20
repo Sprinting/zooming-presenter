@@ -30,7 +30,7 @@ use pptx_parse::{
 use zebra_core::import::{asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox};
 use zebra_core::{Align, Crop, Dash, Element, ElementKind, ImageData, ImageMask, ListKind, ParaFormat, ShapeData, ShapeKind, Size, SpanFormat, TextData, TextSpan, TextStyle, Transform};
 
-use crate::pptx_xml::{part_info, PartInfo, StyleKind, TextStrike};
+use crate::pptx_xml::{part_info, PartInfo, ShapeInfo, StyleKind, TextStrike};
 use crate::{Control, ImportError, Options, Reader};
 
 /// Long side of a slide on the canvas, world units (the same as a PDF's
@@ -432,7 +432,12 @@ impl<'a> SlideReader<'a> {
                     if src.is_some_and(|s| s.media.is_some()) {
                         self.note(ImportNote::Media);
                     }
-                    self.picture_node(p, &p.base.transform, parents, group);
+                    // A chart (or other object) the file keeps a picture of
+                    // beside it comes in as that picture: say so.
+                    let stand_in = self.shape_info(self.part, p.base.id).and_then(|i| i.stands_in);
+                    if self.picture_node(p, &p.base.transform, parents, group) && stand_in.is_some() {
+                        self.note(ImportNote::AsPicture);
+                    }
                 }
                 ShapeNode::GraphicFrame(f) => {
                     if f.base.hidden || (role == Role::Inherited && f.base.placeholder.is_some()) {
@@ -899,8 +904,13 @@ impl<'a> SlideReader<'a> {
     /// The strike-through part `part`'s shape `id` says (None when it
     /// says none).
     fn text_strike(&self, part: &str, id: u32) -> Option<&'a TextStrike> {
+        self.shape_info(part, id)?.text.as_ref()
+    }
+
+    /// What the parser's model leaves out of part `part`'s shape `id`.
+    fn shape_info(&self, part: &str, id: u32) -> Option<&'a ShapeInfo> {
         let infos: &'a BTreeMap<String, PartInfo> = self.infos;
-        infos.get(part)?.shapes.get(&id)?.text.as_ref()
+        infos.get(part)?.shapes.get(&id)
     }
 
     /// Whether paragraph `index` at `level`'s runs strike through unless
