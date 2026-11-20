@@ -199,6 +199,9 @@ pub struct ZebraApp {
     /// built for: `nearest_step` searches it.
     step_index: std::cell::RefCell<Option<((u64, u64, [u64; 2]), zebra_core::step_index::StepIndex)>>,
     pub queued: Vec<Action>,
+    /// Faces of font families (the Weight pop-up, the inspector's Font
+    /// line), per family, for the document as last opened.
+    font_faces: std::cell::RefCell<(u64, std::collections::HashMap<String, Vec<zebra_core::FontFace>>)>,
     /// Actions held while the document is being saved (Close, Quit, Open,
     /// another Save, and what a Save Changes sheet's Save goes on to do).
     /// They run when the save is done, and are dropped if it failed.
@@ -418,6 +421,7 @@ impl ZebraApp {
             nearest_step: Default::default(),
             step_index: Default::default(),
             queued: vec![],
+            font_faces: Default::default(),
             after_save: vec![],
             opening: None,
             scroll_mode,
@@ -620,6 +624,16 @@ impl ZebraApp {
 
     // ------------------------------------------------------------------
     // Actions
+
+    /// The upright faces of a font family, lightest first (cached: an
+    /// installed font's files are read once).
+    pub fn font_faces(&self, family: &str) -> Vec<zebra_core::FontFace> {
+        let mut c = self.font_faces.borrow_mut();
+        if c.0 != self.editor.loads {
+            *c = (self.editor.loads, Default::default());
+        }
+        c.1.entry(family.to_string()).or_insert_with(|| self.editor.measure.font_faces(&self.editor.doc, family)).clone()
+    }
 
     pub fn perform(&mut self, ctx: &Context, a: Action) {
         use Action::*;

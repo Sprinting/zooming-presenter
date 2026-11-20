@@ -12,6 +12,9 @@ use crate::style;
 const H: Origin = Origin::Human;
 /// Seconds without a change before a burst of edits becomes one undo step.
 const COMMIT_AFTER: f64 = 0.8;
+/// Which styles get a Weight pop-up next to their font: Title, Subtitle,
+/// Body. (Kartik hasn't decided whether Subtitle and Body get one.)
+const WEIGHT_POPUP: [bool; 3] = [true, true, true];
 
 pub struct ThemeEditor {
     /// The theme being edited (a custom theme of this document).
@@ -205,13 +208,16 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
     section(ui, &crate::t!("theme-editor-section-fonts"));
     let families = te.families.clone();
     let font_tip = crate::t!("theme-editor-font-tip");
-    for (i, label) in [crate::t!("theme-editor-font-title"), crate::t!("theme-editor-font-subtitle"), crate::t!("theme-editor-font-body")].into_iter().enumerate() {
-        let st = match i {
-            0 => &mut te.draft.title,
-            1 => &mut te.draft.subtitle,
-            _ => &mut te.draft.body,
-        };
-        ui.horizontal(|ui| {
+    let labels = [crate::t!("theme-editor-font-title"), crate::t!("theme-editor-font-subtitle"), crate::t!("theme-editor-font-body")];
+    // Label, Font pop-up, Weight pop-up, size: one row per style, the
+    // columns lined up.
+    egui::Grid::new("theme-fonts").num_columns(4).spacing([6.0, 6.0]).show(ui, |ui| {
+        for (i, label) in labels.into_iter().enumerate() {
+            let st = match i {
+                0 => &mut te.draft.title,
+                1 => &mut te.draft.subtitle,
+                _ => &mut te.draft.body,
+            };
             ui.label(RichText::new(label).size(12.0)).on_hover_text(&font_tip);
             let shown = match st.font.as_str() {
                 "Sans" => crate::t!("theme-editor-font-sans-shown"),
@@ -220,20 +226,46 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
                 "Hand" => crate::t!("theme-editor-font-hand-shown"),
                 f => f.to_string(),
             };
-            egui::ComboBox::from_id_salt(("font", i)).selected_text(shown).width(170.0).height(320.0).show_ui(ui, |ui| {
+            // One width for the three, so the rows line up; a long
+            // installed font's name is cut short (its full name is in the
+            // list).
+            egui::ComboBox::from_id_salt(("font", i)).selected_text(shown).width(196.0).truncate().height(320.0).show_ui(ui, |ui| {
                 ui.add(egui::TextEdit::singleline(&mut te.font_query[i]).hint_text(crate::t!("theme-editor-search-fonts")));
                 let q = te.font_query[i].to_lowercase();
                 for f in families.iter().filter(|f| q.is_empty() || f.to_lowercase().contains(&q)).take(400) {
-                    if ui.selectable_label(st.font == *f, font_label(f)).clicked() {
+                    if ui.selectable_label(st.font == *f, font_label(f)).clicked() && st.font != *f {
                         st.font = f.clone();
+                        // Keep the weight if the new font has it, else
+                        // take its nearest face.
+                        let have: Vec<u16> = app.font_faces(f).iter().map(|x| x.weight).collect();
+                        if !have.is_empty() {
+                            st.weight = zebra_core::theme::nearest_weight(&have, st.weight);
+                        }
                         changed = true;
                     }
                 }
             });
+            if WEIGHT_POPUP[i] {
+                let faces = app.font_faces(&st.font);
+                let shown = crate::words::style_face_name(&faces, st.weight);
+                egui::ComboBox::from_id_salt(("weight", i)).selected_text(shown).width(96.0).truncate().height(320.0).show_ui(ui, |ui| {
+                    for f in &faces {
+                        if ui.selectable_label(st.weight == f.weight, crate::words::face_name(f)).clicked() && st.weight != f.weight {
+                            st.weight = f.weight;
+                            changed = true;
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(crate::t!("theme-editor-weight"));
+            } else {
+                ui.label("");
+            }
             let r = ui.add(egui::DragValue::new(&mut st.size).range(8.0..=400.0).speed(0.5).suffix(format!(" {}", crate::t!("theme-editor-unit-pt"))));
             changed |= r.drag_stopped() || (r.changed() && !r.dragged());
-        });
-    }
+            ui.end_row();
+        }
+    });
     if !te.draft.fonts.is_empty() {
         let names: Vec<&str> = te.draft.fonts.keys().map(|s| s.as_str()).collect();
         ui.label(RichText::new(crate::t!("theme-editor-embedded-fonts", fonts = names.join(", "))).size(11.0).weak());
