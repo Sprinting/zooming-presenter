@@ -49,6 +49,9 @@ function put(u8) {
 }
 function putStr(s) { var u = enc.encode(s); return [put(u), u.length]; }
 function out() { return dec.decode(new Uint8Array(X.memory.buffer, X.zw_out_ptr(), X.zw_out_len()).slice()); }
+// Links open only for http, https and mailto, as in the app (the player
+// filters too; this guards the page on its own).
+function safeLink(u) { return /^\s*(https?:\/\/|mailto:)/i.test(u); }
 
 var media = {}; // asset key -> object URL or relative path
 
@@ -399,7 +402,7 @@ function bind() {
       X.zw_command(dx < 0 ? 0 : 1);
     } else if (!moved) {
       var r = X.zw_click(p[0], p[1]);
-      if (r === 2) window.open(out(), '_blank', 'noopener');
+      if (r === 2) { var url = out(); if (safeLink(url)) window.open(url, '_blank', 'noopener'); }
       else if (r === 3) toggleVideo(out());
     }
     wake();

@@ -247,3 +247,14 @@ fn only_web_and_mail_links_open() {
         assert_eq!(matches!(got, Click::Link(_)), opens, "{url}: {got:?}");
     }
 }
+
+/// Audit R1, player side: the page script itself opens only http, https
+/// and mailto links, whatever the player hands it.
+#[test]
+fn the_page_script_checks_the_scheme_before_opening() {
+    let js = include_str!("../web/player.js");
+    assert!(js.contains("function safeLink(u) { return /^\\s*(https?:\\/\\/|mailto:)/i.test(u); }"), "allow-list present");
+    for line in js.lines().filter(|l| l.contains("window.open(")) {
+        assert!(line.contains("safeLink("), "every window.open is behind safeLink: {line}");
+    }
+}
