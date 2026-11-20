@@ -20,8 +20,8 @@ fn deck(pages: usize) -> ImportedDeck {
     let mut d = ImportedDeck { title: "t".into(), ..Default::default() };
     for i in 0..pages {
         let mut p = ImportedPage { w: 960.0, h: 540.0, name: format!("Page {}", i + 1), notes: format!("notes {i}"), ..Default::default() };
-        p.items.push(ImportedItem { element: text(&format!("Title {i}\nsecond line"), Align::Left), fit: Some(SourceBox { x0: 100.0, y0: 50.0, x1: 900.0, y1: 150.0 }) });
-        p.items.push(ImportedItem { element: text("centred", Align::Center), fit: Some(SourceBox { x0: 400.0, y0: 300.0, x1: 560.0, y1: 340.0 }) });
+        p.items.push(ImportedItem { element: text(&format!("Title {i}\nsecond line"), Align::Left), fit: Some(SourceBox { x0: 100.0, y0: 50.0, x1: 900.0, y1: 150.0, anchor: Default::default() }) });
+        p.items.push(ImportedItem { element: text("centred", Align::Center), fit: Some(SourceBox { x0: 400.0, y0: 300.0, x1: 560.0, y1: 340.0, anchor: Default::default() }) });
         d.pages.push(p);
     }
     d

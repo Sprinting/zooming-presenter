@@ -40,6 +40,9 @@ pub struct ImportedPage {
     pub items: Vec<ImportedItem>,
     /// Speaker notes for the page's path step.
     pub notes: String,
+    /// A PowerPoint slide: always framed (even when it holds one object),
+    /// and its frame shows deck-style when presenting ([`FrameData::slide`]).
+    pub slide: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +61,19 @@ pub struct SourceBox {
     pub y0: f64,
     pub x1: f64,
     pub y1: f64,
+    /// Where the text sits in the box from top to bottom.
+    pub anchor: BoxAnchor,
+}
+
+/// Where text sits in its [`SourceBox`] from top to bottom. A PDF's box is
+/// the text's own ink, so its text is centred on it; a PowerPoint text box
+/// can be taller than its text and says where the text goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BoxAnchor {
+    Top,
+    #[default]
+    Middle,
+    Bottom,
 }
 
 /// Something that came in differently from the source (the summary sheet
@@ -115,7 +131,8 @@ impl Editor {
     /// frame (named after the file) around them all, and a path step per
     /// page appended in page order (carrying the page's notes). A page that
     /// is a single picture (every PDF page) is its own step and carries the
-    /// page's name; a page of several objects is framed on its own.
+    /// page's name; a page of several objects, and every slide, is framed
+    /// on its own. Objects grouped on a page stay grouped.
     pub fn import_deck(&mut self, deck: &ImportedDeck, label: String, origin: Origin) -> ZResult<Outcome> {
         if deck.pages.is_empty() {
             return Err(ZError::invalid("the file has no pages to import"));
@@ -163,25 +180,29 @@ impl Editor {
             // Centred in its cell, so pages of different sizes line up.
             let ox = left + col * (cw + gap) + (cw - p.w) / 2.0;
             let oy = top + row * (ch + gap) + (ch - p.h) / 2.0;
-            let single = p.items.len() == 1;
+            let single = p.items.len() == 1 && !p.slide;
             if !single {
                 let fid = tmp("f");
                 clip.elements.push(Element {
                     id: fid.clone(),
                     transform: Transform { x: ox + p.w / 2.0, y: oy + p.h / 2.0, scale: 1.0, rotation: 0.0 },
-                    size: Size { w: p.w, h: p.h },
+                    // A hair bigger than the page, so what fills the whole
+                    // slide (its background, a full-bleed picture) is held
+                    // by the frame and moves with it (`frame_holds`).
+                    size: Size { w: p.w * (1.0 + 1e-5), h: p.h * (1.0 + 1e-5) },
                     locked: false,
                     name: p.name.clone(),
                     placeholder: false,
                     group: None,
-                    kind: ElementKind::Frame(FrameData { style: FrameStyle::Rectangle, color: None, slide: false }),
+                    kind: ElementKind::Frame(FrameData { style: FrameStyle::Rectangle, color: None, slide: p.slide }),
                 });
                 steps.push((fid, p.notes.clone()));
             }
             for it in &p.items {
                 let mut e = it.element.clone();
                 e.id = tmp(e.kind.id_prefix());
-                e.group = None;
+                // Groups are per page: the same name on two pages is two groups.
+                e.group = e.group.take().map(|g| format!("import-p{i}-{g}"));
                 if let (Some(b), ElementKind::Text(_)) = (it.fit, &e.kind) {
                     fit_text(self, &theme, &mut e, b);
                 }
@@ -204,8 +225,9 @@ impl Editor {
 }
 
 /// Measure `e` in the theme font and place it over its source box `b`:
-/// the same top, the same left, centre or right edge, never wider than the
-/// source by more than a little (it gets smaller instead).
+/// the same left, centre or right edge, at the top, middle or bottom of the
+/// box as its anchor says, never wider than the source by more than a
+/// little (it gets smaller instead).
 fn fit_text(ed: &Editor, theme: &crate::Theme, e: &mut Element, b: SourceBox) {
     let ElementKind::Text(t) = &e.kind else { return };
     let align = t.align;
@@ -229,5 +251,10 @@ fn fit_text(ed: &Editor, theme: &crate::Theme, e: &mut Element, b: SourceBox) {
     };
     // Text sits a little lower in its line box than the source's ink box
     // starts; centre the line box on the source box instead of top-aligning.
-    e.transform.y = (b.y0 + b.y1) / 2.0;
+    let h = e.size.h * e.transform.scale;
+    e.transform.y = match b.anchor {
+        BoxAnchor::Top => b.y0 + h / 2.0,
+        BoxAnchor::Middle => (b.y0 + b.y1) / 2.0,
+        BoxAnchor::Bottom => b.y1 - h / 2.0,
+    };
 }
