@@ -106,6 +106,12 @@ pub struct ViewState {
     /// Agents' mutations are refused while paused (Esc / stop button).
     pub agent_paused: bool,
     pub agent_permission: Permission,
+    /// Beta features are on (see [`crate::beta`]). The person's setting,
+    /// set by the host with [`crate::Editor::set_beta_features`]; never
+    /// read from a file or an agent.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub beta_features: bool,
     /// Seconds; injected by the host each frame.
     pub now: f64,
     /// Each agent's own one-line status ("Rewriting the intro"), set with
@@ -148,6 +154,7 @@ impl Default for ViewState {
             follow_agent: false,
             agent_paused: false,
             agent_permission: Permission::Edit,
+            beta_features: false,
             now: 0.0,
             agent_status: Default::default(),
             media_requests: vec![],

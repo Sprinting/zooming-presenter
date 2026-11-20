@@ -197,6 +197,8 @@ pub enum Event {
     StepChanged { step: Option<usize>, build: usize },
     AgentsPaused { paused: bool },
     Saved { path: String },
+    /// The person turned beta features on or off (see [`crate::beta`]).
+    BetaFeatures { on: bool },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -308,6 +310,25 @@ impl Editor {
             saving: None,
             saved: vec![],
             calc: Default::default(),
+        }
+    }
+
+    /// Turn beta features on or off: the person's setting, from the host
+    /// (see [`crate::beta`]). Agents hear of a change as a `beta_features`
+    /// event; nothing lets them make one.
+    pub fn set_beta_features(&mut self, on: bool) {
+        if self.view.beta_features != on {
+            self.view.beta_features = on;
+            self.events.push(Event::BetaFeatures { on });
+        }
+    }
+
+    /// Whether `feature` may be used now; the refusal when it may not.
+    pub fn check_beta(&self, feature: crate::beta::BetaFeature) -> ZResult<()> {
+        if self.view.beta_features {
+            Ok(())
+        } else {
+            Err(feature.error())
         }
     }
 

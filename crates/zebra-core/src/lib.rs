@@ -5,6 +5,7 @@
 //! state: camera, selection, mode). The GUI has no private mutation path.
 //! Read-only access goes through [`Editor::query`].
 
+pub mod beta;
 pub mod camera;
 pub mod check;
 pub mod clip;

@@ -318,6 +318,7 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                 "present": v.present,
                 "agent_paused": v.agent_paused,
                 "agent_permission": v.agent_permission,
+                "beta_features": v.beta_features,
                 "follow_agent": v.follow_agent,
                 "human_editing": ed.human_gesture_active(),
                 "can_undo": ed.can_undo(),
