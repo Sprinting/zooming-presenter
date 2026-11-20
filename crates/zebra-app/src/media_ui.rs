@@ -510,7 +510,10 @@ pub fn tick(app: &mut ZebraApp) {
         let on_screen = (e.world_size().0.max(e.world_size().1) * zoom * ppp).ceil().clamp(16.0, 4096.0) as u32;
         let max_dim = on_screen.next_power_of_two().min(4096);
         if let Some(f) = l.player.next_frame(max_dim) {
-            l.frame = Some(Arc::new(ImageLevel::from_premultiplied(&v.asset, f.width, f.height, f.rgba)));
+            // Marked moving: the next frame is the same picture to the GPU's
+            // settle logic, as a GIF's is (a big video kept the window
+            // redrawing).
+            l.frame = Some(Arc::new(ImageLevel::video_frame(&v.asset, f.width, f.height, f.rgba)));
         }
         if l.player.is_playing() {
             any_playing = true;

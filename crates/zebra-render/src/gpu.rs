@@ -465,6 +465,15 @@ mod settle_tests {
     }
 
     #[test]
+    fn a_big_playing_video_settles_once_not_every_frame() {
+        // Leftover of W9: video frames (4096² at most, over the 8M px) were
+        // new pictures every frame.
+        let frame = |shade: u8| Arc::new(ImageLevel::video_frame("clip", 3000, 3000, vec![shade; 3000 * 3000 * 4]));
+        let frames: Vec<DisplayList> = (0..6).map(|i| list(vec![frame(i as u8)])).collect();
+        assert_eq!(settling(&frames), [2, 1, 0, 0, 0, 0]);
+    }
+
+    #[test]
     fn new_stills_still_settle() {
         let a = big("page", false);
         let frames = [list(vec![a.clone()]), list(vec![a.clone()]), list(vec![a]), list(vec![big("page", false)])];
