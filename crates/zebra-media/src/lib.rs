@@ -22,6 +22,8 @@ use std::time::Instant;
 #[cfg(target_os = "macos")]
 mod avf;
 pub mod link;
+#[cfg(target_os = "macos")]
+mod mac_net;
 
 /// Whether a player can play yet. Players of local files are ready at
 /// once; a web video loads first, and can fail.
@@ -107,8 +109,10 @@ pub trait Backend: Send + Sync {
     /// can play. Nothing is fetched before this is called.
     fn open_video_url(&self, url: &str) -> Result<Box<dyn VideoPlayer>, String>;
     /// A still from a web video file, as [`Backend::poster_png`]. Blocks
-    /// while it loads: call it off the main thread. Streams have none.
-    fn poster_png_url(&self, url: &str, at: f64, max_dim: u32) -> Result<Vec<u8>, String>;
+    /// while it loads, never longer than `timeout` (then the request is
+    /// cancelled): call it off the main thread. Streams have none (their
+    /// first frame comes from a player).
+    fn poster_png_url(&self, url: &str, at: f64, max_dim: u32, timeout: std::time::Duration) -> Result<Vec<u8>, String>;
 }
 
 /// The backend for this platform (`ZEBRA_FAKE_MEDIA=1` forces the fake one).
@@ -148,7 +152,7 @@ impl Backend for Null {
     fn open_video_url(&self, _: &str) -> Result<Box<dyn VideoPlayer>, String> {
         Err("video plays on macOS only".into())
     }
-    fn poster_png_url(&self, _: &str, _: f64, _: u32) -> Result<Vec<u8>, String> {
+    fn poster_png_url(&self, _: &str, _: f64, _: u32, _: std::time::Duration) -> Result<Vec<u8>, String> {
         Err("poster frames need macOS".into())
     }
 }
@@ -188,7 +192,12 @@ impl Backend for Fake {
         }
         Ok(Box::new(p))
     }
-    fn poster_png_url(&self, url: &str, at: f64, max_dim: u32) -> Result<Vec<u8>, String> {
+    fn poster_png_url(&self, url: &str, at: f64, max_dim: u32, timeout: std::time::Duration) -> Result<Vec<u8>, String> {
+        if url.contains("slow") {
+            // A server that never sends a frame: given up at the deadline.
+            std::thread::sleep(timeout);
+            return Err("timed out".into());
+        }
         if url.contains("fail") || url.ends_with(".m3u8") {
             return Err("no poster".into());
         }

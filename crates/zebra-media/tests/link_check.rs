@@ -3,11 +3,12 @@
 //! sign-in, missing, slow, streams, and YouTube's and Vimeo's lookups.
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use zebra_core::LinkKind;
-use zebra_media::link::{Checker, LinkError};
+use zebra_media::link::{self, Checker, DownloadError, LinkError};
 
 /// Requests the server saw: (path with query, had a Cookie header).
 type Log = Arc<Mutex<Vec<(String, bool)>>>;
@@ -45,6 +46,9 @@ fn respond(mut s: TcpStream, base: &str, log: &Log) {
     let path = target.split('?').next().unwrap_or("").to_string();
     let query = target.split_once('?').map(|(_, q)| q.to_string()).unwrap_or_default();
     let mp4 = zebra_core::media::fixtures::tiny_mp4(1280, 720, 30, true);
+    if stream(&mut s, &path, &query, &mp4) {
+        return;
+    }
     let (status, ctype, body, extra): (&str, &str, Vec<u8>, String) = match path.as_str() {
         "/talk.mp4" => ("200 OK", "video/mp4", mp4, "Set-Cookie: session=abc\r\n".into()),
         "/octet.mov" => ("206 Partial Content", "application/octet-stream", mp4, String::new()),
@@ -96,6 +100,76 @@ fn respond(mut s: TcpStream, base: &str, log: &Log) {
     let _ = s.write_all(&body);
 }
 
+/// Answers that misbehave over time: they stall, never end, end early or
+/// claim to be enormous. True when `path` was one.
+fn stream(s: &mut TcpStream, path: &str, query: &str, mp4: &[u8]) -> bool {
+    let head = |s: &mut TcpStream, len: Option<u64>, ctype: &str| {
+        let len = len.map(|l| format!("Content-Length: {l}\r\n")).unwrap_or_default();
+        let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\n{len}Connection: close\r\n\r\n").as_bytes());
+    };
+    match path {
+        "/loop" => {
+            let _ = s.write_all(b"HTTP/1.1 302 Found\r\nLocation: /loop\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+        // The start of a file, then nothing for a long while.
+        "/stall.mp4" => {
+            head(s, Some(10 << 20), "video/mp4");
+            let _ = s.write_all(&mp4[..mp4.len().min(1024)]);
+            std::thread::sleep(Duration::from_secs(5));
+        }
+        // A video that never ends (until the reader hangs up).
+        "/endless.mp4" => {
+            head(s, None, "video/mp4");
+            let _ = s.write_all(mp4);
+            let zeros = vec![0u8; 64 * 1024];
+            while s.write_all(&zeros).is_ok() {}
+        }
+        // Says 1000 bytes more than it sends.
+        "/short.mp4" => {
+            head(s, Some(mp4.len() as u64 + 1000), "video/mp4");
+            let _ = s.write_all(mp4);
+        }
+        // Says 5 TB.
+        "/huge.mp4" => {
+            head(s, Some(5 << 40), "video/mp4");
+            let _ = s.write_all(&mp4[..mp4.len().min(1024)]);
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        // An oEmbed answer that never ends.
+        "/oembed/youtube" if query.contains("endlessVid1") => {
+            head(s, None, "application/json");
+            let _ = s.write_all(b"{\"type\":\"video\",\"title\":\"");
+            let spaces = vec![b' '; 64 * 1024];
+            while s.write_all(&spaces).is_ok() {}
+        }
+        // A thumbnail that claims to be 60000 pixels a side.
+        "/yt/hugeThumb01/maxresdefault.jpg" => {
+            let b = lying_png(60000, 60000);
+            head(s, Some(b.len() as u64), "image/png");
+            let _ = s.write_all(&b);
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// A PNG whose header claims `w` x `h` over one pixel of data (with the
+/// header's checksum fixed, so only its size is a lie).
+fn lying_png(w: u32, h: u32) -> Vec<u8> {
+    let mut b = png(1, 1, 0);
+    b[16..20].copy_from_slice(&w.to_be_bytes());
+    b[20..24].copy_from_slice(&h.to_be_bytes());
+    let mut crc = !0u32;
+    for &x in &b[12..29] {
+        crc ^= x as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    b[29..33].copy_from_slice(&(!crc).to_be_bytes());
+    b
+}
+
 fn server() -> Server {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", l.local_addr().unwrap());
@@ -117,6 +191,7 @@ fn checker(s: &Server) -> Checker {
         vimeo_oembed: format!("{}/oembed/vimeo", s.base),
         youtube_thumbs: format!("{}/yt/", s.base),
         allow_http: true,
+        ..Checker::default()
     }
 }
 
@@ -235,19 +310,134 @@ fn youtube_and_vimeo_are_cards_with_the_sites_thumbnail() {
     assert!(log.iter().all(|(p, _)| p.starts_with("/oembed/") || p.starts_with("/yt/") || p.starts_with("/thumb/")), "only the lookups and thumbnails: {log:?}");
 }
 
-/// Download saves the whole file and leaves no part file behind.
+fn dl_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("zebra-link-dl-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Nothing left in the folder: no part file, no half a video.
+fn empty(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir).unwrap().next().is_none()
+}
+
+/// Download saves the whole file, reports progress, and leaves no part
+/// file behind.
 #[test]
 fn download_streams_to_a_file() {
     let s = server();
-    let dir = std::env::temp_dir().join(format!("zebra-link-dl-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dl_dir("ok");
     let to = dir.join("talk.mp4");
-    let stop = std::sync::atomic::AtomicBool::new(false);
-    let n = checker(&s).download(&format!("{}/talk.mp4", s.base), &to, &stop).unwrap();
-    assert_eq!(std::fs::read(&to).unwrap(), zebra_core::media::fixtures::tiny_mp4(1280, 720, 30, true));
-    assert_eq!(n as usize, std::fs::metadata(&to).unwrap().len() as usize);
-    let page = dir.join("page.mp4");
-    assert_eq!(checker(&s).download(&format!("{}/page.html", s.base), &page, &stop), Err(LinkError::NotVideo));
-    assert!(!page.exists() && !page.with_extension("part").exists());
-    assert_eq!(checker(&s).download(&format!("{}/gone.mp4", s.base), &page, &stop), Err(LinkError::NotFound));
+    let stop = AtomicBool::new(false);
+    let seen = Mutex::new(vec![]);
+    let n = checker(&s).download(&format!("{}/talk.mp4", s.base), &to, &stop, &|done, total| seen.lock().unwrap().push((done, total))).unwrap();
+    let mp4 = zebra_core::media::fixtures::tiny_mp4(1280, 720, 30, true);
+    assert_eq!(std::fs::read(&to).unwrap(), mp4);
+    assert_eq!(n as usize, mp4.len());
+    let seen = seen.into_inner().unwrap();
+    assert_eq!(seen.first(), Some(&(0, Some(mp4.len() as u64))));
+    assert_eq!(seen.last(), Some(&(mp4.len() as u64, Some(mp4.len() as u64))));
+    std::fs::remove_file(&to).unwrap();
+    assert!(empty(&dir));
+}
+
+/// Every way a download can fail leaves the folder as it was.
+#[test]
+fn a_failed_download_leaves_nothing_behind() {
+    let s = server();
+    let dir = dl_dir("fail");
+    let to = dir.join("v.mp4");
+    let stop = AtomicBool::new(false);
+    let c = checker(&s);
+    let dl = |c: &Checker, p: &str| c.download(&format!("{}{p}", s.base), &to, &stop, &|_, _| {});
+    assert_eq!(dl(&c, "/page.html"), Err(DownloadError::Link(LinkError::NotVideo)));
+    assert_eq!(dl(&c, "/gone.mp4"), Err(DownloadError::Link(LinkError::NotFound)));
+    assert_eq!(dl(&c, "/private.mp4"), Err(DownloadError::Link(LinkError::SignIn)));
+    assert_eq!(dl(&c, "/loop"), Err(DownloadError::Link(LinkError::Unreachable)), "a redirect loop");
+    assert_eq!(dl(&c, "/short.mp4"), Err(DownloadError::Link(LinkError::Unreachable)), "the server hung up early");
+    assert!(empty(&dir));
+
+    // Nothing for the stall time (30 s; shortened here).
+    let quick = Checker { idle: Duration::from_millis(400), ..checker(&s) };
+    let t = Instant::now();
+    assert_eq!(dl(&quick, "/stall.mp4"), Err(DownloadError::Link(LinkError::Unreachable)));
+    assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    assert!(empty(&dir));
+
+    // The folder can't be written to.
+    let nowhere = dir.join("missing").join("v.mp4");
+    assert_eq!(c.download(&format!("{}/talk.mp4", s.base), &nowhere, &stop, &|_, _| {}), Err(DownloadError::Disk));
+    assert!(empty(&dir));
+}
+
+/// The disk's free space is checked against the size before anything is
+/// written, and again while it is.
+#[test]
+fn a_download_never_fills_the_disk() {
+    let s = server();
+    let dir = dl_dir("space");
+    let to = dir.join("v.mp4");
+    let stop = AtomicBool::new(false);
+    let dl = |c: &Checker, p: &str| c.download(&format!("{}{p}", s.base), &to, &stop, &|_, _| {});
+    // 5 TB claimed: refused at once.
+    let t = Instant::now();
+    assert_eq!(dl(&checker(&s), "/huge.mp4"), Err(DownloadError::NoSpace));
+    assert!(t.elapsed() < Duration::from_secs(2));
+    // A disk with exactly the margin left can't take even a small file.
+    let full = Checker { free_space: |_| Some(link::SPACE_MARGIN), ..checker(&s) };
+    assert_eq!(dl(&full, "/talk.mp4"), Err(DownloadError::NoSpace));
+    assert!(empty(&dir));
+    // No size given, and the disk fills while it streams: it stops.
+    static FREE: AtomicU64 = AtomicU64::new(0);
+    FREE.store(link::SPACE_MARGIN + (40 << 20), Ordering::SeqCst);
+    let filling = Checker {
+        free_space: |_| Some(FREE.fetch_sub(8 << 20, Ordering::SeqCst)),
+        ..checker(&s)
+    };
+    assert_eq!(dl(&filling, "/endless.mp4"), Err(DownloadError::NoSpace));
+    assert!(empty(&dir));
+}
+
+/// Cancel stops a download at once, and leaves nothing.
+#[test]
+fn a_download_can_be_cancelled() {
+    let s = server();
+    let dir = dl_dir("cancel");
+    let to = dir.join("v.mp4");
+    let stop = AtomicBool::new(false);
+    let got = AtomicU64::new(0);
+    let r = checker(&s).download(&format!("{}/endless.mp4", s.base), &to, &stop, &|done, total| {
+        assert_eq!(total, None);
+        got.store(done, Ordering::SeqCst);
+        if done > 4 << 20 {
+            stop.store(true, Ordering::SeqCst);
+        }
+    });
+    assert_eq!(r, Err(DownloadError::Cancelled));
+    assert!(got.load(Ordering::SeqCst) > 4 << 20);
+    assert!(empty(&dir));
+}
+
+/// Hostile answers to a check: a redirect loop, an answer that never
+/// ends, a thumbnail that claims to be enormous. Each ends quickly with
+/// a message, reading only a bounded part of what is sent.
+#[test]
+fn hostile_answers_are_bounded() {
+    let s = server();
+    let c = checker(&s);
+    assert_eq!(c.check(&format!("{}/loop", s.base)), Err(LinkError::Unreachable));
+    let t = Instant::now();
+    assert_eq!(c.check(&format!("{}/endless.mp4", s.base)).unwrap().kind, LinkKind::File, "only its start is read");
+    assert_eq!(c.check("https://youtu.be/endlessVid1"), Err(LinkError::NotFound), "512 KB of an endless lookup isn't an answer");
+    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    assert_eq!(c.check("https://youtu.be/hugeThumb01"), Err(LinkError::NotVideo), "a thumbnail too big to decode");
+    // Empty and silly input never reaches the network.
+    for bad in ["", "   ", "https://", "\u{0}", "https://exa mple.com/v.mp4"] {
+        assert_eq!(c.check(bad), Err(LinkError::NotLink), "{bad:?}");
+    }
+    assert_eq!(c.check("https://me:pw@example.com/v.mp4"), Err(LinkError::Password));
+    let long = format!("https://example.com/{}.mp4", "a".repeat(1 << 20));
+    let _ = Checker { timeout: Duration::from_millis(200), ..checker(&s) }.check(&long);
+    assert!(s.log.lock().unwrap().iter().all(|(p, _)| !p.contains("exa mple") && !p.contains("aaaa")));
 }

@@ -14,7 +14,7 @@
 //! * YouTube and Vimeo: the oEmbed lookup says whether the video is there
 //!   and public, and gives its title and thumbnail (the card's poster).
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,14 @@ const HEAD_BYTES: u64 = 64 * 1024;
 const TEXT_BYTES: u64 = 512 * 1024;
 /// Most of a thumbnail that is read.
 const IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+/// A download that receives nothing for this long has stalled.
+pub const DOWNLOAD_IDLE: Duration = Duration::from_secs(30);
+/// Space a download leaves free on the disk, and below which it stops.
+pub const SPACE_MARGIN: u64 = 512 * 1024 * 1024;
+/// How often (bytes written) a download looks at the free space again.
+const SPACE_EVERY: u64 = 16 * 1024 * 1024;
+/// Redirects followed before a link counts as unreachable (a loop).
+const MAX_REDIRECTS: u32 = 5;
 
 /// Where the checks go. `Default` is the real web; tests point it at a
 /// local server.
@@ -40,9 +48,17 @@ pub struct Checker {
     /// Where YouTube keeps a video's thumbnails: `{this}{id}/maxresdefault.jpg`.
     pub youtube_thumbs: String,
     /// Tests only: let http links through so a local server can stand in
-    /// for the web. Zebra itself only ever opens https links.
+    /// for the web. Zebra itself only ever opens https links. It also
+    /// keeps the requests on the portable transport (ureq) on the Mac,
+    /// where the system's would refuse plain http.
     #[doc(hidden)]
     pub allow_http: bool,
+    /// A download's stall time (`DOWNLOAD_IDLE`; tests shorten it).
+    #[doc(hidden)]
+    pub idle: Duration,
+    /// Free bytes on the disk holding a path (tests stand in a full disk).
+    #[doc(hidden)]
+    pub free_space: fn(&Path) -> Option<u64>,
 }
 
 impl Default for Checker {
@@ -53,6 +69,8 @@ impl Default for Checker {
             vimeo_oembed: "https://vimeo.com/api/oembed.json".into(),
             youtube_thumbs: "https://i.ytimg.com/vi/".into(),
             allow_http: false,
+            idle: DOWNLOAD_IDLE,
+            free_space,
         }
     }
 }
@@ -73,6 +91,7 @@ impl Checker {
             c.allow_http = true;
             if let Some(ms) = std::env::var("ZEBRA_TEST_WEB_TIMEOUT_MS").ok().and_then(|m| m.parse().ok()) {
                 c.timeout = Duration::from_millis(ms);
+                c.idle = Duration::from_millis(ms);
             }
         }
         c
@@ -94,52 +113,118 @@ pub struct Checked {
     pub title: Option<String>,
 }
 
+/// Why a download stopped. The part file is gone in every case.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DownloadError {
+    /// The link itself: moved, private, not a video, unreachable, stalled.
+    Link(LinkError),
+    /// Not enough space on the disk for it (before or while saving).
+    NoSpace,
+    /// The disk refused the file.
+    Disk,
+    Cancelled,
+}
+
+impl DownloadError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            DownloadError::Link(e) => e.code(),
+            DownloadError::NoSpace => "no_space",
+            DownloadError::Disk => "io",
+            DownloadError::Cancelled => "cancelled",
+        }
+    }
+    pub fn message(&self) -> &'static str {
+        match self {
+            DownloadError::Link(e) => e.message(),
+            DownloadError::NoSpace => "There isn't enough space on the disk for this video.",
+            DownloadError::Disk => "Couldn't save the video.",
+            DownloadError::Cancelled => "Download cancelled.",
+        }
+    }
+}
+
+impl From<LinkError> for DownloadError {
+    fn from(e: LinkError) -> Self {
+        DownloadError::Link(e)
+    }
+}
+
+/// An answer's status line and headers, after redirects.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Head {
+    pub status: u16,
+    /// Lower case, without parameters.
+    pub content_type: String,
+    /// Where the answer came from after redirects.
+    pub final_url: String,
+    pub redirected: bool,
+    pub length: Option<u64>,
+}
+
+/// An answer whose body is still to be read.
+pub(crate) struct Opened {
+    pub head: Head,
+    pub body: Box<dyn Read + Send>,
+}
+
 /// One answer, with at most a few kilobytes of its body.
 struct Answer {
-    status: u16,
-    content_type: String,
-    /// Where the answer came from after redirects.
-    final_url: String,
-    redirected: bool,
+    head: Head,
     body: Vec<u8>,
 }
 
-fn net(_: ureq::Error) -> LinkError {
-    // No connection, no such host, a time-out, a bad certificate, a
-    // redirect loop: all "couldn't reach".
-    LinkError::Unreachable
+/// How long a request may take: the whole of it (a check) or between
+/// two reads (a download).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Limits {
+    pub deadline: Option<Instant>,
+    pub idle: Duration,
+}
+
+impl Limits {
+    /// Time left, or Unreachable when it is up.
+    pub fn left(&self) -> Result<Duration, LinkError> {
+        match self.deadline {
+            Some(d) => d.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()).map(|d| d.min(self.idle)).ok_or(LinkError::Unreachable),
+            None => Ok(self.idle),
+        }
+    }
+}
+
+/// An https link that lands on http has been downgraded: refused, even
+/// when the http page would answer.
+pub fn downgraded(from: &str, to: &str) -> bool {
+    let scheme = |u: &str| u.trim().split_once("://").map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
+    scheme(from) == "https" && scheme(to) != "https"
 }
 
 impl Checker {
-    fn agent(&self, deadline: Instant) -> Result<ureq::Agent, LinkError> {
-        let left = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()).ok_or(LinkError::Unreachable)?;
-        Ok(agent_with(Some(left)))
+    /// Open `url`: the system's transport on the Mac (its proxies and App
+    /// Transport Security), ureq elsewhere and in tests. Never follows a
+    /// redirect from https to http, nor more than five.
+    fn open(&self, url: &str, range: Option<u64>, limits: Limits) -> Result<Opened, LinkError> {
+        if !(weblink::is_https_link(url) || self.allow_http) {
+            return Err(LinkError::Http);
+        }
+        #[cfg(target_os = "macos")]
+        let o = if self.allow_http { ureq_open(url, range, limits, true)? } else { crate::mac_net::open(url, range, limits)? };
+        #[cfg(not(target_os = "macos"))]
+        let o = ureq_open(url, range, limits, self.allow_http)?;
+        if downgraded(url, &o.head.final_url) {
+            return Err(LinkError::Http);
+        }
+        Ok(o)
     }
 
     fn get(&self, url: &str, max: u64, range: bool, deadline: Instant) -> Result<Answer, LinkError> {
-        let agent = self.agent(deadline)?;
-        let mut req = agent.get(url).header("Accept", "*/*");
-        if range {
-            // Ask for the start only; a server that can't still sends all
-            // of it, of which only `max` bytes are read.
-            req = req.header("Range", &format!("bytes=0-{}", max - 1));
-        }
-        let mut resp = req.call().map_err(net)?;
-        use ureq::ResponseExt;
-        let final_url = resp.get_uri().to_string();
-        let redirected = resp.get_redirect_history().is_some_and(|h| h.len() > 1) || final_url != url;
-        let status = resp.status().as_u16();
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
-            .unwrap_or_default();
+        let limits = Limits { deadline: Some(deadline), idle: self.timeout };
+        let o = self.open(url, range.then_some(max), limits)?;
         let mut body = vec![];
-        if status < 400 {
-            resp.body_mut().as_reader().take(max).read_to_end(&mut body).map_err(|_| LinkError::Unreachable)?;
+        if o.head.status < 400 {
+            o.body.take(max).read_to_end(&mut body).map_err(|_| LinkError::Unreachable)?;
         }
-        Ok(Answer { status, content_type, final_url, redirected, body })
+        Ok(Answer { head: o.head, body })
     }
 
     /// Check `url` as the Insert Web Video sheet does. Never longer than
@@ -163,22 +248,25 @@ impl Checker {
 
     fn web(&self, url: &str, deadline: Instant) -> Result<Checked, LinkError> {
         let a = self.get(url, HEAD_BYTES, true, deadline)?;
-        status(a.status)?;
-        if is_hls(&a.content_type, &a.body) {
+        status(a.head.status)?;
+        if is_hls(&a.head.content_type, &a.body) {
             return self.hls(&a, deadline);
         }
-        if is_movie(&a.body) || (a.body.is_empty() && is_movie_type(&a.content_type)) {
+        if is_movie(&a.body) || (a.body.is_empty() && is_movie_type(&a.head.content_type)) {
             let info = zebra_core::media::info(&a.body).ok().filter(|i| i.kind == zebra_core::MediaKind::Video);
+            // A header with a nonsense size (0, or past what any screen
+            // shows) says nothing; the player will.
+            let (w, h) = info.as_ref().map(|i| (i.width, i.height)).filter(|(w, h)| weblink::poster_fits(*w, *h)).unwrap_or((0, 0));
             return Ok(Checked {
                 kind: LinkKind::File,
-                width: info.as_ref().map_or(0, |i| i.width),
-                height: info.as_ref().map_or(0, |i| i.height),
-                duration: info.as_ref().map_or(0.0, |i| i.duration),
+                width: w,
+                height: h,
+                duration: info.as_ref().map(|i| i.duration).filter(|d| d.is_finite() && *d > 0.0).unwrap_or(0.0),
                 poster: None,
                 title: None,
             });
         }
-        if is_html(&a.content_type, &a.body) && a.redirected && looks_like_sign_in(&a.final_url) {
+        if is_html(&a.head.content_type, &a.body) && a.head.redirected && looks_like_sign_in(&a.head.final_url) {
             return Err(LinkError::SignIn);
         }
         Err(LinkError::NotVideo)
@@ -191,24 +279,39 @@ impl Checker {
         let media = match pl.first_variant {
             Some(v) => {
                 // A master playlist: its first variant says whether it ends.
-                let vurl = resolve(&a.final_url, &v);
+                let vurl = resolve(&a.head.final_url, &v);
                 match self.get(&vurl, TEXT_BYTES, false, deadline) {
-                    Ok(b) if b.status < 400 => {
+                    Ok(b) if b.head.status < 400 => {
                         let p = parse_playlist(&String::from_utf8_lossy(&b.body));
                         if (w, h) == (0, 0) {
                             (w, h) = p.resolution.unwrap_or((0, 0));
                         }
                         Some(p)
                     }
-                    // The player will find out; the stream itself answered.
+                    // A downgrade is refused outright; anything else the
+                    // player will find out (the stream itself answered).
+                    Err(LinkError::Http) => return Err(LinkError::Http),
                     _ => None,
                 }
             }
             None => Some(pl),
         };
+        if !weblink::poster_fits(w, h) {
+            (w, h) = (0, 0);
+        }
         let live = media.as_ref().is_some_and(|m| !m.ends);
         let duration = media.filter(|m| m.ends).map_or(0.0, |m| m.duration);
         Ok(Checked { kind: if live { LinkKind::Live } else { LinkKind::Stream }, width: w, height: h, duration, poster: None, title: None })
+    }
+
+    /// A thumbnail at `url`, when it is a picture of a sensible size.
+    /// Err(NotVideo) for one too big to decode safely.
+    fn thumbnail(&self, url: &str, deadline: Instant) -> Result<Option<image::DynamicImage>, LinkError> {
+        match self.get(url, IMAGE_BYTES, false, deadline) {
+            Ok(b) if b.head.status < 400 => decode_thumbnail(&b.body),
+            Err(LinkError::Http) => Err(LinkError::Http),
+            _ => Ok(None),
+        }
     }
 
     fn card(&self, kind: LinkKind, url: &str, youtube_id: Option<&str>, deadline: Instant) -> Result<Checked, LinkError> {
@@ -219,7 +322,7 @@ impl Checker {
             lookup.push_str("&width=1280");
         }
         let a = self.get(&lookup, TEXT_BYTES, false, deadline)?;
-        match a.status {
+        match a.head.status {
             401 | 403 => return Err(LinkError::SignIn),
             s if s >= 500 => return Err(LinkError::Unreachable),
             s if s >= 400 => return Err(LinkError::NotFound),
@@ -230,83 +333,134 @@ impl Checker {
         // where the video has it, else the lookup's (bars cut off).
         let mut poster = None;
         if let Some(id) = youtube_id {
-            let big = format!("{}{id}/maxresdefault.jpg", self.youtube_thumbs);
-            if let Ok(b) = self.get(&big, IMAGE_BYTES, false, deadline) {
-                if b.status < 400 && image::guess_format(&b.body).is_ok() {
-                    poster = Some(b.body);
-                }
-            }
+            poster = self.thumbnail(&format!("{}{id}/maxresdefault.jpg", self.youtube_thumbs), deadline)?;
         }
         if poster.is_none() {
             if let Some(t) = &o.thumbnail_url {
-                if let Ok(b) = self.get(t, IMAGE_BYTES, false, deadline) {
-                    if b.status < 400 && image::guess_format(&b.body).is_ok() {
-                        poster = Some(trim_letterbox(b.body));
-                    }
-                }
+                poster = self.thumbnail(t, deadline)?.map(trim_letterbox);
             }
         }
-        let (mut w, mut h) = poster.as_deref().and_then(|p| image::load_from_memory(p).ok()).map(|i| (i.width(), i.height())).unwrap_or((0, 0));
+        let (mut w, mut h) = poster.as_ref().map(|i| (i.width(), i.height())).unwrap_or((0, 0));
         if (w, h) == (0, 0) {
             if let (Some(ow), Some(oh)) = (o.width, o.height) {
-                if ow > 0 && oh > 0 {
-                    (w, h) = (1280, (1280 * oh / ow).max(1));
+                if ow > 0 && oh > 0 && weblink::poster_fits(ow, oh) {
+                    (w, h) = (1280, (1280u64 * oh as u64 / ow as u64).clamp(1, 8192) as u32);
                 }
             }
         }
+        let poster = poster.and_then(|p| jpeg(&p));
         Ok(Checked { kind, width: w, height: h, duration: o.duration.unwrap_or(0.0), poster, title: o.title })
     }
 
-    /// Save a file link's video to `to` (Download in the inspector). Stops
-    /// early, leaving no file, when `cancel` is set.
-    pub fn download(&self, url: &str, to: &Path, cancel: &AtomicBool) -> Result<u64, LinkError> {
-        if !(weblink::is_https_link(url) || self.allow_http) {
-            return Err(LinkError::Http);
+    /// Save a file link's video to `to` (Download in the inspector),
+    /// streaming it to `to` + ".part" and renaming that when it is all
+    /// there. `progress` hears (bytes so far, size when the server says).
+    /// Stops when `cancel` is set, when nothing arrives for `idle`
+    /// (30 s), or when the disk would be left with less than
+    /// `SPACE_MARGIN`. The part file is deleted whatever stops it.
+    pub fn download(&self, url: &str, to: &Path, cancel: &AtomicBool, progress: &dyn Fn(u64, Option<u64>)) -> Result<u64, DownloadError> {
+        let part = PartFile::new(to);
+        let dir = to.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let o = self.open(url, None, Limits { deadline: None, idle: self.idle })?;
+        status(o.head.status)?;
+        let need = o.head.length.unwrap_or(0).saturating_add(SPACE_MARGIN);
+        if (self.free_space)(dir).is_some_and(|free| free < need) {
+            return Err(DownloadError::NoSpace);
         }
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_connect(Some(self.timeout))
-            .timeout_recv_response(Some(self.timeout))
-            .http_status_as_error(false)
-            .max_redirects(5)
-            .user_agent("Zebra")
-            .tls_config(tls())
-            .build()
-            .into();
-        let mut resp = agent.get(url).call().map_err(net)?;
-        status(resp.status().as_u16())?;
-        let tmp = to.with_extension("part");
-        let result = (|| -> Result<u64, LinkError> {
-            let mut f = std::fs::File::create(&tmp).map_err(|_| LinkError::Unreachable)?;
-            let mut r = resp.body_mut().with_config().limit(u64::MAX).reader();
-            let mut buf = vec![0u8; 256 * 1024];
-            let mut n = 0u64;
-            loop {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err(LinkError::Unreachable);
-                }
-                let k = r.read(&mut buf).map_err(|_| LinkError::Unreachable)?;
-                if k == 0 {
-                    break;
-                }
-                if n == 0 && !is_movie(&buf[..k]) {
-                    return Err(LinkError::NotVideo);
-                }
-                std::io::Write::write_all(&mut f, &buf[..k]).map_err(|_| LinkError::Unreachable)?;
-                n += k as u64;
+        let mut f = std::fs::File::create(&part.0).map_err(|_| DownloadError::Disk)?;
+        let mut r = o.body;
+        let mut buf = vec![0u8; 256 * 1024];
+        let mut head: Vec<u8> = Vec::with_capacity(16);
+        let (mut n, mut next_space) = (0u64, SPACE_EVERY);
+        progress(0, o.head.length);
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(DownloadError::Cancelled);
             }
-            f.sync_all().map_err(|_| LinkError::Unreachable)?;
-            Ok(n)
-        })();
-        match result {
-            Ok(n) => {
-                std::fs::rename(&tmp, to).map_err(|_| LinkError::Unreachable)?;
-                Ok(n)
+            let k = match r.read(&mut buf) {
+                Ok(k) => k,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return Err(if cancel.load(Ordering::Relaxed) { DownloadError::Cancelled } else { LinkError::Unreachable.into() }),
+            };
+            if k == 0 {
+                break;
             }
-            Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
-                Err(e)
+            // Only a movie is saved: its first box says so.
+            if head.len() < 16 {
+                head.extend_from_slice(&buf[..k.min(16 - head.len())]);
+                if head.len() >= 16 && !is_movie(&head) {
+                    return Err(LinkError::NotVideo.into());
+                }
             }
+            std::io::Write::write_all(&mut f, &buf[..k]).map_err(|e| if is_disk_full(&e) { DownloadError::NoSpace } else { DownloadError::Disk })?;
+            n += k as u64;
+            if n >= next_space {
+                next_space = n + SPACE_EVERY;
+                if (self.free_space)(dir).is_some_and(|free| free < SPACE_MARGIN) {
+                    return Err(DownloadError::NoSpace);
+                }
+            }
+            progress(n, o.head.length);
         }
+        if head.len() < 16 && !is_movie(&head) {
+            return Err(LinkError::NotVideo.into());
+        }
+        if o.head.length.is_some_and(|len| n < len) {
+            // The connection closed early: a part of a file isn't a video.
+            return Err(LinkError::Unreachable.into());
+        }
+        f.sync_all().map_err(|_| DownloadError::Disk)?;
+        drop(f);
+        part.finish(to).map_err(|_| DownloadError::Disk)?;
+        Ok(n)
+    }
+}
+
+/// `to` + ".part" while a download writes it. Deleted on drop unless the
+/// download finished and renamed it.
+struct PartFile(PathBuf);
+
+impl PartFile {
+    fn new(to: &Path) -> PartFile {
+        let mut p = to.as_os_str().to_owned();
+        p.push(".part");
+        PartFile(PathBuf::from(p))
+    }
+    fn finish(self, to: &Path) -> std::io::Result<()> {
+        std::fs::rename(&self.0, to)
+    }
+}
+
+impl Drop for PartFile {
+    fn drop(&mut self) {
+        // Gone already after a rename: nothing to do.
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn is_disk_full(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::StorageFull || e.raw_os_error() == Some(28) /* ENOSPC */
+}
+
+/// Free bytes on the disk holding `dir` (for the user, not root). None
+/// when it can't be told.
+pub fn free_space(dir: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        // SAFETY: `c` is a NUL-terminated path and `st` a writable statvfs.
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+            return None;
+        }
+        #[allow(clippy::unnecessary_cast)]
+        Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        None
     }
 }
 
@@ -315,18 +469,55 @@ fn tls() -> ureq::tls::TlsConfig {
 }
 
 /// An agent with no cookie store (ureq keeps none without its `cookies`
-/// feature), the platform's TLS and certificates, and HTTP errors as
-/// answers rather than failures.
-fn agent_with(timeout: Option<Duration>) -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(timeout)
+/// feature), the platform's TLS and certificates, https only (every
+/// redirect too) unless a test allows http, and HTTP errors as answers
+/// rather than failures.
+fn ureq_open(url: &str, range: Option<u64>, limits: Limits, allow_http: bool) -> Result<Opened, LinkError> {
+    let left = limits.left()?;
+    let mut cfg = ureq::Agent::config_builder()
         .http_status_as_error(false)
-        .max_redirects(5)
+        .https_only(!allow_http)
+        .max_redirects(MAX_REDIRECTS)
         .save_redirect_history(true)
         .user_agent("Zebra")
         .tls_config(tls())
-        .build()
-        .into()
+        .timeout_connect(Some(left))
+        .timeout_recv_response(Some(left))
+        .timeout_per_read(Some(limits.idle));
+    if limits.deadline.is_some() {
+        cfg = cfg.timeout_global(Some(left));
+    }
+    let agent: ureq::Agent = cfg.build().into();
+    let mut req = agent.get(url).header("Accept", "*/*");
+    if let Some(max) = range {
+        // Ask for the start only; a server that can't still sends all of
+        // it, of which only `max` bytes are read.
+        req = req.header("Range", &format!("bytes=0-{}", max.saturating_sub(1)));
+    }
+    let resp = req.call().map_err(net)?;
+    use ureq::ResponseExt;
+    let final_url = resp.get_uri().to_string();
+    let redirected = resp.get_redirect_history().is_some_and(|h| h.len() > 1) || final_url != url;
+    let header = |k: &str| resp.headers().get(k).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let head = Head {
+        status: resp.status().as_u16(),
+        content_type: header("content-type").map(|v| v.split(';').next().unwrap_or("").trim().to_ascii_lowercase()).unwrap_or_default(),
+        final_url,
+        redirected,
+        length: header("content-length").and_then(|v| v.trim().parse().ok()),
+    };
+    let body = resp.into_body().into_with_config().limit(u64::MAX).reader();
+    Ok(Opened { head, body: Box::new(body) })
+}
+
+fn net(e: ureq::Error) -> LinkError {
+    match e {
+        // A redirect to http (ureq checks every hop).
+        ureq::Error::RequireHttpsOnly(_) => LinkError::Http,
+        // No connection, no such host, a time-out, a bad certificate, a
+        // redirect loop: all "couldn't reach".
+        _ => LinkError::Unreachable,
+    }
 }
 
 /// What an HTTP status says about the link.
@@ -488,28 +679,61 @@ pub fn parse_oembed(body: &[u8]) -> Option<OEmbed> {
     })
 }
 
+/// Decode a thumbnail, refusing one too big to be a thumbnail (more than
+/// 8192 pixels a side or `weblink::POSTER_MAX_PIXELS` in all): its size
+/// is read from the header before anything is decoded, and the decoder
+/// is held to it. Ok(None) when it isn't a picture.
+pub fn decode_thumbnail(bytes: &[u8]) -> Result<Option<image::DynamicImage>, LinkError> {
+    let Ok(fmt) = image::guess_format(bytes) else { return Ok(None) };
+    if !matches!(fmt, image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP) {
+        return Ok(None);
+    }
+    let reader = || image::ImageReader::with_format(std::io::Cursor::new(bytes), fmt);
+    let Ok((w, h)) = reader().into_dimensions() else { return Ok(None) };
+    if w == 0 || h == 0 {
+        return Ok(None);
+    }
+    if !weblink::poster_fits(w, h) {
+        return Err(LinkError::NotVideo);
+    }
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(weblink::POSTER_MAX_SIDE);
+    limits.max_image_height = Some(weblink::POSTER_MAX_SIDE);
+    limits.max_alloc = Some(weblink::POSTER_MAX_PIXELS * 4 + (16 << 20));
+    let mut r = reader();
+    r.limits(limits);
+    match r.decode() {
+        Ok(i) => Ok(Some(i)),
+        Err(image::ImageError::Limits(_)) => Err(LinkError::NotVideo),
+        Err(_) => Ok(None),
+    }
+}
+
+/// A poster as JPEG (what goes in the deck).
+fn jpeg(img: &image::DynamicImage) -> Option<Vec<u8>> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(img.to_rgb8()).write_to(&mut out, image::ImageFormat::Jpeg).ok()?;
+    Some(out.into_inner())
+}
+
 /// Cut black bars off the top and bottom of a thumbnail (YouTube's 4:3
 /// thumbnails of 16:9 videos have them). The picture as it was when it
-/// has none or can't be read.
-pub fn trim_letterbox(bytes: Vec<u8>) -> Vec<u8> {
-    let Ok(img) = image::load_from_memory(&bytes) else { return bytes };
+/// has none.
+pub fn trim_letterbox(img: image::DynamicImage) -> image::DynamicImage {
     let rgb = img.to_rgb8();
     let (w, h) = rgb.dimensions();
     if w == 0 || h < 8 {
-        return bytes;
+        return img;
     }
     let dark = |y: u32| (0..w).all(|x| rgb.get_pixel(x, y).0.iter().all(|c| *c < 24));
     let top = (0..h / 3).take_while(|y| dark(*y)).count() as u32;
     let bottom = (0..h / 3).take_while(|y| dark(h - 1 - *y)).count() as u32;
-    if top < h / 50 || bottom < h / 50 {
-        return bytes;
+    // Bars on both sides, leaving at least half: a dark picture (or an
+    // all-black one) isn't letterboxed.
+    if top < h / 50 || bottom < h / 50 || top + bottom > h / 2 {
+        return img;
     }
-    let cut = image::DynamicImage::ImageRgb8(image::imageops::crop_imm(&rgb, 0, top, w, h - top - bottom).to_image());
-    let mut out = std::io::Cursor::new(Vec::new());
-    match cut.write_to(&mut out, image::ImageFormat::Jpeg) {
-        Ok(()) => out.into_inner(),
-        Err(_) => bytes,
-    }
+    image::DynamicImage::ImageRgb8(image::imageops::crop_imm(&rgb, 0, top, w, h - top - bottom).to_image())
 }
 
 #[cfg(test)]
@@ -567,10 +791,80 @@ mod tests {
                 img.put_pixel(x, y, image::Rgb([200, 100, 50]));
             }
         }
-        let mut png = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgb8(img).write_to(&mut png, image::ImageFormat::Png).unwrap();
-        let out = image::load_from_memory(&trim_letterbox(png.into_inner())).unwrap();
+        let out = trim_letterbox(image::DynamicImage::ImageRgb8(img));
         assert_eq!((out.width(), out.height()), (48, 28));
+        // All black: nothing left to keep, so it stays as it was.
+        let black = trim_letterbox(image::DynamicImage::ImageRgb8(image::RgbImage::new(16, 9)));
+        assert_eq!((black.width(), black.height()), (16, 9));
+    }
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageLuma8(image::GrayImage::new(w, h)).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    /// A PNG whose header claims `w` x `h` over one pixel of data (with the
+    /// header's checksum fixed, so only its size is a lie).
+    fn lying_png(w: u32, h: u32) -> Vec<u8> {
+        let mut b = png(1, 1);
+        b[16..20].copy_from_slice(&w.to_be_bytes());
+        b[20..24].copy_from_slice(&h.to_be_bytes());
+        let mut crc = !0u32;
+        for &x in &b[12..29] {
+            crc ^= x as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        b[29..33].copy_from_slice(&(!crc).to_be_bytes());
+        b
+    }
+
+    /// A thumbnail's size is read from its header before it is decoded;
+    /// one past the limits is refused, whatever the bytes claim.
+    #[test]
+    fn thumbnails_are_size_checked_before_decoding() {
+        assert_eq!(decode_thumbnail(&png(64, 36)).unwrap().map(|i| (i.width(), i.height())), Some((64, 36)));
+        assert_eq!(decode_thumbnail(&png(8193, 1)).unwrap_err(), LinkError::NotVideo);
+        // A header that claims a huge picture over a few bytes of data:
+        // past 8192 a side, and (8000 x 8000) under it but past the count.
+        for (w, h) in [(60000u32, 60000u32), (8000, 8000)] {
+            assert_eq!(decode_thumbnail(&lying_png(w, h)).unwrap_err(), LinkError::NotVideo, "{w}x{h}");
+        }
+        // Within the limits but a lie all the same: no poster, no panic.
+        assert!(decode_thumbnail(&lying_png(4000, 3000)).unwrap().is_none());
+        // Empty, truncated, not a picture, a format not taken: no poster.
+        assert!(decode_thumbnail(b"").unwrap().is_none());
+        assert!(decode_thumbnail(&png(64, 36)[..40]).unwrap().is_none());
+        assert!(decode_thumbnail(b"<html>").unwrap().is_none());
+        assert!(decode_thumbnail(b"GIF89a\x01\0\x01\0\0\0\0;").unwrap().is_none());
+    }
+
+    #[test]
+    fn https_never_lands_on_http() {
+        assert!(downgraded("https://example.com/a.mp4", "http://example.com/a.mp4"));
+        assert!(downgraded("HTTPS://example.com/a.mp4", "HTTP://cdn.example.com/a.mp4"));
+        assert!(!downgraded("https://example.com/a.mp4", "https://cdn.example.com/a.mp4"));
+        // Tests' local http server: nothing to downgrade from.
+        assert!(!downgraded("http://127.0.0.1:1/a.mp4", "http://127.0.0.1:1/b.mp4"));
+    }
+
+    /// The real transport is https-only on every hop: ureq refuses an http
+    /// address before connecting (port 1 would otherwise be "couldn't
+    /// reach"), which is the same check it makes on each redirect.
+    #[test]
+    fn the_real_transport_refuses_http_on_every_hop() {
+        let limits = Limits { deadline: Some(Instant::now() + Duration::from_secs(2)), idle: Duration::from_secs(2) };
+        assert_eq!(ureq_open("http://127.0.0.1:1/a.mp4", None, limits, false).err(), Some(LinkError::Http));
+        assert_eq!(ureq_open("http://127.0.0.1:1/a.mp4", None, limits, true).err(), Some(LinkError::Unreachable));
+        assert_eq!(Checker::default().download("http://127.0.0.1:1/a.mp4", Path::new("/nonexistent/a.mp4"), &AtomicBool::new(false), &|_, _| {}), Err(DownloadError::Link(LinkError::Http)));
+    }
+
+    #[test]
+    fn free_space_is_known_here() {
+        assert!(free_space(&std::env::temp_dir()).is_some_and(|f| f > 0));
+        assert_eq!(free_space(Path::new("/no/such/folder/anywhere")), None);
     }
 
     #[test]

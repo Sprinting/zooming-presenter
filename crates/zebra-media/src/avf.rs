@@ -18,7 +18,7 @@
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -51,6 +51,8 @@ const TIMESCALE: i32 = 600;
 /// How close to the end counts as ended (one frame at 60 fps).
 const VIDEO_END_SLACK: f64 = 1.0 / 60.0;
 const AUDIO_END_SLACK: f64 = 0.05;
+/// Seconds a web video buffers ahead.
+const WEB_FORWARD_BUFFER: f64 = 30.0;
 
 pub struct AvFoundation;
 
@@ -73,9 +75,9 @@ impl Backend for AvFoundation {
     fn open_video_url(&self, url: &str) -> Result<Box<dyn VideoPlayer>, String> {
         Ok(Box::new(Video::open_url(url)?))
     }
-    fn poster_png_url(&self, url: &str, at: f64, max_dim: u32) -> Result<Vec<u8>, String> {
+    fn poster_png_url(&self, url: &str, at: f64, max_dim: u32, timeout: Duration) -> Result<Vec<u8>, String> {
         let asset = web_asset(url)?;
-        poster_of(&asset, url, at, max_dim).map(|f| encode_png(&f))
+        web_poster(&asset, url, at, max_dim, timeout).map(|f| encode_png(&f))
     }
 }
 
@@ -218,7 +220,12 @@ impl Video {
             return Err("video players must be opened on the main thread".into());
         };
         let asset = web_asset(url)?;
-        Self::with_asset(asset, None, None, mtm)
+        let v = Self::with_asset(asset, None, None, mtm)?;
+        // Buffer 30 s ahead at most: enough to ride out a slow patch,
+        // not the whole of a long talk in memory.
+        // SAFETY: plain setter on the main thread.
+        unsafe { v.item.setPreferredForwardBufferDuration(WEB_FORWARD_BUFFER) };
+        Ok(v)
     }
 
     fn with_asset(asset: Retained<AVURLAsset>, turns: Option<u8>, asset_duration: Option<f64>, mtm: MainThreadMarker) -> Result<Video, String> {
@@ -654,7 +661,72 @@ fn poster_of(asset: &AVURLAsset, name: &str, at: f64, max_dim: u32) -> Result<Fr
         }
     };
 
-    let (iw, ih) = (CGImage::width(Some(&image)), CGImage::height(Some(&image)));
+    frame_of(&image, name, max_dim)
+}
+
+/// A web video's still at `at` seconds (the nearest frame it can get),
+/// or its first frame when the clip is shorter. Asked for without
+/// blocking and waited for until `timeout`; at the deadline every request
+/// is cancelled, so nothing keeps loading in the background.
+fn web_poster(asset: &AVURLAsset, name: &str, at: f64, max_dim: u32, timeout: Duration) -> Result<Frame, String> {
+    use std::sync::mpsc;
+    let deadline = Instant::now() + timeout;
+    // SAFETY: plain AVFoundation calls with live arguments; the generator
+    // may be used from any thread.
+    let generator = unsafe {
+        let g = AVAssetImageGenerator::assetImageGeneratorWithAsset(asset);
+        g.setAppliesPreferredTrackTransform(true);
+        if max_dim > 0 {
+            g.setMaximumSize(CGSize { width: max_dim as f64, height: max_dim as f64 });
+        }
+        // Any nearby frame: exact frames of a remote file cost more reads.
+        g.setRequestedTimeToleranceBefore(kCMTimePositiveInfinity);
+        g.setRequestedTimeToleranceAfter(kCMTimePositiveInfinity);
+        g
+    };
+    let mut times = vec![at.max(0.0)];
+    if at > 0.0 {
+        // A clip shorter than `at` has no frame there: its first, then.
+        times.push(0.0);
+    }
+    let mut last = String::from("no frame");
+    for t in times {
+        let (tx, rx) = mpsc::sync_channel::<Result<CFRetained<CGImage>, String>>(1);
+        let tx = std::sync::Mutex::new(Some(tx));
+        let block = block2::RcBlock::new(move |image: *mut CGImage, _actual: CMTime, error: *mut NSError| {
+            let r = match std::ptr::NonNull::new(image) {
+                // SAFETY: the handler's image is valid for the call; retain
+                // it to keep it past the call.
+                Some(p) => Ok(unsafe { CFRetained::retain(p) }),
+                // SAFETY: a non-null error is a live NSError for the call.
+                None => Err(unsafe { error.as_ref() }.map(describe).unwrap_or_else(|| "cancelled".into())),
+            };
+            if let Some(tx) = tx.lock().ok().and_then(|mut g| g.take()) {
+                let _ = tx.send(r);
+            }
+        });
+        // SAFETY: the block lives as long as AVFoundation keeps it (it is
+        // reference counted and copied by the call).
+        unsafe { generator.generateCGImageAsynchronouslyForTime_completionHandler(cmtime(t), &block) };
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(Ok(image)) => return frame_of(&image, name, max_dim),
+            Ok(Err(e)) => last = e,
+            Err(_) => {
+                // SAFETY: plain call; outstanding requests end with
+                // "cancelled", which nobody waits for any more.
+                unsafe { generator.cancelAllCGImageGeneration() };
+                return Err(format!("{name}: no frame within {} s", timeout.as_secs()));
+            }
+        }
+    }
+    Err(format!("{name}: {last}"))
+}
+
+/// A decoded still as an RGBA frame no bigger than `max_dim`.
+fn frame_of(image: &CGImage, name: &str, max_dim: u32) -> Result<Frame, String> {
+    let fail = |what: &str| format!("{name}: {what}");
+    let (iw, ih) = (CGImage::width(Some(image)), CGImage::height(Some(image)));
     if iw == 0 || ih == 0 || iw > 1 << 15 || ih > 1 << 15 {
         return Err(fail("the poster frame has no usable size"));
     }
@@ -694,7 +766,7 @@ fn poster_of(asset: &AVURLAsset, name: &str, at: f64, max_dim: u32) -> Result<Fr
             },
         };
         // Bitmap memory starts at the top row, so the image lands upright.
-        CGContext::draw_image(Some(&context), rect, Some(&image));
+        CGContext::draw_image(Some(&context), rect, Some(image));
     }
     // `encode_png` writes an opaque image; video frames are opaque, but
     // make sure of it rather than store stray alpha.
