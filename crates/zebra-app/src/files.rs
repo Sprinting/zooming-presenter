@@ -143,11 +143,14 @@ pub fn sweep_autosave_media(dir: &Path) {
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let p = e.path();
         let name = e.file_name().to_string_lossy().to_string();
-        if let Some(autosave) = name.strip_suffix(".media").filter(|n| n.ends_with(".autosave")) {
+        // Beside a saved document Zebra's folders are hidden
+        // (`.<file>.autosave.media`); a visible one there is the person's.
+        let ours = name.starts_with('.') || dir == untitled_dir();
+        if let Some(autosave) = name.strip_suffix(".media").filter(|n| ours && n.ends_with(".autosave")) {
             // Not one an autosave is being written beside right now (its
             // media goes in before the autosave itself).
             let old = std::fs::metadata(&p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() > 600);
-            if p.is_dir() && old && !dir.join(autosave).exists() {
+            if e.file_type().is_ok_and(|t| t.is_dir()) && old && !dir.join(autosave).exists() {
                 let _ = std::fs::remove_dir_all(&p);
             }
         }

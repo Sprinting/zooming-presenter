@@ -72,13 +72,20 @@ fn media_lifecycle() {
     // running Zebra is writing stays; other files are never touched.
     let docs = root.join("docs");
     std::fs::create_dir_all(&docs).unwrap();
-    for n in ["talk.zebra", ".talk.zebra.saving-999999999", ".talk.zebra.open-999999999", "talk.zebra.tmp", "notes.tmp", "other.zebra.tmp"] {
+    for n in ["talk.zebra", ".talk.zebra.saving-999999999", ".talk.zebra.open-999999999", "talk.zebra.tmp", "notes.tmp", "other.zebra.tmp", ".video.part-999999999"] {
         std::fs::write(docs.join(n), b"x").unwrap();
     }
     let mine = format!(".talk.zebra.saving-{}", std::process::id());
     std::fs::write(docs.join(&mine), b"x").unwrap();
+    // An autosave media folder's half-copied file goes; a loose `.part-`
+    // file in the person's folder is someone else's and stays.
+    let media_dir = docs.join(".talk.zebra.autosave.media");
+    std::fs::create_dir_all(&media_dir).unwrap();
+    std::fs::write(media_dir.join(".k.mp4.part-999999999"), b"x").unwrap();
     io::sweep_temp(&docs, |p| p == std::process::id());
-    let mut want = vec![mine, "notes.tmp".to_string(), "other.zebra.tmp".to_string(), "talk.zebra".to_string()];
+    assert!(files(&media_dir).is_empty());
+    std::fs::remove_dir(&media_dir).unwrap();
+    let mut want = vec![".video.part-999999999".to_string(), mine, "notes.tmp".to_string(), "other.zebra.tmp".to_string(), "talk.zebra".to_string()];
     want.sort();
     assert_eq!(files(&docs), want);
 

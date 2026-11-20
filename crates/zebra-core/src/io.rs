@@ -330,7 +330,7 @@ pub fn sweep_temp(dir: &Path, alive: impl Fn(u32) -> bool) {
     // Autosave media folders hold `.part-` files too.
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let n = e.file_name().to_string_lossy().to_string();
-        if n.ends_with(".autosave.media") && e.path().is_dir() {
+        if n.ends_with(".autosave.media") && e.file_type().is_ok_and(|t| t.is_dir()) {
             all.push(e.path());
         }
     }
@@ -347,8 +347,11 @@ pub fn sweep_temp(dir: &Path, alive: impl Fn(u32) -> bool) {
                 }
                 continue;
             }
-            let pid = [".saving-", ".open-", ".part-"].iter().find_map(|m| n.rsplit_once(m).map(|(_, p)| p)).and_then(|p| p.parse::<u32>().ok());
-            if pid.is_some_and(|p| !alive(p)) {
+            // Only Zebra's own names: `.part-` files only inside an
+            // autosave media folder, never loose in the person's folder.
+            let marks: &[&str] = if d == dir { &[".saving-", ".open-"] } else { &[".part-"] };
+            let pid = marks.iter().find_map(|m| n.rsplit_once(m).map(|(_, p)| p)).and_then(|p| p.parse::<u32>().ok());
+            if pid.is_some_and(|p| !alive(p)) && e.file_type().is_ok_and(|t| t.is_file()) {
                 let _ = std::fs::remove_file(e.path());
             }
         }
