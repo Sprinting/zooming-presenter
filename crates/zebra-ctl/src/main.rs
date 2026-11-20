@@ -463,7 +463,12 @@ fn connect_agent(c: &Conn, direct: bool) -> Result<Client> {
             (inst.socket, c.token.clone().unwrap_or(inst.token))
         }
     };
-    let rs = zebra_api::relay::socket_for(&sock, &c.name());
+    // No relay socket fits (a very long --api-socket path, and no private
+    // short folder): connect directly at once rather than wait for a
+    // relay that can't start.
+    let Some(rs) = zebra_api::relay::socket_for(&sock, &c.name()) else {
+        return Client::connect_hello(&sock, &c.name(), &tok).map_err(|e| anyhow!("{e}"));
+    };
     if let Ok(cl) = zebra_api::relay::connect(&rs, &c.name(), &tok) {
         return Ok(cl);
     }

@@ -379,3 +379,27 @@ fn gridlines_are_four_independent_toggles() {
     assert!(all.horizontal && all.vertical && all.outline, "{all:?}");
     shot(&mut h, "inspector-table.png");
 }
+
+/// D6 (cloud pass): Esc while typing in a cell selected the whole table,
+/// so the next arrow moved the table and Delete deleted it. Like Numbers:
+/// Esc cancels the typing and keeps that cell selected; a second Esc goes
+/// to the table, a third to nothing.
+#[test]
+fn esc_while_typing_keeps_the_cell() {
+    let mut h = harness();
+    table_with_cell(&mut h);
+    type_text(&mut h, "Draft");
+    assert!(table_ui::editing(h.state()));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(!table_ui::editing(h.state()), "typing cancelled");
+    assert_eq!(head(&h), Some((1, 0)), "the cell is still selected");
+    assert_eq!(input(&h, 1, 0), "", "nothing typed was kept");
+    // Arrows now move between cells, and Delete clears a cell, not the table.
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(head(&h), Some((2, 0)));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().canvas.table.is_none(), "then the table");
+    assert_eq!(h.state().editor.view.selection.len(), 1);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().editor.view.selection.is_empty(), "then nothing");
+}

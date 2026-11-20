@@ -10,11 +10,36 @@ pub struct ZError {
     pub hint: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub valid_values: Vec<String>,
+    /// What the person is told, when the code alone would say the wrong
+    /// thing (`too_big` is a table, a picture or a document). Not sent to
+    /// agents: they read `message` and `hint`.
+    #[serde(skip)]
+    pub about: Option<About>,
+}
+
+/// What an error is about, for the app's own words (see [`ZError::about`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum About {
+    /// A table edit over a table limit.
+    Table,
+    /// A picture too large to scale down (see `media::PictureHeader::fits`).
+    Picture,
+    /// A video poster over its limit.
+    Poster,
+    /// A document over [`crate::io::MAX_DOCUMENT_JSON`].
+    Document,
+    /// A file still being written by an earlier save.
+    Saving,
 }
 
 impl ZError {
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), hint: None, valid_values: vec![] }
+        Self { code, message: message.into(), hint: None, valid_values: vec![], about: None }
+    }
+    /// Say what the error is about (for the person's message).
+    pub fn about(mut self, a: About) -> Self {
+        self.about = Some(a);
+        self
     }
     pub fn hint(mut self, h: impl Into<String>) -> Self {
         self.hint = Some(h.into());

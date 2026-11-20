@@ -334,9 +334,11 @@ impl Shell {
     }
 
     /// Quit closes one window at a time, the root window last (so no
-    /// document moves into it while another is asking). A window with
-    /// unsaved changes comes to the front before it asks, so its Save
-    /// Changes sheet is the one in view; Cancel there stops the quit.
+    /// document moves into it while another is asking). As in Keynote, a
+    /// document with a file is saved in place without asking; an Untitled
+    /// one with changes comes to the front before it asks, so its Save
+    /// Changes sheet is the one in view; Cancel there stops the quit, and
+    /// so does a save that fails (its alert says why).
     fn quit_step(&mut self, ctx: &egui::Context) {
         let busy = |w: &ZebraApp| w.close_me || w.sheet_showing() || !w.queued.is_empty() || w.editor.saving().is_some() || !w.after_save.is_empty();
         if let Some(w) = self.windows.iter().find(|w| w.quit_pending) {
@@ -351,7 +353,7 @@ impl Shell {
             return;
         }
         let i = self.windows.len() - 1;
-        if self.windows[i].editor.dirty() {
+        if self.windows[i].editor.dirty() && self.windows[i].editor.file_path.is_none() {
             self.set_front(i);
             let vid = if i == 0 { egui::ViewportId::ROOT } else { egui::ViewportId::from_hash_of(("document", self.windows[i].doc_id.as_str())) };
             ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Minimized(false));

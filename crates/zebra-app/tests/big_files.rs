@@ -105,8 +105,16 @@ fn dropped_files_are_told_apart_by_their_bytes_not_their_names() {
     let f = std::fs::File::create(&dmg).unwrap();
     f.set_len(4 << 30).unwrap();
     let t = std::time::Instant::now();
-    assert_eq!(dropped_kind(&dmg).unwrap(), Dropped::Other);
+    assert_eq!(dropped_kind(&dmg).unwrap(), Dropped::Damaged, "named as a picture, but isn't one");
     assert!(t.elapsed().as_millis() < 1000);
+    // Something named as nothing Zebra takes: "use a picture, ...".
+    let log = dir.join("notes.log");
+    std::fs::write(&log, "just text\n").unwrap();
+    assert_eq!(dropped_kind(&log).unwrap(), Dropped::Other);
+    // An empty PowerPoint file is damaged, not "use a PowerPoint file".
+    let empty = dir.join("empty.pptx");
+    std::fs::write(&empty, b"").unwrap();
+    assert_eq!(dropped_kind(&empty).unwrap(), Dropped::Damaged);
     // A picture with no extension, a video named .txt.
     let pic = dir.join("picture");
     let mut png = vec![];
@@ -120,22 +128,129 @@ fn dropped_files_are_told_apart_by_their_bytes_not_their_names() {
     let pptx = dir.join("Deck.pptx");
     std::fs::write(&pptx, b"PK\x03\x04\x14\x00\x00\x00[Content_Types].xml").unwrap();
     assert_eq!(dropped_kind(&pptx).unwrap(), Dropped::Slides);
-    // A folder, a device: an error, not a read.
+    // A folder, a device, a pipe: an error, not a read, and the person
+    // reads a plain line with the name, not the path and "not a file".
     assert!(dropped_kind(&dir).is_err());
     assert!(dropped_kind(std::path::Path::new("/dev/zero")).is_err());
+    let pipe = dir.join("pipe.png");
+    assert!(std::process::Command::new("mkfifo").arg(&pipe).status().unwrap().success());
+    let e = dropped_kind(&pipe).unwrap_err();
+    let said = zebra_app::media_ui::unreadable(&pipe, &e);
+    assert_eq!(said, zebra_app::t!("app-toast-not-a-file", name = "pipe.png"));
+    assert!(!said.contains(dir.to_str().unwrap()) && !said.contains("not a file"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A pasted picture comes in at its full size: nothing is scaled down
+/// (a 10,000-pixel-wide one stays 10,000 wide). Pixels that don't add up
+/// are no picture.
 #[test]
-fn pasted_pictures_are_bounded() {
-    use zebra_app::media_ui::{pasted_png, MAX_PASTE_SIDE};
-    // Pixels that don't match the size, or no pixels: nothing.
+fn pasted_pictures_keep_their_size() {
+    use zebra_app::media_ui::pasted_png;
     assert!(pasted_png(0, 0, vec![]).is_none());
     assert!(pasted_png(100, 100, vec![0; 16]).is_none());
     assert!(pasted_png(u32::MAX, u32::MAX, vec![0; 16]).is_none());
-    // Wider than the limit: scaled down to it, aspect kept.
-    let w = MAX_PASTE_SIDE + 1808;
+    let w = 10_000;
     let png = pasted_png(w, 50, vec![255; w as usize * 50 * 4]).unwrap();
     let (pw, ph) = image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().unwrap().into_dimensions().unwrap();
-    assert_eq!(pw, MAX_PASTE_SIDE);
-    assert_eq!(ph, (50.0 * MAX_PASTE_SIDE as f64 / w as f64).round() as u32);
+    assert_eq!((pw, ph), (w, 50));
+}
+
+/// Cloud pass: pasting a 12000 x 9000 screenshot held the window for 2 s
+/// while the clipboard's picture was read and decoded. Now that happens
+/// on a worker; the window goes on drawing, and the picture lands after.
+/// With no picture there after all, Zebra's own copy is pasted instead.
+#[test]
+fn a_pasted_picture_is_read_off_the_window_thread() {
+    use zebra_app::media_ui::paste_picture_with;
+    let mut h = harness();
+    let t = std::time::Instant::now();
+    paste_picture_with(h.state_mut(), || {
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        Some((64, 32, vec![200; 64 * 32 * 4]))
+    });
+    assert!(t.elapsed() < std::time::Duration::from_millis(200), "the window didn't wait: {:?}", t.elapsed());
+    h.run_steps(2);
+    assert!(h.state().editor.doc.elements.is_empty(), "not there yet");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().editor.doc.elements.is_empty() && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        h.run_steps(1);
+    }
+    let app = h.state();
+    assert_eq!(app.editor.doc.elements.len(), 1, "the picture landed");
+    assert!(matches!(app.editor.doc.elements.values().next().unwrap().kind, zebra_core::ElementKind::Image(_)));
+
+    // No picture on the clipboard: Zebra's own copied objects are pasted.
+    h.state_mut().queued.push(Action::Copy);
+    h.run_steps(2);
+    paste_picture_with(h.state_mut(), || None);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().editor.doc.elements.len() < 2 && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().editor.doc.elements.len(), 2, "own copy pasted");
+}
+
+/// A3 (cloud pass): every non-table "too big" read "That would make the
+/// table too big." Each error the person sees says what it is about.
+#[test]
+fn errors_say_what_they_are_about() {
+    use zebra_core::error::About;
+    use zebra_core::ZError;
+    let say = |e: ZError| zebra_app::words::error(&e);
+    let picture = say(ZError::new("too_big", "x").about(About::Picture));
+    assert_eq!(picture, zebra_app::t!("app-error-picture-too-big"));
+    assert!(picture.contains("picture") && !picture.contains("MB"), "{picture}");
+    assert!(say(ZError::new("too_big", "x").about(About::Table)).contains("table"));
+    for e in [ZError::new("too_big", "x"), ZError::new("too_large", "x"), ZError::new("too_big", "x").about(About::Poster), ZError::new("bad_file", "x").about(About::Document), ZError::new("busy", "x").about(About::Saving)] {
+        assert!(!say(e.clone()).contains("table"), "{e:?}: {}", say(e.clone()));
+    }
+    assert!(!say(ZError::new("busy", "x").about(About::Saving)).contains("agent"));
+
+    // A picture whose pixels can't be scaled down here (a progressive
+    // JPEG claiming 60,000 x 60,000), dropped: the toast says so. Any file
+    // size comes in (Kartik, 21 Nov); only this kind is refused. (On the
+    // Mac, ImageIO scales these, as Keynote does.)
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut h = harness();
+        let dir = data_dir().join("over-limit");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("picture-unscalable.jpg");
+        std::fs::write(&p, lying_jpeg(60_000, 60_000)).unwrap();
+        let at = h.state().canvas_center_world();
+        zebra_app::media_ui::insert_file(h.state_mut(), &p, at);
+        h.run_steps(1);
+        assert_eq!(h.state().toast.as_ref().map(|t| t.text.clone()), Some(picture.clone()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A progressive JPEG header claiming `w` x `h`, and no pixels.
+#[cfg(not(target_os = "macos"))]
+fn lying_jpeg(w: u16, h: u16) -> Vec<u8> {
+    let mut v = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 16, b'J', b'F', b'I', b'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0];
+    v.extend([0xFF, 0xC2, 0, 17, 8]);
+    v.extend(h.to_be_bytes());
+    v.extend(w.to_be_bytes());
+    v.extend([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+    v.extend([0xFF, 0xD9]);
+    v
+}
+
+/// A15 (cloud pass): a .zebra over the document size limit said "isn't a
+/// Zebra presentation, or it's damaged". It says it's too large.
+#[test]
+fn a_document_over_the_limit_is_too_large_not_damaged() {
+    use zebra_core::error::About;
+    let mut h = harness();
+    let p = data_dir().join("bomb-document.zebra");
+    let e = zebra_core::ZError::new("bad_file", "the document is too large").about(About::Document);
+    h.state_mut().finish_open(&p, Err(e));
+    match h.state().sheet.clone() {
+        Some(zebra_app::sheets::SheetKind::Alert { message, .. }) => assert_eq!(message, zebra_app::t!("app-open-failed-too-large")),
+        other => panic!("{other:?}"),
+    }
 }

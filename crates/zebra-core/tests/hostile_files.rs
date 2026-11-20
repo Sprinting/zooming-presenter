@@ -61,6 +61,23 @@ fn real_json() -> String {
     io::to_json(&Document::default())
 }
 
+/// A document with a picture for each asset key in `keys`.
+fn json_using(keys: &[&str]) -> String {
+    use base64::Engine;
+    let mut ed = Editor::new(Document::default());
+    let b64 = base64::engine::general_purpose::STANDARD.encode(png(4, 4));
+    for k in keys {
+        let out = ed.apply(cmd(json!({"op": "add_image", "data_base64": b64, "x": 0, "y": 0})), Origin::Human).unwrap();
+        let id = out.created[0].clone();
+        if let Some(e) = ed.doc.elements.get_mut(&id) {
+            if let ElementKind::Image(i) = &mut e.kind {
+                i.asset = k.to_string();
+            }
+        }
+    }
+    io::to_json(&ed.doc)
+}
+
 #[test]
 fn zip_bombs_are_refused_without_the_memory() {
     let _spill = spill_lock();
@@ -77,6 +94,7 @@ fn zip_bombs_are_refused_without_the_memory() {
     let before = heap();
     let e = io::load_bytes(&bomb).unwrap_err();
     assert_eq!(e.code, "bad_file");
+    assert_eq!(e.about, Some(error::About::Document), "the person is told it's too large, not damaged");
     if let (Some(a), Some(b)) = (before, heap()) {
         assert!(b.saturating_sub(a) < 64 << 20, "heap grew {} MB", (b - a) >> 20);
     }
@@ -89,7 +107,7 @@ fn zip_bombs_are_refused_without_the_memory() {
     head.truncate(head.len() - 12); // no IEND: zeros follow the header
     let bomb = zip_with(|z| {
         z.start_file("document.json", deflated()).unwrap();
-        z.write_all(real_json().as_bytes()).unwrap();
+        z.write_all(json_using(&["zeros", "fakepng"]).as_bytes()).unwrap();
         z.start_file("assets/zeros.png", deflated()).unwrap();
         write_n(z, 0, 256 << 20);
         z.start_file("assets/fakepng.png", deflated()).unwrap();
@@ -109,12 +127,49 @@ fn zip_bombs_are_refused_without_the_memory() {
     let pic = png(64, 64);
     let ok = zip_with(|z| {
         z.start_file("document.json", deflated()).unwrap();
-        z.write_all(real_json().as_bytes()).unwrap();
+        z.write_all(json_using(&["abc"]).as_bytes()).unwrap();
         z.start_file("assets/abc.png", deflated()).unwrap();
         z.write_all(&pic).unwrap();
     });
     let doc = io::load_bytes(&ok).unwrap();
     assert_eq!(doc.assets["abc"].bytes.len(), pic.len());
+}
+
+/// bomb-picture.zebra: a picture nothing in the document uses, which
+/// unpacks to 200 MB. Opening it reads none of it: nothing is spilled to
+/// disk (it went into the autosave's media before), and the document
+/// opens without it.
+#[test]
+fn assets_nothing_uses_are_not_read() {
+    let _spill = spill_lock();
+    let spill = root("unused-spill");
+    media::set_spill_dir(Some(spill.clone()));
+    let mut head = png(4, 4);
+    head.truncate(head.len() - 12);
+    let pic = png(8, 8);
+    let file = root("unused").join("bomb-picture.zebra");
+    std::fs::write(
+        &file,
+        zip_with(|z| {
+            z.start_file("document.json", deflated()).unwrap();
+            z.write_all(json_using(&["used"]).as_bytes()).unwrap();
+            z.start_file("assets/bomb.png", deflated()).unwrap();
+            z.write_all(&head).unwrap();
+            write_n(z, 0, 256 << 20);
+            z.start_file("assets/used.png", deflated()).unwrap();
+            z.write_all(&pic).unwrap();
+        }),
+    )
+    .unwrap();
+    let doc = io::load(&file).unwrap();
+    assert_eq!(doc.assets.keys().collect::<Vec<_>>(), ["used"], "the unused asset isn't read");
+    let spilled: u64 = std::fs::read_dir(&spill).into_iter().flatten().flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum();
+    assert!(spilled < 1 << 20, "{spilled} bytes spilled for an asset nothing uses");
+    // Saved again: the same document, without it.
+    let out = file.with_file_name("again.zebra");
+    io::write_file(&doc, &out).unwrap();
+    assert_eq!(io::load(&out).unwrap().assets.keys().collect::<Vec<_>>(), ["used"]);
+    media::set_spill_dir(None);
 }
 
 #[test]
@@ -169,22 +224,78 @@ fn paths_that_never_end_are_refused() {
     assert!(t.elapsed().as_secs() < 5, "took {:?}", t.elapsed());
 }
 
+/// A PNG header claiming `w` x `h` (interlaced or not), with no pixels.
+fn lying_png(w: u32, h: u32, interlaced: bool) -> Vec<u8> {
+    let mut v = png(8, 8);
+    v[16..20].copy_from_slice(&w.to_be_bytes());
+    v[20..24].copy_from_slice(&h.to_be_bytes());
+    v[28] = interlaced as u8;
+    v
+}
+
+/// A baseline (C0) or progressive (C2) JPEG frame header claiming w x h.
+fn lying_jpeg(w: u16, h: u16, progressive: bool) -> Vec<u8> {
+    let mut v = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 16, b'J', b'F', b'I', b'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0];
+    v.extend([0xFF, if progressive { 0xC2 } else { 0xC0 }, 0, 17, 8]);
+    v.extend(h.to_be_bytes());
+    v.extend(w.to_be_bytes());
+    v.extend([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+    v.extend([0xFF, 0xD9]);
+    v
+}
+
+/// Kartik, 21 Nov: no file-size cap on pictures (like Keynote). A picture
+/// of any file size comes in; only one whose header says its pixels can't
+/// be scaled down within bounds is refused, before anything is copied.
 #[test]
-fn a_huge_picture_is_refused_before_it_is_copied() {
+fn a_huge_picture_comes_in_and_only_unscalable_ones_are_refused() {
     let _spill = spill_lock();
     let spill = root("huge-spill");
     media::set_spill_dir(Some(spill.clone()));
     let dir = root("huge");
-    // A real PNG header, then a sparse 300 MB: costs no disk.
+    // A real PNG header, then a sparse 1.2 GB: it comes in.
     let p = dir.join("poster.png");
     let f = std::fs::File::create(&p).unwrap();
     (&f).write_all(&png(8, 8)).unwrap();
-    f.set_len(media::MAX_PICTURE + (44 << 20)).unwrap();
+    f.set_len(1200 << 20).unwrap();
+    drop(f);
     let mut ed = Editor::default();
-    let e = ed.apply(cmd(json!({"op":"add_image","path":p,"x":0,"y":0})), Origin::Human).unwrap_err();
-    assert_eq!(e.code, "too_big", "{e:?}");
-    // Nothing copied.
-    assert_eq!(std::fs::read_dir(&spill).map(|d| d.count()).unwrap_or(0), 0);
+    ed.apply(cmd(json!({"op":"add_image","path":p,"x":0,"y":0})), Origin::Human).unwrap();
+    drop(ed);
+
+    // Headers that lie about their size: a PNG 150,000 pixels square (any
+    // height streams) comes in; rows wider than the stream bound, a huge
+    // progressive JPEG, are refused at once, nothing copied.
+    let mut ed = Editor::default();
+    let ok = dir.join("lying-150000.png");
+    std::fs::write(&ok, lying_png(150_000, 150_000, false)).unwrap();
+    ed.apply(cmd(json!({"op":"add_image","path":ok,"x":0,"y":0})), Origin::Human).unwrap();
+    let base = std::fs::read_dir(&spill).map(|d| d.count()).unwrap_or(0);
+    // (On the Mac ImageIO draws any JPEG scaled, progressive or not.)
+    let mut refused = vec![("wide.png", lying_png(u32::MAX / 2, 10, false))];
+    if !cfg!(target_os = "macos") {
+        refused.push(("progressive.jpg", lying_jpeg(60_000, 60_000, true)));
+    }
+    for (name, bytes) in refused {
+        let p = dir.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        let e = ed.apply(cmd(json!({"op":"add_image","path":p,"x":0,"y":0})), Origin::Human).unwrap_err();
+        assert_eq!(e.code, "too_big", "{name}: {e:?}");
+        assert_eq!(e.about, Some(error::About::Picture));
+    }
+    assert_eq!(std::fs::read_dir(&spill).map(|d| d.count()).unwrap_or(0), base, "nothing copied");
+    // The header rules themselves.
+    let h = |b: &[u8]| media::picture_header(b).unwrap();
+    // On the Mac ImageIO reads a JPEG scaled at any size; elsewhere only
+    // what Zebra's own decoder can hold whole.
+    assert_eq!(h(&lying_jpeg(65_000, 65_000, false)).fits(), cfg!(target_os = "macos"), "a baseline JPEG is read scaled at any size on the Mac");
+    assert_eq!(h(&lying_jpeg(65_000, 65_000, true)).fits(), cfg!(target_os = "macos"));
+    assert!(h(&lying_png(70_000, 70_000, true)).fits(), "interlaced: drawn from its first pass");
+    assert_eq!(h(&lying_png(3, 4, true)), media::PictureHeader { format: media::PictureFormat::Png, width: 3, height: 4, interlaced: true });
+    // (A shadowed editor lives to the end of the scope: its copy of the
+    // 150,000-pixel picture would still be spilled.)
+    drop(ed);
+    let mut ed = Editor::default();
 
     // A disk image named .png: turned away from its first bytes.
     let dmg = dir.join("Installer.png");

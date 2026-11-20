@@ -611,7 +611,7 @@ impl ZebraApp {
                 // first: update {patch:...}"). Log them; show the person a
                 // translated line for the kind of error.
                 eprintln!("zebra: {}: {}{}", e.code, e.message, e.hint.as_ref().map(|h| format!(" ({h})")).unwrap_or_default());
-                self.toast(crate::words::error(&e.code));
+                self.toast(crate::words::error(&e));
                 None
             }
         }
@@ -686,6 +686,12 @@ impl ZebraApp {
 
     pub fn perform(&mut self, ctx: &Context, a: Action) {
         use Action::*;
+        // A sheet or the template chooser has the window: what the
+        // document would do (Paste, Delete, Undo…) must not reach the
+        // document behind it. Opening, closing and quitting still work.
+        if self.sheet_up() && !works_under_a_sheet(&a) {
+            return;
+        }
         // Commit any in-place text edit first so actions see the final text
         // (Move to New Text Box needs the selection in it, and commits it).
         if !matches!(a, Undo | Redo | MoveToNewTextBox) {
@@ -722,8 +728,23 @@ impl ZebraApp {
             New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close | Save | SaveAs if self.editor.saving().is_some() => {
                 self.after_save.push(a);
             }
-            New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close if self.editor.dirty() && self.sheet.is_none() && !self.force_quit => {
-                crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(a));
+            // As in Keynote: a document that has a file is saved in place,
+            // without asking, and the action follows once it's written. Only
+            // an Untitled one asks Save Changes.
+            New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close
+                if self.editor.dirty() && !self.force_quit && self.editor.file_path.is_some() && !self.asking_to_save() =>
+            {
+                if self.save(false) {
+                    self.after_save.push(a);
+                }
+            }
+            New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close if self.editor.dirty() && !self.force_quit => {
+                // Already asking (a second Close, from the close button
+                // say): that question stands. It used to fall through and
+                // close the window unasked (B4).
+                if !self.asking_to_save() {
+                    crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(a));
+                }
             }
             Close if self.hosted => {
                 // A show ends with its window: the menu bar and Dock come
@@ -1134,6 +1155,11 @@ impl ZebraApp {
         if crate::media_ui::paste_from_system(self) {
             return;
         }
+        self.paste_own();
+    }
+
+    /// Paste Zebra's own copied objects.
+    pub fn paste_own(&mut self) {
         if self.clipboard.is_empty() {
             return;
         }
@@ -1263,7 +1289,7 @@ impl ZebraApp {
     /// read into memory whole.
     pub fn insert_image_file(&mut self, p: &std::path::Path, at: Vec2) {
         if let Err(e) = std::fs::metadata(p) {
-            self.toast(crate::t!("app-toast-read-failed", path = p.display().to_string(), error = e.to_string()));
+            self.toast(crate::media_ui::unreadable(p, &e));
             return;
         }
         let alt = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
@@ -1325,6 +1351,7 @@ impl ZebraApp {
                 eprintln!("zebra: could not open {}: {e}", p.display());
                 let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
                 let message = match e.code {
+                    _ if e.about == Some(zebra_core::error::About::Document) => crate::t!("app-open-failed-too-large"),
                     "bad_file" if e.message.contains("newer") => crate::t!("app-open-failed-newer"),
                     "bad_file" => crate::t!("app-open-failed-not-zebra"),
                     _ if e.message.contains("No such file") => crate::t!("app-open-failed-missing"),
@@ -1343,7 +1370,22 @@ impl ZebraApp {
         egui::Id::unique((name, &self.doc_id))
     }
 
+    /// A sheet or the template chooser is over the document (see
+    /// [`works_under_a_sheet`]).
+    pub fn sheet_up(&self) -> bool {
+        self.welcome.is_some() || self.sheet_showing()
+    }
+
     /// A Save Changes or other sheet is up (or waiting to go up).
+    /// Save Changes is up, or about to be.
+    pub fn asking_to_save(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        if self.open_sheet.as_ref().is_some_and(|o| matches!(o.kind(), crate::sheets::SheetKind::SaveChanges(_))) {
+            return true;
+        }
+        matches!(self.sheet, Some(crate::sheets::SheetKind::SaveChanges(_)))
+    }
+
     pub fn sheet_showing(&self) -> bool {
         #[cfg(target_os = "macos")]
         if self.open_sheet.is_some() || self.open_picker.is_some() {
@@ -1829,8 +1871,9 @@ impl ZebraApp {
             }
             self.queued.push(action.clone());
         }
-        // Clipboard (egui turns ⌘C/⌘X/⌘V into these events)
-        if !text_focus && self.palette.is_none() {
+        // Clipboard (egui turns ⌘C/⌘X/⌘V into these events). Not while a
+        // sheet or the template chooser is up: the document is behind it.
+        if !text_focus && self.palette.is_none() && !self.sheet_up() {
             let evs = ctx.input(|i| i.events.clone());
             for ev in evs {
                 match ev {
@@ -1870,6 +1913,17 @@ impl ZebraApp {
         if files.is_empty() {
             return;
         }
+        // A sheet or the template chooser is up: only documents open (as
+        // File › Open would); nothing is added to the document behind.
+        if self.sheet_up() {
+            for f in &files {
+                let p = f.path().to_path_buf();
+                if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("zebra")) {
+                    self.queued.push(Action::OpenPath(p));
+                }
+            }
+            return;
+        }
         let pos = ctx.input(|i| i.pointer.hover_pos());
         let at = pos.map(|p| self.canvas.s2w(&self.editor, p)).unwrap_or_else(|| self.canvas_center_world());
         for (i, f) in files.iter().enumerate() {
@@ -1885,16 +1939,23 @@ impl ZebraApp {
                 continue;
             }
             match f.bytes() {
-                // Only where there is no file (a browser): never more than a
-                // picture can be.
-                Ok(bytes) if bytes.len() as u64 > zebra_core::media::MAX_PICTURE => {
-                    self.toast(crate::t!("app-toast-read-dropped-failed", error = "too large".to_string()))
+                // Only where there is no file (a browser). A big one goes in
+                // from a file, as a dropped file does:
+                // its base64 would be another copy, a third larger.
+                Ok(bytes) if bytes.len() > 64 << 20 => {
+                    let off = 30.0 * i as f64 / self.editor.view.camera.zoom;
+                    let tmp = std::env::temp_dir().join(format!("zebra-drop-{}-{i}.{}", std::process::id(), if ext.is_empty() { "bin" } else { ext.as_str() }));
+                    match std::fs::write(&tmp, &bytes[..]) {
+                        Ok(()) => self.insert_image_file(&tmp, at + Vec2::new(off, off)),
+                        Err(e) => self.toast(crate::media_ui::unreadable(&p, &e)),
+                    }
+                    let _ = std::fs::remove_file(&tmp);
                 }
                 Ok(bytes) => {
                     let off = 30.0 * i as f64 / self.editor.view.camera.zoom;
                     self.insert_image_bytes(bytes, at + Vec2::new(off, off), p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
                 }
-                Err(e) => self.toast(crate::t!("app-toast-read-dropped-failed", error = e.to_string())),
+                Err(e) => self.toast(crate::media_ui::cant_read(&p, &e)),
             }
         }
     }
@@ -1904,7 +1965,7 @@ impl ZebraApp {
             // The close button: this window only, after Save Changes.
             if ctx.input(|i| i.viewport().close_requested()) && !self.force_quit {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                if !self.close_me && self.sheet.is_none() {
+                if !self.close_me && self.sheet.is_none() && !self.queued.contains(&Action::Close) {
                     self.queued.push(Action::Close);
                 }
             }
@@ -1920,7 +1981,14 @@ impl ZebraApp {
         }
         if ctx.input(|i| i.viewport().close_requested()) && !self.force_quit && self.editor.dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(Action::Quit));
+            if self.editor.file_path.is_some() {
+                // Saved in place, as Keynote does; then the window closes.
+                if self.save(false) && !self.after_save.contains(&Action::Quit) {
+                    self.after_save.push(Action::Quit);
+                }
+            } else if !self.asking_to_save() {
+                crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(Action::Quit));
+            }
         }
     }
 
@@ -2066,6 +2134,17 @@ pub fn same_file(p: &std::path::Path) -> PathBuf {
 const IMAGE_IDLE: f64 = 300.0;
 /// How often that is checked.
 const IMAGE_TRIM_EVERY: f64 = 60.0;
+
+/// Actions that still work while a sheet or the template chooser is up,
+/// as in Keynote: making, opening, closing and quitting documents, and the
+/// app's own windows. Everything else would act on the document behind.
+pub fn works_under_a_sheet(a: &Action) -> bool {
+    use Action::*;
+    matches!(
+        a,
+        New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | ReopenAutosave(_) | Close | Quit | Settings | About | Acknowledgements | PauseAgents | StopAgents
+    )
+}
 
 /// What waited for a save, in order, minus saves asked for after the
 /// document is replaced or closed: they were meant for the document that

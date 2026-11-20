@@ -2742,10 +2742,9 @@ impl Editor {
             let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).filter(|e| !e.is_empty() && e.len() <= 8 && e.bytes().all(|b| b.is_ascii_alphanumeric())).unwrap_or_else(|| "bin".into());
             // What it is, from its first bytes, before any of it is
             // copied: a disk image or a log named .png costs 256 KB.
-            let (meta, head) = crate::media::read_head(p).map_err(ioe)?;
+            let (_, head) = crate::media::read_head(p).map_err(ioe)?;
             let unknown = || ZError::invalid("unrecognised media format").hint("use PNG, JPEG, WebP, GIF, MP4, MOV, MP3, M4A, AAC or WAV");
             let kind = crate::media::sniff_kind(&head).ok_or_else(unknown)?;
-            let too_big = |n: u64| ZError::new("too_big", format!("this picture is {} MB; the largest Zebra takes is {} MB", n >> 20, crate::media::MAX_PICTURE >> 20));
             // A picture where a video or sound was asked for (or the other
             // way round) is turned away before the copy. Video and audio
             // can't always be told apart from the head (an .mp4 with only
@@ -2753,13 +2752,17 @@ impl Editor {
             if (kind == MediaKind::Image) != (want == MediaKind::Image) || kind == MediaKind::Document {
                 check(&crate::media::MediaInfo { ext: String::new(), kind, width: 0, height: 0, duration: 0.0 })?;
             }
-            if kind == MediaKind::Image && meta.len() > crate::media::MAX_PICTURE {
-                return Err(too_big(meta.len()));
+            // Any size of file (like Keynote): what can't come in is a
+            // picture whose pixels can't be scaled down within bounds,
+            // told from its header before anything is copied.
+            if kind == MediaKind::Image {
+                picture_fits(&head)?;
             }
             let (key, bytes) = crate::media::spill_file(p, &ext).map_err(ioe)?;
-            // It may have grown while it was copied.
-            if kind == MediaKind::Image && bytes.len() as u64 > crate::media::MAX_PICTURE {
-                return Err(too_big(bytes.len() as u64));
+            // The copy is what is kept: check its header too (the file may
+            // have changed while it was copied).
+            if kind == MediaKind::Image {
+                picture_fits(&bytes[..bytes.len().min(256 << 10)])?;
             }
             let info = crate::media::info(&bytes)?;
             check(&info)?;
@@ -2775,6 +2778,9 @@ impl Editor {
             .map_err(|e| ZError::invalid(format!("data_base64 is not valid base64: {e}")))?;
         let info = crate::media::info(&bytes)?;
         check(&info)?;
+        if info.kind == MediaKind::Image {
+            picture_fits(&bytes[..bytes.len().min(256 << 10)])?;
+        }
         let key = content_key(&bytes);
         if !self.doc.assets.contains_key(&key) {
             let bytes = crate::media::spill(bytes, &key, &info.ext);
@@ -3772,7 +3778,7 @@ pub const WEB_POSTER_MAX_BYTES: usize = 8 * 1024 * 1024;
 /// `poster_base64` as bytes, refused before decoding when it is too long.
 fn decode_web_poster(b64: &str) -> ZResult<Vec<u8>> {
     if b64.len() > WEB_POSTER_MAX_BYTES.div_ceil(3) * 4 + 4 {
-        return Err(ZError::new("too_large", "poster_base64 is over 8 MB").hint("use a JPEG or PNG under 8 MB"));
+        return Err(ZError::new("too_large", "poster_base64 is over 8 MB").hint("use a JPEG or PNG under 8 MB").about(crate::error::About::Poster));
     }
     base64::engine::general_purpose::STANDARD
         .decode(b64)
@@ -3784,11 +3790,11 @@ fn decode_web_poster(b64: &str) -> ZResult<Vec<u8>> {
 /// decoded.
 fn web_poster_fits(bytes: &[u8]) -> ZResult<()> {
     if bytes.len() > WEB_POSTER_MAX_BYTES {
-        return Err(ZError::new("too_large", "the poster is over 8 MB").hint("use a JPEG or PNG under 8 MB"));
+        return Err(ZError::new("too_large", "the poster is over 8 MB").hint("use a JPEG or PNG under 8 MB").about(crate::error::About::Poster));
     }
     let (_, w, h) = image_info(bytes)?;
     if !crate::weblink::poster_fits(w, h) {
-        return Err(ZError::new("too_large", format!("the poster is {w}x{h}; it can be at most 8192 pixels a side and 40 million in all")).hint("use a smaller picture"));
+        return Err(ZError::new("too_large", format!("the poster is {w}x{h}; it can be at most 8192 pixels a side and 40 million in all")).hint("use a smaller picture").about(crate::error::About::Poster));
     }
     Ok(())
 }
@@ -3885,6 +3891,18 @@ pub(crate) fn content_key(bytes: &[u8]) -> String {
 }
 
 /// (ext, width, height) of an image's bytes.
+/// A picture Zebra can show: one whose header says its pixels can be
+/// scaled down within bounds (see `media::PictureHeader::fits`). Its file
+/// size doesn't matter.
+fn picture_fits(head: &[u8]) -> ZResult<()> {
+    match crate::media::picture_header(head) {
+        Some(h) if !h.fits() => Err(ZError::new("too_big", format!("this picture is {}x{} pixels{}; Zebra can't scale it down to show it", h.width, h.height, if h.interlaced { " (interlaced/progressive)" } else { "" }))
+            .hint("save it smaller, or as a non-progressive JPEG or a PNG, which Zebra reads at any size")
+            .about(crate::error::About::Picture)),
+        _ => Ok(()),
+    }
+}
+
 pub fn image_info(bytes: &[u8]) -> ZResult<(String, u32, u32)> {
     if bytes.len() > 4 && (bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml")) {
         return Err(ZError::invalid("SVG import is not supported yet").hint("convert to PNG"));
@@ -3897,6 +3915,11 @@ pub fn image_info(bytes: &[u8]) -> ZResult<(String, u32, u32)> {
         image::ImageFormat::Gif => "gif",
         _ => return Err(ZError::invalid("unsupported image format").hint("use PNG, JPEG, WebP or GIF")),
     };
+    // Read straight from the header where Zebra can (any size), so a huge
+    // picture's size never depends on a decoder's own limits.
+    if let Some(h) = crate::media::picture_header(&bytes[..bytes.len().min(256 << 10)]).filter(|h| h.width > 0 && h.height > 0) {
+        return Ok((ext.into(), h.width, h.height));
+    }
     let (w, h) = image::ImageReader::with_format(std::io::Cursor::new(bytes), fmt)
         .into_dimensions()
         .map_err(|e| ZError::invalid(format!("cannot read image: {e}")))?;

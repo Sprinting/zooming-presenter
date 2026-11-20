@@ -46,6 +46,14 @@ fn measure<T>(f: impl FnOnce() -> T) -> (T, usize) {
     (t, PEAK.load(Relaxed).saturating_sub(base))
 }
 
+/// Run `f` (a big test picture being made) while nothing is measured: the
+/// counter is process-wide, so its allocations would land in another
+/// test's peak.
+fn quietly<T>(f: impl FnOnce() -> T) -> T {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    f()
+}
+
 fn with_picture(bytes: &[u8]) -> Editor {
     let mut ed = Editor::default();
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
@@ -123,7 +131,7 @@ fn big_grey_png(side: u32) -> Vec<u8> {
 /// 268 MB) stays under 400 MB.
 #[test]
 fn huge_png_streams_into_its_level() {
-    let bytes: zebra_core::AssetBytes = big_grey_png(16000).into();
+    let bytes: zebra_core::AssetBytes = quietly(|| big_grey_png(16000).into());
     let cache = zebra_render::images::ImageCache::default();
     let (img, peak) = measure(|| cache.get("p", "png", &bytes, (16000, 16000), 0, true));
     assert_eq!(img.map(|d| d.width()), Some(8192));
@@ -135,11 +143,12 @@ fn huge_png_streams_into_its_level() {
 /// pixel format (no RGBA copy of the full picture).
 #[test]
 fn jpeg_shrinks_without_an_rgba_copy() {
-    let img = image::RgbImage::from_pixel(3000, 2000, image::Rgb([200, 100, 50]));
-    let mut jpg = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut jpg, image::ImageFormat::Jpeg).unwrap();
-    drop(img);
-    let bytes: zebra_core::AssetBytes = jpg.into_inner().into();
+    let bytes: zebra_core::AssetBytes = quietly(|| {
+        let img = image::RgbImage::from_pixel(3000, 2000, image::Rgb([200, 100, 50]));
+        let mut jpg = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut jpg, image::ImageFormat::Jpeg).unwrap();
+        jpg.into_inner().into()
+    });
     let cache = zebra_render::images::ImageCache::default();
     let (d, peak) = measure(|| cache.get("j", "jpg", &bytes, (3000, 2000), 2, true));
     let d = d.unwrap();
@@ -183,4 +192,86 @@ fn levels_from_odd_buffers() {
     assert_eq!(l.pixmap().data_as_u8_slice(), &[7u8; 36][..]);
     let l = zebra_render::display::ImageLevel::video_frame("v", 2, 1, vec![1; 8]);
     assert!(l.moving);
+}
+
+/// Kartik's decision (21 Nov): no size cap on pictures. On the Mac a JPEG
+/// too big to decode whole (here wider than 16,384) is drawn by ImageIO
+/// at the level's size, as Keynote does, never at full size in Zebra.
+#[test]
+#[cfg(target_os = "macos")]
+fn a_big_jpeg_decodes_scaled() {
+    let (w, h) = (20000u32, 1200u32);
+    let bytes: zebra_core::AssetBytes = quietly(|| {
+        let img = image::RgbImage::from_fn(w, h, |x, _| if x < w / 2 { image::Rgb([200, 100, 50]) } else { image::Rgb([30, 60, 220]) });
+        let mut jpg = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut jpg, image::ImageFormat::Jpeg).unwrap();
+        jpg.into_inner().into()
+    });
+    let cache = zebra_render::images::ImageCache::default();
+    let (d, peak) = measure(|| cache.get("j", "jpg", &bytes, (w, h), 1, true));
+    let zebra_render::images::Decoded::Still(l) = d.expect("decoded") else { panic!() };
+    assert_eq!((l.width, l.height), zebra_render::images::level_size(w, h, 1));
+    // Whole, it would be 72 MB of RGB; at 1/4 it is 4.5 MB (twice).
+    assert!(peak < 24 * MB, "peak {} MB", peak / MB);
+    let px = l.data.data.data();
+    assert!((px[0] as i32 - 200).abs() < 8 && (px[1] as i32 - 100).abs() < 8, "{:?}", &px[..4]);
+    let end = &px[px.len() - 4..];
+    assert!((end[2] as i32 - 220).abs() < 8 && (end[0] as i32 - 30).abs() < 8, "{end:?}");
+}
+
+/// A PNG of 160 megapixels (more than any picture decoded whole) streams
+/// into its level whatever its size.
+#[test]
+fn a_png_over_the_whole_decode_budget_streams() {
+    let (w, h) = (40000u32, 4000u32);
+    let bytes: zebra_core::AssetBytes = quietly(|| {
+        let mut out = vec![];
+        let mut e = png::Encoder::new(&mut out, w, h);
+        e.set_color(png::ColorType::Grayscale);
+        let mut wr = e.write_header().unwrap();
+        let mut s = wr.stream_writer().unwrap();
+        let row = vec![77u8; w as usize];
+        for _ in 0..h {
+            std::io::Write::write_all(&mut s, &row).unwrap();
+        }
+        s.finish().unwrap();
+        drop(wr);
+        out.into()
+    });
+    assert!(w as u64 * h as u64 > zebra_render::images::MAX_WHOLE_PIXELS);
+    let cache = zebra_render::images::ImageCache::default();
+    let (d, peak) = measure(|| cache.get("p", "png", &bytes, (w, h), 2, true));
+    let zebra_render::images::Decoded::Still(l) = d.expect("decoded") else { panic!() };
+    assert_eq!((l.width, l.height), zebra_render::images::level_size(w, h, 2));
+    assert_eq!(l.data.data.data()[..4], [77, 77, 77, 255]);
+    // The decoder's own buffers and the level: about 20 MB, whatever the
+    // size. Whole, it would be 160 MB of grey and 640 MB as RGBA.
+    assert!(peak < 40 * MB, "peak {} MB", peak / MB);
+}
+
+/// Measure a real big picture (`ZEBRA_BIG_PICTURE=path`): the time and the
+/// heap peak of a fit-to-screen level and of level 0.
+#[test]
+#[ignore]
+fn big_picture_from_env() {
+    let Ok(p) = std::env::var("ZEBRA_BIG_PICTURE") else { return };
+    let path = std::path::Path::new(&p);
+    let bytes: zebra_core::AssetBytes = zebra_core::media::MappedFile::open(path).unwrap().into();
+    let (ext, w, h) = zebra_core::editor::image_info(&bytes[..bytes.len().min(256 << 10)]).unwrap();
+    eprintln!("{p}: {ext} {w}x{h}, {} MB", bytes.len() >> 20);
+    for level in [zebra_render::images::level_for(w, h, 1600.0), 0] {
+        let cache = zebra_render::images::ImageCache::default();
+        let t = std::time::Instant::now();
+        let (d, peak) = measure(|| cache.get("big", &ext, &bytes, (w, h), level, true));
+        let d = d.expect("decoded");
+        eprintln!("level {level}: {}px wide in {:.1} s, heap peak {} MB", d.width(), t.elapsed().as_secs_f64(), peak / MB);
+        if let Ok(out) = std::env::var("ZEBRA_BIG_PICTURE_OUT") {
+            if let zebra_render::images::Decoded::Still(l) = &d {
+                if level != 0 {
+                    let img = image::RgbaImage::from_raw(l.width, l.height, l.data.data.data().to_vec()).unwrap();
+                    img.save(&out).unwrap();
+                }
+            }
+        }
+    }
 }

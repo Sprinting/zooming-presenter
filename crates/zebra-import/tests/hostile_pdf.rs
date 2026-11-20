@@ -113,7 +113,8 @@ fn bad_pages_never_stop_the_import() {
     let reader = zebra_import::open_bytes(unique(some_slow_pages(7, &[1, 2, 4]), "three"), "three".into()).unwrap();
     assert_eq!(reader.page_count(), 7);
     let deck = reader.read(&opts(), &Control::default()).unwrap();
-    eprintln!("3 bad pages of 7: {:?}, app heap +{} MB", t.elapsed(), heap().saturating_sub(before) >> 20);
+    let first = t.elapsed();
+    eprintln!("3 bad pages of 7: {first:?}, app heap +{} MB", heap().saturating_sub(before) >> 20);
     assert_eq!(deck.pages.len(), 7, "every page, three of them placeholders");
     assert_eq!(deck.notes.get(&ImportNote::Placeholder), Some(&3));
     assert_eq!(ImportNote::Placeholder.english(3), "3 pages that couldn't be drawn shown as placeholders");
@@ -125,7 +126,9 @@ fn bad_pages_never_stop_the_import() {
     let deck = again.read(&opts(), &Control::default()).unwrap();
     assert_eq!(deck.pages.len(), 7);
     assert_eq!(deck.notes.get(&ImportNote::Placeholder), Some(&3));
-    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+    // At once: well under the first read, which waited out each bad page
+    // (not a fixed time, which a loaded machine misses).
+    assert!(t.elapsed() < first / 2, "{:?} again, {first:?} the first time", t.elapsed());
 }
 
 /// M1: 30,000 pages are counted at once, and any range comes in: here

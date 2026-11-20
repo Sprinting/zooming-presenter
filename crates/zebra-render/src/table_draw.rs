@@ -585,7 +585,7 @@ impl Ctx<'_> {
             fill(items, &Rect::new(bx0, cy - bh / 2.0, bx0 + len, cy + bh / 2.0), tl, with_alpha(color, 0.35));
             return;
         }
-        let text: String = shown.text.chars().take(table::MAX_INPUT).collect();
+        let text: String = table::drawn_text(&shown.text).chars().take(table::MAX_INPUT).collect();
         let (layout, x) = if one_line {
             let td = TextData { text, bold, italic, style: TextStyle::Body, ..Default::default() };
             let lay = self.r.fonts.layout(&td, th, None);

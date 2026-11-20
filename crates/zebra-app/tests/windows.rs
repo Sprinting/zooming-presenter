@@ -281,3 +281,135 @@ fn a_new_document_is_named_by_the_app() {
     assert_eq!(zebra_app::app::new_document("classic").title, untitled);
     assert_eq!(zebra_app::app::untitled_name("", &untitled, 0), untitled, "an empty title (an old or agent file) reads as untitled");
 }
+
+/// B4 (cloud pass): with one window open, Quit left at once, without the
+/// Save Changes sheet, and the edits were lost. Like Keynote, Quit asks
+/// about every unsaved document whatever the number of windows.
+#[test]
+fn quit_with_one_unsaved_window_asks_first() {
+    let mut h = harness();
+    add_frame(&mut h.state_mut().windows[0]);
+    h.state_mut().windows[0].queued.push(Action::Quit);
+    h.run_steps(6);
+    let s = h.state();
+    assert_eq!(s.windows.len(), 1);
+    assert!(s.windows[0].sheet_showing(), "Save Changes is asked");
+    assert!(!s.windows[0].force_quit, "nothing is closing yet");
+    assert_eq!(s.windows[0].editor.doc.elements.len(), 1);
+
+    // Cancel: still open, still unsaved, not quitting.
+    let k = h.state_mut().windows[0].sheet.take().unwrap();
+    zebra_app::sheets::resolve(&mut h.state_mut().windows[0], k, &zebra_app::t!("sheet-cancel"));
+    h.run_steps(4);
+    let s = h.state();
+    assert!(!s.windows[0].quit_pending && !s.windows[0].force_quit && !s.empty);
+    assert!(s.windows[0].editor.dirty());
+
+    // Quit again; Don't Save quits.
+    h.state_mut().windows[0].queued.push(Action::Quit);
+    h.run_steps(4);
+    let k = h.state_mut().windows[0].sheet.take().expect("asks again");
+    zebra_app::sheets::resolve(&mut h.state_mut().windows[0], k, &zebra_app::t!("sheet-dont-save"));
+    h.run_steps(4);
+    assert!(h.state().windows[0].force_quit, "then Zebra quits");
+}
+
+/// B4's cause: egui's own Ctrl/⌘Q shortcut also asked the root window to
+/// close. That second Close came after Save Changes went up, went past it
+/// and closed the only window, so Zebra quit unasked. The shortcut is off
+/// now, and a close request while Save Changes is up leaves it asking.
+#[test]
+fn a_close_request_while_asking_leaves_the_question_up() {
+    let mut h = harness();
+    assert!(h.ctx.options(|o| o.quit_shortcuts.is_empty()), "Zebra's Quit is the only ⌘Q");
+    add_frame(&mut h.state_mut().windows[0]);
+    h.state_mut().windows[0].queued.push(Action::Quit);
+    // What egui's shortcut did, in the frame of the Quit.
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.run_steps(8);
+    let s = h.state();
+    assert_eq!(s.windows.len(), 1);
+    assert!(s.windows[0].sheet_showing(), "Save Changes is still asked");
+    assert!(!s.windows[0].close_me && !s.windows[0].force_quit, "nothing closed");
+    // A Close from the close button while asking changes nothing either.
+    h.state_mut().windows[0].queued.push(Action::Close);
+    h.run_steps(4);
+    let s = h.state();
+    assert!(s.windows[0].asking_to_save() && !s.windows[0].close_me && !s.windows[0].force_quit);
+}
+
+/// The same with the keys, while typing a new text box (what the cloud
+/// pass did): the words typed count as a change and are asked about.
+#[test]
+fn quit_key_while_typing_asks_first() {
+    let mut h = harness();
+    let c = h.state().windows[0].canvas.rect.center();
+    zebra_app::canvas::begin_new_text(&mut h.state_mut().windows[0], c);
+    h.run_steps(2);
+    h.event(egui::Event::Text("Keep me".into()));
+    h.run_steps(3);
+    h.event(egui::Event::Key { key: egui::Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+    h.event(egui::Event::Key { key: egui::Key::Q, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::COMMAND });
+    h.run_steps(6);
+    let s = h.state();
+    assert!(s.windows[0].sheet_showing(), "Save Changes is asked");
+    assert!(!s.windows[0].force_quit);
+    assert_eq!(s.windows[0].editor.doc.elements.len(), 1, "the words typed are kept");
+}
+
+/// B4, as Keynote does it: Quit saves a document that has a file in place,
+/// without asking, then quits. Only Untitled documents ask.
+#[test]
+fn quit_saves_a_titled_document_in_place_without_asking() {
+    let dir = std::env::temp_dir().join(format!("zebra-quit-titled-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Talk.zebra");
+    let mut h = harness();
+    add_frame(&mut h.state_mut().windows[0]);
+    let mut doc = h.state().windows[0].editor.doc.clone();
+    zebra_core::io::save(&mut doc, &path).unwrap();
+    h.state_mut().windows[0].editor.mark_saved(Some(path.clone()));
+    add_frame(&mut h.state_mut().windows[0]);
+    assert!(h.state().windows[0].editor.dirty());
+    h.state_mut().windows[0].queued.push(Action::Quit);
+    let mut quit = false;
+    for _ in 0..200 {
+        h.run_steps(1);
+        assert!(!h.state().windows[0].sheet_showing(), "no Save Changes for a document with a file");
+        if h.state().windows[0].force_quit {
+            quit = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(quit, "Zebra quits once the save is written");
+    assert_eq!(zebra_core::io::load(&path).unwrap().elements.len(), 2, "both frames are in the file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same for Close: a titled document is saved in place and its window
+/// closes; Untitled ones ask (above).
+#[test]
+fn close_saves_a_titled_document_in_place_without_asking() {
+    let dir = std::env::temp_dir().join(format!("zebra-close-titled-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Talk.zebra");
+    let mut h = harness();
+    add_frame(&mut h.state_mut().windows[0]);
+    let mut doc = h.state().windows[0].editor.doc.clone();
+    zebra_core::io::save(&mut doc, &path).unwrap();
+    h.state_mut().windows[0].editor.mark_saved(Some(path.clone()));
+    add_frame(&mut h.state_mut().windows[0]);
+    h.state_mut().windows[0].queued.push(Action::Close);
+    for _ in 0..200 {
+        h.run_steps(1);
+        assert!(!h.state().windows[0].sheet_showing(), "no Save Changes for a document with a file");
+        if h.state().empty {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(h.state().empty, "the window closed");
+    assert_eq!(zebra_core::io::load(&path).unwrap().elements.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}

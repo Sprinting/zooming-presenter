@@ -563,48 +563,85 @@ fn decode_job_inner(job: &Job) -> Vec<(u8, Decoded)> {
 }
 
 /// A still picture at `want` (and its smallest level), sized from its
-/// header before anything is decoded: a PNG streams row by row into the
-/// levels, so its full size never exists; JPEG and WebP decode once under
-/// [`decode_limits`] and shrink from their own pixel format, with no RGBA
-/// copy and no clone of level 0.
+/// header before anything is decoded, and never held at full size when it
+/// is big (the rules are `zebra_core::media::PictureHeader::fits`):
+///
+/// * a PNG streams row by row into the levels; an interlaced one over
+///   [`MAX_WHOLE_PIXELS`] streams its first pass (every 8th pixel);
+/// * on the Mac, a big JPEG, and anything else Zebra can't stream or
+///   decode whole (a huge progressive JPEG or WebP), is drawn by ImageIO
+///   at the level's size, as Keynote draws pictures;
+/// * the rest decode whole under [`decode_limits`] and shrink from their
+///   own pixel format, with no RGBA copy and no clone of level 0.
+///
+/// A level can come out a little smaller than [`level_size`] when the
+/// picture only gives that much (a scaled JPEG, a PNG's first pass).
 fn decode_still(asset: &str, bytes: &[u8], want: u8) -> Vec<(u8, Decoded)> {
-    let Some((iw, ih)) = header_size(bytes) else { return vec![] };
+    use zebra_core::media::PictureFormat;
+    let Some(head) = zebra_core::media::picture_header(&bytes[..bytes.len().min(256 << 10)]).filter(|h| h.fits()) else { return vec![] };
+    let (iw, ih) = (head.width, head.height);
     let last = last_level(iw, ih);
     let level = want.min(last);
     let (lw, lh) = level_size(iw, ih, level);
     let (sw, sh) = level_size(iw, ih, last);
     let out_bytes = (lw as u64 * lh as u64 + sw as u64 * sh as u64) * 4;
-    let mut shrinks = vec![Shrink::new(iw, ih, lw, lh)];
-    if level != last {
-        shrinks.push(Shrink::new(iw, ih, sw, sh));
-    }
-    let streamed = bytes.starts_with(b"\x89PNG") && {
-        let _permit = DecodeBytes::acquire(out_bytes + iw as u64 * 16);
-        stream_png(bytes, &mut shrinks).is_some()
-    };
-    if !streamed {
-        shrinks = vec![Shrink::new(iw, ih, lw, lh)];
+    // Shrinks from a `w`x`h` source to the levels.
+    let shrinks = |w: u32, h: u32| {
+        let mut v = vec![Shrink::new(w, h, lw, lh)];
         if level != last {
-            shrinks.push(Shrink::new(iw, ih, sw, sh));
+            v.push(Shrink::new(w, h, sw, sh));
         }
-        let _permit = DecodeBytes::acquire(out_bytes + iw as u64 * ih as u64 * 4);
-        let Some(img) = decode_limited(bytes) else { return vec![] };
-        if (img.width(), img.height()) != (iw, ih) {
-            return vec![];
-        }
-        let (raw, channels): (std::borrow::Cow<[u8]>, usize) = match &img {
-            image::DynamicImage::ImageLuma8(b) => (b.as_raw().into(), 1),
-            image::DynamicImage::ImageLumaA8(b) => (b.as_raw().into(), 2),
-            image::DynamicImage::ImageRgb8(b) => (b.as_raw().into(), 3),
-            image::DynamicImage::ImageRgba8(b) => (b.as_raw().into(), 4),
-            other => (other.to_rgba8().into_raw().into(), 4),
-        };
-        for row in raw.chunks_exact(iw as usize * channels) {
-            for s in shrinks.iter_mut() {
-                s.push(row, channels);
+        v
+    };
+    let pixels = head.pixels();
+    let mut done = None;
+    if head.format == PictureFormat::Png {
+        let _permit = DecodeBytes::acquire(out_bytes + iw as u64 * 16);
+        done = stream_png(bytes, &shrinks, pixels > MAX_WHOLE_PIXELS);
+    } else if head.format == PictureFormat::Jpeg && (pixels > SCALED_JPEG_FROM || iw.max(ih) > WHOLE_JPEG_SIDE) || !head.streams_or_decodes_whole() {
+        // On the Mac, ImageIO draws it at the level's size, as Keynote
+        // does (a JPEG straight from its DCT at a smaller size). Elsewhere
+        // (development builds) it decodes whole if it can.
+        #[cfg(target_os = "macos")]
+        {
+            let _permit = DecodeBytes::acquire(out_bytes * 2);
+            let Some((w, h, px)) = crate::imageio::thumbnail(bytes, lw.max(lh), MAX_WHOLE_DECODE_ALLOC) else { return vec![] };
+            let mut out = shrinks(w, h);
+            for row in px.chunks_exact(w as usize * 4) {
+                for s in out.iter_mut() {
+                    s.push(row, 4);
+                }
             }
+            done = Some(out);
         }
     }
+    let shrinks = match done {
+        Some(s) => s,
+        None => {
+            if pixels > MAX_WHOLE_PIXELS {
+                return vec![];
+            }
+            let mut out = shrinks(iw, ih);
+            let _permit = DecodeBytes::acquire(out_bytes + pixels * 4);
+            let Some(img) = decode_limited(bytes) else { return vec![] };
+            if (img.width(), img.height()) != (iw, ih) {
+                return vec![];
+            }
+            let (raw, channels): (std::borrow::Cow<[u8]>, usize) = match &img {
+                image::DynamicImage::ImageLuma8(b) => (b.as_raw().into(), 1),
+                image::DynamicImage::ImageLumaA8(b) => (b.as_raw().into(), 2),
+                image::DynamicImage::ImageRgb8(b) => (b.as_raw().into(), 3),
+                image::DynamicImage::ImageRgba8(b) => (b.as_raw().into(), 4),
+                other => (other.to_rgba8().into_raw().into(), 4),
+            };
+            for row in raw.chunks_exact(iw as usize * channels) {
+                for s in out.iter_mut() {
+                    s.push(row, channels);
+                }
+            }
+            out
+        }
+    };
     let mut it = shrinks.into_iter();
     let mut out = vec![];
     if let Some(s) = it.next() {
@@ -616,21 +653,25 @@ fn decode_still(asset: &str, bytes: &[u8], want: u8) -> Vec<(u8, Decoded)> {
     out
 }
 
-/// Width and height from the header, if inside the decode limits.
-fn header_size(bytes: &[u8]) -> Option<(u32, u32)> {
-    let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
-    (w > 0 && h > 0 && w <= MAX_DECODE_DIM && h <= MAX_DECODE_DIM).then_some((w, h))
-}
+/// Largest picture decoded whole (pixels); see `zebra_core::media`.
+pub use zebra_core::media::MAX_WHOLE_PIXELS;
+/// JPEGs over this many pixels are drawn by ImageIO at the level's size
+/// on the Mac; smaller ones decode whole, which is faster. 64 MP is 192 MB
+/// as RGB.
+pub const SCALED_JPEG_FROM: u64 = 64 << 20;
+/// JPEGs wider or taller than this go to ImageIO too.
+pub const WHOLE_JPEG_SIDE: u32 = 16384;
 
-/// Feed a non-interlaced PNG's rows to `shrinks`. None if it isn't one (or
-/// is broken), so the caller can decode it whole instead.
-fn stream_png(bytes: &[u8], shrinks: &mut [Shrink]) -> Option<()> {
+/// Feed a PNG's rows to the shrinks `make` gives for the size streamed.
+/// A non-interlaced PNG streams every row. An interlaced one decodes whole
+/// (8 bits a sample) unless `first_pass_only`: then only its first Adam7
+/// pass is read, every 8th pixel each way, so a huge one stays small.
+/// None if it is broken, so the caller can decode it whole instead.
+fn stream_png(bytes: &[u8], make: &dyn Fn(u32, u32) -> Vec<Shrink>, first_pass_only: bool) -> Option<Vec<Shrink>> {
     let mut d = png::Decoder::new_with_limits(std::io::Cursor::new(bytes), png::Limits { bytes: MAX_DECODE_ALLOC as usize });
     d.set_transformations(png::Transformations::normalize_to_color8());
     let mut r = d.read_info().ok()?;
-    if r.info().interlaced {
-        return None;
-    }
+    let (w, h) = (r.info().width, r.info().height);
     let channels = match r.output_color_type() {
         (png::ColorType::Grayscale, png::BitDepth::Eight) => 1,
         (png::ColorType::GrayscaleAlpha, png::BitDepth::Eight) => 2,
@@ -638,14 +679,47 @@ fn stream_png(bytes: &[u8], shrinks: &mut [Shrink]) -> Option<()> {
         (png::ColorType::Rgba, png::BitDepth::Eight) => 4,
         _ => return None,
     };
-    // A truncated file keeps the rows it has; the rest stays clear.
-    while let Ok(Some(row)) = r.next_row() {
+    if !r.info().interlaced {
+        let mut shrinks = make(w, h);
+        // A truncated file keeps the rows it has; the rest stays clear.
+        while let Ok(Some(row)) = r.next_row() {
+            for s in shrinks.iter_mut() {
+                s.push(row.data(), channels);
+            }
+        }
+        return Some(shrinks);
+    }
+    if first_pass_only {
+        // Pass 1 comes first: pixels (8i, 8j), ceil(w/8) by ceil(h/8).
+        let (pw, ph) = (w.div_ceil(8), h.div_ceil(8));
+        let mut shrinks = make(pw, ph);
+        for _ in 0..ph {
+            let Ok(Some(row)) = r.next_row() else { break };
+            if row.data().len() < pw as usize * channels {
+                break;
+            }
+            for s in shrinks.iter_mut() {
+                s.push(&row.data()[..pw as usize * channels], channels);
+            }
+        }
+        return Some(shrinks);
+    }
+    let size = w as u64 * h as u64 * channels as u64;
+    if size > MAX_WHOLE_DECODE_ALLOC {
+        return None;
+    }
+    let _permit = DecodeBytes::acquire(size);
+    let mut buf = vec![0u8; size as usize];
+    r.next_frame(&mut buf).ok()?;
+    let mut shrinks = make(w, h);
+    for row in buf.chunks_exact(w as usize * channels) {
         for s in shrinks.iter_mut() {
-            s.push(row.data(), channels);
+            s.push(row, channels);
         }
     }
-    Some(())
+    Some(shrinks)
 }
+
 
 /// Most bytes all decodes in flight may be estimated to need at once
 /// (header size times the pixel formats, plus the levels made). One
@@ -690,9 +764,6 @@ fn svg_size((w, h): (u32, u32)) -> (u32, u32) {
     (((w as f64 * k).round() as u32).max(1), ((h as f64 * k).round() as u32).max(1))
 }
 
-/// Largest picture side any decoder accepts. Bigger ones are drawn as the
-/// "unreadable picture" placeholder.
-pub const MAX_DECODE_DIM: u32 = 16384;
 /// Most bytes one decoder may allocate for its pixels.
 pub const MAX_DECODE_ALLOC: u64 = 256 << 20;
 /// Most screen pixels a GIF's frames may cover in all (screen area times
@@ -707,9 +778,12 @@ pub const MAX_WHOLE_DECODE_ALLOC: u64 = 512 << 20;
 
 /// The limits every `image` decoder runs under.
 pub fn decode_limits() -> image::Limits {
+    // No limit on the sides: what is decoded whole is bounded by its
+    // pixels (`MAX_WHOLE_PIXELS`, checked from the header first) and by
+    // the allocation.
     let mut l = image::Limits::default();
-    l.max_image_width = Some(MAX_DECODE_DIM);
-    l.max_image_height = Some(MAX_DECODE_DIM);
+    l.max_image_width = None;
+    l.max_image_height = None;
     l.max_alloc = Some(MAX_WHOLE_DECODE_ALLOC);
     l
 }
@@ -831,7 +905,7 @@ fn decode_gif(asset: &str, bytes: &[u8], level: u8) -> Option<Decoded> {
     let mut dec = options().read_info(std::io::Cursor::new(bytes)).ok()?;
     let (w, h) = (dec.width() as u32, dec.height() as u32);
     let area = w as u64 * h as u64;
-    if w == 0 || h == 0 || w > MAX_DECODE_DIM || h > MAX_DECODE_DIM || area * 4 > MAX_DECODE_ALLOC {
+    if w == 0 || h == 0 || area > zebra_core::media::MAX_GIF_PIXELS || area * 4 > MAX_DECODE_ALLOC {
         return None;
     }
     // Count frames without decoding them (their compressed data is only
@@ -1054,7 +1128,8 @@ mod tests {
     fn camera_sized_jpeg_fits_the_limits() {
         let l = decode_limits();
         assert!(l.max_alloc.unwrap() >= 11648 * 8736 * 3, "a 100 MP JPEG must decode");
-        assert_eq!(l.max_image_width, Some(MAX_DECODE_DIM));
+        assert!(l.max_alloc.unwrap() >= MAX_WHOLE_PIXELS * 4);
+        assert_eq!(l.max_image_width, None);
     }
 
     /// Audit T-C3: a panicking decode used to end its worker thread and
@@ -1120,6 +1195,60 @@ mod tests {
             assert!(t0.elapsed().as_secs() < 10, "the tiles never landed");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    /// The pixel at (x, y) of tests/data/interlaced-61x37.png.
+    fn fixture_px(x: u32, y: u32) -> [u8; 3] {
+        [(x * 4) as u8, (y * 6) as u8, ((x + y) * 3) as u8]
+    }
+
+    /// An interlaced PNG too big to decode whole is drawn from its first
+    /// Adam7 pass: every 8th pixel each way, exactly.
+    #[test]
+    fn interlaced_png_first_pass_is_every_8th_pixel() {
+        let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/interlaced-61x37.png")).unwrap();
+        let one = |w, h| vec![Shrink::new(w, h, w, h)];
+        let s = stream_png(&bytes, &one, true).unwrap().pop().unwrap().finish("i");
+        assert_eq!((s.width, s.height), (8, 5));
+        let px = s.data.data.data();
+        for (j, y) in (0..37).step_by(8).enumerate() {
+            for (i, x) in (0..61).step_by(8).enumerate() {
+                let at = (j * 8 + i) * 4;
+                assert_eq!(px[at..at + 3], fixture_px(x, y), "({x}, {y})");
+            }
+        }
+        // Small enough to decode whole: every pixel.
+        let s = stream_png(&bytes, &one, false).unwrap().pop().unwrap().finish("i");
+        assert_eq!((s.width, s.height), (61, 37));
+        let at = (36 * 61 + 60) * 4;
+        assert_eq!(s.data.data.data()[at..at + 3], fixture_px(60, 36));
+        // And through the cache.
+        let c = ImageCache::default();
+        let got = c.get("i", "png", &bytes.into(), (61, 37), 0, true).unwrap();
+        assert_eq!(got.width(), 61);
+    }
+
+    /// Wider than 16,384 used to be the placeholder; now it streams.
+    #[test]
+    fn a_png_wider_than_16384_streams() {
+        let mut out = vec![];
+        {
+            let mut e = png::Encoder::new(&mut out, 20000, 30);
+            e.set_color(png::ColorType::Rgb);
+            let mut w = e.write_header().unwrap();
+            let row: Vec<u8> = (0..20000u32).flat_map(|x| [if x < 10000 { 200 } else { 20 }, 100, 50]).collect();
+            let mut s = w.stream_writer().unwrap();
+            for _ in 0..30 {
+                std::io::Write::write_all(&mut s, &row).unwrap();
+            }
+            s.finish().unwrap();
+        }
+        let c = ImageCache::default();
+        let Some(Decoded::Still(l)) = c.get("w", "png", &out.into(), (20000, 30), 0, true) else { panic!("not decoded") };
+        assert_eq!((l.width, l.height), level_size(20000, 30, 0));
+        let px = l.data.data.data();
+        assert_eq!(px[..4], [200, 100, 50, 255]);
+        assert_eq!(px[px.len() - 4..], [20, 100, 50, 255]);
     }
 
     #[test]

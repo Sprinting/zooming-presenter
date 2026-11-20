@@ -198,6 +198,13 @@ pub struct OpenSheet {
     answer: std::pin::Pin<Box<dyn std::future::Future<Output = rfd::MessageDialogResult>>>,
 }
 
+#[cfg(target_os = "macos")]
+impl OpenSheet {
+    pub fn kind(&self) -> &SheetKind {
+        &self.kind
+    }
+}
+
 /// Native sheets: call from `eframe::App::ui` where the window handle is.
 /// The NSAlert is attached as a sheet without a modal loop (a blocking
 /// one spun the CPU at 100% while it was open); its answer is polled here

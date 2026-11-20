@@ -44,12 +44,14 @@ app-toast-nothing-to-play = There's nothing to play yet. Double-click the canvas
 app-toast-presenter-view-on = Presenter view opens when you play the presentation.
 app-toast-presenter-view-off = Presenter view is off.
 app-toast-agent-stopped = Agent stopped. To resume it, click AI in the toolbar.
-app-toast-read-failed = Couldn't read { $path }: { $error }
-app-toast-read-dropped-failed = Couldn't read the dropped file: { $error }
+app-toast-cant-read = Zebra can't read { $name }.
+app-toast-not-a-file = Zebra can't add { $name }. It isn't a file.
+app-toast-empty-or-damaged = Zebra can't read { $name }. It's empty or damaged.
 app-toast-agent-switched-ai-off = { $name } turned off AI control. To turn it on again, click AI in the toolbar.
 app-open-failed-title = The document “{ $name }” could not be opened.
 app-open-failed-newer = It was made by a newer version of Zebra.
 app-open-failed-not-zebra = It isn't a Zebra presentation, or it's damaged.
+app-open-failed-too-large = It's too large for Zebra to open.
 app-open-failed-missing = The file no longer exists.
 app-open-failed-permission = You don't have permission to read it.
 app-open-failed-unreadable = The file couldn't be read.
@@ -1821,7 +1823,11 @@ history-format-cells = Format Cells
 history-change-column = Change Column
 history-change-row = Change Row
 history-sort-table = Sort
-app-error-too-big = That would make the table too big. Nothing was changed.
+app-error-too-big = That's too large. Nothing was changed.
+app-error-picture-too-big = This picture is too large to open.
+app-error-poster-too-big = This picture is too large to use as a poster.
+app-error-document-too-big = This document is too large for Zebra to open.
+app-error-saving = The document is still being saved. Try again in a moment.
 
 ## Beta features (Settings › General): the offer where a person reaches
 ## one while they are off.

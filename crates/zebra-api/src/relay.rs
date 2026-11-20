@@ -25,18 +25,74 @@ use crate::client::Client;
 /// A relay with no calls for this long exits (and its connection closes).
 pub const IDLE: Duration = Duration::from_secs(10 * 60);
 
+/// Longest path a Unix socket can have, its closing NUL included
+/// (`sun_path`).
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+pub const SUN_PATH: usize = 104;
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+pub const SUN_PATH: usize = 108;
+
+/// Whether `p` fits in a Unix socket address.
+pub fn fits_socket(p: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    p.as_os_str().as_bytes().len() < SUN_PATH
+}
+
+/// FNV-1a: stable across runs and builds (unlike DefaultHasher).
+fn fnv(parts: &[&[u8]]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for p in parts {
+        for b in *p {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        h ^= 0xff;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
 /// The relay socket for `name` on the Zebra instance at `zebra_socket`:
 /// next to it, named from the instance and a 64-bit hash of the agent
 /// name (32 bits let two agent names share one relay; audit L5).
-pub fn socket_for(zebra_socket: &Path, name: &str) -> PathBuf {
-    // FNV-1a: stable across runs and builds (unlike DefaultHasher).
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in name.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x0100_0000_01b3);
-    }
+///
+/// A long `--api-socket` path can make that name too long for a socket
+/// (`sun_path`); every call then waited 2 s for a relay that could never
+/// start. Instead the relay goes in a short folder only this user can
+/// write to (`$XDG_RUNTIME_DIR`, or the per-user temporary folder on
+/// macOS), named from a hash of the instance's socket and the agent name.
+/// None when there is no such folder: the call connects directly, at once.
+pub fn socket_for(zebra_socket: &Path, name: &str) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let h = fnv(&[name.as_bytes()]);
     let stem = zebra_socket.file_stem().and_then(|s| s.to_str()).unwrap_or("zebra");
-    zebra_socket.with_file_name(format!("{stem}.agent{h:016x}.sock"))
+    let beside = zebra_socket.with_file_name(format!("{stem}.agent{h:016x}.sock"));
+    if fits_socket(&beside) {
+        return Some(beside);
+    }
+    let both = fnv(&[zebra_socket.as_os_str().as_bytes(), name.as_bytes()]);
+    short_dirs().into_iter().map(|d| d.join(format!("zebra-agent-{both:016x}.sock"))).find(|p| fits_socket(p))
+}
+
+/// Folders for a relay socket when the one beside Zebra's is too long:
+/// absolute, owned by this user and writable by no one else (a socket in
+/// a shared folder like /tmp could be someone else's, and the agent's
+/// token is sent to it).
+fn short_dirs() -> Vec<PathBuf> {
+    let mut v = vec![];
+    if let Some(d) = std::env::var_os("XDG_RUNTIME_DIR") {
+        v.push(PathBuf::from(d));
+    }
+    #[cfg(target_os = "macos")]
+    v.push(std::env::temp_dir());
+    v.into_iter().filter(|d| private_dir(d)).collect()
+}
+
+fn private_dir(d: &Path) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    // SAFETY: geteuid has no preconditions and can't fail.
+    let me = unsafe { libc::geteuid() };
+    d.is_absolute() && std::fs::symlink_metadata(d).is_ok_and(|m| m.is_dir() && m.uid() == me && m.permissions().mode() & 0o022 == 0)
 }
 
 /// Connect to the relay at `relay_socket` and say hello, checking it is

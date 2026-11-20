@@ -509,9 +509,141 @@ pub fn read_head(path: &Path) -> std::io::Result<(std::fs::Metadata, Vec<u8>)> {
 
 const HEAD: u64 = 256 << 10;
 
-/// Largest picture file Zebra takes in (a PNG or JPEG this big is a scan
-/// of a poster; anything larger is a mistake or an attack).
-pub const MAX_PICTURE: u64 = 256 << 20;
+// ----------------------------------------------------------------------
+// Pictures of any size (Kartik, 21 Nov: no file-size cap; like Keynote, a
+// huge picture comes in and is shown scaled down). What limits a picture
+// is whether its pixels can be scaled down without ever holding them at
+// full size, and that depends on the format, read from the header:
+//
+// * PNG: rows stream into the downscaler, so any height, and any width
+//   up to `MAX_STREAM_WIDTH` (a row and the column table stay small).
+//   Interlaced (Adam7) PNGs over the whole-decode budget are drawn from
+//   their first pass, which is every 8th pixel each way.
+// * JPEG and WebP on the Mac: drawn by ImageIO at the size shown, as
+//   Keynote draws them (a JPEG straight from its DCT at a smaller size),
+//   up to the formats' own most (65,535 a side for JPEG, 16,383 for WebP).
+//   Elsewhere (development builds) they decode whole, so they are bounded
+//   by `MAX_WHOLE_PIXELS`, and a progressive JPEG, which keeps every
+//   coefficient while its scans arrive, by `MAX_PROGRESSIVE_PIXELS`.
+// * GIF has no streaming decoder: its frames are composited at full
+//   screen size, so its screen is bounded by `MAX_GIF_PIXELS`.
+//
+// Pictures within these come in whatever their file size; the renderer
+// keeps to the same numbers (zebra_render::images).
+
+/// Widest PNG row streamed (pixels): 16-bit RGBA rows of 8 MB, and a
+/// 4 MB column table in the downscaler.
+pub const MAX_STREAM_WIDTH: u64 = 1 << 20;
+/// Largest picture decoded whole (pixels): 512 MB as RGBA.
+pub const MAX_WHOLE_PIXELS: u64 = 128 << 20;
+/// Largest progressive (or lossless) JPEG (pixels): its coefficients, 2
+/// bytes a sample and up to 3 samples a pixel, fit in 384 MB.
+pub const MAX_PROGRESSIVE_PIXELS: u64 = 64 << 20;
+/// Largest GIF screen (pixels): composited at full size, 256 MB as RGBA.
+pub const MAX_GIF_PIXELS: u64 = 64 << 20;
+
+/// A picture's format and size from its header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PictureHeader {
+    pub format: PictureFormat,
+    pub width: u32,
+    pub height: u32,
+    /// An interlaced PNG or a progressive JPEG.
+    pub interlaced: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PictureFormat {
+    Png,
+    Jpeg,
+    WebP,
+    Gif,
+}
+
+impl PictureHeader {
+    pub fn pixels(&self) -> u64 {
+        self.width as u64 * self.height as u64
+    }
+    /// Whether Zebra can show it scaled down without its pixels ever being
+    /// held at full size beyond the budgets above (see the module notes).
+    pub fn fits(&self) -> bool {
+        if self.width == 0 || self.height == 0 {
+            return false;
+        }
+        if cfg!(target_os = "macos") && matches!(self.format, PictureFormat::Jpeg | PictureFormat::WebP) {
+            return true;
+        }
+        self.streams_or_decodes_whole()
+    }
+    /// Whether Zebra's own decoders can scale it down within the budgets
+    /// (streaming a PNG, or decoding the rest whole). What can't is left
+    /// to ImageIO on the Mac.
+    pub fn streams_or_decodes_whole(&self) -> bool {
+        match self.format {
+            PictureFormat::Png => self.width as u64 <= MAX_STREAM_WIDTH,
+            PictureFormat::Jpeg => self.pixels() <= MAX_WHOLE_PIXELS && (!self.interlaced || self.pixels() <= MAX_PROGRESSIVE_PIXELS),
+            PictureFormat::WebP => self.pixels() <= MAX_WHOLE_PIXELS,
+            PictureFormat::Gif => self.pixels() <= MAX_GIF_PIXELS,
+        }
+    }
+}
+
+/// The header of a PNG, JPEG, WebP or GIF from its first bytes (the
+/// first 256 KB is plenty: a JPEG's size can follow 64 KB of metadata).
+pub fn picture_header(head: &[u8]) -> Option<PictureHeader> {
+    let be32 = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+    if head.starts_with(b"\x89PNG\r\n\x1a\n") && head.len() >= 29 && &head[12..16] == b"IHDR" {
+        return Some(PictureHeader { format: PictureFormat::Png, width: be32(&head[16..20]), height: be32(&head[20..24]), interlaced: head[28] != 0 });
+    }
+    if head.starts_with(&[0xFF, 0xD8]) {
+        return jpeg_header(head);
+    }
+    let format = match image::guess_format(head).ok()? {
+        image::ImageFormat::WebP => PictureFormat::WebP,
+        image::ImageFormat::Gif => PictureFormat::Gif,
+        _ => return None,
+    };
+    let fmt = if format == PictureFormat::Gif { image::ImageFormat::Gif } else { image::ImageFormat::WebP };
+    let (width, height) = image::ImageReader::with_format(std::io::Cursor::new(head), fmt).into_dimensions().ok()?;
+    Some(PictureHeader { format, width, height, interlaced: false })
+}
+
+/// A JPEG's frame header (SOFn), walking the markers before it.
+fn jpeg_header(b: &[u8]) -> Option<PictureHeader> {
+    let mut i = 2;
+    while i + 4 <= b.len() {
+        if b[i] != 0xFF {
+            return None;
+        }
+        let m = b[i + 1];
+        if m == 0xFF {
+            i += 1; // fill byte
+            continue;
+        }
+        if matches!(m, 0x01 | 0xD0..=0xD7) {
+            i += 2;
+            continue;
+        }
+        let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
+        // Every start-of-frame but DHT (C4), JPG (C8) and DAC (CC).
+        if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
+            if i + 9 > b.len() {
+                return None;
+            }
+            let height = u16::from_be_bytes([b[i + 5], b[i + 6]]) as u32;
+            let width = u16::from_be_bytes([b[i + 7], b[i + 8]]) as u32;
+            // Only baseline/extended (C0, C1) and progressive (C2) Huffman
+            // JPEGs are read; the rest count as not fitting.
+            let interlaced = m != 0xC0 && m != 0xC1;
+            return Some(PictureHeader { format: PictureFormat::Jpeg, width, height, interlaced });
+        }
+        if m == 0xDA || len < 2 {
+            return None;
+        }
+        i += 2 + len;
+    }
+    None
+}
 
 /// What kind of media a file is, from its first bytes alone; None for
 /// anything Zebra can't show. Used before copying a file in, so dropping

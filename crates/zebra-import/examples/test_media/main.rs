@@ -27,24 +27,36 @@ fn main() {
     for d in [&big, &bad] {
         std::fs::create_dir_all(d).expect("make the folder");
     }
-    let step = |what: &str| eprintln!("  {what}");
+    // Each line names the file as it is made (it used to say big/deck.pptx
+    // and big/pages.pdf for files named otherwise).
+    let step = |p: &Path, what: &str| {
+        let name = p.strip_prefix(dir).unwrap_or(p).display().to_string();
+        if what.is_empty() { eprintln!("  {name}") } else { eprintln!("  {name} ({what})") }
+    };
 
-    step("big/video.mp4 (plays a 6 s clip; the rest is padding)");
-    padded(SEED_MP4, &big.join(format!("video-{mb}MB.mp4")), mb << 20);
-    step("big/music.m4a");
-    padded(SEED_M4A, &big.join(format!("music-{}MB.m4a", mb / 2)), (mb / 2).max(1) << 20);
-    step("big/silence.wav");
-    wav(&big.join("silence-1GB.wav"), 1 << 30);
-    step("big/picture.png (about 217 MB of noise, under Zebra's 256 MB limit)");
-    noise_png(&big.join("picture-217MB.png"), 8700, 8700);
-    step("big/picture-over-limit.png");
-    sparse_after(&small_png(), &big.join("picture-over-limit-300MB.png"), 300 << 20);
-    step("big/deck.pptx (the big video inside a PowerPoint file; real size)");
-    pptx_with(&big.join(format!("video-{mb}MB.mp4")), &big.join(format!("deck-with-{mb}MB-video.pptx")));
-    step("big/pages.pdf (600 pages)");
-    pdf(&big.join("600-pages.pdf"), 600);
+    let video = big.join(format!("video-{mb}MB.mp4"));
+    step(&video, "plays a 6 s clip; the rest is padding");
+    padded(SEED_MP4, &video, mb << 20);
+    let music = big.join(format!("music-{}MB.m4a", mb / 2));
+    step(&music, "");
+    padded(SEED_M4A, &music, (mb / 2).max(1) << 20);
+    let wav_file = big.join("silence-1GB.wav");
+    step(&wav_file, "");
+    wav(&wav_file, 1 << 30);
+    let picture = big.join("picture-217MB.png");
+    step(&picture, "about 217 MB of noise");
+    noise_png(&picture, 8700, 8700);
+    let padded_png = big.join("picture-padded-1GB.png");
+    step(&padded_png, "a small picture with 1 GB after it: there is no size limit");
+    sparse_after(&small_png(), &padded_png, 1 << 30);
+    let deck = big.join(format!("deck-with-{mb}MB-video.pptx"));
+    step(&deck, "the big video inside a PowerPoint file; real size");
+    pptx_with(&video, &deck);
+    let pages = big.join("600-pages.pdf");
+    step(&pages, "600 pages");
+    pdf(&pages, 600);
 
-    step("hostile/…");
+    eprintln!("  hostile/…");
     std::fs::write(bad.join("empty.png"), b"").unwrap();
     std::fs::write(bad.join("empty.pptx"), b"").unwrap();
     std::fs::write(bad.join("empty.zebra"), b"").unwrap();
@@ -56,6 +68,7 @@ fn main() {
     let extras = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/extras.pptx")).unwrap();
     std::fs::write(bad.join("cut-off.pptx"), &extras[..extras.len() / 2]).unwrap();
     lying_mp4(&bad.join("lying-sizes.mp4"));
+    std::fs::write(bad.join("too-wide.png"), lying_png(2_000_000, 10)).unwrap();
     sparse_after(b"koly-this-is-a-disk-image", &bad.join("disk-image-named.png"), 4 << 30);
     zebra_bomb_json(&bad.join("bomb-document.zebra"));
     zebra_bomb_asset(&bad.join("bomb-picture.zebra"));
@@ -119,6 +132,30 @@ fn noise(n: usize, seed: u64) -> Vec<u8> {
 fn small_png() -> Vec<u8> {
     let mut v = vec![];
     image::RgbImage::from_pixel(64, 64, image::Rgb([30, 120, 200])).write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Png).unwrap();
+    v
+}
+
+/// Just a PNG header claiming `w` x `h` pixels: one 2,000,000 pixels
+/// wide can't be scaled down a row at a time, so it's refused.
+fn lying_png(w: u32, h: u32) -> Vec<u8> {
+    fn crc(b: &[u8]) -> u32 {
+        let mut c = !0u32;
+        for &x in b {
+            c ^= x as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        !c
+    }
+    let mut ihdr = b"IHDR".to_vec();
+    ihdr.extend(w.to_be_bytes());
+    ihdr.extend(h.to_be_bytes());
+    ihdr.extend([8, 6, 0, 0, 0]);
+    let mut v = b"\x89PNG\r\n\x1a\n".to_vec();
+    v.extend(13u32.to_be_bytes());
+    v.extend(&ihdr);
+    v.extend(crc(&ihdr).to_be_bytes());
     v
 }
 
