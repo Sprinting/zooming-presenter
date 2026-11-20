@@ -291,6 +291,273 @@ pub fn para(t: &TextData, i: usize) -> (ListKind, u8, Align) {
     (list, p.indent.min(8), p.align.unwrap_or(t.align))
 }
 
+// ----------------------------------------------------------------------
+// Moving words: drag text out of a box, or to another place in it.
+
+/// The characters `start..end` of `t` as a text of their own, the way a
+/// dragged selection becomes a new box: the box's own settings (style,
+/// colour, alignment, bold, italic, bullets, width mode), the characters'
+/// formatting, and the paragraph formatting (list, indent, alignment) of
+/// each paragraph wholly inside the range. A part of a paragraph comes out
+/// as a plain paragraph. Spaces and line breaks at either end are dropped.
+pub fn slice(t: &TextData, start: usize, end: usize) -> TextData {
+    let chars: Vec<char> = t.text.chars().collect();
+    let (mut a, mut b) = (start.min(chars.len()), end.min(chars.len()));
+    while a < b && chars[a].is_whitespace() {
+        a += 1;
+    }
+    while b > a && chars[b - 1].is_whitespace() {
+        b -= 1;
+    }
+    let mut out = TextData { text: chars[a..b].iter().collect(), spans: vec![], paras: vec![], ..t.clone() };
+    out.spans = t
+        .spans
+        .iter()
+        .filter(|s| s.start < b && s.end > a)
+        .map(|s| TextSpan { start: s.start.max(a) - a, end: s.end.min(b) - a, format: s.format.clone() })
+        .collect();
+    // Paragraph by paragraph: whole ones keep their format.
+    let first = chars[..a].iter().filter(|c| **c == '\n').count();
+    let mut ps = chars[..a].iter().rposition(|c| *c == '\n').map_or(0, |i| i + 1);
+    for k in 0..=out.text.matches('\n').count() {
+        let pe = chars[ps..].iter().position(|c| *c == '\n').map_or(chars.len(), |i| ps + i);
+        let (mut cs, mut ce) = (ps, pe);
+        while cs < ce && chars[cs].is_whitespace() {
+            cs += 1;
+        }
+        while ce > cs && chars[ce - 1].is_whitespace() {
+            ce -= 1;
+        }
+        let whole = if cs < ce { a <= cs && ce <= b } else { a <= ps && pe <= b };
+        let p = if whole {
+            t.paras.get(first + k).cloned().unwrap_or_default()
+        } else {
+            // Plain: no marker even in a box whose every paragraph has one.
+            ParaFormat { list: t.bullets.then_some(ListKind::None), ..Default::default() }
+        };
+        out.paras.push(p);
+        ps = pe + 1;
+    }
+    normalize(&mut out);
+    out
+}
+
+/// Take characters `a..b` out of `t`, formatting moving with what's left.
+/// A paragraph cut from its start keeps the format of the one it joins.
+fn remove(t: &mut TextData, a: usize, b: usize) {
+    let chars: Vec<char> = t.text.chars().collect();
+    let (a, b) = (a.min(chars.len()), b.min(chars.len()));
+    if a >= b {
+        return;
+    }
+    let gone = b - a;
+    for s in &mut t.spans {
+        let map = |i: usize| if i <= a { i } else if i >= b { i - gone } else { a };
+        s.start = map(s.start);
+        s.end = map(s.end);
+    }
+    let para_at = chars[..a].iter().filter(|c| **c == '\n').count();
+    let nl = chars[a..b].iter().filter(|c| **c == '\n').count();
+    if nl > 0 && !t.paras.is_empty() {
+        let at_start = a == 0 || chars[a - 1] == '\n';
+        let from = if at_start { para_at } else { para_at + 1 };
+        let (from, to) = (from.min(t.paras.len()), (from + nl).min(t.paras.len()));
+        t.paras.drain(from..to);
+    }
+    t.text = chars[..a].iter().chain(&chars[b..]).collect();
+    normalize(t);
+}
+
+/// Put `piece` (its characters, their formatting and its paragraphs) into
+/// `t` at `at`. Inserted words never take on the formatting around them.
+fn insert(t: &mut TextData, at: usize, piece: &TextData) {
+    let chars: Vec<char> = t.text.chars().collect();
+    let at = at.min(chars.len());
+    let n = char_len(&piece.text);
+    if n == 0 {
+        return;
+    }
+    let mut spans = vec![];
+    for s in t.spans.drain(..) {
+        if s.end <= at {
+            spans.push(s);
+        } else if s.start >= at {
+            spans.push(TextSpan { start: s.start + n, end: s.end + n, format: s.format });
+        } else {
+            spans.push(TextSpan { start: s.start, end: at, format: s.format.clone() });
+            spans.push(TextSpan { start: at + n, end: s.end + n, format: s.format });
+        }
+    }
+    spans.extend(piece.spans.iter().map(|s| TextSpan { start: s.start + at, end: s.end + at, format: s.format.clone() }));
+    t.spans = spans;
+    let nl = piece.text.matches('\n').count();
+    if nl > 0 {
+        let para_at = chars[..at].iter().filter(|c| **c == '\n').count();
+        let count = t.text.split('\n').count();
+        if t.paras.len() < count {
+            t.paras.resize(count, ParaFormat::default());
+        }
+        // The paragraph split by the insert: its first part keeps its
+        // format unless the piece starts it, its last part likewise unless
+        // the piece ends it.
+        let here = t.paras[para_at].clone();
+        let at_start = at == 0 || chars[at - 1] == '\n';
+        let at_end = at == chars.len() || chars[at] == '\n';
+        let of_piece = |k: usize| piece.paras.get(k).cloned().unwrap_or_default();
+        let mut new = vec![if at_start { of_piece(0) } else { here.clone() }];
+        new.extend((1..nl).map(of_piece));
+        new.push(if at_end { of_piece(nl) } else { here });
+        t.paras.splice(para_at..=para_at, new);
+    }
+    t.text = chars[..at].iter().copied().chain(piece.text.chars()).chain(chars[at..].iter().copied()).collect();
+    normalize(t);
+}
+
+/// Where position `p` ends up after the removals `cuts` (each `a..b`, in
+/// the text as it was when it was made, applied in order).
+fn after_cuts(mut p: usize, cuts: &[(usize, usize)]) -> usize {
+    for &(a, b) in cuts {
+        if p >= b {
+            p -= b - a;
+        } else if p > a {
+            p = a;
+        }
+    }
+    p
+}
+
+/// Cut characters `start..end` out of `t` and tidy the gap as the Mac's
+/// smart cut does: no double space left, no space at the start or end of a
+/// paragraph or before punctuation, and no empty paragraph where a whole
+/// one was. Returns each removal made, in order (for [`after_cuts`]).
+pub fn cut(t: &mut TextData, start: usize, end: usize) -> Vec<(usize, usize)> {
+    let n = char_len(&t.text);
+    let (a, b) = (start.min(n), end.min(n));
+    if a >= b {
+        return vec![];
+    }
+    let had_words = t.text.chars().skip(a).take(b - a).any(|c| !c.is_whitespace());
+    let mut cuts = vec![(a, b)];
+    remove(t, a, b);
+    let mut take = |t: &mut TextData, x: usize, y: usize| {
+        remove(t, x, y);
+        cuts.push((x, y));
+    };
+    let chars = |t: &TextData| t.text.chars().collect::<Vec<char>>();
+    let mut i = a;
+    // A whole paragraph went: its line goes too.
+    let c = chars(t);
+    let para_start = i == 0 || c[i - 1] == '\n';
+    let para_end = i == c.len() || c[i] == '\n';
+    if had_words && para_start && para_end && !c.is_empty() {
+        if i < c.len() {
+            take(t, i, i + 1);
+        } else {
+            take(t, i - 1, i);
+            i -= 1;
+        }
+    }
+    let c = chars(t);
+    let space = |k: usize| c.get(k) == Some(&' ');
+    let mut s = i;
+    while s > 0 && space(s - 1) {
+        s -= 1;
+    }
+    let mut e = i;
+    while space(e) {
+        e += 1;
+    }
+    let s_start = s == 0 || c[s - 1] == '\n';
+    let e_end = e == c.len() || c[e] == '\n';
+    let punct = c.get(e).is_some_and(|ch| matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | ')' | '’' | '”'));
+    let (x, y) = if s_start || e_end || punct {
+        // Nothing before or after the gap but its spaces: they all go.
+        (s, e)
+    } else if e - s > 1 {
+        // Words on both sides: one space between them.
+        (s + 1, e)
+    } else {
+        (i, i)
+    };
+    if x < y {
+        take(t, x, y);
+    }
+    cuts
+}
+
+/// Move (or with `copy`, copy) characters `start..end` of `t` to `to`, a
+/// position in the text as it is now, as dragging a selection inside a
+/// text box does. The words keep their formatting; spaces are tidied where
+/// they left and added where they land when a word would otherwise run
+/// into its neighbour. Returns the words' new range, or `None` when `to`
+/// is inside the range itself (nothing to do) or nothing but spaces is
+/// selected.
+pub fn move_within(t: &mut TextData, start: usize, end: usize, to: usize, copy: bool) -> Option<(usize, usize)> {
+    let n = char_len(&t.text);
+    let (start, end, to) = (start.min(n), end.min(n), to.min(n));
+    if start >= end || (start..=end).contains(&to) {
+        return None;
+    }
+    let piece = slice(t, start, end);
+    if piece.text.is_empty() {
+        return None;
+    }
+    // Whole paragraphs dropped at a paragraph's start or end move as
+    // paragraphs; anything else lands among the words there.
+    let c: Vec<char> = t.text.chars().collect();
+    let (mut a, mut b) = (start, end);
+    while a < b && c[a].is_whitespace() {
+        a += 1;
+    }
+    while b > a && c[b - 1].is_whitespace() {
+        b -= 1;
+    }
+    let whole = (a == 0 || c[a - 1] == '\n') && (b == c.len() || c[b] == '\n');
+    let to = if copy { to } else { after_cuts(to, &cut(t, start, end)) };
+    let c: Vec<char> = t.text.chars().collect();
+    let to = to.min(c.len());
+    let at_start = to == 0 || c[to - 1] == '\n';
+    let at_end = to == c.len() || c[to] == '\n';
+    if whole && (at_start || at_end) && !c.is_empty() {
+        let mut p = piece.clone();
+        let blank = TextData { text: "\n".into(), ..Default::default() };
+        let at = if at_start {
+            p.text.push('\n');
+            p.paras.resize(p.text.split('\n').count(), ParaFormat::default());
+            to
+        } else {
+            insert(t, to, &blank);
+            to + 1
+        };
+        if at_start {
+            insert(t, at, &p);
+        } else {
+            // The new empty paragraph after `to` takes the piece's format.
+            let at_para = t.text.chars().take(at).filter(|c| *c == '\n').count();
+            if t.paras.len() <= at_para {
+                t.paras.resize(at_para + 1, ParaFormat::default());
+            }
+            t.paras[at_para] = piece.paras.first().cloned().unwrap_or_default();
+            insert(t, at, &p);
+        }
+        return Some((at, at + char_len(&piece.text)));
+    }
+    let word = |ch: Option<&char>| ch.is_some_and(|ch| !ch.is_whitespace());
+    let pad_before = to > 0 && word(c.get(to - 1)) && piece.text.chars().next().is_some_and(|ch| ch.is_alphanumeric());
+    let pad_after = word(c.get(to)) && c.get(to).is_some_and(|ch| ch.is_alphanumeric() || matches!(ch, '(' | '“' | '‘'));
+    let mut at = to;
+    let space = TextData { text: " ".into(), ..Default::default() };
+    if pad_after {
+        insert(t, at, &space);
+    }
+    if pad_before {
+        insert(t, at, &space);
+        at += 1;
+    }
+    insert(t, at, &piece);
+    Some((at, at + char_len(&piece.text)))
+}
+
 /// Character offset → byte offset in `s`.
 pub fn byte_at(s: &str, chars: usize) -> usize {
     s.char_indices().nth(chars).map(|(b, _)| b).unwrap_or(s.len())

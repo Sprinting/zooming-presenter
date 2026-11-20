@@ -1526,6 +1526,75 @@ impl Editor {
                 measure_text(&*self.measure, &theme, e);
                 out.changed.push(id);
             }
+            Command::SplitText { id, start, end, x, y, copy } => {
+                self.check_ids(std::slice::from_ref(&id))?;
+                if !copy {
+                    self.check_unlocked(std::slice::from_ref(&id))?;
+                }
+                let old = self.doc.elements[&id].clone();
+                let ElementKind::Text(t) = &old.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
+                let n = t.text.chars().count();
+                if !(start < end && end <= n) {
+                    return Err(ZError::invalid(format!("start..end ({start}..{end}) must be a range of the text's {n} characters")).hint("count in characters, end not included"));
+                }
+                let piece = crate::rich::slice(t, start, end);
+                if piece.text.is_empty() {
+                    return Err(ZError::invalid(format!("characters {start}..{end} of {id} are only spaces")));
+                }
+                let pos = match (x, y) {
+                    (Some(x), Some(y)) if x.is_finite() && y.is_finite() => Some(Vec2::new(x, y)),
+                    (None, None) => None,
+                    _ => return Err(ZError::invalid("give both x and y (finite), or neither")),
+                };
+                let style = t.style;
+                let fixed = t.fixed_width;
+                let mut new = Element {
+                    id: String::new(),
+                    transform: Transform { x: 0.0, y: 0.0, ..old.transform },
+                    size: Size { w: if fixed { old.size.w } else { 0.0 }, h: 0.0 },
+                    locked: false,
+                    name: String::new(),
+                    placeholder: false,
+                    group: None,
+                    kind: ElementKind::Text(piece),
+                };
+                measure_text(&*self.measure, &theme, &mut new);
+                // Its id first: a box emptied by the split goes, and its id
+                // must not come back as the new box's.
+                new.id = self.doc.alloc_id(new.kind.id_prefix());
+                // What the new box goes below: the old box as it is left.
+                let mut below = old.clone();
+                if !copy {
+                    self.note(&id);
+                    let e = self.doc.elements.get_mut(&id).expect("element exists");
+                    let ElementKind::Text(t) = &mut e.kind else { unreachable!("checked above") };
+                    crate::rich::cut(t, start, end);
+                    if t.text.trim().is_empty() {
+                        self.apply_inner(Command::Delete { ids: vec![id.clone()] }, out)?;
+                    } else {
+                        e.placeholder = false;
+                        measure_text(&*self.measure, &theme, e);
+                        below = e.clone();
+                        out.changed.push(id);
+                    }
+                }
+                let c = pos.unwrap_or_else(|| {
+                    // Just below, lined up as the text is aligned.
+                    let k = below.transform.scale;
+                    let (ow, oh) = (below.size.w * k, below.size.h * k);
+                    let (nw, nh) = (new.size.w * k, new.size.h * k);
+                    let gap = theme.text_style(style).size * k * 0.5;
+                    let dx = match &below.kind {
+                        ElementKind::Text(t) if t.align == Align::Center => 0.0,
+                        ElementKind::Text(t) if t.align == Align::Right => (ow - nw) / 2.0,
+                        _ => (nw - ow) / 2.0,
+                    };
+                    below.transform.center() + Vec2::new(dx, oh / 2.0 + gap + nh / 2.0).rotate_deg(below.transform.rotation)
+                });
+                new.transform.x = c.x;
+                new.transform.y = c.y;
+                self.insert_element(new, out)?;
+            }
             Command::Move { ids, dx, dy, with_contents } => {
                 self.check_ids(&ids)?;
                 self.check_unlocked(&ids)?;
@@ -3360,6 +3429,8 @@ pub fn command_label(c: &Command) -> String {
         Command::Update { patch, .. } if patch.text.is_some() => "Edit text".into(),
         Command::FormatText { .. } => "Format text".into(),
         Command::FormatParagraphs { .. } => "Format paragraphs".into(),
+        Command::SplitText { copy: true, .. } => "Copy text".into(),
+        Command::SplitText { .. } => "Move text".into(),
         Command::Update { .. } => "Change properties".into(),
         Command::Move { .. } => "Move".into(),
         Command::Scale { .. } => "Resize".into(),

@@ -67,6 +67,7 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
             crate::t!("menu-format"),
             vec![
                 Sub(crate::t!("menu-font"), vec![A(Bold), A(Italic), A(Underline)]),
+                Sub(crate::t!("menu-text"), vec![A(MoveToNewTextBox)]),
                 Sep,
                 Sub(crate::t!("menu-theme"), Theme::ids().into_iter().map(|t| A(SetTheme(t))).chain([Sep, A(ThemeEditor)]).collect()),
             ],
@@ -216,6 +217,8 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
             );
             !texts.is_empty()
         }
+        // While typing, with words selected.
+        MoveToNewTextBox => app.canvas.text.as_ref().is_some_and(crate::text_drag::has_words),
         ToggleSidebar => {
             title = if app.show_sidebar { crate::t!("menu-hide-sidebar") } else { crate::t!("action-toggle-sidebar") };
             true

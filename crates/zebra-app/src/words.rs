@@ -138,6 +138,8 @@ fn command(c: &Command) -> String {
         Command::Update { patch, .. } if patch.text.is_some() => t!("history-edit-text"),
         Command::FormatText { .. } => t!("history-format-text"),
         Command::FormatParagraphs { .. } => t!("history-format-paragraphs"),
+        Command::SplitText { copy: true, .. } => t!("history-copy-text"),
+        Command::SplitText { .. } => t!("history-move-text"),
         Command::Update { .. } => t!("history-change-properties"),
         Command::Move { .. } => t!("history-move"),
         Command::Scale { .. } | Command::Resize { .. } => t!("history-resize"),

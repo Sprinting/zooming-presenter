@@ -65,6 +65,9 @@ pub enum Action {
     Bold,
     Italic,
     Underline,
+    /// Format › Text › Move to New Text Box: the words selected in the
+    /// text being typed into a box of their own, just below.
+    MoveToNewTextBox,
     // Arrange
     BringForward,
     SendBackward,
@@ -161,6 +164,7 @@ impl Action {
             Bold => crate::t!("action-bold"),
             Italic => crate::t!("action-italic"),
             Underline => crate::t!("action-underline"),
+            MoveToNewTextBox => crate::t!("action-move-to-new-text-box"),
             BringForward => crate::t!("action-bring-forward"),
             SendBackward => crate::t!("action-send-backward"),
             BringToFront => crate::t!("action-bring-to-front"),

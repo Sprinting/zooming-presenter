@@ -101,6 +101,22 @@ enum Cmd {
     Select { ids: Vec<String> },
     /// Set text of an element.
     SetText { id: String, text: String },
+    /// Take characters START..END (counted in characters, END not
+    /// included) out of text ID into a new box of their own, as dragging
+    /// selected words out of a box does. The new box's centre is --x,--y;
+    /// without them it goes just below the old box. --copy leaves the old
+    /// box as it was. Prints the new box's id.
+    Split {
+        id: String,
+        start: usize,
+        end: usize,
+        #[arg(long, allow_hyphen_values = true, requires = "y")]
+        x: Option<f64>,
+        #[arg(long, allow_hyphen_values = true, requires = "x")]
+        y: Option<f64>,
+        #[arg(long)]
+        copy: bool,
+    },
     /// Undo the last change (yours or the person's)
     Undo,
     /// Redo
@@ -563,6 +579,17 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Move { ids, dx, dy } => print(&call(c, "apply", json!({ "command": { "op": "move", "ids": ids, "dx": dx, "dy": dy } }))?),
         Cmd::Delete { ids } => print(&call(c, "apply", json!({ "command": { "op": "delete", "ids": ids } }))?),
         Cmd::Select { ids } => print(&view(c, json!({ "op": "select", "ids": ids }))?),
+        Cmd::Split { id, start, end, x, y, copy } => {
+            let mut cmd = json!({ "op": "split_text", "id": id, "start": start, "end": end });
+            if let (Some(x), Some(y)) = (x, y) {
+                cmd["x"] = json!(x);
+                cmd["y"] = json!(y);
+            }
+            if copy {
+                cmd["copy"] = json!(true);
+            }
+            print(&call(c, "apply", json!({ "command": cmd }))?)
+        }
         Cmd::SetText { id, text } => print(&call(c, "apply", json!({ "command": { "op": "update", "id": id, "patch": { "text": text } } }))?),
         Cmd::Undo => print(&call(c, "undo", json!({}))?),
         Cmd::Redo => print(&call(c, "redo", json!({}))?),
