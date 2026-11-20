@@ -498,7 +498,7 @@ fn decode_job(job: &Job) -> Vec<(u8, Decoded)> {
         // Drawn at each level's size, so it is sharp at any zoom.
         let style = job.svg.unwrap_or_default();
         let make = |l: u8| {
-            let (lw, lh) = level_size(w, h, l);
+            let (lw, lh) = svg_size(level_size(w, h, l));
             crate::svg::rasterize(&job.bytes, &style, lw, lh).map(|px| Decoded::Still(Arc::new(ImageLevel::from_premultiplied(asset, lw, lh, px))))
         };
         let Some(first) = make(level) else { return vec![] };
@@ -631,6 +631,17 @@ impl Drop for DecodeBytes {
         *g = g.saturating_sub(self.0);
         FREED.notify_all();
     }
+}
+
+/// A level's size, scaled to fit [`crate::svg::MAX_RASTER_SIDE`].
+fn svg_size((w, h): (u32, u32)) -> (u32, u32) {
+    let m = w.max(h);
+    let cap = crate::svg::MAX_RASTER_SIDE;
+    if m <= cap {
+        return (w, h);
+    }
+    let k = cap as f64 / m as f64;
+    (((w as f64 * k).round() as u32).max(1), ((h as f64 * k).round() as u32).max(1))
 }
 
 /// Largest picture side any decoder accepts. Bigger ones are drawn as the
@@ -985,6 +996,12 @@ mod tests {
         assert!(Arc::ptr_eq(f, &a.frames[1]));
         assert!((next - 0.15).abs() < 1e-9);
         assert!(Arc::ptr_eq(a.frame_at(0.65).0, &a.frames[0]));
+    }
+
+    #[test]
+    fn svgs_are_drawn_at_most_4096_wide() {
+        assert_eq!(svg_size((8192, 4096)), (4096, 2048));
+        assert_eq!(svg_size((300, 200)), (300, 200));
     }
 
     #[test]
