@@ -1997,7 +1997,9 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     let has_sel = sa < sb;
     let n_chars = t.buf.chars().count();
     let (ra, rb) = if has_sel { (sa, sb) } else { (0, n_chars) };
-    let is_bold = all_on(&t.rich, ra, rb, |f| f.bold, t.bold);
+    // Bold or heavier is on (a Semibold style is already bold).
+    let style_weight = theme.text_style(t.style).weight;
+    let is_bold = rich::all_bold(&t.rich, style_weight, ra, rb);
     let is_italic = all_on(&t.rich, ra, rb, |f| f.italic, t.italic);
     let is_under = all_on(&t.rich, ra, rb, |f| f.underline, false);
     let is_strike = all_on(&t.rich, ra, rb, |f| f.strike, false);
@@ -2105,7 +2107,12 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         refocus = true;
         let fmt = match f {
             Fx::Bold if !has_sel => {
-                t.bold = !t.bold;
+                // The whole box. Against a heavy style (or words with their
+                // own bold) the box setting alone isn't enough.
+                t.bold = !is_bold;
+                if style_weight >= zebra_core::theme::BOLD_FROM || t.rich.spans.iter().any(|s| s.format.bold.is_some()) {
+                    rich::apply_format(&mut t.rich, 0, n_chars, &SpanFormat { bold: Some(t.bold), ..Default::default() });
+                }
                 None
             }
             Fx::Italic if !has_sel => {
