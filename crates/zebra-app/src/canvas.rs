@@ -1553,7 +1553,7 @@ pub fn commit_text_edit(app: &mut ZebraApp) {
 
 /// Build the editing view of a rich text: one egui section per run of
 /// equal formatting, paragraph indents as leading space.
-fn rich_job(rich: &TextData, text: &str, theme: &zebra_core::Theme, base: &FontId, font_name: &str, color: Color32, wrap: f32) -> egui::text::LayoutJob {
+fn rich_job(rich: &TextData, text: &str, theme: &zebra_core::Theme, base: &FontId, font_name: &str, weight: u16, color: Color32, wrap: f32) -> egui::text::LayoutJob {
     use zebra_core::rich;
     let mut r = rich.clone();
     rich::edit_text(&mut r, text);
@@ -1589,7 +1589,7 @@ fn rich_job(rich: &TextData, text: &str, theme: &zebra_core::Theme, base: &FontI
             continue;
         }
         let f = r.spans.iter().find(|sp| sp.start <= a && b <= sp.end).map(|sp| sp.format.clone()).unwrap_or_default();
-        let bold = f.bold.unwrap_or(rich.bold);
+        let w = zebra_core::theme::bold_weight(weight, f.bold.or(rich.bold.then_some(true)));
         let italic = f.italic.unwrap_or(rich.italic);
         let k = f.size.unwrap_or(1.0) as f32;
         let c = match (&f.color, &f.link) {
@@ -1600,7 +1600,7 @@ fn rich_job(rich: &TextData, text: &str, theme: &zebra_core::Theme, base: &FontI
         let line = Stroke::new((size * k * 0.06).max(1.0), c);
         let mut fmt = egui::TextFormat {
             // Same cap as the box itself: egui rasterises glyphs at this size.
-            font_id: FontId::new((size * k).clamp(1.0, 600.0), style::doc_family(font_name, bold, italic)),
+            font_id: FontId::new((size * k).clamp(1.0, 600.0), style::doc_family(font_name, w, italic)),
             color: c,
             ..Default::default()
         };
@@ -1678,7 +1678,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     let zoom = app.editor.view.camera.zoom;
     t.zoom = zoom;
     let size = (ts.size * t.scale * zoom) as f32;
-    let font = FontId::new(size.clamp(4.0, 600.0), style::doc_family(&ts.font, t.bold, t.italic));
+    let font = FontId::new(size.clamp(4.0, 600.0), style::doc_family(&ts.font, zebra_core::theme::bold_weight(ts.weight, t.bold.then_some(true)), t.italic));
     let color = crate::fallback::theme_color(&theme, t.rich.color.as_deref().filter(|c| !c.is_empty()).unwrap_or(match t.style {
         TextStyle::Title => "theme:title",
         TextStyle::Subtitle => "theme:subtitle",
@@ -1691,7 +1691,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     let pos = app.canvas.w2s(&app.editor, t.anchor);
     let measure_text = if t.buf.is_empty() { crate::t!("canvas-text-placeholder") } else { t.buf.clone() + " " };
     let gw = {
-        let job = rich_job(&t.rich, &measure_text, &theme, &font, &ts.font, color, f32::INFINITY);
+        let job = rich_job(&t.rich, &measure_text, &theme, &font, &ts.font, ts.weight, color, f32::INFINITY);
         ctx.fonts_mut(|f| f.layout_job(job).size().x)
     };
     let width = match t.wrap {
@@ -1788,6 +1788,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     let app_rect_valid = app.canvas.rect_valid;
     let rich_now = t.rich.clone();
     let font_name = ts.font.clone();
+    let style_weight = ts.weight;
     let theme2 = theme.clone();
     let font2 = font.clone();
     // The spelling menu belongs to this edit: a click in it must not end it.
@@ -1803,7 +1804,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         // text wrap a few letters per line while typing.
         ui.set_min_width(width);
         let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
-            let job = rich_job(&rich_now, buf.as_str(), &theme2, &font2, &font_name, color, wrap);
+            let job = rich_job(&rich_now, buf.as_str(), &theme2, &font2, &font_name, style_weight, color, wrap);
             let g = ui.fonts_mut(|f| f.layout_job(job));
             indent_empty_list_rows(g, &rich_now, buf.as_str(), font2.size)
         };
@@ -2910,7 +2911,7 @@ mod tests {
         let font = FontId::proportional(20.0);
         let theme = zebra_core::Theme::resolve("classic");
         for buf in ["One\nTwo\n", "One\n\nTwo"] {
-            let job = rich_job(&t, buf, &theme, &font, "", Color32::WHITE, f32::INFINITY);
+            let job = rich_job(&t, buf, &theme, &font, "", 400, Color32::WHITE, f32::INFINITY);
             let g = ctx.fonts_mut(|f| f.layout_job(job));
             let g = indent_empty_list_rows(g, &t, buf, font.size);
             let first = g.pos_from_cursor(egui::text::CCursor::new(0)).min.x;

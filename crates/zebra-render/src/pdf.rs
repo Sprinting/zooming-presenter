@@ -52,7 +52,10 @@ pub(crate) fn export(r: &Renderer, editor: &Editor) -> Result<Vec<u8>, ZError> {
 
 #[derive(Default)]
 struct Resources {
-    fonts: HashMap<(u64, u32), Option<Font>>,
+    /// Per font face and variable-font location (axis tag, value bits):
+    /// krilla cuts a variable font to a plain one at that location, so
+    /// the PDF carries only the weights the deck uses.
+    fonts: HashMap<(u64, u32, Vec<([u8; 4], u32)>), Option<Font>>,
     images: HashMap<String, Option<krilla::image::Image>>,
     /// Pictures the PDF can't embed as files (SVG symbols...), as pixels:
     /// one per asset and size, however many times they are drawn.
@@ -137,13 +140,19 @@ fn draw_list(s: &mut Surface<'_>, list: &DisplayList, editor: &Editor, res: &mut
                 s.push_transform(&tf(transform));
                 for (ri, run) in layout.runs.iter().enumerate() {
                     s.set_fill(Some(fill_of(run_colors.get(ri).copied().unwrap_or(*color))));
-                    let key = (run.font.data.id(), run.font.index);
+                    let at: Vec<([u8; 4], u32)> = run.variations.iter().map(|(t, v)| (*t, v.to_bits())).collect();
+                    let key = (run.font.data.id(), run.font.index, at);
                     let font = res
                         .fonts
                         .entry(key)
                         .or_insert_with(|| {
                             let data: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(run.font.data.clone());
-                            Font::new(Data::from(data), run.font.index)
+                            if run.variations.is_empty() {
+                                Font::new(Data::from(data), run.font.index)
+                            } else {
+                                let vars: Vec<(krilla::text::Tag, f32)> = run.variations.iter().map(|(t, v)| (krilla::text::Tag::new(t), *v)).collect();
+                                Font::new_variable(Data::from(data), run.font.index, &vars)
+                            }
                         })
                         .clone();
                     let Some(font) = font else { continue };

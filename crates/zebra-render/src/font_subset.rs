@@ -7,7 +7,8 @@
 //! lays text out exactly as the app does; only the drawings of glyphs the
 //! document doesn't use are left out. Two kinds of drawings are cut:
 //! colour bitmaps (`sbix`), TrueType outlines (`glyf`/`loca`, with the
-//! layers of COLR v0 colour glyphs) and CFF outlines (charstrings; shared
+//! layers of COLR v0 colour glyphs, and a variable font's `gvar` with
+//! them: the cut keeps every weight) and CFF outlines (charstrings; shared
 //! subroutines stay). Other drawings (`CFF2`, `CBDT` bitmaps, COLR v1
 //! outlines) come back whole, in a one-face file.
 use std::collections::BTreeSet;
@@ -74,7 +75,7 @@ pub fn subset(file: &[u8], index: u32, keep: &BTreeSet<u16>) -> Option<Vec<u8>> 
         }
     }
     let keep = &keep;
-    let mut glyf_loca: Option<(Vec<u8>, Vec<u8>)> = None;
+    let mut glyf_loca: Option<(Vec<u8>, Vec<u8>, BTreeSet<u16>)> = None;
     let mut cff: Option<Vec<u8>> = None;
     if cut_outlines {
         if let (Some(glyf), Some(loca), Some(long)) = (find(b"glyf"), find(b"loca"), long_loca) {
@@ -84,12 +85,18 @@ pub fn subset(file: &[u8], index: u32, keep: &BTreeSet<u16>) -> Option<Vec<u8>> 
             cff = cut_cff(c, num_glyphs, keep);
         }
     }
+    // A variable font: its outline variations go with the outlines.
+    let gvar = match (&glyf_loca, find(b"gvar")) {
+        (Some((_, _, want)), Some(g)) => cut_gvar(g, want),
+        _ => None,
+    };
     let mut out_tables: Vec<([u8; 4], Vec<u8>)> = vec![];
     for t in &tables {
         let data = match &t.tag {
             b"sbix" => cut_sbix(t.data, num_glyphs, keep)?,
             b"glyf" if glyf_loca.is_some() => glyf_loca.as_ref()?.0.clone(),
             b"loca" if glyf_loca.is_some() => glyf_loca.as_ref()?.1.clone(),
+            b"gvar" if gvar.is_some() => gvar.clone()?,
             b"CFF " if cff.is_some() => cff.clone()?,
             // DSIG would no longer match; drop it.
             b"DSIG" => continue,
@@ -178,7 +185,7 @@ fn cut_sbix(sbix: &[u8], num_glyphs: usize, keep: &BTreeSet<u16>) -> Option<Vec<
 
 /// `glyf` and `loca` keeping only the outlines of `keep` and the parts of
 /// composite glyphs they use; every other glyph becomes empty.
-fn cut_glyf(glyf: &[u8], loca: &[u8], long: bool, num_glyphs: usize, keep: &BTreeSet<u16>) -> Option<(Vec<u8>, Vec<u8>)> {
+fn cut_glyf(glyf: &[u8], loca: &[u8], long: bool, num_glyphs: usize, keep: &BTreeSet<u16>) -> Option<(Vec<u8>, Vec<u8>, BTreeSet<u16>)> {
     let at = |g: usize| -> Option<usize> {
         if long {
             u32_at(loca, 4 * g).map(|v| v as usize)
@@ -230,7 +237,49 @@ fn cut_glyf(glyf: &[u8], loca: &[u8], long: bool, num_glyphs: usize, keep: &BTre
         }
     }
     put(new_glyf.len(), &mut new_loca);
-    Some((new_glyf, new_loca))
+    Some((new_glyf, new_loca, want))
+}
+
+/// `gvar` (a variable TrueType font's outline variations) keeping only
+/// the variations of `want`, the glyphs left in `glyf`. The header, the
+/// shared tuples and the offset format stay as they were.
+fn cut_gvar(gvar: &[u8], want: &BTreeSet<u16>) -> Option<Vec<u8>> {
+    let shared_at = u32_at(gvar, 8)? as usize;
+    let count = u16_at(gvar, 12)? as usize;
+    let long = u16_at(gvar, 14)? & 1 != 0;
+    let data_at = u32_at(gvar, 16)? as usize;
+    let offsets_at = 20;
+    let offsets_len = (count + 1) * if long { 4 } else { 2 };
+    // Shared tuples after the variation data would move; leave such a
+    // file whole.
+    if data_at < offsets_at + offsets_len || shared_at > data_at {
+        return None;
+    }
+    let off = |g: usize| -> Option<usize> {
+        if long { u32_at(gvar, offsets_at + 4 * g).map(|v| v as usize) } else { u16_at(gvar, offsets_at + 2 * g).map(|v| v as usize * 2) }
+    };
+    let mut out = gvar.get(..data_at)?.to_vec();
+    let mut body: Vec<u8> = vec![];
+    let put = |g: usize, v: usize, out: &mut Vec<u8>| {
+        if long {
+            out[offsets_at + 4 * g..offsets_at + 4 * g + 4].copy_from_slice(&(v as u32).to_be_bytes());
+        } else {
+            out[offsets_at + 2 * g..offsets_at + 2 * g + 2].copy_from_slice(&((v / 2) as u16).to_be_bytes());
+        }
+    };
+    for g in 0..count {
+        put(g, body.len(), &mut out);
+        if want.contains(&(g as u16)) {
+            let (a, b) = (off(g)?, off(g + 1)?);
+            body.extend(gvar.get(data_at + a..data_at + b.max(a))?);
+            if !long && body.len() % 2 != 0 {
+                body.push(0);
+            }
+        }
+    }
+    put(count, body.len(), &mut out);
+    out.extend(body);
+    Some(out)
 }
 
 /// COLR v0: the layer glyphs of `keep`'s colour glyphs. None for other
@@ -599,6 +648,43 @@ mod tests {
         let og = b.outline_glyphs();
         for g in &keep {
             assert!(og.get(skrifa::GlyphId::new(*g as u32)).is_some(), "glyph {g} lost");
+        }
+    }
+
+    /// Inter is a variable font: its outline variations (`gvar`, most of
+    /// the file) are cut with the outlines, and a kept glyph still draws
+    /// the same at any weight.
+    #[test]
+    fn variable_font_cut_keeps_every_weight_of_the_used_glyphs() {
+        use skrifa::instance::{LocationRef, Size};
+        use skrifa::outline::{DrawSettings, OutlinePen};
+        use skrifa::MetadataProvider;
+        #[derive(Default)]
+        struct P(String);
+        impl OutlinePen for P {
+            fn move_to(&mut self, x: f32, y: f32) { self.0 += &format!("M{x},{y}"); }
+            fn line_to(&mut self, x: f32, y: f32) { self.0 += &format!("L{x},{y}"); }
+            fn quad_to(&mut self, a: f32, b: f32, x: f32, y: f32) { self.0 += &format!("Q{a},{b},{x},{y}"); }
+            fn curve_to(&mut self, a: f32, b: f32, c: f32, d: f32, x: f32, y: f32) { self.0 += &format!("C{a},{b},{c},{d},{x},{y}"); }
+            fn close(&mut self) { self.0 += "Z"; }
+        }
+        let file = crate::text::bundled_font_bytes_for_tests();
+        let a = skrifa::FontRef::from_index(file, 0).unwrap();
+        let keep: BTreeSet<u16> = "Zebra".chars().filter_map(|c| a.charmap().map(c)).map(|g| g.to_u32() as u16).collect();
+        let cut = subset(file, 0, &keep).expect("cut");
+        assert!(cut.len() < file.len() / 2, "{} of {}", cut.len(), file.len());
+        let b = skrifa::FontRef::from_index(&cut, 0).unwrap();
+        for w in [100.0, 400.0, 650.0, 900.0] {
+            let la = a.axes().location([("wght", w)]);
+            let lb = b.axes().location([("wght", w)]);
+            for g in &keep {
+                let draw = |f: &skrifa::FontRef, loc: LocationRef| {
+                    let mut p = P::default();
+                    f.outline_glyphs().get(skrifa::GlyphId::new(*g as u32)).unwrap().draw(DrawSettings::unhinted(Size::new(100.0), loc), &mut p).unwrap();
+                    p.0
+                };
+                assert_eq!(draw(&a, (&la).into()), draw(&b, (&lb).into()), "glyph {g} at wght {w}");
+            }
         }
     }
 }

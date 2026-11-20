@@ -6,7 +6,7 @@
 use zebra_core::{TextData, Theme};
 use zebra_render::text::Fonts;
 
-const INTER: &[u8] = include_bytes!("../../../assets/fonts/inter/Inter-Regular.ttf");
+const INTER: &[u8] = include_bytes!("../../../assets/fonts/inter/InterVariable.ttf");
 
 /// Characters in `s` that some installed or bundled font can show.
 fn shown(fonts: &Fonts, s: &str) -> bool {

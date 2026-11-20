@@ -43,33 +43,24 @@ macro_rules! font {
 #[cfg(target_arch = "wasm32")]
 const BUNDLED: &[Bundled] = &[];
 
+/// Inter, Lora and JetBrains Mono are variable fonts (a weight axis), so
+/// a style can be any weight from Thin or Regular to Black or Bold; Caveat
+/// has a Regular and a Bold face.
 #[cfg(not(target_arch = "wasm32"))]
 const BUNDLED: &[Bundled] = &[
     Bundled {
         family: "Inter",
-        files: &[
-            font!("inter/Inter-Regular.ttf"),
-            font!("inter/Inter-Bold.ttf"),
-            font!("inter/Inter-Italic.ttf"),
-            font!("inter/Inter-BoldItalic.ttf"),
-        ],
+        files: &[font!("inter/InterVariable.ttf"), font!("inter/InterVariable-Italic.ttf")],
     },
     Bundled {
         family: "Lora",
-        files: &[
-            font!("lora/Lora-Regular.ttf"),
-            font!("lora/Lora-Bold.ttf"),
-            font!("lora/Lora-Italic.ttf"),
-            font!("lora/Lora-BoldItalic.ttf"),
-        ],
+        files: &[font!("lora/Lora-Variable.ttf"), font!("lora/Lora-Italic-Variable.ttf")],
     },
     Bundled {
         family: "JetBrains Mono",
         files: &[
-            font!("jetbrains-mono/JetBrainsMono-Regular.ttf"),
-            font!("jetbrains-mono/JetBrainsMono-Bold.ttf"),
-            font!("jetbrains-mono/JetBrainsMono-Italic.ttf"),
-            font!("jetbrains-mono/JetBrainsMono-BoldItalic.ttf"),
+            font!("jetbrains-mono/JetBrainsMono-Variable.ttf"),
+            font!("jetbrains-mono/JetBrainsMono-Italic-Variable.ttf"),
         ],
     },
     Bundled {
@@ -77,6 +68,20 @@ const BUNDLED: &[Bundled] = &[
         files: &[font!("caveat/Caveat-Regular.ttf"), font!("caveat/Caveat-Bold.ttf")],
     },
 ];
+
+/// Names the bundled fonts' files give their family, where that isn't
+/// the family Zebra knows them by ("Inter Variable" is Inter). A page's
+/// fonts (cut from these files) register under the Zebra name too.
+const FAMILY_ALIASES: &[(&str, &str)] = &[("Inter Variable", "Inter")];
+
+/// The family name a font file gives itself (typographic, else legacy).
+fn family_name_of(bytes: &[u8]) -> Option<String> {
+    use skrifa::{string::StringId, MetadataProvider};
+    let f = skrifa::FontRef::from_index(bytes, 0).ok()?;
+    [StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME]
+        .into_iter()
+        .find_map(|id| f.localized_strings(id).english_or_first().map(|s| s.chars().collect::<String>()))
+}
 
 /// Map a theme family ("Sans", "Serif", "Mono", "Hand") to a bundled family.
 /// Any other name is passed through (a system font, if installed).
@@ -110,6 +115,9 @@ pub struct GlyphRunData {
     pub font_size: f32,
     /// Variable font coordinates (empty for static fonts).
     pub coords: Vec<i16>,
+    /// The same location as axis settings in user units (e.g. `wght`
+    /// 600): what a PDF cuts the font to.
+    pub variations: Vec<([u8; 4], f32)>,
     /// Synthetic italic skew in degrees (fonts without an italic face).
     pub skew: Option<f32>,
     pub glyphs: Vec<PGlyph>,
@@ -179,6 +187,8 @@ struct Key {
     text: String,
     family: String,
     size_bits: u64,
+    /// The style's weight.
+    weight: u16,
     bold: bool,
     italic: bool,
     align: u8,
@@ -220,13 +230,25 @@ const CACHE_HARD_LIMIT: usize = 4 * CACHE_SOFT_LIMIT;
 
 impl Fonts {
     pub fn new() -> Self {
+        Self::with(true)
+    }
+
+    /// No fonts at all until [`Fonts::add_font`]: what the web player
+    /// starts with (tests of exported pages).
+    #[doc(hidden)]
+    pub fn bare() -> Self {
+        Self::with(false)
+    }
+
+    fn with(bundled: bool) -> Self {
         // System fonts stay available as a fallback for scripts and symbols the
         // bundled families lack; the bundled families always win by name.
-        let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: true });
-        for b in BUNDLED {
+        let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: bundled });
+        for b in BUNDLED.iter().filter(|_| bundled) {
             for data in b.files {
                 let blob: Blob<u8> = Blob::new(Arc::new(*data));
-                collection.register_fonts(blob, None);
+                let named = parley::fontique::FontInfoOverride { family_name: Some(b.family), ..Default::default() };
+                collection.register_fonts(blob, Some(named));
             }
         }
         let font_cx = FontContext { collection, source_cache: SourceCache::default() };
@@ -248,9 +270,11 @@ impl Fonts {
     /// Register a font file (TTF, OTF or a collection). Layouts made
     /// before it was added are dropped, as with a theme's embedded fonts.
     pub fn add_font(&self, bytes: Vec<u8>) {
+        let alias = family_name_of(&bytes).and_then(|n| FAMILY_ALIASES.iter().find(|(a, _)| *a == n).map(|(_, z)| *z));
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let blob: Blob<u8> = Blob::new(Arc::new(bytes));
-        g.font_cx.collection.register_fonts(blob, None);
+        let named = alias.map(|a| parley::fontique::FontInfoOverride { family_name: Some(a), ..Default::default() });
+        g.font_cx.collection.register_fonts(blob, named);
         g.cache.clear();
         g.used.clear();
         g.fallbacks.clear();
@@ -333,6 +357,7 @@ impl Fonts {
             text: t.text.clone(),
             family: family_for(&style.font).to_string(),
             size_bits: style.size.to_bits(),
+            weight: style.weight,
             bold: t.bold,
             italic: t.italic,
             align: t.align as u8,
@@ -463,6 +488,79 @@ impl Fonts {
                 Some((std::fs::read(&p).ok()?, ext))
             })
             .collect()
+    }
+
+    /// The upright faces of a family, lightest first, one per weight (see
+    /// [`zebra_core::TextMeasure::font_faces`]). A variable font lists its
+    /// named instances; Zebra's own fonts list the usual weights their
+    /// weight axis covers, without names (the app names them).
+    pub fn faces(&self, doc: Option<&zebra_core::Document>, family: &str) -> Vec<zebra_core::FontFace> {
+        use parley::fontique::{FontStyle as FStyle, FontWidth};
+        use skrifa::MetadataProvider;
+        use zebra_core::FontFace;
+        if let Some(d) = doc {
+            self.register_doc_fonts(d);
+        }
+        let fam = family_for(family);
+        let ours = BUNDLED.iter().any(|b| b.family == fam);
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let FontContext { collection, source_cache } = &mut g.font_cx;
+        let Some(info) = collection.family_by_name(fam) else { return vec![] };
+        let all = info.fonts();
+        let upright: Vec<_> = all.iter().filter(|f| f.style() == FStyle::Normal).collect();
+        let upright = if upright.is_empty() { all.iter().collect() } else { upright };
+        let normal: Vec<_> = upright.iter().copied().filter(|f| f.width() == FontWidth::NORMAL).collect();
+        let faces = if normal.is_empty() { upright } else { normal };
+        let mut out: Vec<FontFace> = vec![];
+        for f in faces {
+            let name_of = |blob: &Blob<u8>, id: skrifa::string::StringId| -> Option<String> {
+                let font = skrifa::FontRef::from_index(blob.as_ref(), f.index()).ok()?;
+                font.localized_strings(id).english_or_first().map(|s| s.chars().collect::<String>())
+            };
+            match f.axes().iter().find(|a| a.tag.to_be_bytes() == *b"wght") {
+                Some(axis) => {
+                    let mut named = vec![];
+                    if !ours && let Some(blob) = f.load(Some(source_cache)) {
+                        if let Ok(font) = skrifa::FontRef::from_index(blob.as_ref(), f.index()) {
+                            let axes = font.axes();
+                            let wi = axes.iter().position(|a| a.tag().to_be_bytes() == *b"wght");
+                            for inst in font.named_instances().iter() {
+                                let Some(w) = wi.and_then(|i| inst.user_coords().nth(i)) else { continue };
+                                // Upright, default-width instances only.
+                                let other_axes_default = inst.user_coords().zip(axes.iter()).enumerate().all(|(i, (v, a))| {
+                                    Some(i) == wi || !matches!(&a.tag().to_be_bytes(), b"ital" | b"slnt" | b"wdth") || v == a.default_value()
+                                });
+                                if !other_axes_default {
+                                    continue;
+                                }
+                                named.push(FontFace { weight: w.round().clamp(1.0, 1000.0) as u16, name: name_of(&blob, inst.subfamily_name_id()) });
+                            }
+                        }
+                    }
+                    if named.is_empty() {
+                        for (w, _) in zebra_core::theme::WEIGHT_NAMES {
+                            if axis.min <= w as f32 && w as f32 <= axis.max {
+                                named.push(FontFace { weight: w, name: None });
+                            }
+                        }
+                    }
+                    out.extend(named);
+                }
+                None => {
+                    let name = if ours {
+                        None
+                    } else {
+                        f.load(Some(source_cache)).and_then(|blob| {
+                            name_of(&blob, skrifa::string::StringId::TYPOGRAPHIC_SUBFAMILY_NAME).or_else(|| name_of(&blob, skrifa::string::StringId::SUBFAMILY_NAME))
+                        })
+                    };
+                    out.push(FontFace { weight: f.weight().value().round().clamp(1.0, 1000.0) as u16, name });
+                }
+            }
+        }
+        out.sort_by_key(|f| f.weight);
+        out.dedup_by_key(|f| f.weight);
+        out
     }
 
     /// Whether any installed or bundled font has a glyph for `c` (tests
@@ -755,6 +853,10 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
         char0 += p.chars().count() + 1;
     }
 
+    // The box's weight: the style's, or Bold if the box is (see
+    // `bold_weight`: Bold in a heavy style keeps the style's weight).
+    let base_weight = zebra_core::theme::bold_weight(key.weight, key.bold.then_some(true));
+
     // `extra`: byte ranges to set in the theme family followed by
     // fallback families (see `tofu_fixes`).
     let build = |font_cx: &mut FontContext,
@@ -765,8 +867,8 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
         b.push_default(StyleProperty::FontFamily(FontFamily::named(&key.family)));
         b.push_default(StyleProperty::FontSize(size));
         b.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(LINE_HEIGHT)));
-        if key.bold {
-            b.push_default(StyleProperty::FontWeight(FontWeight::BOLD));
+        if base_weight != 400 {
+            b.push_default(StyleProperty::FontWeight(FontWeight::new(base_weight as f32)));
         }
         if key.italic {
             b.push_default(StyleProperty::FontStyle(FontStyle::Italic));
@@ -781,7 +883,8 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
             let r = p.marker_len + rich::byte_at(body, a - p.char0)..p.marker_len + rich::byte_at(body, z - p.char0);
             let f = &s.format;
             if let Some(v) = f.bold {
-                b.push(StyleProperty::FontWeight(if v { FontWeight::BOLD } else { FontWeight::NORMAL }), r.clone());
+                let w = zebra_core::theme::bold_weight(key.weight, Some(v));
+                b.push(StyleProperty::FontWeight(FontWeight::new(w as f32)), r.clone());
             }
             if let Some(v) = f.italic {
                 b.push(StyleProperty::FontStyle(if v { FontStyle::Italic } else { FontStyle::Normal }), r.clone());
@@ -804,8 +907,8 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
             let mut bb = layout_cx.ranged_builder(font_cx, marker, 1.0, true);
             bb.push_default(StyleProperty::FontFamily(FontFamily::named(&key.family)));
             bb.push_default(StyleProperty::FontSize(size));
-            if key.bold {
-                bb.push_default(StyleProperty::FontWeight(FontWeight::BOLD));
+            if base_weight != 400 {
+                bb.push_default(StyleProperty::FontWeight(FontWeight::new(base_weight as f32)));
             }
             let mut bl = bb.build(marker);
             bl.break_all_lines(None);
@@ -905,6 +1008,7 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
                     font: run.font().clone(),
                     font_size: run.font_size(),
                     coords: run.normalized_coords().iter().map(|c| c.to_bits()).collect(),
+                    variations: synthesis.variation_settings().iter().map(|(t, v)| (t.to_be_bytes(), *v)).collect(),
                     skew: synthesis.skew(),
                     glyphs,
                     format,
@@ -942,6 +1046,9 @@ impl zebra_core::TextMeasure for ParleyMeasure {
     }
     fn font_families(&self) -> Vec<String> {
         self.fonts.families()
+    }
+    fn font_faces(&self, doc: &zebra_core::Document, family: &str) -> Vec<zebra_core::FontFace> {
+        self.fonts.faces(Some(doc), family)
     }
 }
 

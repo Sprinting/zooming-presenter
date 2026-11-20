@@ -76,7 +76,7 @@ pub fn paint(
                 } else {
                     t.text.clone()
                 };
-                let font = egui::FontId::new(size, doc_family(&style.font, t.bold, t.italic));
+                let font = egui::FontId::new(size, doc_family(&style.font, zebra_core::theme::bold_weight(style.weight, t.bold.then_some(true)), t.italic));
                 let wrap = if t.fixed_width { e.size.w as f32 * px } else { f32::INFINITY };
                 let galley = painter.layout(text, font, color, wrap);
                 let tl = local(-hw, -hh);
