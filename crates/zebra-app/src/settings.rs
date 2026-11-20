@@ -36,6 +36,9 @@ impl Pane {
     pub fn size(self) -> Vec2 {
         match self {
             Pane::Keyboard => Vec2::new(620.0, 520.0),
+            // The third permission's label needs the room (it ran past the
+            // window's edge at 520).
+            Pane::Agents => Vec2::new(600.0, 380.0),
             _ => Vec2::new(520.0, 380.0),
         }
     }
@@ -126,14 +129,39 @@ fn contents(app: &mut ZebraApp, ui: &mut Ui) {
     });
 }
 
-/// A settings row: right-aligned label in a 150 pt column, controls right.
+/// Width of the label column in a settings pane.
+const LABEL_COL: f32 = 150.0;
+
+/// A settings row, laid out like a Mac Settings form: the label right-
+/// aligned in a fixed column (so every colon lines up, whatever the label's
+/// length), 8 pt, then the controls, top-aligned with the label's row.
+/// The label column used to shrink to its text, so each row's controls
+/// started at a different x.
 fn srow(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     let p = Palette::of(ui.ctx());
-    ui.horizontal(|ui| {
-        ui.allocate_ui_with_layout(Vec2::new(150.0, w::H_REGULAR), Layout::right_to_left(Align::Center), |ui| {
+    // One key for every row of this pane (the pane's own Ui).
+    let key = ui.scope_id().with("settings-label-col");
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        // The column is as wide as the pane's widest label (at least
+        // LABEL_COL), remembered per pane so every row uses the same x.
+        let lw = ui.painter().layout_no_wrap(label.to_string(), style::ui_font(13.0), p.text).size().x.ceil();
+        let known: f32 = ui.ctx().data(|d| d.get_temp(key)).unwrap_or(LABEL_COL);
+        let width = known.max(lw);
+        if width > known {
+            ui.ctx().data_mut(|d| d.insert_temp(key, width));
+            ui.ctx().request_repaint();
+        }
+        let (col, _) = ui.allocate_exact_size(Vec2::new(width, w::H_REGULAR), egui::Sense::hover());
+        ui.scope_builder(egui::UiBuilder::new().max_rect(col).layout(Layout::right_to_left(Align::Center)), |ui| {
             ui.label(RichText::new(label).font(style::ui_font(13.0)).color(p.text));
         });
-        ui.vertical(|ui| add(ui));
+        let width = ui.available_width();
+        ui.allocate_ui_with_layout(Vec2::new(width, 0.0), Layout::top_down(Align::Min), |ui| {
+            ui.set_width(width);
+            ui.spacing_mut().item_spacing.y = 4.0;
+            add(ui)
+        });
     });
 }
 

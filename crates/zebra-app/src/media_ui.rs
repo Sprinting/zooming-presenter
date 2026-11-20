@@ -920,27 +920,33 @@ pub fn image_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, img: &zebra_core
     ui.horizontal_wrapped(|ui| {
         let cropping = app.media.crop.as_ref().is_some_and(|c| c.id == id);
         if cropping {
-            if ui.button(crate::t!("media-crop-done")).on_hover_text(crate::i18n::with_key(crate::t!("media-crop-finish"), egui::Modifiers::NONE, egui::Key::Enter)).clicked() {
+            if crate::widgets::push_button(ui, &crate::t!("media-crop-done")).on_hover_text(crate::i18n::with_key(crate::t!("media-crop-finish"), egui::Modifiers::NONE, egui::Key::Enter)).clicked() {
                 end_crop(app, true);
             }
-        } else if ui.button(crate::t!("media-crop")).on_hover_text(crate::t!("media-crop-tip")).clicked() {
+        } else if crate::widgets::push_button(ui, &crate::t!("media-crop")).on_hover_text(crate::t!("media-crop-tip")).clicked() {
             begin_crop(app, id);
         }
-        if img.crop.is_some() && ui.button(crate::t!("media-uncrop")).clicked() {
+        if img.crop.is_some() && crate::widgets::push_button(ui, &crate::t!("media-uncrop")).clicked() {
             patch = Some(ElementPatch { crop: Some(Crop::FULL), ..Default::default() });
         }
-        if ui.button(crate::t!("media-replace")).on_hover_text(crate::t!("media-replace-image-tip")).clicked() {
+        if crate::widgets::push_button(ui, &crate::t!("media-replace")).on_hover_text(crate::t!("media-replace-image-tip")).clicked() {
             replace_image_dialog(app, id);
         }
     });
     crate::widgets::row(ui, &crate::t!("media-mask"), |ui| {
-        use crate::widgets::Seg;
-        let mut m = img.mask;
+        // A pop-up, like Keynote's mask shapes: three labels don't fit a
+        // segmented control at the inspector's width.
         let (square, rounded, circle) = (crate::t!("media-mask-square"), crate::t!("media-mask-rounded"), crate::t!("media-mask-circle"));
-        let items = [(ImageMask::Rectangle, Seg::Text(&square)), (ImageMask::Rounded, Seg::Text(&rounded)), (ImageMask::Circle, Seg::Text(&circle))];
-        if crate::widgets::segmented(ui, &mut m, &items, Some(ui.available_width())).changed() {
-            patch = Some(ElementPatch { mask: Some(m), ..Default::default() });
-        }
+        let items = [(ImageMask::Rectangle, &square), (ImageMask::Rounded, &rounded), (ImageMask::Circle, &circle)];
+        let current = items.iter().find(|(m, _)| *m == img.mask).map(|(_, l)| l.as_str()).unwrap_or(square.as_str());
+        let width = ui.available_width().min(160.0);
+        crate::widgets::popup_button(ui, "image-mask", current, width, |ui| {
+            for (m, label) in &items {
+                if crate::widgets::menu_check(ui, *m == img.mask, label, None).clicked() {
+                    patch = Some(ElementPatch { mask: Some(*m), ..Default::default() });
+                }
+            }
+        });
     });
     if let Some(a) = app.editor.doc.assets.get(&img.asset) {
         let size = if a.ext == "gif" { crate::t!("media-image-size-gif", width = a.width, height = a.height) } else { crate::t!("media-image-size", width = a.width, height = a.height) };
@@ -962,7 +968,7 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
     let playing = app.media.is_playing(id);
     ui.horizontal_wrapped(|ui| {
         let label = if playing { crate::t!("media-pause") } else { crate::t!("media-play") };
-        if ui.button(label).on_hover_text(crate::t!("media-play-tip")).clicked() {
+        if crate::widgets::push_button(ui, &label).on_hover_text(crate::t!("media-play-tip")).clicked() {
             toggle(app, id);
         }
         let pos = app.media.videos.get(id).map(|l| l.player.position()).unwrap_or(v.start);
@@ -970,12 +976,12 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
         // The inspector's own font; the width is that of the same text in
         // zeros, so the buttons after it don't shift as the time runs.
         let text = format!("{} / {}", fmt_time(pos), fmt_time(dur));
-        let font = crate::style::ui_font(11.5);
+        let font = crate::style::ui_font(11.0);
         let zeros: String = text.chars().map(|c| if c.is_ascii_digit() { '0' } else { c }).collect();
         let w = ui.painter().layout_no_wrap(zeros, font.clone(), ui.visuals().text_color()).size().x;
         let (r, _) = ui.allocate_exact_size(egui::vec2(w.ceil(), ui.spacing().interact_size.y), egui::Sense::hover());
         ui.painter().text(r.left_center(), egui::Align2::LEFT_CENTER, text, font, ui.visuals().text_color());
-        if ui.button(crate::t!("media-replace")).on_hover_text(crate::t!("media-replace-video-tip")).clicked() {
+        if crate::widgets::push_button(ui, &crate::t!("media-replace")).on_hover_text(crate::t!("media-replace-video-tip")).clicked() {
             replace_video_dialog(app, id);
         }
     });
@@ -983,85 +989,94 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
         ui.label(egui::RichText::new(crate::t!("media-video-macos-only")).size(11.0).color(ui.visuals().weak_text_color()));
     }
     let mut auto = v.autoplay;
-    if ui.checkbox(&mut auto, crate::t!("media-autoplay-on-step")).changed() {
+    if crate::widgets::checkbox(ui, &mut auto, &crate::t!("media-autoplay-on-step")).changed() {
         patch = Some(ElementPatch { autoplay: Some(auto), ..Default::default() });
     }
     ui.horizontal_wrapped(|ui| {
         let mut lp = v.looping;
-        if ui.checkbox(&mut lp, crate::t!("media-loop")).changed() {
+        if crate::widgets::checkbox(ui, &mut lp, &crate::t!("media-loop")).changed() {
             patch = Some(ElementPatch { looping: Some(lp), ..Default::default() });
         }
         let mut m = v.muted;
-        if ui.checkbox(&mut m, crate::t!("media-mute")).changed() {
+        if crate::widgets::checkbox(ui, &mut m, &crate::t!("media-mute")).changed() {
             patch = Some(ElementPatch { muted: Some(m), ..Default::default() });
         }
     });
     let max = if v.duration > 0.0 { v.duration } else { 3600.0 };
-    egui::Grid::new("trim").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
-        ui.label(crate::t!("media-trim-start"));
+    // Trim and poster as inspector rows (label column, then controls), like
+    // every other inspector section; they were a loose grid of egui drag
+    // values and buttons.
+    crate::widgets::row(ui, &crate::t!("media-trim-start"), |ui| {
         let mut s = v.start;
-        let r = ui.add(egui::DragValue::new(&mut s).speed(0.05).range(0.0..=max).suffix(format!(" {}", crate::t!("media-seconds-unit"))).max_decimals(1));
+        let r = crate::widgets::number_field(ui, &mut s, crate::widgets::Num::secs().range(0.0, max).step(0.1).width(84.0));
         dragging |= r.dragged() || r.has_focus();
         if r.changed() && v.end.is_none_or(|e| s < e) {
             patch = Some(ElementPatch { start: Some(s), ..Default::default() });
         }
-        ui.end_row();
-        ui.label(crate::t!("media-trim-end"));
-        ui.horizontal_wrapped(|ui| {
-            let mut e = v.end.unwrap_or(max);
-            let r = ui.add(egui::DragValue::new(&mut e).speed(0.05).range(0.0..=max).suffix(format!(" {}", crate::t!("media-seconds-unit"))).max_decimals(1));
-            dragging |= r.dragged() || r.has_focus();
-            if r.changed() && e > v.start {
-                patch = Some(ElementPatch { end: Some(e), ..Default::default() });
-            }
-            if v.end.is_some() && ui.small_button(crate::t!("media-clear-button")).on_hover_text(crate::t!("media-trim-clear-end-tip")).clicked() {
-                patch = Some(ElementPatch { end: Some(-1.0), ..Default::default() });
-            }
-        });
-        ui.end_row();
     });
-    ui.horizontal_wrapped(|ui| {
-        ui.label(crate::t!("media-poster"));
+    crate::widgets::row(ui, &crate::t!("media-trim-end"), |ui| {
+        let mut e = v.end.unwrap_or(max);
+        let r = crate::widgets::number_field(ui, &mut e, crate::widgets::Num::secs().range(0.0, max).step(0.1).width(84.0));
+        dragging |= r.dragged() || r.has_focus();
+        if r.changed() && e > v.start {
+            patch = Some(ElementPatch { end: Some(e), ..Default::default() });
+        }
+        if v.end.is_some() && crate::widgets::push_button_ext(ui, &crate::t!("media-clear-button"), crate::widgets::Size::Small, true, None).on_hover_text(crate::t!("media-trim-clear-end-tip")).clicked() {
+            patch = Some(ElementPatch { end: Some(-1.0), ..Default::default() });
+        }
+    });
+    crate::widgets::row(ui, &crate::t!("media-poster"), |ui| {
         let frame = app.media.videos.get(id).and_then(|l| l.frame.clone());
         if let Some(f) = frame {
-            if ui.button(crate::t!("media-poster-use-frame")).on_hover_text(crate::t!("media-poster-use-frame-tip")).clicked() {
+            if crate::widgets::push_button(ui, &crate::t!("media-poster-use-frame")).on_hover_text(crate::t!("media-poster-use-frame-tip")).clicked() {
                 let png = zebra_media::encode_png(&zebra_media::Frame { width: f.width, height: f.height, rgba: f.data.data.data().to_vec() });
                 app.apply(Command::SetPoster { id: id.to_string(), data_base64: base64::engine::general_purpose::STANDARD.encode(png), path: None, at: None });
             }
         }
-        if ui.button(crate::t!("media-poster-choose")).clicked() {
+        if crate::widgets::push_button(ui, &crate::t!("media-poster-choose")).clicked() {
             crate::pickers::ask(app, crate::pickers::Pick::Poster(id.to_string()));
         }
-        if v.poster.is_some() && ui.small_button(crate::t!("media-clear-button")).on_hover_text(crate::t!("media-poster-remove-tip")).clicked() {
+        if v.poster.is_some() && crate::widgets::push_button_ext(ui, &crate::t!("media-clear-button"), crate::widgets::Size::Small, true, None).on_hover_text(crate::t!("media-poster-remove-tip")).clicked() {
             app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: None, at: None });
         }
     });
     (patch, dragging)
 }
 
+/// A small group heading (11 pt semibold, secondary colour), with the same
+/// 4 pt gap to its controls as the inspector's other headings.
+fn group_heading(ui: &mut Ui, text: &str) {
+    let p = crate::style::Palette::of(ui.ctx());
+    ui.label(egui::RichText::new(text).font(crate::style::semibold(11.0)).color(p.weak));
+    ui.add_space(2.0);
+}
+
 /// Document section (nothing selected): the soundtrack.
 pub fn document_section(app: &mut ZebraApp, ui: &mut Ui) {
-    ui.add_space(6.0);
-    ui.label(egui::RichText::new(crate::t!("media-soundtrack-heading")).size(10.5).color(ui.visuals().weak_text_color()).strong());
+    ui.add_space(8.0);
+    group_heading(ui, &crate::t!("media-soundtrack-heading"));
     match app.editor.doc.soundtrack.clone() {
         None => {
-            if ui.button(crate::t!("media-add-music")).on_hover_text(crate::t!("media-add-music-tip")).clicked() {
+            if crate::widgets::push_button(ui, &crate::t!("media-add-music")).on_hover_text(crate::t!("media-add-music-tip")).clicked() {
                 soundtrack_dialog(app);
             }
         }
         Some(t) => {
+            let name = if t.name.is_empty() { crate::t!("media-music") } else { t.name.clone() };
+            // The name on its own line: with the buttons beside it a long
+            // name pushed Remove past the inspector's edge.
+            ui.add(egui::Label::new(crate::t!("media-music-name", name = name)).truncate());
             ui.horizontal(|ui| {
-                let name = if t.name.is_empty() { crate::t!("media-music") } else { t.name.clone() };
-                ui.label(crate::t!("media-music-name", name = name));
-                if ui.small_button(crate::t!("media-replace")).clicked() {
+                if crate::widgets::push_button_ext(ui, &crate::t!("media-replace"), crate::widgets::Size::Small, true, None).clicked() {
                     soundtrack_dialog(app);
                 }
-                if ui.small_button(crate::t!("media-remove")).clicked() {
+                if crate::widgets::push_button_ext(ui, &crate::t!("media-remove"), crate::widgets::Size::Small, true, None).clicked() {
                     app.apply(Command::RemoveSoundtrack);
                 }
             });
             let mut vol = t.volume;
-            let r = ui.add(egui::Slider::new(&mut vol, 0.0..=1.0).text(crate::t!("media-volume")).show_value(false));
+            let vol_label = crate::t!("media-volume");
+            let r = crate::widgets::row(ui, &vol_label, |ui| crate::widgets::slider(ui, &mut vol, 0.0..=1.0, ui.available_width().min(160.0), &vol_label));
             if r.drag_started() && !app.editor.in_transaction() {
                 let _ = app.editor.begin(crate::t!("media-undo-change-soundtrack"), crate::app::HUMAN);
             }
@@ -1072,7 +1087,7 @@ pub fn document_section(app: &mut ZebraApp, ui: &mut Ui) {
                 app.editor.commit_as(&crate::app::HUMAN);
             }
             let mut lp = t.looping;
-            if ui.checkbox(&mut lp, crate::t!("media-loop")).changed() {
+            if crate::widgets::checkbox(ui, &mut lp, &crate::t!("media-loop")).changed() {
                 app.apply(Command::SetSoundtrack { data_base64: String::new(), path: None, looping: Some(lp), volume: None, name: None });
             }
         }
@@ -1082,20 +1097,20 @@ pub fn document_section(app: &mut ZebraApp, ui: &mut Ui) {
 /// Path-step section: the step's voice-over.
 pub fn step_section(app: &mut ZebraApp, ui: &mut Ui, step: usize) {
     let Some(s) = app.editor.doc.path.get(step).cloned() else { return };
-    ui.add_space(6.0);
-    ui.label(egui::RichText::new(crate::t!("media-voiceover-heading", step = ((step + 1) as u64))).size(10.5).color(ui.visuals().weak_text_color()).strong());
+    ui.add_space(8.0);
+    group_heading(ui, &crate::t!("media-voiceover-heading", step = ((step + 1) as u64)));
     ui.horizontal(|ui| match s.voiceover {
         None => {
-            if ui.button(crate::t!("media-add-recording")).on_hover_text(crate::t!("media-add-recording-tip")).clicked() {
+            if crate::widgets::push_button(ui, &crate::t!("media-add-recording")).on_hover_text(crate::t!("media-add-recording-tip")).clicked() {
                 voiceover_dialog(app, step);
             }
         }
         Some(_) => {
             ui.label(crate::t!("media-recorded"));
-            if ui.small_button(crate::t!("media-replace")).clicked() {
+            if crate::widgets::push_button_ext(ui, &crate::t!("media-replace"), crate::widgets::Size::Small, true, None).clicked() {
                 voiceover_dialog(app, step);
             }
-            if ui.small_button(crate::t!("media-remove")).clicked() {
+            if crate::widgets::push_button_ext(ui, &crate::t!("media-remove"), crate::widgets::Size::Small, true, None).clicked() {
                 app.apply(Command::SetVoiceover { index: step, data_base64: String::new(), path: None });
             }
         }

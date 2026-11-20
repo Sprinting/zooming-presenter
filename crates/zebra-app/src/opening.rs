@@ -104,7 +104,8 @@ pub fn ui(app: &mut ZebraApp, ctx: &Context) {
     let Some(o) = &app.opening else { return };
     let name = o.path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let progress = o.progress();
-    egui::Modal::new(app.uid("opening")).show(ctx, |ui| {
+    let p = crate::style::Palette::of(ctx);
+    egui::Modal::new(app.uid("opening")).frame(crate::style::sheet_frame(&p)).show(ctx, |ui| {
         ui.set_width(280.0);
         ui.label(RichText::new(crate::t!("app-opening", name = name.as_str())).strong());
         ui.add_space(8.0);

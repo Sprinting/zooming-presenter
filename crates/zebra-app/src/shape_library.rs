@@ -95,11 +95,13 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
             ui.set_width(COLS as f32 * (TILE + 4.0));
             if lib.replace.is_none() {
                 let before = lib.tab;
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut lib.tab, Tab::Shapes, crate::t!("library-tab-shapes"));
-                    ui.selectable_value(&mut lib.tab, Tab::Icons, crate::t!("library-tab-icons"));
-                    ui.selectable_value(&mut lib.tab, Tab::Symbols, crate::t!("library-tab-symbols"));
+                // A centred tab control (segmented), as in Mac panels; the
+                // tabs were tinted chips.
+                let (a, b, c) = (crate::t!("library-tab-shapes"), crate::t!("library-tab-icons"), crate::t!("library-tab-symbols"));
+                ui.vertical_centered(|ui| {
+                    crate::widgets::tab_bar(ui, &mut lib.tab, &[(Tab::Shapes, a.as_str()), (Tab::Icons, b.as_str()), (Tab::Symbols, c.as_str())]);
                 });
+                ui.add_space(4.0);
                 lib.focus_search |= lib.tab != before;
             }
             let hint = match lib.tab {
@@ -107,7 +109,8 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
                 Tab::Icons => crate::t!("library-search-icons-hint"),
                 Tab::Symbols => crate::t!("library-search-symbols-hint"),
             };
-            let r = ui.add(egui::TextEdit::singleline(&mut lib.query).hint_text(hint).desired_width(f32::INFINITY));
+            let wdt = ui.available_width();
+            let r = crate::widgets::search_field(ui, &mut lib.query, wdt, &hint);
             if lib.focus_search {
                 r.request_focus();
                 lib.focus_search = false;

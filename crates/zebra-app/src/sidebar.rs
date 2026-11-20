@@ -356,7 +356,9 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     if app.current_step().is_some() {
         egui::Panel::bottom("path-notes")
             .exact_size(118.0)
-            .frame(egui::Frame::new().fill(p.sidebar).inner_margin(egui::Margin::symmetric(8, 4)))
+            // No side inset of its own: the notes line up with the header,
+            // the rows and the footer on the sidebar's 10 pt margin.
+            .frame(egui::Frame::new().fill(p.sidebar).inner_margin(egui::Margin::symmetric(0, 6)))
             .show(ui, |ui| crate::presenting::sidebar_notes(app, ui, p));
     }
 
@@ -676,7 +678,7 @@ impl StepRow<'_> {
             *dragging = Some(i);
         }
         let resp = if resp.hovered() { resp.on_hover_text(crate::t!("sidebar-step-tip", number = ((i + 1) as u64), label = step_label(app, i))) } else { resp };
-        egui::Popup::context_menu(&resp).width(200.0).show(|ui| {
+        egui::Popup::context_menu(&resp).style(crate::widgets::menu_style).width(200.0).show(|ui| {
             if w::menu_item(ui, &crate::t!("sidebar-go-to-step"), None).clicked() {
                 let _ = app.editor.view(ViewCommand::GotoStep { step: i }, H);
             }
@@ -753,7 +755,7 @@ fn footer(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         ui.add_space(6.0);
         let more_tip = crate::t!("sidebar-more-tip");
         let more = footer_button(ui, Icon::ChevronDown, true, p, &more_tip).on_hover_text(more_tip.as_str());
-        egui::Popup::menu(&more).width(200.0).show(|ui| {
+        egui::Popup::menu(&more).style(crate::widgets::menu_style).width(200.0).show(|ui| {
             if w::menu_item(ui, &crate::t!("sidebar-path-from-frames"), None).clicked() {
                 app.queued.push(Action::AutoPath);
             }

@@ -102,7 +102,7 @@ pub fn sections(insp: &mut Insp, ui: &mut Ui, tab: Tab) {
                         w::popup_button(ui, ("head", is_end), name, wdt, |ui| {
                             for (h, l) in &heads {
                                 let h = *h;
-                                if ui.selectable_label(cur == h, l.as_str()).clicked() {
+                                if w::menu_check(ui, cur == h, l.as_str(), None).clicked() {
                                     picked = Some(h);
                                 }
                             }

@@ -121,11 +121,24 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
             let font = crate::style::ui_font(13.0);
             let galley = painter.layout_no_wrap(txt, font.clone(), white);
             let esc = painter.layout_no_wrap(crate::t!("present-hud-exit", key = "Esc"), crate::style::ui_font(11.0), Color32::from_gray(200).gamma_multiply(a));
-            let btn = egui::vec2(30.0, 30.0);
-            let w = btn.x * 2.0 + galley.size().x + 24.0 + 1.0 + esc.size().x + 28.0;
-            let hud = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.bottom() - 44.0), egui::vec2(w, 38.0));
-            painter.rect_filled(hud, 10.0, Color32::from_black_alpha((170.0 * a) as u8));
-            let mut x = hud.left() + 4.0;
+            // Bezel metrics: 36 pt high, 8 pt corners (a rounded rect, not a
+            // capsule), 6 pt from the edge to the 28 pt step buttons (their
+            // glyph is inset 8 pt, so 14 pt to the ink), 14 pt after the
+            // exit hint. Both texts sit on one baseline.
+            const HUD_H: f32 = 36.0;
+            const EDGE: f32 = 6.0;
+            const GAP: f32 = 6.0;
+            const SEP: f32 = 12.0;
+            const END: f32 = 14.0;
+            let btn = egui::vec2(28.0, 28.0);
+            let w = EDGE + btn.x + GAP + galley.size().x + GAP + btn.x + SEP + 1.0 + SEP + esc.size().x + END;
+            let hud = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.bottom() - 44.0), egui::vec2(w.round(), HUD_H));
+            painter.rect_filled(hud, 8.0, Color32::from_black_alpha((170.0 * a) as u8));
+            // One baseline for the step count and the exit hint, with the
+            // step count's capitals centred in the bezel.
+            let base = |g: &egui::Galley| g.rows.first().and_then(|r| r.row.glyphs.first().map(|gl| r.pos.y + gl.pos.y)).unwrap_or(g.size().y * 0.8);
+            let baseline = (hud.center().y + 13.0 * 0.71 / 2.0).round();
+            let mut x = hud.left() + EDGE;
             let hud_id = app.uid("present-hud");
             let step_btn = |painter: &egui::Painter, ui: &mut egui::Ui, x: f32, icon: Icon, id: &str, enabled: bool| -> bool {
                 let r = egui::Rect::from_min_size(egui::pos2(x, hud.center().y - btn.y / 2.0), btn);
@@ -133,7 +146,7 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
                 let label = if id == "prev" { crate::t!("present-hud-previous-step") } else { crate::t!("present-hud-next-step") };
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, enabled, label.clone()));
                 if resp.hovered() && enabled {
-                    painter.rect_filled(r, 6.0, Color32::from_white_alpha((40.0 * a) as u8));
+                    painter.rect_filled(r, 5.0, Color32::from_white_alpha((40.0 * a) as u8));
                 }
                 let col = if enabled { white } else { white.gamma_multiply(0.35) };
                 crate::icons::paint_icon(painter, r.shrink(8.0), icon, col);
@@ -143,16 +156,17 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
             if step_btn(&painter, ui, x, Icon::ChevronLeft, "prev", app.editor.view.present.step.is_some()) {
                 let _ = app.editor.view(ViewCommand::Prev, H);
             }
-            x += btn.x + 12.0;
-            painter.galley(egui::pos2(x, hud.center().y - galley.size().y / 2.0), galley.clone(), white);
-            x += galley.size().x + 12.0;
+            x += btn.x + GAP;
+            painter.galley(egui::pos2(x, baseline - base(&galley)), galley.clone(), white);
+            x += galley.size().x + GAP;
             if step_btn(&painter, ui, x, Icon::ChevronRight, "next", !at_end) {
                 let _ = app.editor.view(ViewCommand::Next, H);
             }
-            x += btn.x + 8.0;
-            painter.line_segment([egui::pos2(x, hud.top() + 9.0), egui::pos2(x, hud.bottom() - 9.0)], egui::Stroke::new(1.0, Color32::from_white_alpha((60.0 * a) as u8)));
-            x += 12.0;
-            painter.galley(egui::pos2(x, hud.center().y - esc.size().y / 2.0), esc, white);
+            x += btn.x + SEP;
+            let sx = x.round() + 0.5;
+            painter.line_segment([egui::pos2(sx, hud.top() + 9.0), egui::pos2(sx, hud.bottom() - 9.0)], egui::Stroke::new(1.0, Color32::from_white_alpha((60.0 * a) as u8)));
+            x += 1.0 + SEP;
+            painter.galley(egui::pos2(x, baseline - base(&esc)), esc, white);
             // Repaint only for the fade, not while the bezel just sits there.
             if idle < 1.6 {
                 ctx.request_repaint_after(std::time::Duration::from_secs_f64(1.6 - idle));

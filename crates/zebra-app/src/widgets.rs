@@ -123,6 +123,11 @@ pub fn default_button(ui: &mut Ui, text: &str) -> Response {
     button_impl(ui, text, None, Size::Regular, true, true, None)
 }
 
+/// The default button with a minimum width (dialog button rows use 80 pt).
+pub fn default_button_w(ui: &mut Ui, text: &str, min_w: f32) -> Response {
+    button_impl(ui, text, None, Size::Regular, true, true, Some(min_w))
+}
+
 /// Push button with a leading icon.
 pub fn icon_text_button(ui: &mut Ui, icon: Icon, text: &str, enabled: bool) -> Response {
     button_impl(ui, text, Some(icon), Size::Regular, false, enabled, None)
@@ -243,6 +248,53 @@ pub fn toolbar_item(ui: &mut Ui, icon: Icon, label: &str, st: ToolbarState) -> R
     resp
 }
 
+/// A borderless button for floating bars (the text format bar): 24 pt
+/// high, 7 pt side padding, a soft plate on hover and a pressed plate with
+/// accent text while `on` (AppKit's recessed/toolbar button). One style for
+/// every item in the bar, toggles and plain buttons alike; they used to mix
+/// tinted chips, bordered bezels and bare text.
+pub fn bar_toggle(ui: &mut Ui, on: bool, text: impl Into<egui::WidgetText>) -> Response {
+    bar_item(ui, Some(on), text)
+}
+
+/// [`bar_toggle`] without a state (A+, Colour, Done).
+pub fn bar_button(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> Response {
+    bar_item(ui, None, text)
+}
+
+fn bar_item(ui: &mut Ui, on: Option<bool>, text: impl Into<egui::WidgetText>) -> Response {
+    let p = pal(ui);
+    let text: egui::WidgetText = text.into();
+    let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+    let w = (galley.size().x + 14.0).max(24.0);
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 24.0), Sense::click());
+    resp.widget_info(|| match on {
+        Some(o) => WidgetInfo::selected(Role::Button, ui.is_enabled(), o, galley.text()),
+        None => WidgetInfo::labeled(Role::Button, ui.is_enabled(), galley.text()),
+    });
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let lit = on == Some(true);
+        if lit || resp.is_pointer_button_down_on() {
+            painter.rect_filled(rect, RADIUS, p.pressed);
+        } else if resp.hovered() {
+            painter.rect_filled(rect, RADIUS, p.hover);
+        }
+        let c = if lit { accent() } else { p.text };
+        let pos = Pos2::new(rect.center().x - galley.size().x / 2.0, rect.center().y - galley.size().y / 2.0);
+        painter.galley(pos, galley, c);
+    }
+    resp
+}
+
+/// A thin vertical divider between groups in a floating bar.
+pub fn bar_divider(ui: &mut Ui) {
+    let p = pal(ui);
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, 24.0), Sense::hover());
+    let x = rect.center().x.round() + 0.5;
+    ui.painter().line_segment([Pos2::new(x, rect.top() + 4.0), Pos2::new(x, rect.bottom() - 4.0)], Stroke::new(1.0, p.border));
+}
+
 /// A vertical hairline between toolbar groups.
 pub fn toolbar_separator(ui: &mut Ui) {
     let p = pal(ui);
@@ -310,9 +362,16 @@ fn segmented_impl(ui: &mut Ui, states: &[bool], segs: &[Seg], width: Option<f32>
         })
         .collect();
     let natural: f32 = seg_ws.iter().sum();
-    let total = width.unwrap_or(natural).max(natural.min(width.unwrap_or(f32::MAX)));
-    // Equal widths when a width is given (AppKit's `.fillEqually`).
-    let ws: Vec<f32> = if width.is_some() { vec![total / n as f32; n] } else { seg_ws.clone() };
+    // Never narrower than the labels need: squeezed segments overlap.
+    let total = width.unwrap_or(natural).max(natural);
+    let widest = seg_ws.iter().cloned().fold(0.0, f32::max);
+    // Equal widths when a width is given and every label fits
+    // (AppKit's `.fillEqually`); otherwise share the spare room out.
+    let ws: Vec<f32> = if width.is_some() && total / n as f32 >= widest {
+        vec![total / n as f32; n]
+    } else {
+        seg_ws.iter().map(|w| w + (total - natural) / n as f32).collect()
+    };
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(total, size.height()), Sense::hover());
     let mut clicked = None;
     if ui.is_rect_visible(rect) {
@@ -389,11 +448,19 @@ pub fn popup_button(ui: &mut Ui, id_salt: impl std::hash::Hash + std::fmt::Debug
             focus_ring(ui, rect, RADIUS);
         }
     }
-    egui::Popup::menu(&resp).width(width.max(140.0)).show(|ui| {
+    egui::Popup::menu(&resp).style(crate::widgets::menu_style).width(width.max(140.0)).show(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         add_contents(ui)
     });
     resp
+}
+
+/// Style for every menu and pop-up menu: egui's menu style, with no gap
+/// between rows. NSMenu rows are 22 pt and touch; egui's 6 pt item
+/// spacing made them 28 pt apart and the separators 15 pt.
+pub fn menu_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.item_spacing.y = 0.0;
 }
 
 /// A plain menu row (13 pt, accent highlight on hover, optional shortcut).
@@ -408,7 +475,13 @@ pub fn menu_check(ui: &mut Ui, checked: bool, label: &str, shortcut: Option<&str
 
 pub fn menu_row(ui: &mut Ui, checked: Option<bool>, label: &str, shortcut: Option<&str>, enabled: bool) -> Response {
     let p = pal(ui);
-    let w = ui.available_width().max(120.0);
+    // Wide enough for the title, a 24 pt gap and the shortcut: the menu
+    // grows to fit (a fixed width ran long titles into their shortcuts).
+    let font = style::ui_font(13.0);
+    let lw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), Color32::PLACEHOLDER).size().x;
+    let sw = shortcut.map_or(0.0, |s| 24.0 + ui.painter().layout_no_wrap(s.to_string(), font.clone(), Color32::PLACEHOLDER).size().x);
+    let need = 22.0 + lw + sw + 10.0;
+    let w = ui.available_width().max(120.0).max(need);
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 22.0), if enabled { Sense::click() } else { Sense::hover() });
     resp.widget_info(|| match checked {
         Some(c) => WidgetInfo::selected(Role::CheckBox, enabled, c, label),
@@ -423,10 +496,10 @@ pub fn menu_row(ui: &mut Ui, checked: Option<bool>, label: &str, shortcut: Optio
     if checked == Some(true) {
         paint_icon(painter, Rect::from_center_size(Pos2::new(rect.left() + 11.0, rect.center().y), Vec2::splat(11.0)), Icon::Check, tc);
     }
-    painter.text(Pos2::new(rect.left() + 22.0, rect.center().y), Align2::LEFT_CENTER, label, style::ui_font(13.0), tc);
+    painter.text(Pos2::new(rect.left() + 22.0, rect.center().y), Align2::LEFT_CENTER, label, font.clone(), tc);
     if let Some(s) = shortcut {
         let sc = if hot { on_accent() } else { p.weak };
-        painter.text(Pos2::new(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, s, style::ui_font(13.0), sc);
+        painter.text(Pos2::new(rect.right() - 10.0, rect.center().y), Align2::RIGHT_CENTER, s, font, sc);
     }
     if resp.clicked() {
         ui.close();
@@ -434,11 +507,21 @@ pub fn menu_row(ui: &mut Ui, checked: Option<bool>, label: &str, shortcut: Optio
     resp
 }
 
+/// A menu row with a colour swatch before the title (NSMenu image column).
+pub fn menu_swatch(ui: &mut Ui, color: Color32, label: &str) -> Response {
+    let resp = menu_row(ui, None, label, None, true);
+    let r = Rect::from_center_size(Pos2::new(resp.rect.left() + 11.0, resp.rect.center().y), Vec2::splat(11.0));
+    ui.painter().rect(r, 2.5, color, Stroke::new(0.6, Color32::from_black_alpha(50)), StrokeKind::Inside);
+    resp
+}
+
 /// Menu separator (NSMenuItem.separator).
 pub fn menu_separator(ui: &mut Ui) {
     let p = pal(ui);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 9.0), Sense::hover());
-    ui.painter().line_segment([Pos2::new(rect.left() + 8.0, rect.center().y), Pos2::new(rect.right() - 8.0, rect.center().y)], Stroke::new(1.0, p.border));
+    // NSMenu separator: 11 pt high, the line inset like the row text.
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 11.0), Sense::hover());
+    let y = rect.center().y.round() + 0.5;
+    ui.painter().line_segment([Pos2::new(rect.left() + 10.0, y), Pos2::new(rect.right() - 10.0, y)], Stroke::new(1.0, p.border));
 }
 
 // ----------------------------------------------------------------------
@@ -470,6 +553,61 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         }
         if resp.has_focus() {
             focus_ring(ui, b, 3.5);
+        }
+    }
+    resp
+}
+
+/// NSSlider, horizontal, no tick marks: a 4 pt track filled with the
+/// accent up to a 18 pt round white knob. Arrow keys step by 5 % when it
+/// has focus. `width` is the whole control, knob included.
+pub fn slider(ui: &mut Ui, value: &mut f64, range: std::ops::RangeInclusive<f64>, width: f32, label: &str) -> Response {
+    let p = pal(ui);
+    const KNOB: f32 = 18.0;
+    let (lo, hi) = (*range.start(), *range.end());
+    let (rect, mut resp) = ui.allocate_exact_size(Vec2::new(width, H_REGULAR), Sense::click_and_drag());
+    let x0 = rect.left() + KNOB / 2.0;
+    let x1 = rect.right() - KNOB / 2.0;
+    let old = *value;
+    if let Some(pos) = resp.interact_pointer_pos() {
+        if resp.dragged() || resp.clicked() || resp.drag_started() {
+            let t = ((pos.x - x0) / (x1 - x0).max(1.0)).clamp(0.0, 1.0) as f64;
+            *value = lo + t * (hi - lo);
+        }
+    }
+    if resp.has_focus() {
+        let step = (hi - lo) * 0.05;
+        ui.input(|i| {
+            if i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::ArrowUp) {
+                *value = (*value + step).min(hi);
+            }
+            if i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowDown) {
+                *value = (*value - step).max(lo);
+            }
+        });
+    }
+    if *value != old {
+        resp.mark_changed();
+    }
+    let v = *value;
+    resp.widget_info(|| WidgetInfo::slider(ui.is_enabled(), v, label));
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let t = ((v - lo) / (hi - lo).max(f64::EPSILON)).clamp(0.0, 1.0) as f32;
+        let kx = (x0 + t * (x1 - x0)).round();
+        let cy = rect.center().y.round();
+        let track = Rect::from_min_max(Pos2::new(x0 - 2.0, cy - 2.0), Pos2::new(x1 + 2.0, cy + 2.0));
+        let empty = if p.dark { Color32::from_gray(0x55) } else { Color32::from_gray(0xd8) };
+        painter.rect_filled(track, 2.0, empty);
+        let fill = if ui.is_enabled() { accent() } else { p.disabled };
+        painter.rect_filled(Rect::from_min_max(track.min, Pos2::new(kx, track.max.y)), 2.0, fill);
+        let c = Pos2::new(kx, cy);
+        // Soft shadow, then the knob with a hairline edge.
+        painter.circle_filled(c + Vec2::new(0.0, 0.5), KNOB / 2.0 + 0.5, Color32::from_black_alpha(if p.dark { 90 } else { 40 }));
+        let knob = if p.dark { Color32::from_gray(if resp.is_pointer_button_down_on() { 0xb0 } else { 0xcc }) } else if resp.is_pointer_button_down_on() { Color32::from_gray(0xf0) } else { Color32::WHITE };
+        painter.circle(c, KNOB / 2.0 - 0.3, knob, Stroke::new(0.6, p.control_edge));
+        if resp.has_focus() {
+            focus_ring(ui, Rect::from_center_size(c, Vec2::splat(KNOB)), KNOB / 2.0);
         }
     }
     resp
@@ -549,7 +687,8 @@ pub fn text_field(ui: &mut Ui, text: &mut String, width: f32, hint: &str) -> Res
 pub fn search_field(ui: &mut Ui, text: &mut String, width: f32, hint: &str) -> Response {
     let p = pal(ui);
     let rect = ui.allocate_space(Vec2::new(width, H_REGULAR)).1;
-    let r = rect.height() / 2.0;
+    // A rounded rectangle (6 pt), as in Big Sur to Sonoma, not a capsule.
+    let r = 6.0;
     ui.painter().rect(rect, r, p.field, Stroke::new(if p.dark { 0.0 } else { 0.6 }, p.control_edge), StrokeKind::Inside);
     // Magnifier.
     let c = egui::pos2(rect.left() + 13.0, rect.center().y - 1.0);
@@ -821,13 +960,119 @@ pub fn color_well(ui: &mut Ui, id_salt: impl std::hash::Hash + std::fmt::Debug, 
     paint_bezel(ui, rect, resp.is_pointer_button_down_on(), ui.is_enabled());
     ui.painter().rect(rect.shrink2(Vec2::new(5.0, 4.0)), 2.0, color, Stroke::new(0.6, Color32::from_black_alpha(50)), StrokeKind::Inside);
     let mut out = None;
-    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        let mut c = color;
-        if egui::color_picker::color_picker_color32(ui, &mut c, egui::color_picker::Alpha::Opaque) {
+    let pid = resp.id;
+    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).frame(popover_frame(ui)).show(|ui| {
+        if let Some(c) = color_picker(ui, pid, color) {
             out = Some(c);
         }
     });
-    out.or_else(|| None).filter(|c| *c != color)
+    out.filter(|c| *c != color)
+}
+
+/// The popover's frame: a menu's look with a 12 pt inset.
+fn popover_frame(ui: &Ui) -> egui::Frame {
+    egui::Frame::menu(ui.style()).inner_margin(12)
+}
+
+/// Saturation/brightness square, hue strip and a hex field, at 200 pt:
+/// the colour panel's wheel tab cut down to what a popover needs. The
+/// hue is remembered while the colour is grey, where it can't be derived.
+fn color_picker(ui: &mut Ui, id: Id, color: Color32) -> Option<Color32> {
+    use egui::ecolor::Hsva;
+    const W: f32 = 200.0;
+    let key = id.with("hsva");
+    let mut hsva = ui.ctx().data(|d| d.get_temp::<(Color32, Hsva)>(key)).filter(|(c, _)| *c == color).map(|(_, h)| h).unwrap_or_else(|| Hsva::from(color));
+    let before = hsva;
+    let p = pal(ui);
+    ui.set_width(W);
+    ui.spacing_mut().item_spacing.y = 8.0;
+
+    // Saturation (x) by brightness (y) for the current hue.
+    let (sq, sq_resp) = ui.allocate_exact_size(Vec2::new(W, 150.0), Sense::click_and_drag());
+    if let Some(pos) = sq_resp.interact_pointer_pos() {
+        hsva.s = ((pos.x - sq.left()) / sq.width()).clamp(0.0, 1.0);
+        hsva.v = 1.0 - ((pos.y - sq.top()) / sq.height()).clamp(0.0, 1.0);
+    }
+    let mut mesh = egui::Mesh::default();
+    const N: usize = 12;
+    for yi in 0..=N {
+        for xi in 0..=N {
+            let (x, y) = (xi as f32 / N as f32, yi as f32 / N as f32);
+            let c: Color32 = Hsva::new(hsva.h, x, 1.0 - y, 1.0).into();
+            mesh.colored_vertex(Pos2::new(sq.left() + x * sq.width(), sq.top() + y * sq.height()), c);
+            if xi < N && yi < N {
+                let i = (yi * (N + 1) + xi) as u32;
+                let r = (N + 1) as u32;
+                mesh.add_triangle(i, i + 1, i + r);
+                mesh.add_triangle(i + 1, i + r + 1, i + r);
+            }
+        }
+    }
+    ui.painter().add(Shape::mesh(mesh));
+    ui.painter().rect_stroke(sq, 3.0, Stroke::new(0.6, p.control_edge), StrokeKind::Inside);
+    let knob = Pos2::new(sq.left() + hsva.s * sq.width(), sq.top() + (1.0 - hsva.v) * sq.height());
+    ui.painter().circle_stroke(knob, 5.0, Stroke::new(2.0, Color32::WHITE));
+    ui.painter().circle_stroke(knob, 6.0, Stroke::new(0.6, Color32::from_black_alpha(90)));
+
+    // Hue strip.
+    let (hr, h_resp) = ui.allocate_exact_size(Vec2::new(W, 12.0), Sense::click_and_drag());
+    if let Some(pos) = h_resp.interact_pointer_pos() {
+        hsva.h = ((pos.x - hr.left()) / hr.width()).clamp(0.0, 0.9999);
+    }
+    let mut mesh = egui::Mesh::default();
+    const HN: usize = 36;
+    for i in 0..=HN {
+        let t = i as f32 / HN as f32;
+        let c: Color32 = Hsva::new(t, 1.0, 1.0, 1.0).into();
+        let x = hr.left() + t * hr.width();
+        mesh.colored_vertex(Pos2::new(x, hr.top()), c);
+        mesh.colored_vertex(Pos2::new(x, hr.bottom()), c);
+        if i < HN {
+            let j = (i * 2) as u32;
+            mesh.add_triangle(j, j + 1, j + 2);
+            mesh.add_triangle(j + 1, j + 3, j + 2);
+        }
+    }
+    ui.painter().add(Shape::mesh(mesh));
+    ui.painter().rect_stroke(hr, 3.0, Stroke::new(0.6, p.control_edge), StrokeKind::Inside);
+    let hx = hr.left() + hsva.h * hr.width();
+    let hk = Rect::from_center_size(Pos2::new(hx, hr.center().y), Vec2::new(6.0, hr.height() + 4.0));
+    ui.painter().rect(hk, 2.0, Color32::WHITE, Stroke::new(0.6, Color32::from_black_alpha(90)), StrokeKind::Inside);
+
+    let mut picked: Color32 = hsva.into();
+    // The colour and its hex code, editable.
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let (sw, _) = ui.allocate_exact_size(Vec2::new(44.0, H_REGULAR), Sense::hover());
+        paint_bezel(ui, sw, false, true);
+        ui.painter().rect(sw.shrink2(Vec2::new(5.0, 4.0)), 2.0, picked, Stroke::new(0.6, Color32::from_black_alpha(50)), StrokeKind::Inside);
+        let buf_id = id.with("hex");
+        let mut buf = ui.ctx().data(|d| d.get_temp::<String>(buf_id)).unwrap_or_else(|| hex(picked));
+        let field = text_field(ui, &mut buf, W - 44.0 - 8.0, "");
+        if field.has_focus() {
+            if let Some(c) = parse_hex6(&buf) {
+                if c != picked {
+                    picked = c;
+                    hsva = Hsva::from(c);
+                }
+            }
+            ui.ctx().data_mut(|d| d.insert_temp(buf_id, buf));
+        } else {
+            ui.ctx().data_mut(|d| d.remove::<String>(buf_id));
+        }
+    });
+    ui.ctx().data_mut(|d| d.insert_temp(key, (picked, hsva)));
+    (hsva != before).then_some(picked)
+}
+
+fn parse_hex6(s: &str) -> Option<Color32> {
+    let s = s.trim();
+    let s = s.strip_prefix('#').unwrap_or(s);
+    if s.len() != 6 {
+        return None;
+    }
+    let v = u32::from_str_radix(s, 16).ok()?;
+    Some(Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
 }
 
 pub fn hex(c: Color32) -> String {

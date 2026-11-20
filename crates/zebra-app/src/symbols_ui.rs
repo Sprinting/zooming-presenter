@@ -15,6 +15,7 @@ use zebra_core::{Command, ElementPatch, ViewCommand};
 use crate::app::ZebraApp;
 use crate::shape_library::Library as Window;
 use crate::style::Palette;
+use crate::widgets as w;
 
 /// Tile size in points, and the pixel size tiles are drawn at.
 const TILE: f32 = 52.0;
@@ -188,17 +189,25 @@ pub fn grid(app: &mut ZebraApp, win: &mut Window, ui: &mut egui::Ui, p: &Palette
 
     let all = crate::t!("symbols-all-sets");
     let current = sym.set.and_then(|s| lib.set(s)).map(|s| s.name.clone()).unwrap_or_else(|| all.clone());
-    egui::ComboBox::from_id_salt("symbol-set").selected_text(current).width(ui.available_width()).height(420.0).show_ui(ui, |ui| {
-        ui.selectable_value(&mut sym.set, None, &all);
-        for g in GROUPS {
-            ui.separator();
-            ui.label(RichText::new(group_name(g)).size(11.0).color(p.weak));
-            for (i, s) in lib.sets().enumerate() {
-                if s.group == g {
-                    ui.selectable_value(&mut sym.set, Some(i as u16), &s.name);
+    // The kit's pop-up button (as everywhere else), scrolling past 420 pt,
+    // with NSMenu-style group headers.
+    let wdt = ui.available_width();
+    w::popup_button(ui, "symbol-set", &current, wdt, |ui| {
+        egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+            if w::menu_check(ui, sym.set.is_none(), &all, None).clicked() {
+                sym.set = None;
+            }
+            for g in GROUPS {
+                w::menu_separator(ui);
+                let (hr, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 20.0), egui::Sense::hover());
+                ui.painter().text(egui::pos2(hr.left() + 10.0, hr.center().y), egui::Align2::LEFT_CENTER, group_name(g), crate::style::semibold(11.0), p.weak);
+                for (i, s) in lib.sets().enumerate() {
+                    if s.group == g && w::menu_check(ui, sym.set == Some(i as u16), &s.name, None).clicked() {
+                        sym.set = Some(i as u16);
+                    }
                 }
             }
-        }
+        });
     });
     ui.add_space(4.0);
 
@@ -279,7 +288,6 @@ fn insert(app: &mut ZebraApp, win: &mut Window, lib: &Library, r: SymbolRef) {
 /// Inspector rows for a symbol: where it's from, its colours and the
 /// sticker look.
 pub fn inspector(insp: &mut crate::inspector::Insp, ui: &mut egui::Ui, look: &zebra_core::SymbolLook) {
-    use crate::widgets as w;
     let set_name = library().and_then(|l| l.set_index(&look.set).and_then(|i| l.set(i)).map(|s| s.name.clone())).unwrap_or_else(|| look.set.clone());
     let alt = match &insp.el.kind {
         zebra_core::ElementKind::Image(i) => i.alt.clone(),
@@ -296,7 +304,7 @@ pub fn inspector(insp: &mut crate::inspector::Insp, ui: &mut egui::Ui, look: &ze
             }
         });
         let mut st = look.sticker;
-        if ui.checkbox(&mut st, crate::t!("symbols-sticker")).on_hover_text(crate::t!("symbols-sticker-tip")).changed() {
+        if w::checkbox(ui, &mut st, &crate::t!("symbols-sticker")).on_hover_text(crate::t!("symbols-sticker-tip")).changed() {
             insp.set(ElementPatch { sticker: Some(st), ..Default::default() });
         }
     });

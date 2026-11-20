@@ -7,13 +7,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
 
-use egui::{Align2, Color32, ColorImage, FontId, Rect, RichText, Sense, TextureHandle, TextureOptions, Ui, Vec2 as EVec2};
+use egui::{Align2, Color32, ColorImage, Rect, RichText, Sense, TextureHandle, TextureOptions, Ui, Vec2 as EVec2};
 use zebra_core::templates::{LAYOUTS, TEMPLATES};
 use zebra_core::{Command, Document, Editor, Origin};
 
 use crate::actions::Action;
 use crate::app::ZebraApp;
-use crate::style::{self, Palette, ACCENT};
+use crate::style::{self, Palette};
 
 const H: Origin = Origin::Human;
 const TW: u32 = 320;
@@ -119,9 +119,10 @@ fn card(ui: &mut Ui, tex: Option<&TextureHandle>, name: &str, selected: bool, p:
             painter.rect_filled(img, 4.0, p.hover);
         }
     }
-    let stroke = if selected { egui::Stroke::new(3.0, ACCENT) } else { egui::Stroke::new(1.0, p.border) };
+    let acc = crate::style::accent();
+    let stroke = if selected { egui::Stroke::new(3.0, acc) } else { egui::Stroke::new(1.0, p.border) };
     painter.rect_stroke(img, 4.0, stroke, egui::StrokeKind::Outside);
-    painter.text(egui::pos2(img.center().x, img.bottom() + 13.0), Align2::CENTER_CENTER, name, FontId::proportional(12.5), if selected { ACCENT } else { p.text });
+    painter.text(egui::pos2(img.center().x, img.bottom() + 14.0), Align2::CENTER_CENTER, name, style::ui_font(13.0), if selected { acc } else { p.text });
     resp
 }
 
@@ -138,18 +139,21 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
     // and the cards scroll in a short one. At the smallest window (760 by
     // 480) it used to be wider than the window, with Create out of reach.
     let room = ctx.content_rect().size();
-    let total = (room.x - 48.0).clamp(330.0, 860.0);
+    let total = (room.x - 32.0 - 2.0 * style::SHEET_MARGIN).clamp(330.0, 860.0);
     let side = if total >= 700.0 { 180.0 } else { 0.0 };
     let cards_w = total - side - if side > 0.0 { 40.0 } else { 0.0 };
     let cols = (((cards_w + 10.0) / 162.0).floor() as usize).clamp(1, 4);
-    let body_h = (room.y - 150.0).max(140.0);
-    egui::Modal::new(app.uid("welcome")).show(ctx, |ui| {
+    let body_h = (room.y - 150.0 - 2.0 * style::SHEET_MARGIN).max(140.0);
+    egui::Modal::new(app.uid("welcome")).frame(style::sheet_frame(&p)).show(ctx, |ui| {
         ui.set_width(total);
         ui.horizontal(|ui| {
-            ui.label(RichText::new(crate::t!("welcome-title")).font(style::bold(18.0)));
+            ui.label(RichText::new(crate::t!("welcome-title")).font(style::semibold(15.0)));
         });
-        ui.add_space(8.0);
+        ui.add_space(12.0);
         egui::ScrollArea::vertical().max_height(body_h).auto_shrink([false, true]).show(ui, |ui| {
+        // Room for the selected card's 3 pt ring, which the scroll area
+        // clipped along the top row.
+        ui.add_space(3.0);
         ui.horizontal_top(|ui| {
             // Templates.
             ui.vertical(|ui| {
@@ -173,11 +177,11 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
                 });
                 if !welcome.mine.is_empty() {
                     ui.add_space(8.0);
-                    ui.label(RichText::new(crate::t!("welcome-my-templates")).font(style::bold(13.0)));
+                    ui.label(RichText::new(crate::t!("welcome-my-templates")).font(style::semibold(13.0)));
                     ui.horizontal_wrapped(|ui| {
                         for (path, name) in welcome.mine.clone() {
                             let sel = Selection::Mine(path);
-                            let r = ui.selectable_label(welcome.selected == sel, &name);
+                            let r = crate::widgets::bar_toggle(ui, welcome.selected == sel, &name);
                             if r.clicked() {
                                 welcome.selected = sel.clone();
                             }
@@ -191,18 +195,18 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
             if side == 0.0 {
                 return;
             }
-            ui.add_space(12.0);
+            ui.add_space(20.0);
             // Recent files.
             ui.vertical(|ui| {
                 ui.set_width(side);
-                ui.label(RichText::new(crate::t!("welcome-recent")).font(style::bold(13.0)));
+                ui.label(RichText::new(crate::t!("welcome-recent")).font(style::semibold(13.0)));
                 ui.add_space(4.0);
                 if app.recent.is_empty() {
-                    ui.label(RichText::new(crate::t!("welcome-recent-empty")).size(12.0).color(p.weak));
+                    crate::widgets::caption(ui, crate::t!("welcome-recent-empty"));
                 }
                 for path in app.recent.clone().into_iter().take(10) {
                     let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                    if ui.selectable_label(false, &name).on_hover_text(path.display().to_string()).clicked() {
+                    if crate::widgets::bar_button(ui, &name).on_hover_text(path.display().to_string()).clicked() {
                         app.queued.push(Action::OpenPath(path));
                         cancel = true;
                     }
@@ -210,18 +214,19 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
             });
         });
         });
-        ui.add_space(10.0);
+        ui.add_space(20.0);
         ui.horizontal(|ui| {
-            if ui.button(crate::t!("welcome-open")).clicked() {
+            if crate::widgets::push_button(ui, &crate::t!("welcome-open")).clicked() {
                 app.queued.push(Action::Open);
                 cancel = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                let create = egui::Button::new(RichText::new(crate::t!("welcome-create")).color(Color32::WHITE)).fill(ACCENT).min_size(EVec2::new(84.0, 24.0));
-                if ui.add(create).clicked() {
+                // AppKit: default button rightmost, 12 pt to Cancel.
+                ui.spacing_mut().item_spacing.x = 12.0;
+                if crate::widgets::default_button_w(ui, &crate::t!("welcome-create"), 80.0).clicked() {
                     choose = app.welcome.as_ref().map(|w| w.selected.clone());
                 }
-                if ui.button(crate::t!("welcome-cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if crate::widgets::push_button(ui, &crate::t!("welcome-cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     cancel = true;
                 }
             });
@@ -306,8 +311,8 @@ pub fn layout_gallery(app: &mut ZebraApp, ctx: &egui::Context) {
     let mut open = true;
     let mut pick: Option<&'static str> = None;
     egui::Window::new(crate::t!("layouts-title")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, GALLERY_OFFSET).show(ctx, |ui| {
-        ui.label(RichText::new(crate::t!("layouts-caption")).size(12.0).color(p.weak));
-        ui.add_space(6.0);
+        crate::widgets::caption(ui, crate::t!("layouts-caption"));
+        ui.add_space(8.0);
         let tex = app.previews.as_ref().map(|p| &p.textures);
         let (cols, h) = gallery_fit(ctx.content_rect().size());
         egui::ScrollArea::vertical().max_height(h).show(ui, |ui| {
@@ -341,8 +346,8 @@ pub fn diagram_gallery(app: &mut ZebraApp, ctx: &egui::Context) {
     let mut open = true;
     let mut pick: Option<&'static str> = None;
     egui::Window::new(crate::t!("diagrams-title")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, GALLERY_OFFSET).show(ctx, |ui| {
-        ui.label(RichText::new(crate::t!("diagrams-caption")).size(12.0).color(p.weak));
-        ui.add_space(6.0);
+        crate::widgets::caption(ui, crate::t!("diagrams-caption"));
+        ui.add_space(8.0);
         let tex = app.previews.as_ref().map(|p| &p.textures);
         let (cols, h) = gallery_fit(ctx.content_rect().size());
         egui::ScrollArea::vertical().max_height(h).min_scrolled_height(h.min(600.0)).show(ui, |ui| {

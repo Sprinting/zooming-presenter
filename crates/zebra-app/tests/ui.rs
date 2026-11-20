@@ -589,7 +589,9 @@ fn right_click_menu_selects_and_acts() {
     assert_eq!(h.state().editor.view.selection.len(), 2, "right-clicking inside the selection keeps it");
     // The inspector has a Group button too: click the one in the menu,
     // which opens at the pointer.
-    h.get_all_by_label("Group").min_by(|a, b| (a.rect().center() - pb).length().total_cmp(&(b.rect().center() - pb).length())).unwrap().click();
+    // The menu's left edge sits at the pointer; its width follows the
+    // longest title, so compare left edges rather than centres.
+    h.get_all_by_label("Group").min_by(|a, b| (a.rect().left() - pb.x).abs().total_cmp(&(b.rect().left() - pb.x).abs())).unwrap().click();
     h.run_steps(3);
     assert!(h.state().editor.doc.get("a").unwrap().group.is_some());
 }
