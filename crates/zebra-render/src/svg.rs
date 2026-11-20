@@ -106,6 +106,11 @@ pub const MAX_RASTER_SIDE: u32 = 4096;
 const MAX_FILTER_WORK: f64 = (1u64 << 28) as f64;
 /// Largest filter region, in pixels at the size drawn.
 const MAX_FILTER_AREA: f32 = 16384.0 * 16384.0;
+/// Largest pattern tile resvg may draw, in pixels: it allocates the whole
+/// tile (a 5,000,000-unit tile asked for 655 TB and aborted, audit T-C2).
+/// Masks and clip paths are drawn canvas-sized, so the raster cap bounds
+/// them.
+const MAX_TILE_AREA: f32 = 8192.0 * 8192.0;
 /// Most nodes in one SVG (clip paths, masks and patterns included).
 const MAX_NODES: usize = 100_000;
 
@@ -160,6 +165,12 @@ impl Cost {
         for n in g.children() {
             let ok = match n {
                 usvg::Node::Group(c) => self.group(c, t),
+                usvg::Node::Path(p) => {
+                    self.nodes += 1;
+                    let at = t.pre_concat(p.abs_transform());
+                    let paints = p.fill().map(|f| f.paint()).into_iter().chain(p.stroke().map(|s| s.paint()));
+                    self.nodes <= MAX_NODES && paints.into_iter().all(|paint| tile_ok(paint, at))
+                }
                 _ => {
                     self.nodes += 1;
                     self.nodes <= MAX_NODES
@@ -174,6 +185,14 @@ impl Cost {
         }
         true
     }
+}
+
+/// A pattern's tile, drawn with `t`, is within [`MAX_TILE_AREA`].
+fn tile_ok(paint: &usvg::Paint, t: tiny_skia::Transform) -> bool {
+    let usvg::Paint::Pattern(p) = paint else { return true };
+    let (sx, sy) = t.pre_concat(p.transform()).get_scale();
+    let r = p.rect();
+    r.width() * sx * r.height() * sy <= MAX_TILE_AREA
 }
 
 /// Squared distance from each pixel to the nearest pixel where `inside`
@@ -390,6 +409,18 @@ mod tests {
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><filter id="f"><feGaussianBlur stdDeviation="30"/><feMorphology radius="1"/></filter><rect x="20" y="20" width="60" height="60" fill="red" filter="url(#f)"/></svg>"#;
         let px = rasterize(svg, &SvgStyle::default(), 1000, 1000).unwrap();
         assert!(at(&px, 1000, 500, 500)[3] > 0);
+    }
+
+    /// Audit T-C2: a pattern tile of 5,000,000 units (and a fuzzed EMF's
+    /// conversion) made resvg allocate terabytes and abort.
+    #[test]
+    fn huge_pattern_tiles_are_refused() {
+        for svg in [&include_bytes!("../tests/data/pattern-bomb.svg")[..], &include_bytes!("../tests/data/emf-pattern-bomb.svg")[..]] {
+            assert!(rasterize(svg, &SvgStyle::default(), 400, 400).is_none());
+        }
+        let ok = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><pattern id="p" patternUnits="userSpaceOnUse" width="10" height="10"><rect width="5" height="5" fill="red"/></pattern></defs><rect width="100" height="100" fill="url(#p)"/></svg>"#;
+        let px = rasterize(ok, &SvgStyle::default(), 400, 400).unwrap();
+        assert!(at(&px, 400, 5, 5)[3] > 0);
     }
 
     #[test]
