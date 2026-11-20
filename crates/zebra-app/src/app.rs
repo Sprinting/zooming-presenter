@@ -170,6 +170,9 @@ pub struct ZebraApp {
     /// An open or save panel asked for: it goes up as a sheet on this
     /// window once the frame is drawn (see `pickers`).
     pub want_pick: Option<crate::pickers::Pick>,
+    /// The pass in which `want_pick` was set: the panel waits until a
+    /// frame without the menu that asked for it has been drawn.
+    pub want_pick_pass: u64,
     #[cfg(target_os = "macos")]
     pub open_picker: Option<crate::sheets::OpenPicker>,
     pub show_settings: bool,
@@ -400,6 +403,7 @@ impl ZebraApp {
             #[cfg(target_os = "macos")]
             open_sheet: None,
             want_pick: None,
+            want_pick_pass: 0,
             #[cfg(target_os = "macos")]
             open_picker: None,
             show_settings: false,
