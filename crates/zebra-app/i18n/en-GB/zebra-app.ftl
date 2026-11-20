@@ -967,6 +967,8 @@ canvas-menu-add-text = Add Text
 canvas-menu-edit-text = Edit Text
 canvas-menu-replace-icon = Replace Icon…
 
+# Pasting more than 100,000 characters at once: nothing is pasted.
+paste-too-long = Too long to paste into one text box.
 ## ---- end canvas.rs ----
 
 

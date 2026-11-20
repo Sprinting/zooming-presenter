@@ -346,3 +346,24 @@ fn tab_at_line_start_indents() {
     assert_eq!(buf(&h), "first\nsecond");
     assert_eq!(para(&h, 1), (ListKind::None, 1));
 }
+
+/// M2 of the hostile-input audit: a paste into a text box takes up to
+/// 100,000 characters; one more and nothing goes in, and a note says it
+/// is too long for one box.
+#[test]
+fn a_paste_over_100000_characters_is_refused_with_a_note() {
+    let mut h = harness();
+    editing(&mut h, "x", vec![]);
+    // Lines, as pasted text has them, so the field lays out quickly.
+    let text = |n: usize| -> String { (0..n).map(|i| if i % 80 == 79 { '\n' } else { 'a' }).collect() };
+    let too_long = zebra_app::t!("paste-too-long");
+    h.event(Event::Paste(text(100_001)));
+    h.run_steps(2);
+    assert_eq!(buf(&h), "x", "nothing pasted");
+    assert_eq!(h.state().toast.as_ref().map(|t| t.text.clone()), Some(too_long.clone()));
+    h.state_mut().toast = None;
+    h.event(Event::Paste(text(100_000)));
+    h.run_steps(2);
+    assert_eq!(buf(&h).chars().count(), 100_001, "all 100,000 pasted after the x");
+    assert!(h.state().toast.as_ref().is_none_or(|t| t.text != too_long));
+}

@@ -846,13 +846,20 @@ fn check_read(editor: &Editor, seen: Option<u64>) -> Result<(), RpcError> {
         .hint("read it again (`describe`, or `query` for the parts you are changing), then retry"))
 }
 
-/// Before commands run: a poster `at` a time in the video becomes that
-/// frame's picture, and `save_theme` with `to_library` is checked (it
-/// writes into the person's own files, like `save`). Returns the ids of
-/// the themes to save to the library once the commands succeed.
+/// Before commands run: text over the one-insert limit is refused
+/// ([`zebra_core::rich::insert_error`]), a poster `at` a time in the
+/// video becomes that frame's picture, and `save_theme` with `to_library`
+/// is checked (it writes into the person's own files, like `save`).
+/// Returns the ids of the themes to save to the library once the
+/// commands succeed.
 fn prepare(cmds: &mut [Command], editor: &Editor) -> Result<Vec<String>, RpcError> {
     let mut lib = vec![];
     for c in cmds {
+        // Text in one box, as the person's paste is: 100,000 characters
+        // at a time.
+        if let Some(e) = zebra_core::rich::insert_error(c, &editor.doc) {
+            return Err(e.into());
+        }
         match c {
             Command::SaveTheme { theme, to_library: true, .. } => {
                 need_full(editor.view.agent_permission, "save_theme with to_library")?;

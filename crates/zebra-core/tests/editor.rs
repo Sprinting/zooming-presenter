@@ -811,3 +811,29 @@ fn a_custom_theme_with_missing_fields_still_opens() {
     let json = doc_json_with_theme(|t| t["id"] = "night".into());
     assert!(zebra_core::io::from_json(&json).unwrap().themes.is_empty());
 }
+
+/// M2 of the hostile-input audit: one insert puts at most 100,000
+/// characters into a text box (the person's paste, and an agent's
+/// add_text, update or add_element).
+#[test]
+fn one_insert_takes_at_most_100000_characters() {
+    use zebra_core::rich::{insert_error, too_long_to_insert, MAX_INSERT_CHARS};
+    let ok = "é".repeat(MAX_INSERT_CHARS);
+    let over = "é".repeat(MAX_INSERT_CHARS + 1);
+    assert_eq!(MAX_INSERT_CHARS, 100_000);
+    assert!(!too_long_to_insert(&ok));
+    assert!(too_long_to_insert(&over));
+    let mut ed = Editor::default();
+    let add = |text: &str| cmd(serde_json::json!({"op":"add_text","id":"t","text":text}));
+    assert!(insert_error(&add(&ok), &ed.doc).is_none());
+    assert_eq!(insert_error(&add(&over), &ed.doc).map(|e| e.code), Some("invalid_params"));
+    ed.apply(add(&ok), Origin::Human).unwrap();
+    // An update counts what it adds: 100,000 more is fine, 100,001 isn't.
+    let update = |text: &str| cmd(serde_json::json!({"op":"update","id":"t","patch":{"text":text}}));
+    assert!(insert_error(&update(&format!("{ok}{ok}")), &ed.doc).is_none());
+    assert!(insert_error(&update(&format!("{ok}{over}")), &ed.doc).is_some());
+    assert!(insert_error(&update("short"), &ed.doc).is_none());
+    let element = |text: &str| cmd(serde_json::json!({"op":"add_element","element":{"kind":{"type":"text","text":text}}}));
+    assert!(insert_error(&element(&ok), &ed.doc).is_none());
+    assert!(insert_error(&element(&over), &ed.doc).is_some());
+}
