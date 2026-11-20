@@ -1085,7 +1085,7 @@ impl ZebraApp {
                 w: Some(vr.width * cam.zoom * 0.96),
                 h: Some(vr.height * cam.zoom * 0.96),
                 name: String::new(),
-                kind: ElementKind::Frame(zebra_core::FrameData { style: zebra_core::FrameStyle::Invisible, color: None }),
+                kind: ElementKind::Frame(zebra_core::FrameData { style: zebra_core::FrameStyle::Invisible, color: None, slide: false }),
             },
         };
         // The frame and its step are one thing to the person: one undo step.

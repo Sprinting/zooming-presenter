@@ -153,7 +153,7 @@ impl Editor {
             name: deck.title.clone(),
             placeholder: false,
             group: None,
-            kind: ElementKind::Frame(FrameData { style: FrameStyle::Rectangle, color: None }),
+            kind: ElementKind::Frame(FrameData { style: FrameStyle::Rectangle, color: None, slide: false }),
         });
         // What each page's path step shows: a page that is one picture is
         // its own step; a page of several objects gets a frame of its own.
@@ -174,7 +174,7 @@ impl Editor {
                     name: p.name.clone(),
                     placeholder: false,
                     group: None,
-                    kind: ElementKind::Frame(FrameData { style: FrameStyle::Rectangle, color: None }),
+                    kind: ElementKind::Frame(FrameData { style: FrameStyle::Rectangle, color: None, slide: false }),
                 });
                 steps.push((fid, p.notes.clone()));
             }

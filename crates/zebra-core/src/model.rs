@@ -306,6 +306,10 @@ pub struct FrameData {
     /// Override the theme frame colour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<ColorRef>,
+    /// A slide imported from PowerPoint: its path step shows deck-style
+    /// when presenting, like an imported PDF page ([`Element::is_page`]).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub slide: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -879,9 +883,14 @@ impl Element {
     pub fn is_frame(&self) -> bool {
         matches!(self.kind, ElementKind::Frame(_))
     }
-    /// A page of an imported PDF (a picture with a page reference).
+    /// A page of an imported file: a PDF page (a picture with a page
+    /// reference) or a PowerPoint slide (a frame marked as a slide).
     pub fn is_page(&self) -> bool {
-        matches!(&self.kind, ElementKind::Image(i) if i.page.is_some())
+        match &self.kind {
+            ElementKind::Image(i) => i.page.is_some(),
+            ElementKind::Frame(f) => f.slide,
+            _ => false,
+        }
     }
     /// The margin (a fraction of the screen) left around this element when
     /// the camera fits it, as a path step or by zooming to it. An imported
