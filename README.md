@@ -33,7 +33,6 @@ Developer options (end users never need these; AI control is a switch in the app
 | `--api` | Switch AI control on at launch, as if you had flipped the switch. |
 | `--api-socket <path>` | Use this socket path instead of the default. |
 | `--agent-permission observe\|edit` | Lower what a connected agent may do this run. It never raises it: agents get at most what you chose from the AI button in the toolbar. |
-| `--headless` | Run with no window, API only (for batch generation). `zebractl` starts this mode for you. |
 
 The first build also builds the web player: `crates/zebra-web/build.rs`
 compiles that crate for `wasm32-unknown-unknown` (release, into
@@ -186,7 +185,7 @@ See [docs/API.md](docs/API.md) for the protocol and `zebractl`.
 |---|---|
 | `crates/zebra-core` | Document model, the command bus (the only way to change state), undo, camera flights, themes, file format |
 | `crates/zebra-render` | Display list, text layout, vello GPU canvas, CPU captures, PDF export |
-| `crates/zebra-api` | JSON-RPC automation server, headless mode |
+| `crates/zebra-api` | JSON-RPC automation server |
 | `crates/zebra-ctl` | `zebractl` CLI (shipped inside Zebra.app) |
 | `crates/zebra-web` | Web player (core + renderer built for wasm32, page script in `web/`) and the HTML exporter; browser check in `tests/browser/check.js` |
 | `scripts/bundle-macos.sh`, `packaging/macos/` | Builds Zebra.app with zebractl inside; Info.plist and App Store entitlements |

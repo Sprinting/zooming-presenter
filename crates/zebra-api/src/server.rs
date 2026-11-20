@@ -94,7 +94,7 @@ pub struct ServerInner {
 
 static SERVERS_IN_PROCESS: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) fn start(opts: ApiOptions, waker: Waker, headless: bool) -> anyhow::Result<ServerInner> {
+pub(crate) fn start(opts: ApiOptions, waker: Waker) -> anyhow::Result<ServerInner> {
     let pid = std::process::id();
     let nth = SERVERS_IN_PROCESS.fetch_add(1, Ordering::SeqCst);
     let stem = if nth == 0 { format!("{pid}") } else { format!("{pid}-{nth}") };
@@ -138,7 +138,6 @@ pub(crate) fn start(opts: ApiOptions, waker: Waker, headless: bool) -> anyhow::R
         version: env!("CARGO_PKG_VERSION").into(),
         api_version: zebra_core::API_VERSION,
         started_at: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
-        headless,
         file: PathBuf::new(),
     };
     let discovery_file = match discovery::write(&inst, &format!("{stem}.json")) {

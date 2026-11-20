@@ -433,7 +433,7 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Instances => {
             let list: Vec<Value> = zebra_api::discovery::list()
                 .into_iter()
-                .map(|i| json!({"pid": i.pid, "socket": i.socket, "version": i.version, "started_at": i.started_at, "headless": i.headless}))
+                .map(|i| json!({"pid": i.pid, "socket": i.socket, "version": i.version, "started_at": i.started_at}))
                 .collect();
             print(&json!(list));
             return Ok(());

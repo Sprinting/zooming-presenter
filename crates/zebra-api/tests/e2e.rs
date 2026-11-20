@@ -222,9 +222,9 @@ fn full_session() {
     let s = c.call("schema", json!({})).unwrap();
     assert!(s["command"]["oneOf"].is_array() || s["command"]["anyOf"].is_array());
 
-    // Quit ends the headless loop and cleans up.
+    // Disconnect ends the loop and cleans up.
     let file_path = inst.file.clone();
-    c.call("quit", json!({})).unwrap();
+    c.call("disconnect", json!({})).unwrap();
     for _ in 0..100 {
         if h.is_finished() {
             break;
@@ -296,8 +296,6 @@ fn paused_returns_paused() {
     let e = rpc_err(c.call("apply", json!({"command":{"op":"add_text","text":"x"}})));
     assert_eq!(e.kind(), "paused");
     assert!(e.hint_text().is_some());
-    let e = rpc_err(c.call("quit", json!({})));
-    assert_eq!(e.kind(), "permission", "quit refused in GUI mode");
     stop.store(true, std::sync::atomic::Ordering::SeqCst);
     assert_eq!(host.join().unwrap(), 1, "clients() lists the connected agent");
 }

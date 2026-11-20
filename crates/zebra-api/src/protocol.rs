@@ -15,7 +15,7 @@ use zebra_render::CaptureTarget;
 pub const METHODS: &[&str] = &[
     "hello", "ping", "methods", "commands", "schema", "subscribe", "unsubscribe", "documents", "new_document", "close_document", "state", "describe", "query",
     "apply", "batch", "copy_to", "import", "begin", "commit", "abort", "undo", "redo", "view", "capture", "wait", "open", "save",
-    "save_template", "export", "disconnect", "quit",
+    "save_template", "export", "disconnect",
 ];
 
 /// JSON-RPC error codes used by Zebra.
@@ -152,7 +152,6 @@ pub enum Call {
     Export { format: ExportFormat, path: Option<PathBuf>, capture: CaptureReq },
     Wait { until: WaitUntil, timeout: Duration },
     Disconnect,
-    Quit,
 }
 
 impl Call {
@@ -449,7 +448,6 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
             Call::Wait { until, timeout: Duration::from_millis(ms) }
         }
         "disconnect" => Call::Disconnect,
-        "quit" => Call::Quit,
         _ => {
             let near = crate::catalogue::nearest(method, METHODS.iter().map(|s| s.to_string()));
             let hint = if crate::catalogue::op_names(crate::catalogue::Kind::Command).iter().any(|o| o == method) {

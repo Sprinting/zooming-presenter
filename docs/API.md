@@ -31,9 +31,8 @@ asking the person to switch it on.
 | How | What happens |
 |---|---|
 | `zebra --api [file.zebra]` | Opens the normal window with AI control already switched on. |
-| `zebra --headless --api [file]` | Runs with no window and the same API. Good for generating decks and for CI. The process prints `ZEBRA_API_READY {...}` on stdout when it is ready. |
 | `--api-socket <path>` | Uses this socket path instead of the default one. |
-| `--agent-permission observe\|edit` | Lowers the permission for this run. It never raises it: agents get at most the person's choice from the AI button in the toolbar (`edit` if they never chose). `--headless` uses that choice too. |
+| `--agent-permission observe\|edit` | Lowers the permission for this run. It never raises it: agents get at most the person's choice from the AI button in the toolbar (`edit` if they never chose). |
 
 ### Permissions
 
@@ -43,7 +42,7 @@ asking the person to switch it on.
 | `edit` (default) | Make undoable document edits. It gets its **own** camera and selection, which are drawn dashed and violet. Present-mode and tool commands are refused. |
 | `full` | Everything in `edit`, plus driving the visible camera, selection and present mode, and `open`/`save`. |
 
-`--api` and `--headless` only work while AI control is switched on. Once the person or an agent (`disconnect`) switches it off, they stay off until the person switches it back on in Zebra.
+`--api` only works while AI control is switched on. Once the person or an agent (`disconnect`) switches it off, it stays off until the person switches it back on in Zebra.
 
 ### Discovery (like Chrome's `DevToolsActivePort`)
 
@@ -57,7 +56,7 @@ Each instance with the API enabled writes a discovery file when it starts and re
 ```json
 { "pid": 4242, "socket": "/var/folders/…/T/zebra-501/4242.sock",
   "token": "9f2c…", "version": "0.1.0", "api_version": 1,
-  "started_at": 1763380000, "headless": false }
+  "started_at": 1763380000 }
 ```
 
 Mac App Store builds are sandboxed, so the app's own Application Support and
@@ -180,8 +179,7 @@ than one document open, events carry the `document` id they come from.
 | `open` | `{"path": "/abs/deck.zebra", "force"?: false}` | needs `full`; fails with `unsaved_changes` unless `force` is set, and with `already_open` when another document has that file open |
 | `save` | `{"path"?: "/abs/deck.zebra"}` | needs `full`; with no `path` it saves to the current file; fails with `already_open` when another document has that file open |
 | `save_template` | `{"name"?: "Quarterly review"}` | needs `full`; File › Save as Template: the document into the person's My Templates (default name: its title; a template of that name stays, this one becomes "name 2"). Returns `{"path", "template"}`; `apply_template` takes that `template` (`saved:<name>`) |
-| `disconnect` | – | switches AI control off in the app (the person must switch it back on); in headless mode it quits |
-| `quit` | – | headless instances only |
+| `disconnect` | – | switches AI control off in the app (the person must switch it back on) |
 
 Capture targets:
 
@@ -249,7 +247,7 @@ Errors are JSON-RPC errors whose `data` explains how to fix the problem:
 | -32000 | `unsaved_changes` | `open` or `close_document` would discard unsaved work. Save first, or pass `force` (`open`) or `discard` (`close_document`). |
 | -32000 | `already_open` | `open` or `save` names a file another document has open (two documents on one file overwrite each other's saves). The message names that document's id: work in it with `"document"`, or save to another path. |
 | -32000 | `timeout` | A `wait` condition was not met in time. |
-| -32000 | `unsupported` | This Zebra can't do it: `play` in a headless instance or off macOS, or `set_poster` with `at` where no video decoder exists (only macOS has one). |
+| -32000 | `unsupported` | This Zebra can't do it: `play` off macOS, or `set_poster` with `at` where no video decoder exists (only macOS has one). |
 | -32000 | `io`, `bad_file`, `no_path`, `unimplemented` | File and renderer problems. |
 
 **"Human wins":** while the person is dragging or typing, agent edits are
@@ -307,7 +305,7 @@ valid values, and set exit status 1.
 ## 5. Walkthrough: a 3-step presentation
 
 ```sh
-zebra --headless --api &      # or use the app with AI control switched on
+# Open Zebra and switch on AI control first.
 
 cat > deck.json <<'EOF'
 [

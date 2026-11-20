@@ -8,7 +8,6 @@
 //! dispatcher.pump(&server, &mut editor);                         // applies queued requests
 //! for ev in dispatcher.take_events() { /* update UI from events */ }
 //! ```
-//! Headless: `zebra --headless --api` calls [`run_headless`].
 //!
 //! Wire protocol: JSON-RPC 2.0, one JSON object per line, over a Unix domain
 //! socket (mode 0600, parent dir 0700). Discovery file per running instance
@@ -56,10 +55,9 @@ pub use zebra_core::editor::Event;
 pub struct ApiOptions {
     /// Socket path; default: per-user temp dir + pid.
     pub socket: Option<PathBuf>,
-    /// Agent permission. Headless: what agents get (`zebra` passes the
-    /// person's saved choice). The app's `--api`: the most the launch flag
-    /// allows, never above the person's saved choice. The person changes
-    /// it from the UI.
+    /// Agent permission. [`HeadlessHandle`]: what agents get. The app's
+    /// `--api`: the most the launch flag allows, never above the person's
+    /// saved choice. The person changes it from the UI.
     pub permission: Permission,
 }
 
@@ -87,10 +85,7 @@ pub struct ApiServer {
 
 impl ApiServer {
     pub fn start(opts: ApiOptions, waker: Waker) -> anyhow::Result<ApiServer> {
-        Ok(ApiServer { inner: server::start(opts, waker, false)? })
-    }
-    pub(crate) fn start_headless(opts: ApiOptions, waker: Waker) -> anyhow::Result<ApiServer> {
-        Ok(ApiServer { inner: server::start(opts, waker, true)? })
+        Ok(ApiServer { inner: server::start(opts, waker)? })
     }
     pub fn socket_path(&self) -> PathBuf {
         self.inner.socket.clone()
@@ -180,10 +175,9 @@ pub struct Dispatcher {
     /// Words of an exported web page's control bar; the app sets them in
     /// the person's language.
     pub web_labels: zebra_web::export::Labels,
-    /// Set by [`run_headless`]: enables the `quit` method.
+    /// No window ([`HeadlessHandle`]): captures render inline and `play`
+    /// is refused.
     pub headless: bool,
-    /// Set when a client called `quit` (headless only).
-    pub quit_requested: bool,
     /// Set when a client called `disconnect`: the host should switch AI
     /// control off (drop the [`ApiServer`]) once replies are flushed.
     pub disconnect_requested: bool,
@@ -232,7 +226,6 @@ impl Dispatcher {
             renderer,
             web_labels: Default::default(),
             headless: false,
-            quit_requested: false,
             disconnect_requested: false,
             events: vec![],
             initialized: false,
@@ -265,16 +258,6 @@ impl Dispatcher {
     pub fn has_pending(&self) -> bool {
         !self.waits.is_empty() || !self.deferred.is_empty()
     }
-}
-
-/// `zebra --headless`: no window, same API. Blocks until killed or `quit`.
-pub fn run_headless(opts: ApiOptions, open: Option<PathBuf>) -> anyhow::Result<()> {
-    // Only while the person's AI control switch is on (a person switched it
-    // on once, and nobody switched it off since).
-    if let Some(why) = discovery::ai_switch().flag_refusal() {
-        anyhow::bail!("{why}");
-    }
-    headless::run(opts, open)
 }
 
 pub use headless::HeadlessHandle;

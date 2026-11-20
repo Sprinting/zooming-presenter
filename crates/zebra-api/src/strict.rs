@@ -54,7 +54,6 @@ pub const METHOD_PARAMS: &[(&str, &[&str])] = &[
     ("save_template", &["name"]),
     ("export", &["format", "path", "target", "width", "height"]),
     ("disconnect", &[]),
-    ("quit", &[]),
 ];
 
 pub fn method_params(method: &str) -> Option<&'static [&'static str]> {
