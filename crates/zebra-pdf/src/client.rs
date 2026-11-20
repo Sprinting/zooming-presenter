@@ -282,6 +282,12 @@ impl Pool {
         r.map_err(io)
     }
 
+    /// Is a request running on `lane` now (tests)?
+    #[doc(hidden)]
+    pub fn busy(&self, lane: Lane) -> bool {
+        matches!(self.lanes[lane as usize].try_lock(), Err(std::sync::TryLockError::WouldBlock))
+    }
+
     /// The process id of `lane`'s helper, if one is running (tests).
     #[doc(hidden)]
     pub fn pid(&self, lane: Lane) -> Option<u32> {
