@@ -35,7 +35,6 @@ impl Kind {
 pub const EXAMPLES: &[(Kind, &str)] = &[
     // ---- document commands
     (Kind::Command, r#"{"op":"add_text","text":"Hello world","x":0,"y":-200,"style":"title"}"#),
-    (Kind::Command, r#"{"op":"add_text","markdown":true,"text":"Why **zebras** have stripes\n\n- flies get *confused*\n- [more](https://example.com)","x":0,"y":200}"#),
     (Kind::Command, r#"{"op":"add_frame","x":0,"y":0,"w":800,"h":600,"style":"bracket","name":"Intro","add_to_path":true}"#),
     (Kind::Command, r#"{"op":"add_shape","shape":"arrow","x":500,"y":0,"w":300,"h":60,"fill":"theme:accent"}"#),
     (Kind::Command, r#"{"op":"add_shape","shape":"speech_bubble","x":0,"y":0,"w":260,"h":160}"#),

@@ -14,11 +14,11 @@ fn deck(r: &Renderer) -> Editor {
     ed.measure = r.measure();
     let cmds = vec![
         Command::AddFrame { style: Default::default(), x: 0.0, y: 0.0, w: 1000.0, h: 700.0, rotation: 0.0, name: None, id: Some("f1".into()), add_to_path: false, find_space: false },
-        Command::AddText { text: "Hello web".into(), x: 0.0, y: -200.0, style: zebra_core::TextStyle::Title, scale: None, place: None, id: Some("t1".into()), markdown: false, on: None, color: None },
+        Command::AddText { text: "Hello web".into(), x: 0.0, y: -200.0, style: zebra_core::TextStyle::Title, scale: None, place: None, id: Some("t1".into()), on: None, color: None },
         Command::AddShape { shape: zebra_core::ShapeKind::Ellipse, x: -200.0, y: 100.0, w: 150.0, h: 150.0, rotation: 0.0, fill: None, stroke: None, id: Some("a".into()) },
         Command::AddShape { shape: zebra_core::ShapeKind::Rectangle, x: 200.0, y: 100.0, w: 150.0, h: 150.0, rotation: 0.0, fill: None, stroke: None, id: Some("b".into()) },
         Command::AddFrame { style: Default::default(), x: 2000.0, y: 500.0, w: 800.0, h: 500.0, rotation: 20.0, name: None, id: Some("f2".into()), add_to_path: false, find_space: false },
-        Command::AddText { text: "Turned".into(), x: 2000.0, y: 500.0, style: zebra_core::TextStyle::Body, scale: None, place: None, id: None, markdown: false, on: None, color: None },
+        Command::AddText { text: "Turned".into(), x: 2000.0, y: 500.0, style: zebra_core::TextStyle::Body, scale: None, place: None, id: None, on: None, color: None },
         Command::AddStep { target: StepTarget::Element { id: "f1".into() }, index: None, builds: vec!["a".into(), "b".into()], notes: String::new() },
         Command::AddStep { target: StepTarget::Element { id: "f2".into() }, index: None, builds: vec![], notes: String::new() },
     ];

@@ -274,79 +274,8 @@ pub fn byte_at(s: &str, chars: usize) -> usize {
     s.char_indices().nth(chars).map(|(b, _)| b).unwrap_or(s.len())
 }
 
-/// Build a text from a small Markdown subset: `**bold**`, `*italic*`,
-/// `~~strike~~`, `[text](url)`, `- ` / `* ` bullets, `1. ` numbered items,
-/// nested lists by indentation. Uses `pulldown-cmark`.
-pub fn from_markdown(md: &str) -> TextData {
-    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-    let mut t = TextData::default();
-    let mut text = String::new();
-    let mut n = 0usize; // chars written
-    let mut stack: Vec<(usize, SpanFormat)> = vec![];
-    let mut lists: Vec<ListKind> = vec![];
-    let mut spans = vec![];
-    let mut paras: Vec<ParaFormat> = vec![];
-    let mut para_open = false;
-    let start_para = |text: &mut String, n: &mut usize, paras: &mut Vec<ParaFormat>, lists: &Vec<ListKind>, open: &mut bool| {
-        if *open {
-            return;
-        }
-        if !text.is_empty() {
-            text.push('\n');
-            *n += 1;
-        }
-        let list = lists.last().copied();
-        paras.push(ParaFormat { indent: lists.len().saturating_sub(1) as u8, list: Some(list.unwrap_or(ListKind::None)), align: None });
-        *open = true;
-    };
-    for ev in Parser::new_ext(md, Options::ENABLE_STRIKETHROUGH) {
-        match ev {
-            Event::Start(Tag::List(first)) => {
-                lists.push(if first.is_some() { ListKind::Number } else { ListKind::Bullet });
-                para_open = false;
-            }
-            Event::End(TagEnd::List(_)) => {
-                lists.pop();
-                para_open = false;
-            }
-            Event::Start(Tag::Item) | Event::Start(Tag::Paragraph) | Event::Start(Tag::Heading { .. }) => {
-                start_para(&mut text, &mut n, &mut paras, &lists, &mut para_open);
-            }
-            Event::End(TagEnd::Item) | Event::End(TagEnd::Paragraph) | Event::End(TagEnd::Heading(_)) => para_open = false,
-            Event::Start(Tag::Strong) => stack.push((n, SpanFormat { bold: Some(true), ..Default::default() })),
-            Event::Start(Tag::Emphasis) => stack.push((n, SpanFormat { italic: Some(true), ..Default::default() })),
-            Event::Start(Tag::Strikethrough) => stack.push((n, SpanFormat { strike: Some(true), ..Default::default() })),
-            Event::Start(Tag::Link { dest_url, .. }) => stack.push((n, SpanFormat { link: Some(dest_url.to_string()), ..Default::default() })),
-            Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link) => {
-                if let Some((s, f)) = stack.pop() {
-                    spans.push(TextSpan { start: s, end: n, format: f });
-                }
-            }
-            Event::Text(s) | Event::Code(s) => {
-                start_para(&mut text, &mut n, &mut paras, &lists, &mut para_open);
-                text.push_str(&s);
-                n += char_len(&s);
-            }
-            Event::SoftBreak | Event::HardBreak => {
-                text.push('\n');
-                n += 1;
-                let last = paras.last().cloned().unwrap_or_default();
-                paras.push(ParaFormat { list: Some(ListKind::None), ..last });
-            }
-            _ => {}
-        }
-    }
-    t.text = text;
-    t.spans = spans;
-    t.paras = paras;
-    if t.paras.iter().all(|p| p.indent == 0 && p.list.is_none_or(|l| l == ListKind::None) && p.align.is_none()) {
-        t.paras.clear();
-    }
-    normalize(&mut t);
-    t
-}
-
-/// The text as Markdown (inverse of [`from_markdown`] for what it covers).
+/// The text as Markdown: bold, italic, strike, links, bullets, numbers
+/// and indents.
 /// Used by `describe` so agents can read formatting back.
 pub fn to_markdown(t: &TextData) -> String {
     let chars: Vec<char> = t.text.chars().collect();
@@ -468,19 +397,18 @@ mod tests {
     }
 
     #[test]
-    fn markdown_round_trip() {
-        let md = "Why **zebras** have *stripes*\n\n- flies get [confused](https://example.com)\n  - really\n1. first\n2. second";
-        let t = from_markdown(md);
-        assert!(t.text.starts_with("Why zebras have stripes\nflies get confused"), "{:?}", t.text);
-        assert_eq!(t.spans.iter().filter(|s| s.format.bold == Some(true)).count(), 1);
-        assert!(t.spans.iter().any(|s| s.format.link.as_deref() == Some("https://example.com")));
-        assert_eq!(para(&t, 1).0, ListKind::Bullet);
-        assert_eq!(para(&t, 2), (ListKind::Bullet, 1, Align::Left));
-        assert_eq!(para(&t, 3).0, ListKind::Number);
-        let back = to_markdown(&t);
-        assert!(back.contains("**zebras**") && back.contains("[confused](https://example.com)") && back.contains("  - really") && back.contains("2. second"), "{back}");
-        let again = from_markdown(&back);
-        assert_eq!(again.text, t.text);
-        assert_eq!(again.spans, t.spans);
+    fn to_markdown_writes_spans_and_lists() {
+        let mut t = TextData { text: "Why zebras have stripes\nflies get confused\nreally maybe\nfirst\nsecond".into(), ..Default::default() };
+        apply_format(&mut t, 4, 10, &SpanFormat { bold: Some(true), ..Default::default() });
+        apply_format(&mut t, 16, 23, &SpanFormat { italic: Some(true), ..Default::default() });
+        apply_format(&mut t, 34, 42, &SpanFormat { link: Some("https://example.com".into()), ..Default::default() });
+        apply_format(&mut t, 50, 55, &SpanFormat { strike: Some(true), ..Default::default() });
+        format_paragraphs(&mut t, 1, 2, Some(ListKind::Bullet), None, 0, None);
+        format_paragraphs(&mut t, 2, 2, None, Some(1), 0, None);
+        format_paragraphs(&mut t, 3, 4, Some(ListKind::Number), None, 0, None);
+        let md = to_markdown(&t);
+        for part in ["Why **zebras** have *stripes*", "- flies get [confused](https://example.com)", "  - really ~~maybe~~", "1. first", "2. second"] {
+            assert!(md.contains(part), "{part} missing from {md}");
+        }
     }
 }

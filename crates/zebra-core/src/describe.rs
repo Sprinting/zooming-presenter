@@ -66,7 +66,7 @@ fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
                 let txt = truncate(&d.text.replace('\n', " / "), 60);
                 let _ = write!(s, " {:?}", txt);
             } else {
-                // Rich text reads back as Markdown (the same subset add_text accepts).
+                // Rich text reads back as Markdown (format_text and format_paragraphs set it).
                 let txt = truncate(&crate::rich::to_markdown(d).replace('\n', " / "), 90);
                 let _ = write!(s, " md{:?}", txt);
             }

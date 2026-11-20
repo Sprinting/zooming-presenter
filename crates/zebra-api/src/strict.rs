@@ -97,7 +97,9 @@ pub fn check_rpc(kind: Kind, v: &Value) -> Result<(), RpcError> {
             Kind::Query => format!("query `{op}`"),
         };
         let mut e = unknown_error(&what, &u.field, u.accepted);
-        if let Some(ex) = catalogue::example_for(op) {
+        if kind == Kind::Command && op == "add_text" && u.field == "markdown" {
+            e = e.hint("Markdown isn't read: add the text plain, then use format_text (bold, italic, strike, link) and format_paragraphs (bullets, numbers, indent)");
+        } else if let Some(ex) = catalogue::example_for(op) {
             e = e.hint(format!("example: {ex}"));
         }
         e
