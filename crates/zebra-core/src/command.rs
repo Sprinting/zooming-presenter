@@ -274,6 +274,27 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         align: Option<crate::model::Align>,
     },
+    /// Take characters `start..end` (counted in characters) out of a text
+    /// box into a new box of their own, as dragging selected words out of a
+    /// box onto the canvas does. The new box has the same style, scale and
+    /// rotation; the words keep their formatting; whole paragraphs keep
+    /// bullets, numbering and indent, a part of a paragraph becomes a plain
+    /// paragraph; it wraps at the old box's width if that was fixed, else
+    /// grows with its words. The old box is tidied (no double or leading
+    /// space left) and deleted if nothing but spaces is left. `x`,`y`: the
+    /// new box's centre; without them it goes just below the old box.
+    /// `copy` leaves the old box as it was. Returns the new box's id.
+    SplitText {
+        id: ElementId,
+        start: usize,
+        end: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        copy: bool,
+    },
     /// Move elements by a world delta. Frames carry their contents.
     Move {
         ids: Vec<ElementId>,
