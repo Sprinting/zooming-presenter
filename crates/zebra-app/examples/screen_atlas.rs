@@ -279,7 +279,8 @@ fn import_slides(a: &mut Atlas) {
         h.state_mut().sheet = None;
         perform(h, Action::PresentStart);
         wait(h, 1.0);
-        let _ = h.state_mut().editor.view(ViewCommand::GotoStep { step: 1 }, HUMAN);
+        // The sample's two steps come first: step 2 (from 0) is slide 1.
+        let _ = h.state_mut().editor.view(ViewCommand::GotoStep { step: 2 }, HUMAN);
         wait(h, 3.0);
     });
 }
