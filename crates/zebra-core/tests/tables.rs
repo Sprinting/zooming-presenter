@@ -543,3 +543,21 @@ fn the_kept_formula_sheet_agrees_with_a_fresh_one() {
         }
     }
 }
+
+#[test]
+fn a_leading_apostrophe_keeps_text_as_text() {
+    let mut ed = Editor::default();
+    run(&mut ed, json!({"op": "add_table", "id": "b1", "cells": [["a", "b"], ["x", "=A2"]]})).unwrap();
+    run(&mut ed, json!({"op": "set_cells", "id": "b1", "at": "A2", "values": [["'=SUM(A1)"]]})).unwrap();
+    let t = table(&ed, "b1");
+    assert!(!t.cells[1][0].is_formula());
+    assert_eq!(t.shown(1, 0, None).text, "=SUM(A1)");
+    // A formula that reads it sees the text without the apostrophe.
+    assert_eq!(t.cells[1][1].value, Some(CellValue::Text("=SUM(A1)".into())));
+    // A number kept as text keeps its zeros.
+    run(&mut ed, json!({"op": "set_cells", "id": "b1", "at": "A2", "values": [["'0042"]]})).unwrap();
+    assert_eq!(table(&ed, "b1").shown(1, 0, None).text, "0042");
+    // An apostrophe alone shows nothing.
+    run(&mut ed, json!({"op": "set_cells", "id": "b1", "at": "A2", "values": [["'"]]})).unwrap();
+    assert_eq!(table(&ed, "b1").shown(1, 0, None).text, "");
+}

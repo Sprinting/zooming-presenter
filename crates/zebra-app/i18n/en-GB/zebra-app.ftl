@@ -305,6 +305,9 @@ settings-language = Language:
 settings-language-system = System ({ $language })
 settings-appearance = Appearance:
 settings-appearance-caption = Zebra uses the appearance set in System Settings. The canvas uses the presentation's theme.
+settings-beta = Beta features:
+settings-beta-switch = Use beta features
+settings-beta-caption = PowerPoint import is in beta and may be unstable.
 settings-scrolling = Scrolling:
 settings-scroll-auto = Trackpad pans, mouse wheel zooms
 settings-scroll-zoom = Always zoom
@@ -1795,3 +1798,10 @@ history-change-column = Change Column
 history-change-row = Change Row
 history-sort-table = Sort
 app-error-too-big = That would make the table too big. Nothing was changed.
+
+## Beta features (Settings › General): the offer where a person reaches
+## one while they are off.
+beta-offer-title = Turn On Beta Features?
+beta-offer-pptx = PowerPoint import is in beta and may be unstable. You can turn beta features off again in Settings.
+beta-offer-turn-on = Turn On
+app-error-beta-off = That needs beta features, which are off in Settings.

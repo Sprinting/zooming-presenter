@@ -925,6 +925,11 @@ const CURRENCIES: [&str; 6] = ["£", "$", "€", "¥", "₹", "CHF"];
 /// date (20/11/2026 · 2026-11-20, with an optional hh:mm), TRUE/FALSE,
 /// or text.
 pub fn parse_input(s: &str) -> Typed {
+    // A leading apostrophe keeps what follows as text, as in spreadsheets
+    // ('=A1, '0042), and isn't shown.
+    if let Some(rest) = s.strip_prefix('\'') {
+        return if rest.trim().is_empty() { Typed::Empty } else { Typed::Text(rest.to_string()) };
+    }
     let t = s.trim();
     if t.is_empty() {
         return Typed::Empty;

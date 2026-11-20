@@ -169,6 +169,8 @@ pub struct ZebraApp {
     pub note: Option<Toast>,
     /// The sheet waiting for an answer (save changes, errors, confirmations).
     pub sheet: Option<crate::sheets::SheetKind>,
+    /// What the beta-features offer carries on with after Turn On.
+    pub beta_pending: Option<crate::beta_ui::Pending>,
     /// File › Import… under way (its sheet is up).
     pub import: Option<crate::import_ui::Flow>,
     /// Insert › Web Video…'s sheet.
@@ -430,6 +432,7 @@ impl ZebraApp {
             toast: None,
             note: None,
             sheet: None,
+            beta_pending: None,
             import: None,
             web_sheet: None,
             native_dialogs: cfg!(target_os = "macos") && has_window,
@@ -492,6 +495,8 @@ impl ZebraApp {
         let switch = zebra_api::discovery::ai_switch();
         let saved_ai: bool = switch.on.unwrap_or_else(|| storage.and_then(|s| eframe::get_value(s, "ai_enabled")).unwrap_or(false));
         app.ai_saved = saved_ai;
+        // Beta features: the person's choice, off until they turn it on.
+        app.editor.view.beta_features = crate::beta_ui::saved(storage);
         // The first time is always a person: until someone has switched AI
         // control on in this window, neither a launch flag nor a saved
         // setting turns it on. Once switched off (by the person, or an
@@ -2018,6 +2023,7 @@ impl eframe::App for ZebraApp {
         eframe::set_value(storage, "scroll_mode", &self.scroll_mode);
         eframe::set_value(storage, "motion_override", &self.motion_override);
         eframe::set_value(storage, "snapping", &self.snapping);
+        eframe::set_value(storage, crate::beta_ui::STORAGE_KEY, &self.editor.view.beta_features);
         eframe::set_value(storage, "sidebar_width", &self.sidebar_w);
         eframe::set_value(storage, "inspector_width", &self.inspector_w);
         eframe::set_value(storage, "default_theme", &self.default_theme);

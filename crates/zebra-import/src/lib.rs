@@ -47,6 +47,10 @@ pub enum ImportError {
     Read(String),
     #[error("the import was cancelled")]
     Cancelled,
+    /// A PowerPoint deck while beta features are off (importing PowerPoint
+    /// is one, see `zebra_core::beta`).
+    #[error("importing PowerPoint is a beta feature, and beta features are off")]
+    BetaOff,
 }
 
 /// Progress and cancel, shared with whoever started the import.

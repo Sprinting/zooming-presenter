@@ -111,6 +111,7 @@ pub fn error(code: &str) -> String {
         "not_empty" => t!("app-error-not-empty"),
         "not_found" => t!("app-error-not-found"),
         "too_big" => t!("app-error-too-big"),
+        zebra_core::beta::CODE => t!("app-error-beta-off"),
         _ => t!("app-error-other"),
     }
 }
