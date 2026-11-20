@@ -209,7 +209,8 @@ impl Editor {
     /// page appended in page order (carrying the page's notes). A page that
     /// is a single picture (every PDF page) is its own step and carries the
     /// page's name; a page of several objects, and every slide, is framed
-    /// on its own. Objects grouped on a page stay grouped. A page's sound becomes its step's voice-over; the deck's
+    /// on its own. Objects grouped on a page stay grouped, locked ones
+    /// locked. A page's sound becomes its step's voice-over; the deck's
     /// music the document's background music, unless it has some.
     pub fn import_deck(&mut self, deck: &ImportedDeck, label: String, origin: Origin) -> ZResult<Outcome> {
         if deck.pages.is_empty() {
@@ -296,6 +297,8 @@ impl Editor {
         // Sounds go in through the commands that set them, which take the
         // bytes; they are the assets the paste adds, so stored once.
         let b64 = |key: &str| deck.assets.get(key).map(|a| base64::engine::general_purpose::STANDARD.encode(&a.bytes[..]));
+        // A paste adds unlocked copies: lock what the page has locked.
+        let locked: Vec<String> = clip.elements.iter().filter(|e| e.locked).map(|e| e.id.clone()).collect();
         let first_step = self.doc.path.len();
         let music = deck.soundtrack.as_ref().filter(|_| self.doc.soundtrack.is_none());
         self.paste_clip_then(&clip, 0.0, 0.0, Some(label), origin, |ids| {
@@ -312,6 +315,9 @@ impl Editor {
                 if let Some(data) = b64(&t.asset) {
                     cmds.push(Command::SetSoundtrack { data_base64: data, path: None, looping: Some(t.looping), volume: Some(t.volume), name: Some(t.name.clone()) });
                 }
+            }
+            for id in &locked {
+                cmds.push(Command::Update { id: ids[id.as_str()].clone(), patch: crate::command::ElementPatch { locked: Some(true), ..Default::default() } });
             }
             cmds
         })

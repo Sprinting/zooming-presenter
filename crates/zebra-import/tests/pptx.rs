@@ -83,6 +83,9 @@ fn a_16_by_9_deck_comes_in_as_slides_of_zebra_objects() {
         assert_eq!(bg.shape, ShapeKind::Rectangle);
         assert_eq!(bg.fill.as_deref(), Some(if i == 6 { "#102040" } else { "#ffffff" }));
         assert_eq!((p.items[0].element.size.w, p.items[0].element.size.h), (p.w, p.h));
+        // Locked, like Keynote's slide background; nothing else is.
+        assert!(p.items[0].element.locked);
+        assert!(p.items[1..].iter().all(|i| !i.element.locked));
     }
 
     // 1. Title and subtitle: placeholders placed by their layout, centred.
@@ -331,6 +334,10 @@ fn on_the_canvas_slides_are_frames_with_steps_and_one_undo_removes_them() {
         assert_eq!(step.notes, deck.pages[i].notes);
         assert_eq!(ed.doc.frame_contents(id).len(), deck.pages[i].items.len(), "slide {}", i + 1);
     }
+    // Each slide's background is locked on the canvas too; nothing else.
+    let locked: Vec<&Element> = ed.doc.elements.values().filter(|e| e.locked).collect();
+    assert_eq!(locked.len(), deck.pages.len());
+    assert!(locked.iter().all(|e| matches!(&e.kind, ElementKind::Shape(s) if s.shape == ShapeKind::Rectangle) && e.size.w == 1000.0));
     // Groups stay groups (one per slide's group, not merged across slides).
     let groups: std::collections::BTreeSet<&str> = ed.doc.elements.values().filter_map(|e| e.group.as_deref()).collect();
     assert_eq!(groups.len(), 2);

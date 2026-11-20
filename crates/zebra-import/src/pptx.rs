@@ -3,7 +3,7 @@
 //!
 //! Each slide becomes a frame (marked as a slide, so it shows deck-style
 //! when presenting) holding:
-//! - its background, as a rectangle (or picture) at the back;
+//! - its background, as a locked rectangle (or picture) at the back;
 //! - the master's and layout's own objects, then the slide's;
 //! - text boxes and placeholders as Zebra text: the source's paragraphs
 //!   and line breaks, bullets and numbering by level, alignment, and runs'
@@ -399,15 +399,17 @@ impl<'a> SlideReader<'a> {
         let (w, h) = (self.size.0 as f64, self.size.1 as f64);
         let all = Placed { cx: w / 2.0, cy: h / 2.0, w, h, rot: 0.0, flip_h: false, flip_v: false };
         let (fill, pic, rf) = found.unwrap_or_default();
-        if let Some(path) = pic.as_ref().and_then(|p| p.media_part_path.clone()) {
-            if self.picture(&path, &PictureCrop::default(), "rect", all, String::new(), None) {
-                return;
-            }
-        }
-        let fill = fill.or_else(|| rf.map(|r| style_fill(&self.scheme, &r, &self.theme)));
-        let color = fill.as_ref().and_then(|f| self.fill_color(f)).or_else(|| self.hex(&scheme_color("background1")));
-        if let Some(c) = color {
+        let pictured = pic.as_ref().and_then(|p| p.media_part_path.clone()).is_some_and(|path| self.picture(&path, &PictureCrop::default(), "rect", all, String::new(), None));
+        if !pictured {
+            let fill = fill.or_else(|| rf.map(|r| style_fill(&self.scheme, &r, &self.theme)));
+            let color = fill.as_ref().and_then(|f| self.fill_color(f)).or_else(|| self.hex(&scheme_color("background1")));
+            let Some(c) = color else { return };
             self.push_shape(ShapeKind::Rectangle, all, Some(c), None, 0.0, 0.0, Dash::Solid, None);
+        }
+        // Locked, as a slide's background is in Keynote: clicking the
+        // slide doesn't pick it up.
+        if let Some(it) = self.items.last_mut() {
+            it.element.locked = true;
         }
     }
 
