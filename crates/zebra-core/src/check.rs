@@ -313,10 +313,28 @@ pub fn repair(doc: &mut Document) -> usize {
         doc.next_id = doc.elements.keys().filter_map(|k| k.trim_start_matches(|c: char| !c.is_ascii_digit()).parse::<u64>().ok()).max().map_or(1, |m| m.saturating_add(1));
         fixed += 1;
     }
+    // A custom theme without an id can't be chosen; one with a built-in's id
+    // would hide that built-in.
+    let before = doc.themes.len();
+    doc.themes.retain(|t| !t.id.trim().is_empty() && !crate::theme::Theme::is_builtin(&t.id));
+    fixed += before - doc.themes.len();
     // Custom theme weights a file can hold (u16) but save_theme refuses:
     // the nearest weight in range. The renderer draws the nearest face.
     for t in &mut doc.themes {
+        if t.name.trim().is_empty() {
+            t.name = t.id.clone();
+            fixed += 1;
+        }
         for s in [&mut t.title, &mut t.subtitle, &mut t.body] {
+            let d = crate::theme::TextStyleDef::default();
+            if !(fin(s.size) && s.size > 0.0) {
+                s.size = d.size;
+                fixed += 1;
+            }
+            if s.font.trim().is_empty() {
+                s.font = d.font;
+                fixed += 1;
+            }
             let w = s.weight.clamp(1, 1000);
             if w != s.weight {
                 s.weight = w;

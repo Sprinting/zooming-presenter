@@ -774,3 +774,40 @@ fn out_of_range_theme_weights_are_repaired_on_open() {
     ed.apply(Command::SaveTheme { theme, apply: true, to_library: false }, Origin::Human).expect("the repaired theme saves");
 }
 
+/// W4 of the 20 Nov audit: a custom theme missing a field ("missing
+/// field `title`") made the whole document fail to open.
+#[test]
+fn a_custom_theme_with_missing_fields_still_opens() {
+    let json = doc_json_with_theme(|t| {
+        let t = t.as_object_mut().unwrap();
+        t.remove("title");
+        t.remove("shapes");
+        t.remove("name");
+        let sub = t["subtitle"].as_object_mut().unwrap();
+        sub.remove("size");
+        sub.remove("font");
+        t["body"]["size"] = serde_json::json!(-3.0);
+    });
+    let doc = zebra_core::io::from_json(&json).expect("the document opens");
+    let t = &doc.themes[0];
+    let classic = zebra_core::theme::Theme::resolve("classic");
+    assert_eq!(t.id, "mine");
+    assert_eq!(t.name, "mine", "a missing name is the id");
+    assert_eq!(t.title, classic.title);
+    assert_eq!(t.shapes, classic.shapes);
+    assert_eq!((t.subtitle.font.as_str(), t.subtitle.size), ("Sans", 24.0));
+    assert_eq!(t.subtitle.color, classic.subtitle.color, "what the file had is kept");
+    assert_eq!(t.body.size, 24.0, "a size that can't draw is repaired");
+    let mut ed = Editor::default();
+    ed.doc = doc;
+    let theme = ed.doc.themes[0].clone();
+    ed.apply(Command::SaveTheme { theme, apply: true, to_library: false }, Origin::Human).expect("the repaired theme saves");
+    // A theme with no id can't be chosen, and one with a built-in's id
+    // would hide it: both go.
+    let json = doc_json_with_theme(|t| {
+        t.as_object_mut().unwrap().remove("id");
+    });
+    assert!(zebra_core::io::from_json(&json).unwrap().themes.is_empty());
+    let json = doc_json_with_theme(|t| t["id"] = "night".into());
+    assert!(zebra_core::io::from_json(&json).unwrap().themes.is_empty());
+}
