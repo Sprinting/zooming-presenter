@@ -139,12 +139,21 @@ pub fn subset(file: &[u8], index: u32, keep: &BTreeSet<u16>) -> Option<Vec<u8>> 
 /// glyphs their `dupe` records point at).
 fn cut_sbix(sbix: &[u8], num_glyphs: usize, keep: &BTreeSet<u16>) -> Option<Vec<u8>> {
     let strikes = u32_at(sbix, 4)? as usize;
+    // Every strike holds an offset per glyph: a count the table can't hold
+    // is a lie (0xFFFFFFFF strikes asked for 17 GB, audit T-C7).
+    let per_strike = 4 * (num_glyphs + 1);
+    if 8 + 4 * strikes > sbix.len() || strikes.checked_mul(per_strike)? > sbix.len() {
+        return None;
+    }
     let mut out = vec![];
     out.extend(sbix.get(0..8)?);
     let header = 8 + 4 * strikes;
     out.resize(header, 0);
     for s in 0..strikes {
         let so = u32_at(sbix, 8 + 4 * s)? as usize;
+        if so.checked_add(4 + per_strike)? > sbix.len() {
+            return None;
+        }
         let data_of = |g: usize| -> Option<&[u8]> {
             let a = u32_at(sbix, so + 4 + 4 * g)? as usize;
             let b = u32_at(sbix, so + 4 + 4 * (g + 1))? as usize;
@@ -631,6 +640,47 @@ fn cut_cff(cff: &[u8], num_glyphs: usize, keep: &BTreeSet<u16>) -> Option<Vec<u8
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bare sfnt holding `tables` (tag, data).
+    fn sfnt(tables: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
+        let n = tables.len();
+        let mut out = vec![0, 1, 0, 0];
+        out.extend((n as u16).to_be_bytes());
+        out.extend([0u8; 6]);
+        let mut off = 12 + 16 * n;
+        let mut body: Vec<u8> = vec![];
+        for (tag, data) in tables {
+            out.extend(tag);
+            out.extend([0u8; 4]);
+            out.extend((off as u32).to_be_bytes());
+            out.extend((data.len() as u32).to_be_bytes());
+            body.extend(data);
+            off += data.len();
+        }
+        out.extend(body);
+        out
+    }
+
+    fn maxp(glyphs: u16) -> ([u8; 4], Vec<u8>) {
+        let mut m = vec![0, 0, 0x50, 0];
+        m.extend(glyphs.to_be_bytes());
+        (*b"maxp", m)
+    }
+
+    /// Audit T-C7: sbix numStrikes 0xFFFFFFFF asked for 17 GB and aborted.
+    #[test]
+    fn a_lying_sbix_strike_count_is_refused() {
+        let mut sbix = vec![0, 1, 0, 1];
+        sbix.extend(0xFFFF_FFFFu32.to_be_bytes());
+        sbix.extend([0u8; 64]);
+        let f = sfnt(&[maxp(3), (*b"sbix", sbix)]);
+        assert!(subset(&f, 0, &[1u16].into_iter().collect()).is_none());
+        // A strike whose offsets run past the table, too.
+        let mut sbix = vec![0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 12];
+        sbix.extend([0, 72, 0, 72]);
+        let f = sfnt(&[maxp(60000), (*b"sbix", sbix)]);
+        assert!(subset(&f, 0, &[1u16].into_iter().collect()).is_none());
+    }
 
     #[test]
     fn bundled_font_cut_keeps_used_glyphs_and_ids() {
