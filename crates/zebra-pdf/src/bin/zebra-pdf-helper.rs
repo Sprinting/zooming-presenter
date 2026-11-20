@@ -118,6 +118,7 @@ fn main() {
     let t0 = Instant::now();
     watchdog(a.budget, a.deadline, t0);
     let _ = sock.set_read_timeout(Some(a.idle));
+    sys::buffer(&sock, true, 4 << 20);
     let lib = library_path().ok_or_else(|| "libpdfium not found".to_string()).and_then(|p| Pdfium::bind_to_library(&p).map_err(|e| e.to_string()));
     let pdfium: &'static Pdfium = match lib {
         Ok(b) => Box::leak(Box::new(Pdfium::new(b))),
@@ -129,7 +130,7 @@ fn main() {
     if (&sock).write_all(&Reply::Hello { version: wire::VERSION }.encode()).is_err() {
         return;
     }
-    let mut doc: Option<PdfDocument<'static>> = None;
+    let mut doc: Option<Open> = None;
     let mut misbehave: Option<String> = None;
     loop {
         let mut fds = vec![];
@@ -187,7 +188,27 @@ fn read_frame(sock: &UnixStream, fds: &mut Vec<OwnedFd>) -> std::io::Result<(u8,
     Ok((tag, body))
 }
 
-fn handle(pdfium: &'static Pdfium, doc: &mut Option<PdfDocument<'static>>, req: Request, mut fds: Vec<OwnedFd>) -> Reply {
+/// The PDF open, and the page last drawn from it, kept loaded: the tiles
+/// of a page come one after another, and loading it again for each would
+/// decode its pictures again each time. (Fields drop in order: the page
+/// before its document.)
+struct Open {
+    page: Option<(u32, PdfPage<'static>)>,
+    doc: PdfDocument<'static>,
+}
+
+impl Open {
+    fn page(&mut self, index: u32) -> Option<&PdfPage<'static>> {
+        if self.page.as_ref().is_none_or(|(i, _)| *i != index) {
+            self.page = None;
+            let p = self.doc.pages().get(i32::try_from(index).ok()?).ok()?;
+            self.page = Some((index, p));
+        }
+        self.page.as_ref().map(|(_, p)| p)
+    }
+}
+
+fn handle(pdfium: &'static Pdfium, doc: &mut Option<Open>, req: Request, mut fds: Vec<OwnedFd>) -> Reply {
     match req {
         Request::Open { start, len, inline, .. } => {
             // The last PDF goes first (its memory and its file).
@@ -203,7 +224,7 @@ fn handle(pdfium: &'static Pdfium, doc: &mut Option<PdfDocument<'static>>, req: 
             match pdfium.load_pdf_from_reader(src, None) {
                 Ok(d) => {
                     let pages = (d.pages().len().max(0) as u32).min(wire::MAX_PAGES);
-                    *doc = Some(d);
+                    *doc = Some(Open { page: None, doc: d });
                     Reply::Opened { pages }
                 }
                 Err(PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError | PdfiumInternalError::SecurityError)) => {
@@ -213,7 +234,7 @@ fn handle(pdfium: &'static Pdfium, doc: &mut Option<PdfDocument<'static>>, req: 
             }
         }
         Request::Sizes { first, last } => {
-            let Some(d) = doc.as_ref() else { return Reply::Failed(Fail::Damaged) };
+            let Some(d) = doc.as_ref().map(|o| &o.doc) else { return Reply::Failed(Fail::Damaged) };
             if last < first || last - first >= wire::MAX_SIZES {
                 return Reply::Failed(Fail::Page);
             }
@@ -227,11 +248,11 @@ fn handle(pdfium: &'static Pdfium, doc: &mut Option<PdfDocument<'static>>, req: 
             Reply::Sizes(v)
         }
         Request::Preview { index, long_px } => {
-            let Some(d) = doc.as_ref() else { return Reply::Failed(Fail::Damaged) };
+            let Some(d) = doc.as_mut() else { return Reply::Failed(Fail::Damaged) };
             if long_px == 0 || long_px > limits::MAX_RECT_PX {
                 return Reply::Failed(Fail::Page);
             }
-            let Some(page) = i32::try_from(index).ok().and_then(|i| d.pages().get(i).ok()) else { return Reply::Failed(Fail::Page) };
+            let Some(page) = d.page(index) else { return Reply::Failed(Fail::Page) };
             let (w, h) = (finite(page.width().value), finite(page.height().value));
             if w <= 0.0 || h <= 0.0 {
                 return Reply::Failed(Fail::Page);
@@ -247,15 +268,15 @@ fn handle(pdfium: &'static Pdfium, doc: &mut Option<PdfDocument<'static>>, req: 
             }
             let rgb: Vec<u8> = rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
             drop(rgba);
-            Reply::Preview { w_pt: w, h_pt: h, px: (bw, bh), text: first_line(&page), rgb }
+            Reply::Preview { w_pt: w, h_pt: h, px: (bw, bh), text: first_line(page), rgb }
         }
         Request::Rect { index, page_px, rect } => {
-            let Some(d) = doc.as_ref() else { return Reply::Failed(Fail::Damaged) };
+            let Some(d) = doc.as_mut() else { return Reply::Failed(Fail::Damaged) };
             let (x, y, w, h) = rect;
             if w == 0 || h == 0 || w > limits::MAX_RECT_PX || h > limits::MAX_RECT_PX || page_px.0 > limits::MAX_PAGE_PX.0 || page_px.1 > limits::MAX_PAGE_PX.1 {
                 return Reply::Failed(Fail::Page);
             }
-            let Some(page) = i32::try_from(index).ok().and_then(|i| d.pages().get(i).ok()) else { return Reply::Failed(Fail::Page) };
+            let Some(page) = d.page(index) else { return Reply::Failed(Fail::Page) };
             let Ok(mut bmp) = PdfBitmap::empty(w as i32, h as i32, PdfBitmapFormat::BGRA) else { return Reply::Failed(Fail::Page) };
             let (Ok(pw), Ok(ph), Ok(ox), Ok(oy)) = (i32::try_from(page_px.0), i32::try_from(page_px.1), i32::try_from(x), i32::try_from(y)) else {
                 return Reply::Failed(Fail::Page);

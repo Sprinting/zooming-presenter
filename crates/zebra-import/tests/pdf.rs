@@ -276,3 +276,34 @@ fn damaged_files_give_an_error_not_a_panic() {
     assert!(matches!(zebra_import::open(std::path::Path::new("/nonexistent/file.pdf")), Err(ImportError::Read(_))));
     assert_eq!(ImportNote::ALL.len(), 19);
 }
+
+/// PDFs for `cargo run -p zebra-pdf --example bench` (the helper against
+/// in-process drawing): a text-and-shapes deck and a deck of big photos,
+/// 20 pages each, written to `ZEBRA_BENCH_OUT`.
+#[test]
+#[ignore]
+fn write_bench_pdfs() {
+    let Some(out) = std::env::var_os("ZEBRA_BENCH_OUT").map(std::path::PathBuf::from) else { return };
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("text-20.pdf"), many_pages_pdf(20)).unwrap();
+    let r = zebra_render::Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    let mut seed = 1u32;
+    let mut cmds = vec![];
+    for i in 0..20 {
+        let img = image::RgbImage::from_fn(3000, 2000, |x, y| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            image::Rgb([(x / 12) as u8, (y / 8) as u8, (seed >> 24) as u8])
+        });
+        let mut jpg = vec![];
+        image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg).unwrap();
+        let key = ed.add_asset(jpg).unwrap();
+        let x = i as f64 * 2000.0;
+        cmds.push(cmd(serde_json::json!({"op":"add_frame","style":"invisible","x":x,"y":0,"w":800,"h":600,"add_to_path":true})));
+        cmds.push(cmd(serde_json::json!({"op":"add_element","element":{"x":x,"y":0,"w":780,"h":520,"kind":{"type":"image","asset":key,"alt":""}}})));
+        cmds.push(cmd(serde_json::json!({"op":"add_text","text":format!("Photo {i}"),"style":"title","x":x,"y":-260})));
+    }
+    ed.apply_batch(cmds, Some("photos".into()), Origin::Human).unwrap();
+    std::fs::write(out.join("photos-20.pdf"), r.export_pdf(&ed).unwrap()).unwrap();
+}

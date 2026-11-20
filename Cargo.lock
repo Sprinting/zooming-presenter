@@ -7086,6 +7086,7 @@ dependencies = [
  "zebra-core",
  "zebra-import",
  "zebra-media",
+ "zebra-pdf",
  "zebra-render",
  "zebra-web",
 ]
@@ -7125,6 +7126,7 @@ dependencies = [
  "zebra-core",
  "zebra-import",
  "zebra-media",
+ "zebra-pdf",
  "zebra-render",
  "zebra-web",
 ]

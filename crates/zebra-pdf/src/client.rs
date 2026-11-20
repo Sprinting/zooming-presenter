@@ -82,6 +82,7 @@ struct Proc {
     /// The PDF open in it: key and page count.
     open: Option<(String, u32)>,
     buf: Vec<u8>,
+    filled: usize,
     last: Instant,
 }
 
@@ -375,13 +376,16 @@ impl Pool {
         drop(cmd);
         self.spawns.fetch_add(1, Ordering::Relaxed);
         ours.set_nonblocking(true).map_err(io)?;
+        // Room for a whole tile in the socket, so it isn't passed over in
+        // 200 KB pieces (the system may give less).
+        sys::buffer(&ours, false, 4 << 20);
         #[cfg(target_os = "macos")]
         {
             let one: libc::c_int = 1;
             // SAFETY: a valid socket and an int option.
             unsafe { libc::setsockopt(ours.as_raw_fd(), libc::SOL_SOCKET, libc::SO_NOSIGPIPE, &one as *const _ as *const libc::c_void, 4) };
         }
-        let mut p = Proc { child, sock: ours, open: None, buf: vec![], last: Instant::now() };
+        let mut p = Proc { child, sock: ours, open: None, buf: vec![], filled: 0, last: Instant::now() };
         match self.receive(&mut p, Instant::now(), self.limits.open, cancel) {
             Ok(Reply::Hello { version }) if version == wire::VERSION => Ok(p),
             Ok(Reply::NoEngine(why)) => {
@@ -514,45 +518,43 @@ impl Pool {
     }
 
     fn receive(&self, p: &mut Proc, t0: Instant, deadline: Duration, cancel: &dyn Fn() -> bool) -> Result<Reply, Lost> {
+        // `p.buf[..p.filled]` is what has come of the frame so far. The
+        // buffer is kept between frames (tiles are the same size), so it
+        // is neither zeroed nor grown again for each one; past 16 MB it
+        // is given back.
+        p.filled = 0;
         loop {
-            match wire::split(&p.buf) {
-                Err(_) => return Err(Lost::Gone("bad frame")),
-                Ok(Some((tag, body, used))) => {
-                    let r = Reply::decode(tag, body).map_err(|_| Lost::Gone("bad frame"));
-                    p.buf.drain(..used);
-                    p.buf.shrink_to(64 * 1024);
-                    return r;
+            let need = if p.filled < 4 {
+                4
+            } else {
+                let n = u32::from_le_bytes([p.buf[0], p.buf[1], p.buf[2], p.buf[3]]) as usize;
+                if n == 0 || n > wire::MAX_FRAME {
+                    return Err(Lost::Gone("bad frame"));
                 }
-                Ok(None) => {}
+                4 + n
+            };
+            if p.filled == need && need > 4 {
+                let r = Reply::decode(p.buf[4], &p.buf[5..need]).map_err(|_| Lost::Gone("bad frame"));
+                p.filled = 0;
+                if p.buf.len() > 16 << 20 {
+                    p.buf = vec![];
+                }
+                return r;
             }
-            if sys::wait(&p.sock, false, limits::POLL.as_millis() as i32) {
-                loop {
-                    // Read straight into the frame's own buffer, as much as
-                    // the frame still needs once its length is known.
-                    let have = p.buf.len();
-                    let room = if have >= 4 {
-                        let n = u32::from_le_bytes([p.buf[0], p.buf[1], p.buf[2], p.buf[3]]) as usize;
-                        (4 + n.min(wire::MAX_FRAME)).saturating_sub(have).max(1)
-                    } else {
-                        64 * 1024
-                    };
-                    p.buf.resize(have + room.min(8 << 20), 0);
-                    let r = (&p.sock).read(&mut p.buf[have..]);
-                    p.buf.truncate(have + r.as_ref().map(|n| *n).unwrap_or(0));
-                    match r {
-                        Ok(0) => return Err(Lost::Gone("closed")),
-                        Ok(_) => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                        Err(_) => return Err(Lost::Gone("closed")),
-                    }
-                    if matches!(wire::split(&p.buf), Ok(Some(_)) | Err(_)) {
-                        break;
+            if p.buf.len() < need {
+                p.buf.resize(need, 0);
+            }
+            match (&p.sock).read(&mut p.buf[p.filled..need]) {
+                Ok(0) => return Err(Lost::Gone("closed")),
+                Ok(n) => p.filled += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if !sys::wait(&p.sock, false, limits::POLL.as_millis() as i32) {
+                        self.watch(p, t0, deadline, cancel)?;
                     }
                 }
-                continue;
+                Err(_) => return Err(Lost::Gone("closed")),
             }
-            self.watch(p, t0, deadline, cancel)?;
         }
     }
 

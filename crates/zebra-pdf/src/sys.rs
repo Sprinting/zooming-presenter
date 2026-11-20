@@ -128,3 +128,11 @@ pub fn exit_now(code: i32) -> ! {
     // destructors.
     unsafe { libc::_exit(code) }
 }
+
+/// Ask for a socket buffer of `bytes` (send or receive); the system may
+/// give less.
+pub fn buffer(sock: &impl AsRawFd, send: bool, bytes: i32) {
+    let opt = if send { libc::SO_SNDBUF } else { libc::SO_RCVBUF };
+    // SAFETY: a valid socket and an int option.
+    unsafe { libc::setsockopt(sock.as_raw_fd(), libc::SOL_SOCKET, opt, &bytes as *const i32 as *const libc::c_void, 4) };
+}
