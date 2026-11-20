@@ -357,6 +357,7 @@ fn zip_with(entries: &[(&str, &[u8])], doc: &Document) -> Vec<u8> {
 fn r27_an_asset_name_cannot_leave_the_media_cache() {
     let mp4 = zebra_core::media::fixtures::tiny_mp4(320, 240, 10, true);
     let bytes = zip_with(&[("assets/../../evil.mp4", &mp4), ("assets/sub/dir.mp4", &mp4), ("assets/ok123.mp4", &mp4)], &Document::default());
+    let mp4: AssetBytes = mp4.into();
     let doc = io::load_bytes(&bytes).unwrap();
     assert_eq!(doc.assets.keys().collect::<Vec<_>>(), vec!["ok123"]);
     for key in ["../../evil", "a/b", "..", "", "a.b"] {

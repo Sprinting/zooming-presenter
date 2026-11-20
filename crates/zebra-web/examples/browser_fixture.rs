@@ -55,7 +55,7 @@ pub fn deck(r: &Renderer, video: Option<&Path>) -> Editor {
     img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     let b64 = |d: &[u8]| base64::engine::general_purpose::STANDARD.encode(d);
     let (x, y) = (b.x1 + 600.0, (b.y0 + b.y1) / 2.0);
-    ed.apply(Command::AddImage { data_base64: b64(&png), x, y: y - 300.0, width: Some(480.0), alt: "ramp".into(), id: Some("ramp".into()) }, H).unwrap();
+    ed.apply(Command::AddImage { data_base64: b64(&png), path: None, x, y: y - 300.0, width: Some(480.0), alt: "ramp".into(), id: Some("ramp".into()) }, H).unwrap();
     ed.apply(Command::AddStep { target: StepTarget::Element { id: "ramp".into() }, index: None, builds: vec![], notes: String::new() }, H).unwrap();
     if let Some(p) = video {
         let data = std::fs::read(p).unwrap();

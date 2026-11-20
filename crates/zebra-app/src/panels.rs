@@ -752,9 +752,9 @@ fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
                             app.recovered = None;
                         }
                         if w::default_button(ui, &crate::t!("recover-restore")).clicked() {
-                            match zebra_core::io::load(&rp) {
+                            let path = app.editor.file_path.clone();
+                            match zebra_core::io::load_autosave(&rp, path.as_deref()) {
                                 Ok(doc) => {
-                                    let path = app.editor.file_path.clone();
                                     app.editor.load(doc, path);
                                     app.after_load();
                                     // Restored work is unsaved: mark the document edited.

@@ -4,7 +4,6 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use base64::Engine;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -503,19 +502,20 @@ pub fn parse_command(mut v: Value) -> Result<Command, RpcError> {
     };
     if o.get("op").and_then(|x| x.as_str()) == Some("add_image") && o.contains_key("path") && !o.contains_key("data_base64") {
         let path = abs_path(o.get("path"), "add_image")?.unwrap_or_default();
-        let meta = std::fs::metadata(&path)
+        // A device (/dev/zero), FIFO or socket says it is 0 bytes long
+        // and never stops when read.
+        let meta = zebra_core::media::regular_file(&path)
             .map_err(|e| RpcError::app("io", format!("cannot read image '{}': {e}", path.display())))?;
         if meta.len() > MAX_IMAGE_BYTES {
             return Err(RpcError::invalid(format!("image is {} bytes; the limit is {MAX_IMAGE_BYTES}", meta.len())));
         }
-        let bytes = std::fs::read(&path).map_err(|e| RpcError::app("io", format!("cannot read image '{}': {e}", path.display())))?;
-        o.remove("path");
+        // The app reads the file itself (copied and mapped, not loaded).
         if !o.contains_key("alt") {
             if let Some(stem) = path.file_stem() {
                 o.insert("alt".into(), Value::String(stem.to_string_lossy().into_owned()));
             }
         }
-        o.insert("data_base64".into(), Value::String(base64::engine::general_purpose::STANDARD.encode(bytes)));
+        o.insert("path".into(), Value::String(path.to_string_lossy().into_owned()));
     }
     // Media commands read their file in the app (videos are copied, not
     // loaded); the path must be absolute because the agent's working

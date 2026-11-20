@@ -4,6 +4,7 @@
 //! Only headers are read here. Decoding is the platform's job
 //! (`zebra-media`), so nothing in this module allocates per frame or
 //! touches more than a few kilobytes of a file.
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use crate::error::{ZError, ZResult};
@@ -177,8 +178,8 @@ fn wav_duration(b: &[u8]) -> Option<f64> {
     None
 }
 
-/// Where video and audio live as plain files, so the platform player can
-/// open them by URL: `$ZEBRA_MEDIA_CACHE`, else the user cache directory
+/// Where players' copies of video and audio live as plain files (see
+/// [`materialize`]): `$ZEBRA_MEDIA_CACHE`, else the user cache directory
 /// (`~/Library/Caches/Zebra/media` on macOS, inside the sandbox container
 /// when sandboxed).
 pub fn cache_dir() -> PathBuf {
@@ -188,6 +189,128 @@ pub fn cache_dir() -> PathBuf {
     let base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
     base.join("Zebra").join("media")
 }
+
+// ----------------------------------------------------------------------
+// Mapped files
+
+/// A memory-mapped file: a saved `.zebra` whose assets are slices of it,
+/// or a file holding one asset. An *owned* file is one Zebra made for the
+/// mapping (a spill file, a player's copy): it is removed when the last
+/// asset, undo step or player using it lets go, so nothing is left behind
+/// after a delete, a save, a close or a quit.
+pub struct MappedFile {
+    map: memmap2::Mmap,
+    path: Option<PathBuf>,
+    owned: bool,
+}
+
+impl MappedFile {
+    /// Map `path` read-only. Not owned: the file stays when this goes.
+    pub fn open(path: &Path) -> std::io::Result<MappedFile> {
+        let f = std::fs::File::open(path)?;
+        // SAFETY: read-only map. Zebra never writes a file it has mapped
+        // (saves write a new file and rename it over); see `AssetBytes`.
+        let map = unsafe { memmap2::Mmap::map(&f) }?;
+        Ok(MappedFile { map, path: Some(path.to_path_buf()), owned: false })
+    }
+
+    /// Map a file only Zebra knows (its own spill file or copy), which is
+    /// removed when the mapping goes.
+    fn owned(path: PathBuf) -> std::io::Result<MappedFile> {
+        let f = std::fs::File::open(&path)?;
+        // SAFETY: as in `open`; nobody else writes Zebra's own files.
+        let map = unsafe { memmap2::Mmap::map(&f) }?;
+        Ok(MappedFile { map, path: Some(path), owned: true })
+    }
+
+    /// The same mapping, known by `path` (a clone mapped in place of the
+    /// file it was cloned from) and not owned.
+    pub fn renamed(mut self, path: &Path) -> MappedFile {
+        self.owned = false;
+        self.path = Some(path.to_path_buf());
+        self
+    }
+
+    /// The mapped file's path (it may have been removed or renamed since).
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// Is this a file Zebra removes when the mapping goes?
+    pub fn is_owned(&self) -> bool {
+        self.owned
+    }
+}
+
+impl std::ops::Deref for MappedFile {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.map
+    }
+}
+
+impl Drop for MappedFile {
+    fn drop(&mut self) {
+        if let (true, Some(p)) = (self.owned, &self.path) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+impl std::fmt::Debug for MappedFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MappedFile({:?}, {} bytes{})", self.path, self.map.len(), if self.owned { ", owned" } else { "" })
+    }
+}
+
+impl From<MappedFile> for AssetBytes {
+    fn from(m: MappedFile) -> AssetBytes {
+        let len = m.len();
+        AssetBytes::Mapped { map: std::sync::Arc::new(m), start: 0, len }
+    }
+}
+
+// ----------------------------------------------------------------------
+// Content keys
+
+/// An asset's key, made while its bytes go by: FNV-1a 64 of the bytes
+/// and their length, stable across runs and platforms.
+#[derive(Debug, Clone)]
+pub struct KeyHasher {
+    h: u64,
+    len: u64,
+}
+
+impl Default for KeyHasher {
+    fn default() -> Self {
+        KeyHasher { h: 0xcbf29ce484222325, len: 0 }
+    }
+}
+
+impl KeyHasher {
+    pub fn update(&mut self, bytes: &[u8]) {
+        let mut h = self.h;
+        for b in bytes {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        self.h = h;
+        self.len += bytes.len() as u64;
+    }
+    pub fn finish(&self) -> String {
+        format!("{:016x}{:x}", self.h, self.len)
+    }
+}
+
+/// The content key of `bytes` (see [`KeyHasher`]).
+pub fn content_key(bytes: &[u8]) -> String {
+    let mut k = KeyHasher::default();
+    k.update(bytes);
+    k.finish()
+}
+
+// ----------------------------------------------------------------------
+// Spill files
 
 /// Where new media bytes are spilled (see [`spill`]); `None`: kept in
 /// memory. The app sets it to a folder beside its autosaves.
@@ -204,114 +327,324 @@ pub fn spill_dir() -> Option<PathBuf> {
     SPILL_DIR.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// New media bytes (an agent's picture, a dropped photo, a theme font) as
-/// an asset. Kept on the heap they stayed there until the document was
-/// saved: 400 photos an agent added were 515 MB of heap. With a spill
-/// folder set, bytes of [`SPILL_MIN`] or more are written to a file there
+/// Where media read from a file or a stream goes: the spill folder, or a
+/// folder in the system's temporary folder when none is set (tools and
+/// tests), since such media is never read into memory.
+fn stream_dir() -> PathBuf {
+    spill_dir().unwrap_or_else(|| std::env::temp_dir().join("Zebra-media"))
+}
+
+/// `<pid>-<n>-<tag>` in `dir`: a name no other spill uses, in this
+/// process or another, that says which process made it.
+fn spill_path(dir: &Path, tag: &str) -> PathBuf {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    dir.join(format!("{}-{n}-{tag}", std::process::id()))
+}
+
+fn check_ext(ext: &str) -> std::io::Result<()> {
+    if !ext.is_empty() && ext.len() <= 8 && ext.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Ok(());
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a media file extension"))
+}
+
+/// New media bytes (an agent's picture, a theme font) as an asset. Kept
+/// on the heap they stayed there until the document was saved: 400 photos
+/// an agent added were 515 MB of heap. With a spill folder set, bytes of
+/// [`SPILL_MIN`] or more are written to a file there (`<pid>-<n>-<key>.<ext>`)
 /// and memory-mapped, like the media of an opened file, so the system can
-/// page them out. The file's name is removed as soon as it is mapped: the
-/// mapping keeps the data for as long as an asset (or an undo step) uses
-/// it, nothing is left to clean up after a save, a close or a crash, and
-/// recovery reads the bytes from the autosave, which copies them in.
-/// Any failure keeps the bytes in memory.
-pub fn spill(bytes: Vec<u8>, key: &str) -> AssetBytes {
-    if bytes.len() < SPILL_MIN || !cfg!(unix) || !crate::check::safe_asset_key(key) {
+/// page them out. The file is Zebra's own ([`MappedFile`]): it goes when
+/// the last asset or undo step using it does, and a run that crashed has
+/// its files swept at the next launch ([`sweep_spill`]). Recovery reads the
+/// bytes from the autosave, which links to them. Any failure keeps the
+/// bytes in memory.
+pub fn spill(bytes: Vec<u8>, key: &str, ext: &str) -> AssetBytes {
+    if bytes.len() < SPILL_MIN || !cfg!(unix) || !crate::check::safe_asset_key(key) || check_ext(ext).is_err() {
         return bytes.into();
     }
     let Some(dir) = spill_dir() else { return bytes.into() };
-    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let path = dir.join(format!("{}-{n}-{key}.spill", std::process::id()));
-    let mapped = (|| -> std::io::Result<memmap2::Mmap> {
+    let path = spill_path(&dir, &format!("{key}.{ext}"));
+    let mapped = (|| -> std::io::Result<MappedFile> {
         use std::io::Write;
         std::fs::create_dir_all(&dir)?;
-        let mut f = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
-        let r = f.write_all(&bytes).and_then(|()| {
-            // SAFETY: read-only map of a file only this process knows
-            // (its name goes below) and never writes again.
-            unsafe { memmap2::Mmap::map(&f) }
-        });
-        let _ = std::fs::remove_file(&path);
-        r
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        if let Err(e) = f.write_all(&bytes) {
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
+        drop(f);
+        MappedFile::owned(path.clone()).inspect_err(|_| {
+            let _ = std::fs::remove_file(&path);
+        })
     })();
     match mapped {
-        Ok(m) if m.len() == bytes.len() => {
-            let len = m.len();
-            AssetBytes::Mapped { map: std::sync::Arc::new(m), start: 0, len }
-        }
+        Ok(m) if m.len() == bytes.len() => m.into(),
         _ => bytes.into(),
     }
 }
 
-/// Spill files a crashed run left (between writing and mapping one):
-/// those of processes that aren't running. `alive` says whether a pid is.
-pub fn sweep_spill(alive: impl Fn(u32) -> bool) {
-    let Some(dir) = spill_dir() else { return };
-    for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-        let name = e.file_name().to_string_lossy().to_string();
-        let pid = name.strip_suffix(".spill").and_then(|n| n.split('-').next()).and_then(|p| p.parse::<u32>().ok());
-        if pid.is_some_and(|p| !alive(p)) {
-            let _ = std::fs::remove_file(e.path());
+/// Stream media into a spill file without holding it in memory (a video
+/// out of a PowerPoint file, a clip being inserted): returns its content
+/// key and the mapped bytes. `ext` is the file's type ("mp4").
+pub fn spill_reader(r: &mut dyn std::io::Read, ext: &str) -> std::io::Result<(String, AssetBytes)> {
+    check_ext(ext)?;
+    let dir = stream_dir();
+    std::fs::create_dir_all(&dir)?;
+    let part = spill_path(&dir, "part");
+    let mut key = KeyHasher::default();
+    let r = (|| -> std::io::Result<()> {
+        use std::io::Write;
+        let f = std::fs::OpenOptions::new().write(true).create_new(true).open(&part)?;
+        let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            let n = match r.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            };
+            key.update(&buf[..n]);
+            w.write_all(&buf[..n])?;
+        }
+        w.flush()
+    })();
+    if let Err(e) = r {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    finish_spill(&dir, part, key.finish(), ext)
+}
+
+/// Copy a media file into a spill file (`clonefile` on APFS, so usually
+/// free) and map the copy: returns its content key and the mapped bytes.
+/// Mapping the copy, not the original, means the person can move, edit or
+/// delete the original without disturbing the document.
+pub fn spill_file(src: &Path, ext: &str) -> std::io::Result<(String, AssetBytes)> {
+    check_ext(ext)?;
+    regular_file(src)?;
+    let dir = stream_dir();
+    std::fs::create_dir_all(&dir)?;
+    let part = spill_path(&dir, "part");
+    if let Err(e) = std::fs::copy(src, &part) {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    let key = match MappedFile::open(&part) {
+        Ok(m) => content_key(&m),
+        Err(e) => {
+            let _ = std::fs::remove_file(&part);
+            return Err(e);
+        }
+    };
+    finish_spill(&dir, part, key, ext)
+}
+
+/// `path`'s metadata if it is a regular file (after symlinks). A device
+/// (`/dev/zero`, `/dev/random`), a FIFO or a socket reports a length of 0
+/// and never ends when read; a folder can't be read at all.
+pub fn regular_file(path: &Path) -> std::io::Result<std::fs::Metadata> {
+    let m = std::fs::metadata(path)?;
+    if !m.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a file"));
+    }
+    Ok(m)
+}
+
+/// The first bytes of a regular file, enough to tell what it is
+/// ([`sniff_kind`]) before copying any of it.
+pub fn read_head(path: &Path) -> std::io::Result<(std::fs::Metadata, Vec<u8>)> {
+    let meta = regular_file(path)?;
+    let mut head = Vec::with_capacity(HEAD as usize);
+    std::fs::File::open(path)?.take(HEAD).read_to_end(&mut head)?;
+    Ok((meta, head))
+}
+
+const HEAD: u64 = 256 << 10;
+
+/// Largest picture file Zebra takes in (a PNG or JPEG this big is a scan
+/// of a poster; anything larger is a mistake or an attack).
+pub const MAX_PICTURE: u64 = 256 << 20;
+
+/// What kind of media a file is, from its first bytes alone; None for
+/// anything Zebra can't show. Used before copying a file in, so dropping
+/// an 8 GB disk image or a log file costs a read of 256 KB, not 8 GB.
+pub fn sniff_kind(head: &[u8]) -> Option<MediaKind> {
+    if let Some(m) = sniff_av(head) {
+        return Some(m.kind);
+    }
+    if head.starts_with(b"%PDF-") {
+        return Some(MediaKind::Document);
+    }
+    match image::guess_format(head) {
+        Ok(image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP | image::ImageFormat::Gif) => Some(MediaKind::Image),
+        _ => None,
+    }
+}
+
+/// A private copy of `path`, mapped, that nothing else can change: the
+/// copy's name is removed at once (the mapping keeps its bytes until it
+/// goes), so another program rewriting or truncating `path` afterwards
+/// can't crash Zebra with SIGBUS. Known by `path`, not owned.
+pub fn private_copy(path: &Path) -> std::io::Result<MappedFile> {
+    regular_file(path)?;
+    let dir = stream_dir();
+    std::fs::create_dir_all(&dir)?;
+    let part = spill_path(&dir, "open");
+    let r = std::fs::copy(path, &part).and_then(|_| MappedFile::open(&part));
+    let _ = std::fs::remove_file(&part);
+    Ok(r?.renamed(path))
+}
+
+/// Give a finished spill file its final name and map it (owned).
+fn finish_spill(dir: &Path, part: PathBuf, key: String, ext: &str) -> std::io::Result<(String, AssetBytes)> {
+    let to = spill_path(dir, &format!("{key}.{ext}"));
+    if let Err(e) = std::fs::rename(&part, &to) {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    match MappedFile::owned(to.clone()) {
+        Ok(m) => Ok((key, m.into())),
+        Err(e) => {
+            let _ = std::fs::remove_file(&to);
+            Err(e)
         }
     }
 }
 
-/// A temp name next to `path` that no other writer uses, in this process
-/// or another: two imports of the same clip at once (same cache key) each
-/// write their own copy, and the second rename simply replaces the first.
-fn part_path(path: &Path, ext: &str) -> PathBuf {
-    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    path.with_extension(format!("{ext}.part{}-{n}", std::process::id()))
+/// A spill file named for what it turned out to hold (`.mov` copied in,
+/// found to be an MP4): players go by the name's extension, and a file
+/// whose name is right is played as it is instead of being copied. Bytes
+/// that aren't a spill file of their own, or are shared, come back as
+/// they were.
+pub fn set_ext(bytes: AssetBytes, ext: &str) -> AssetBytes {
+    let AssetBytes::Mapped { map, start: 0, len } = bytes else { return bytes };
+    let named_right = map.path().and_then(|p| p.extension()).is_some_and(|e| e.eq_ignore_ascii_case(ext));
+    if named_right || !map.is_owned() || len != map.len() || check_ext(ext).is_err() {
+        return AssetBytes::Mapped { map, start: 0, len };
+    }
+    match std::sync::Arc::try_unwrap(map) {
+        Ok(mut m) => {
+            if let Some(p) = m.path.clone() {
+                let to = p.with_extension(ext);
+                if std::fs::rename(&p, &to).is_ok() {
+                    m.path = Some(to);
+                }
+            }
+            m.into()
+        }
+        Err(map) => AssetBytes::Mapped { map, start: 0, len },
+    }
 }
 
-/// The cache file for an asset.
-pub fn cache_path(key: &str, ext: &str) -> PathBuf {
-    cache_dir().join(format!("{key}.{ext}"))
+/// The process that made a spill or cache file, from its name
+/// (`<pid>-...`). None for names of older builds.
+fn file_owner(name: &str) -> Option<u32> {
+    name.split('-').next()?.parse().ok()
 }
+
+/// Spill files a crashed run left: those of processes that aren't running.
+/// `alive` says whether a pid is.
+pub fn sweep_spill(alive: impl Fn(u32) -> bool) {
+    for dir in spill_dir().into_iter().chain(std::iter::once(std::env::temp_dir().join("Zebra-media"))) {
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if file_owner(&name).is_some_and(|p| !alive(p)) && e.path().is_file() {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
+// Players' files
+
+/// A plain file a player opens (players take a path, not bytes): the
+/// asset's own file when it has one, else a copy in [`cache_dir`]. A copy
+/// is removed when the last `PlayFile` for it goes (the window closes,
+/// another file opens, the app quits), and a crashed run's copies at the
+/// next launch ([`sweep_cache`]).
+#[derive(Debug)]
+pub struct PlayFile {
+    path: PathBuf,
+    /// The asset's own file, kept alive while it plays.
+    _keep: Option<std::sync::Arc<MappedFile>>,
+    copy: bool,
+}
+
+impl PlayFile {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PlayFile {
+    fn drop(&mut self) {
+        if self.copy {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Copies being played, by `<key>.<ext>`, so two players (two windows,
+/// a video shown twice) share one.
+static PLAYING: std::sync::Mutex<Option<std::collections::HashMap<String, std::sync::Weak<PlayFile>>>> = std::sync::Mutex::new(None);
 
 /// Refuse a key or extension that could name a file outside the cache.
 fn check_cache_name(key: &str, ext: &str) -> std::io::Result<()> {
-    if crate::check::safe_asset_key(key) && !ext.is_empty() && ext.bytes().all(|b| b.is_ascii_alphanumeric()) {
-        return Ok(());
+    if crate::check::safe_asset_key(key) {
+        return check_ext(ext);
     }
     Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a media asset name"))
 }
 
-/// Make sure the asset exists as a plain file and return its path. Copies
-/// at most once per asset (streams from the mapped `.zebra`, so this costs
-/// disk, not RAM). Written to a temp name and renamed, so a half-written
-/// file is never played.
-pub fn materialize(key: &str, ext: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+/// A plain file holding the asset, for a player. Free when the asset has
+/// a file of its own (new media: its spill file); otherwise the bytes
+/// (mapped from the `.zebra`) are copied once, streamed, so this costs
+/// disk, not memory. Written to a temp name and renamed, so a
+/// half-written file is never played. Keep the result while the file is
+/// in use: the copy goes with the last one.
+pub fn materialize(key: &str, ext: &str, bytes: &AssetBytes) -> std::io::Result<std::sync::Arc<PlayFile>> {
     check_cache_name(key, ext)?;
-    let path = cache_path(key, ext);
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() == bytes.len() as u64) {
-        return Ok(path);
+    if let (Some(p), Some(map)) = (bytes.own_file(), bytes.mapped_file())
+        && p.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext))
+        && std::fs::metadata(p).is_ok_and(|m| m.len() == bytes.len() as u64)
+    {
+        return Ok(std::sync::Arc::new(PlayFile { path: p.to_path_buf(), _keep: Some(map.clone()), copy: false }));
     }
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    let tmp = part_path(&path, ext);
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(path)
+    let name = format!("{key}.{ext}");
+    // One copy at a time: two players of one clip wait for one copy.
+    let mut playing = PLAYING.lock().unwrap_or_else(|e| e.into_inner());
+    let playing = playing.get_or_insert_with(Default::default);
+    playing.retain(|_, w| w.strong_count() > 0);
+    if let Some(f) = playing.get(&name).and_then(|w| w.upgrade()) {
+        return Ok(f);
+    }
+    let dir = cache_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}-{name}", std::process::id()));
+    let tmp = spill_path(&dir, "part");
+    let r = std::fs::write(&tmp, &bytes[..]).and_then(|()| std::fs::rename(&tmp, &path));
+    if let Err(e) = r {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    let f = std::sync::Arc::new(PlayFile { path, _keep: None, copy: true });
+    playing.insert(name, std::sync::Arc::downgrade(&f));
+    Ok(f)
 }
 
-/// Copy a media file into the cache (`clonefile` on APFS, so usually free)
-/// and memory-map the copy. Mapping the copy, not the original, means the
-/// person can move or edit the original without disturbing the document.
-pub fn import_file(src: &Path, key: &str, ext: &str) -> std::io::Result<memmap2::Mmap> {
-    check_cache_name(key, ext)?;
-    let path = cache_path(key, ext);
-    let len = std::fs::metadata(src)?.len();
-    if !std::fs::metadata(&path).is_ok_and(|m| m.len() == len) {
-        std::fs::create_dir_all(path.parent().unwrap())?;
-        let tmp = part_path(&path, ext);
-        std::fs::copy(src, &tmp)?;
-        std::fs::rename(&tmp, &path)?;
+/// Players' copies a run left behind: those of processes that aren't
+/// running (it crashed, or quit without tidying up) and every file of
+/// builds before copies were tidied up (`<key>.<ext>`, the sample clip).
+pub fn sweep_cache(alive: impl Fn(u32) -> bool) {
+    for e in std::fs::read_dir(cache_dir()).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !file_owner(&name).is_some_and(&alive) && e.path().is_file() {
+            let _ = std::fs::remove_file(e.path());
+        }
     }
-    let f = std::fs::File::open(&path)?;
-    // SAFETY: read-only map of a file only Zebra writes, and Zebra never
-    // rewrites a cache file in place (see `materialize`).
-    unsafe { memmap2::Mmap::map(&f) }
 }
 
 /// Tiny media files for tests (headers only; not playable).

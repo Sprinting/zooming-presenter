@@ -1209,17 +1209,26 @@ impl ZebraApp {
         self.editor.view.camera.center()
     }
 
+    /// Insert a picture file: copied (cloned on APFS) and mapped, never
+    /// read into memory whole.
     pub fn insert_image_file(&mut self, p: &std::path::Path, at: Vec2) {
-        match std::fs::read(p) {
-            Ok(bytes) => self.insert_image_bytes(bytes, at, p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
-            Err(e) => self.toast(crate::t!("app-toast-read-failed", path = p.display().to_string(), error = e.to_string())),
+        if let Err(e) = std::fs::metadata(p) {
+            self.toast(crate::t!("app-toast-read-failed", path = p.display().to_string(), error = e.to_string()));
+            return;
         }
+        let alt = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        self.insert_image(String::new(), Some(p.to_string_lossy().to_string()), at, alt);
     }
 
     pub fn insert_image_bytes(&mut self, bytes: Vec<u8>, at: Vec2, alt: String) {
-        let vw = self.editor.view.viewport.x / self.editor.view.camera.zoom;
         let data_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        let r = self.editor.apply(Command::AddImage { data_base64, x: at.x, y: at.y, width: Some(vw * 0.4), alt, id: None }, H);
+        drop(bytes);
+        self.insert_image(data_base64, None, at, alt);
+    }
+
+    fn insert_image(&mut self, data_base64: String, path: Option<String>, at: Vec2, alt: String) {
+        let vw = self.editor.view.viewport.x / self.editor.view.camera.zoom;
+        let r = self.editor.apply(Command::AddImage { data_base64, path, x: at.x, y: at.y, width: Some(vw * 0.4), alt, id: None }, H);
         if let Some(out) = self.report(r) {
             self.select(out.created);
             self.view_cmd(ViewCommand::SetTool { tool: Tool::Select });
@@ -1249,6 +1258,11 @@ impl ZebraApp {
     pub fn finish_open(&mut self, p: &std::path::Path, r: zebra_core::ZResult<zebra_core::Prepared>) {
         match r {
             Ok(prepared) => {
+                // What a save or open of this file that crashed left beside it.
+                if let Some(dir) = p.parent() {
+                    zebra_core::io::sweep_temp(dir, zebra_api::discovery::pid_alive);
+                    crate::files::sweep_autosave_media(dir);
+                }
                 self.editor.load_prepared(prepared, Some(p.to_path_buf()));
                 self.after_load();
                 self.push_recent(p.to_path_buf());
@@ -1296,7 +1310,7 @@ impl ZebraApp {
     /// Open an untitled document's autosave in this window, as the same
     /// untitled, unsaved document (it keeps writing to that autosave).
     pub fn reopen_autosave(&mut self, path: &std::path::Path) -> bool {
-        let doc = match zebra_core::io::load(path) {
+        let doc = match zebra_core::io::load_autosave(path, None) {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("zebra: could not reopen {}: {e}", path.display());
@@ -1305,7 +1319,7 @@ impl ZebraApp {
         };
         // An empty document has nothing to bring back: no blank window.
         if doc.elements.is_empty() {
-            let _ = std::fs::remove_file(path);
+            zebra_core::io::remove_autosave(path);
             return false;
         }
         self.editor.load(doc, None);
@@ -1707,10 +1721,7 @@ impl ZebraApp {
                     egui::Event::Copy => self.queued.push(Action::Copy),
                     egui::Event::Cut => self.queued.push(Action::Cut),
                     egui::Event::Paste(_) => self.queued.push(Action::Paste),
-                    egui::Event::PasteImage(img) => {
-                        let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
-                        crate::media_ui::paste_rgba(self, img.size[0] as u32, img.size[1] as u32, rgba);
-                    }
+                    egui::Event::PasteImage(img) => crate::media_ui::paste_color_image(self, img),
                     _ => {}
                 }
             }
@@ -1758,6 +1769,11 @@ impl ZebraApp {
                 continue;
             }
             match f.bytes() {
+                // Only where there is no file (a browser): never more than a
+                // picture can be.
+                Ok(bytes) if bytes.len() as u64 > zebra_core::media::MAX_PICTURE => {
+                    self.toast(crate::t!("app-toast-read-dropped-failed", error = "too large".to_string()))
+                }
                 Ok(bytes) => {
                     let off = 30.0 * i as f64 / self.editor.view.camera.zoom;
                     self.insert_image_bytes(bytes, at + Vec2::new(off, off), p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());

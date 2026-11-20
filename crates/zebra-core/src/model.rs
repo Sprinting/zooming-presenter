@@ -137,12 +137,28 @@ impl MediaKind {
 #[derive(Clone)]
 pub enum AssetBytes {
     Memory(Arc<Vec<u8>>),
-    Mapped { map: Arc<memmap2::Mmap>, start: usize, len: usize },
+    Mapped { map: Arc<crate::media::MappedFile>, start: usize, len: usize },
 }
 
 impl AssetBytes {
     pub fn is_mapped(&self) -> bool {
         matches!(self, AssetBytes::Mapped { .. })
+    }
+    /// The mapped file these bytes come from, if they are mapped.
+    pub fn mapped_file(&self) -> Option<&Arc<crate::media::MappedFile>> {
+        match self {
+            AssetBytes::Mapped { map, .. } => Some(map),
+            AssetBytes::Memory(_) => None,
+        }
+    }
+    /// The file holding exactly these bytes and nothing else (a spill
+    /// file, a media file of an autosave), if there is one: a player can
+    /// open it as it is, and an autosave can link to it.
+    pub fn own_file(&self) -> Option<&std::path::Path> {
+        match self {
+            AssetBytes::Mapped { map, start: 0, len } if *len == map.len() => map.path(),
+            _ => None,
+        }
     }
 }
 

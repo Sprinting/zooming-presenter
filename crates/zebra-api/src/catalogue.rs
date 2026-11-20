@@ -223,7 +223,7 @@ pub fn param_summary(kind: Kind, v: &Value) -> String {
         .map(|(k, s)| format!("{k}{}: {}", if req.contains(&k.as_str()) { "" } else { "?" }, type_name(s)))
         .collect::<Vec<_>>()
         .join(", ")
-        + if v.get("properties").and_then(|p| p.get("data_base64")).is_some() { " (or path: string, an absolute file path, instead of data_base64)" } else { "" }
+        + if v.get("properties").is_some_and(|p| p.get("data_base64").is_some() && p.get("path").is_none()) { " (or path: string, an absolute file path, instead of data_base64)" } else { "" }
 }
 
 fn type_name(s: &Value) -> String {

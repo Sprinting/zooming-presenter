@@ -1061,6 +1061,7 @@ media-clipboard-objects = { $count ->
    *[other] { $count } Zebra objects
 }
 media-pasted-image = Pasted image
+media-toast-unsupported-file = Zebra can't add { $name }. Use a picture, video, sound, PDF or PowerPoint file.
 media-toast-unlock-to-crop = Unlock the image to crop it.
 media-undo-crop = Crop
 # $done_key and $cancel_key are key glyphs (↵, Esc).

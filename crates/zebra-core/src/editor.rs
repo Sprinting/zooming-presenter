@@ -1213,11 +1213,15 @@ impl Editor {
                     }
                 }
             }
-            Command::AddImage { data_base64, x, y, width, alt, id } => {
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(data_base64.trim())
-                    .map_err(|e| ZError::invalid(format!("data_base64 is not valid base64: {e}")))?;
-                let key = self.add_asset(bytes)?;
+            Command::AddImage { data_base64, path, x, y, width, alt, id } => {
+                let key = if path.as_deref().is_some_and(|p| !p.trim().is_empty()) {
+                    self.load_media(&data_base64, path.as_deref(), MediaKind::Image)?.0
+                } else {
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(data_base64.trim())
+                        .map_err(|e| ZError::invalid(format!("data_base64 is not valid base64: {e}")))?;
+                    self.add_asset(bytes)?
+                };
                 let a = &self.doc.assets[&key];
                 let (pw, ph) = (a.width as f64, a.height as f64);
                 let scale = width.map(|w| w / pw).unwrap_or(1.0);
@@ -1379,8 +1383,10 @@ impl Editor {
                 v.poster = poster;
                 out.changed.push(id);
             }
-            Command::SetSoundtrack { data_base64, path, looping, volume, name } => {
-                let new_asset = if data_base64.trim().is_empty() && path.is_none() {
+            Command::SetSoundtrack { data_base64, path, looping, volume, name, asset } => {
+                let new_asset = if let Some(k) = asset {
+                    Some(self.own_asset(k, MediaKind::Audio)?)
+                } else if data_base64.trim().is_empty() && path.is_none() {
                     None
                 } else {
                     Some(self.load_media(&data_base64, path.as_deref(), MediaKind::Audio)?.0)
@@ -1416,9 +1422,11 @@ impl Editor {
             Command::RemoveSoundtrack => {
                 self.doc.soundtrack = None;
             }
-            Command::SetVoiceover { index, data_base64, path } => {
+            Command::SetVoiceover { index, data_base64, path, asset } => {
                 self.check_step(index)?;
-                let v = if data_base64.trim().is_empty() && path.is_none() {
+                let v = if let Some(k) = asset {
+                    Some(self.own_asset(k, MediaKind::Audio)?)
+                } else if data_base64.trim().is_empty() && path.is_none() {
                     None
                 } else {
                     Some(self.load_media(&data_base64, path.as_deref(), MediaKind::Audio)?.0)
@@ -1742,7 +1750,6 @@ impl Editor {
                     self.el_mut(&only).group = None;
                     out.changed.push(only);
                 }
-                self.gc_assets();
                 out.deleted.extend(ids);
             }
             Command::Duplicate { ids, dx, dy } => {
@@ -2237,7 +2244,7 @@ impl Editor {
             for (bytes, ext) in files {
                 let key = content_key(&bytes);
                 if !self.doc.assets.contains_key(&key) {
-                    let bytes = crate::media::spill(bytes, &key);
+                    let bytes = crate::media::spill(bytes, &key, &ext);
                     self.doc.assets.insert(key.clone(), Asset { ext, bytes, width: 0, height: 0 });
                 }
                 keys.push(key);
@@ -2526,23 +2533,30 @@ impl Editor {
         if let Some(p) = path.filter(|p| !p.trim().is_empty()) {
             let p = std::path::Path::new(p);
             let ioe = |e: std::io::Error| ZError::new("io", format!("cannot read '{}': {e}", p.display()));
-            let f = std::fs::File::open(p).map_err(ioe)?;
-            // SAFETY: read-only and short-lived: used to sniff and hash, then
-            // dropped. The asset maps the cache copy, not this file.
-            let map = unsafe { memmap2::Mmap::map(&f) }.map_err(ioe)?;
-            let info = crate::media::info(&map)?;
-            check(&info)?;
-            let key = content_key(&map);
-            if !self.doc.assets.contains_key(&key) {
-                let bytes: AssetBytes = if want == MediaKind::Image {
-                    crate::media::spill(map.to_vec(), &key)
-                } else {
-                    let m = crate::media::import_file(p, &key, &info.ext).map_err(ioe)?;
-                    let len = m.len();
-                    AssetBytes::Mapped { map: std::sync::Arc::new(m), start: 0, len }
-                };
-                self.doc.assets.insert(key.clone(), Asset { ext: info.ext.clone(), bytes, width: info.width, height: info.height });
+            // Copied first (cloned on APFS, so free) and checked from the
+            // copy: the person's file is never mapped, so it can change or
+            // shrink while Zebra reads it without crashing the app, and
+            // whatever its size none of it goes through the heap. A copy
+            // that isn't what was asked for goes again when dropped.
+            let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).filter(|e| !e.is_empty() && e.len() <= 8 && e.bytes().all(|b| b.is_ascii_alphanumeric())).unwrap_or_else(|| "bin".into());
+            // What it is, from its first bytes, before any of it is
+            // copied: a disk image or a log named .png costs 256 KB.
+            let (meta, head) = crate::media::read_head(p).map_err(ioe)?;
+            let unknown = || ZError::invalid("unrecognised media format").hint("use PNG, JPEG, WebP, GIF, MP4, MOV, MP3, M4A, AAC or WAV");
+            let kind = crate::media::sniff_kind(&head).ok_or_else(unknown)?;
+            let too_big = |n: u64| ZError::new("too_big", format!("this picture is {} MB; the largest Zebra takes is {} MB", n >> 20, crate::media::MAX_PICTURE >> 20));
+            if kind == MediaKind::Image && meta.len() > crate::media::MAX_PICTURE {
+                return Err(too_big(meta.len()));
             }
+            let (key, bytes) = crate::media::spill_file(p, &ext).map_err(ioe)?;
+            // It may have grown while it was copied.
+            if kind == MediaKind::Image && bytes.len() as u64 > crate::media::MAX_PICTURE {
+                return Err(too_big(bytes.len() as u64));
+            }
+            let info = crate::media::info(&bytes)?;
+            check(&info)?;
+            let bytes = crate::media::set_ext(bytes, &info.ext);
+            self.doc.assets.entry(key.clone()).or_insert(Asset { ext: info.ext.clone(), bytes, width: info.width, height: info.height });
             return Ok((key, info));
         }
         if data_base64.trim().is_empty() {
@@ -2555,10 +2569,18 @@ impl Editor {
         check(&info)?;
         let key = content_key(&bytes);
         if !self.doc.assets.contains_key(&key) {
-            let bytes = crate::media::spill(bytes, &key);
+            let bytes = crate::media::spill(bytes, &key, &info.ext);
             self.doc.assets.insert(key.clone(), Asset { ext: info.ext.clone(), bytes, width: info.width, height: info.height });
         }
         Ok((key, info))
+    }
+
+    /// `key`, an asset the document has of kind `want`.
+    fn own_asset(&self, key: String, want: MediaKind) -> ZResult<String> {
+        match self.doc.assets.get(&key) {
+            Some(a) if a.media_kind() == want => Ok(key),
+            _ => Err(ZError::new("not_found", format!("no asset '{key}' of that kind"))),
+        }
     }
 
     /// Store an SVG (a symbol) as an asset; returns the key.
@@ -2566,10 +2588,16 @@ impl Editor {
         let (w, h) = crate::symbols::svg_pixels(&bytes);
         let key = content_key(&bytes);
         if !self.doc.assets.contains_key(&key) {
-            let bytes = crate::media::spill(bytes, &key);
+            let bytes = crate::media::spill(bytes, &key, "svg");
             self.doc.assets.insert(key.clone(), Asset { ext: "svg".into(), bytes, width: w, height: h });
         }
         key
+    }
+
+    /// Store a picture file as an asset (copied and mapped, never read
+    /// whole into memory); returns the key.
+    pub fn add_asset_file(&mut self, path: &std::path::Path) -> ZResult<String> {
+        Ok(self.load_media("", Some(&path.to_string_lossy()), MediaKind::Image)?.0)
     }
 
     /// Store image bytes as an asset; returns the key.
@@ -2577,7 +2605,7 @@ impl Editor {
         let (ext, w, h) = image_info(&bytes)?;
         let key = content_key(&bytes);
         if !self.doc.assets.contains_key(&key) {
-            let bytes = crate::media::spill(bytes, &key);
+            let bytes = crate::media::spill(bytes, &key, &ext);
             self.doc.assets.insert(key.clone(), Asset { ext, bytes, width: w, height: h });
         }
         Ok(key)
@@ -2593,19 +2621,41 @@ impl Editor {
         }
     }
 
-    fn gc_assets(&mut self) {
-        let used: HashSet<String> = self
-            .doc
-            .elements
-            .values()
-            .filter_map(|e| match &e.kind {
-                ElementKind::Image(i) => Some(i.asset.clone()),
-                _ => None,
-            })
-            .collect();
-        // Keep assets referenced by undo history: only gc unreferenced ones
-        // that no history snapshot uses either. Simplest safe choice: keep.
-        let _ = used;
+    /// Drop the assets nothing can show any more: not the document, not
+    /// any undo or redo step (a deleted video stays, so Undo brings it
+    /// back), not a save in flight. Their memory, or the spill file or old
+    /// `.zebra` holding them, is freed once nothing else (the clipboard, a
+    /// player) uses them. Returns the keys kept only for undo and redo.
+    /// Runs when the document is saved: cheap unless something was
+    /// removed, then one pass over the history's patches.
+    pub fn prune_assets(&mut self) -> Vec<String> {
+        let used: HashSet<String> = self.doc.used_assets().into_iter().map(str::to_string).collect();
+        let unused: Vec<String> = self.doc.assets.keys().filter(|k| !used.contains(*k)).cloned().collect();
+        if unused.is_empty() {
+            return vec![];
+        }
+        let mut mentioned: HashSet<String> = HashSet::new();
+        let want: HashSet<&str> = unused.iter().map(String::as_str).collect();
+        for e in self.undo.iter().chain(self.redo.iter()) {
+            for d in &e.deltas {
+                for c in [&d.forward, &d.backward] {
+                    c.visit_strings(&mut |s| {
+                        if want.contains(s) {
+                            mentioned.insert(s.to_string());
+                        }
+                    });
+                }
+            }
+        }
+        let mut kept = vec![];
+        for k in unused {
+            if mentioned.contains(&k) {
+                kept.push(k);
+            } else {
+                self.doc.assets.remove(&k);
+            }
+        }
+        kept
     }
 
     // ------------------------------------------------------------------
@@ -3457,10 +3507,10 @@ pub fn command_label(c: &Command) -> String {
         Command::ReplaceImage { .. } => "Replace image".into(),
         Command::SetPoster { .. } => "Set poster frame".into(),
         Command::ReplaceVideo { .. } => "Replace video".into(),
-        Command::SetSoundtrack { data_base64, path, .. } if !data_base64.is_empty() || path.is_some() => "Add soundtrack".into(),
+        Command::SetSoundtrack { data_base64, path, asset, .. } if !data_base64.is_empty() || path.is_some() || asset.is_some() => "Add soundtrack".into(),
         Command::SetSoundtrack { .. } => "Change soundtrack".into(),
         Command::RemoveSoundtrack => "Remove soundtrack".into(),
-        Command::SetVoiceover { data_base64, path, .. } if data_base64.is_empty() && path.is_none() => "Remove voice-over".into(),
+        Command::SetVoiceover { data_base64, path, asset, .. } if data_base64.is_empty() && path.is_none() && asset.is_none() => "Remove voice-over".into(),
         Command::SetVoiceover { .. } => "Add voice-over".into(),
         Command::Update { patch, .. } if patch.crop.is_some() => "Crop".into(),
         Command::AddInk { highlighter, .. } => if *highlighter { "Highlight" } else { "Draw" }.into(),
@@ -3506,13 +3556,7 @@ fn plural(n: usize, w: &str) -> String {
 }
 
 pub(crate) fn content_key(bytes: &[u8]) -> String {
-    // FNV-1a 64 + length: stable across runs and platforms.
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in bytes {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("{h:016x}{:x}", bytes.len())
+    crate::media::content_key(bytes)
 }
 
 /// (ext, width, height) of an image's bytes.

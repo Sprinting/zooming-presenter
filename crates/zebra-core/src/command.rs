@@ -86,9 +86,13 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<ElementId>,
     },
-    /// Insert an image from bytes (base64). The API also accepts `path`.
+    /// Insert an image from bytes (base64) or a file (`path`).
     AddImage {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         data_base64: String,
+        /// A picture file, read from disk without passing through memory.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
         #[serde(default)]
         x: f64,
         #[serde(default)]
@@ -215,6 +219,10 @@ pub enum Command {
         volume: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
+        /// An asset the document already has (an imported file's sound),
+        /// instead of data or a path. Not part of the API.
+        #[serde(skip)]
+        asset: Option<String>,
     },
     RemoveSoundtrack,
     /// Voice-over for a path step (plays when the step is reached). No data
@@ -225,6 +233,10 @@ pub enum Command {
         data_base64: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
+        /// An asset the document already has (an imported file's sound),
+        /// instead of data or a path. Not part of the API.
+        #[serde(skip)]
+        asset: Option<String>,
     },
     /// Freehand pen / highlighter stroke in world coordinates.
     AddInk {

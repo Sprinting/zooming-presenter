@@ -96,7 +96,7 @@ pub fn finish(app: &mut ZebraApp, pick: Pick, p: PathBuf) {
         Pick::ReplaceVideo(id) => crate::media_ui::replace_video_file(app, &p, id),
         Pick::Soundtrack => crate::media_ui::set_soundtrack_file(app, &p),
         Pick::Voiceover(index) => {
-            app.apply(Command::SetVoiceover { index, data_base64: String::new(), path: path() });
+            app.apply(Command::SetVoiceover { index, data_base64: String::new(), path: path(), asset: None });
         }
         Pick::Poster(id) => {
             app.apply(Command::SetPoster { id, data_base64: String::new(), path: path(), at: None });

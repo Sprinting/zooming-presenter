@@ -385,14 +385,11 @@ fn section(ui: &mut Ui, title: &str) -> egui::Response {
 /// Ask for a picture and store it as a document asset; returns its key.
 fn pick_image(app: &mut ZebraApp) -> Option<String> {
     let p = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), &["png", "jpg", "jpeg", "webp"]).pick_file()?;
-    let bytes = match std::fs::read(&p) {
-        Ok(b) => b,
-        Err(e) => {
-            app.toast(crate::t!("theme-editor-read-failed", path = p.display().to_string(), error = e.to_string()));
-            return None;
-        }
-    };
-    let r = app.editor.add_asset(bytes);
+    if let Err(e) = std::fs::metadata(&p) {
+        app.toast(crate::t!("theme-editor-read-failed", path = p.display().to_string(), error = e.to_string()));
+        return None;
+    }
+    let r = app.editor.add_asset_file(&p);
     app.report(r)
 }
 

@@ -553,8 +553,7 @@ impl Dispatcher {
                 // (Saves are run by `run`, on a worker; this is the direct
                 // route for hosts that call `execute` themselves.)
                 let path = save_path(editor, path)?;
-                zebra_core::io::save(&mut editor.doc, &path)?;
-                editor.mark_saved(Some(path.clone()));
+                editor.save_now(&path)?;
                 json!({ "ok": true, "path": path })
             }
             Call::Export { format, path, capture } => Self::export(&self.renderer, editor, format, path, &capture, limited, &self.web_labels)?,
@@ -641,7 +640,20 @@ impl Dispatcher {
                 }
                 (json.into_bytes(), "application/json")
             }
-            ExportFormat::Zebra => (zebra_core::io::save_bytes(&editor.doc)?, "application/zip"),
+            ExportFormat::Zebra => {
+                // Written straight to the file, media streamed from where
+                // it is; only a small document comes back as data.
+                if let Some(p) = &path {
+                    zebra_core::io::write_file(&editor.doc, p)?;
+                    let bytes = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+                    return Ok(json!({ "path": p, "bytes": bytes, "mime": "application/zip" }));
+                }
+                let media: usize = editor.doc.used_assets().iter().filter_map(|k| editor.doc.assets.get(*k)).map(|a| a.bytes.len()).sum();
+                if media > zebra_web::export::INLINE_LIMIT {
+                    return Err(RpcError::app("too_big", "this document's pictures, video and sound are too big to send as data").hint("give a `path`; the file is written there"));
+                }
+                (zebra_core::io::save_bytes(&editor.doc)?, "application/zip")
+            }
         };
         match path {
             Some(p) => {
@@ -860,7 +872,7 @@ fn prepare(cmds: &mut [Command], editor: &Editor) -> Result<Vec<String>, RpcErro
                 };
                 let a = editor.doc.assets.get(&v.asset).ok_or_else(|| RpcError::app("bad_file", format!("the video '{id}' has no data")))?;
                 let file = zebra_core::media::materialize(&v.asset, &a.ext, &a.bytes).map_err(|e| RpcError::app("io", e.to_string()))?;
-                let png = zebra_media::platform().poster_png(&file, secs, 1280).map_err(|e| {
+                let png = zebra_media::platform().poster_png(file.path(), secs, 1280).map_err(|e| {
                     RpcError::app("unsupported", format!("cannot grab a frame of the video here: {e}")).hint("pass data_base64 or path with a picture instead")
                 })?;
                 *data_base64 = base64::engine::general_purpose::STANDARD.encode(png);

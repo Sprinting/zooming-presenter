@@ -53,14 +53,26 @@ pub struct Media {
     last_step: Option<(Option<usize>, usize)>,
     /// Videos already auto-played on the current step.
     autoplayed: HashSet<ElementId>,
-    /// Videos being inserted (poster made on a worker first).
-    inserting: Vec<Receiver<Insert>>,
+    /// Videos being inserted (poster made on a worker first) and pasted
+    /// pictures being encoded.
+    inserting: Vec<Receiver<Inserted>>,
     pub crop: Option<CropEdit>,
     reported: HashSet<String>,
     /// Background work that ends with a message (exports).
     pub background: Vec<Receiver<String>>,
     /// Web page exports under way (File > Export > Web Page).
     pub web_exports: Vec<Receiver<Result<zebra_web::export::Written, String>>>,
+    /// The files players open, by asset key, kept while this document is
+    /// open so a video that comes back on screen isn't copied again. A
+    /// copy in the media cache goes when its entry does (another file
+    /// opens, the window closes, the app quits).
+    files: Arc<std::sync::Mutex<HashMap<String, Arc<zebra_core::media::PlayFile>>>>,
+}
+
+enum Inserted {
+    Video(Insert),
+    /// A pasted picture, as PNG, and where it goes.
+    Picture(Vec<u8>, Vec2),
 }
 
 struct Insert {
@@ -89,6 +101,7 @@ impl Default for Media {
             reported: HashSet::new(),
             background: vec![],
             web_exports: vec![],
+            files: Default::default(),
         }
     }
 }
@@ -127,6 +140,7 @@ impl Media {
         self.last_step = None;
         self.autoplayed.clear();
         self.crop = None;
+        self.files.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     /// For the `perf` numbers: (open players, converted frame bytes).
@@ -136,16 +150,28 @@ impl Media {
     }
 }
 
-/// Copy an asset to a plain file on a worker thread (players open files).
+/// The asset as a plain file for a player, on a worker thread (a copy
+/// may be made). The file stays while the document is open
+/// ([`Media::files`]).
 fn materialize_async(app: &ZebraApp, key: &str) -> Option<Receiver<std::io::Result<PathBuf>>> {
+    let (tx, rx) = channel();
+    if let Some(f) = app.media.files.lock().unwrap_or_else(|e| e.into_inner()).get(key) {
+        let _ = tx.send(Ok(f.path().to_path_buf()));
+        return Some(rx);
+    }
     let a = app.editor.doc.assets.get(key)?;
     let (key, ext, bytes) = (key.to_string(), a.ext.clone(), a.bytes.clone());
-    let (tx, rx) = channel();
     let ctx = app.ctx.clone();
+    let files = app.media.files.clone();
     std::thread::Builder::new()
         .name("zebra-media-copy".into())
         .spawn(move || {
-            let _ = tx.send(zebra_core::media::materialize(&key, &ext, &bytes));
+            let r = zebra_core::media::materialize(&key, &ext, &bytes).map(|f| {
+                let p = f.path().to_path_buf();
+                files.lock().unwrap_or_else(|e| e.into_inner()).insert(key, f);
+                p
+            });
+            let _ = tx.send(r);
             ctx.request_repaint();
         })
         .ok()?;
@@ -277,7 +303,10 @@ pub fn tick(app: &mut ZebraApp) {
         Err(_) => false,
     });
     for i in done {
-        finish_insert_video(app, i);
+        match i {
+            Inserted::Video(i) => finish_insert_video(app, i),
+            Inserted::Picture(png, at) => app.insert_image_bytes(png, at, crate::t!("media-pasted-image")),
+        }
     }
 
     // Copies that finished: open the player.
@@ -531,7 +560,7 @@ fn make_poster_then(app: &mut ZebraApp, p: &std::path::Path, at: Vec2, replace: 
     let ctx = app.ctx.clone();
     let spawned = std::thread::Builder::new().name("zebra-poster".into()).spawn(move || {
         let poster = backend.poster_png(&path, 1.0, 1280).ok();
-        let _ = tx.send(Insert { replace, path, at, width, poster });
+        let _ = tx.send(Inserted::Video(Insert { replace, path, at, width, poster }));
         ctx.request_repaint();
     });
     if spawned.is_ok() {
@@ -581,6 +610,7 @@ pub fn set_soundtrack_file(app: &mut ZebraApp, p: &std::path::Path) {
         looping: None,
         volume: None,
         name: None,
+        asset: None,
     });
 }
 
@@ -595,16 +625,41 @@ pub fn replace_image_dialog(app: &mut ZebraApp, id: &str) {
 /// Insert any dropped or pasted file by what it is: pictures and videos go
 /// on the canvas, audio becomes the soundtrack.
 pub fn insert_file(app: &mut ZebraApp, p: &std::path::Path, at: Vec2) {
-    let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    match MediaKind::from_ext(match ext.as_str() {
-        "jpeg" => "jpg",
-        e => e,
-    }) {
-        MediaKind::Video => insert_video_file(app, p, at),
-        MediaKind::Audio => set_soundtrack_file(app, p),
-        MediaKind::Image => app.insert_image_file(p, at),
-        MediaKind::Document => crate::import_ui::start(app, p.to_path_buf()),
+    match dropped_kind(p) {
+        Ok(Dropped::Media(MediaKind::Video)) => insert_video_file(app, p, at),
+        Ok(Dropped::Media(MediaKind::Audio)) => set_soundtrack_file(app, p),
+        Ok(Dropped::Media(MediaKind::Image)) => app.insert_image_file(p, at),
+        Ok(Dropped::Media(MediaKind::Document) | Dropped::Slides) => crate::import_ui::start(app, p.to_path_buf()),
+        Ok(Dropped::Other) => {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            app.toast(crate::t!("media-toast-unsupported-file", name = name));
+        }
+        Err(e) => app.toast(crate::t!("app-toast-read-failed", path = p.display().to_string(), error = e.to_string())),
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Dropped {
+    Media(MediaKind),
+    /// A PowerPoint file, imported like a PDF (as Keynote does).
+    Slides,
+    Other,
+}
+
+/// What a dropped or pasted file is, from its first bytes, not its name:
+/// a disk image or a log file dropped by mistake is turned away after a
+/// read of 256 KB instead of being read whole on the UI thread. Folders,
+/// devices and FIFOs are an error.
+pub fn dropped_kind(p: &std::path::Path) -> std::io::Result<Dropped> {
+    let (_, head) = zebra_core::media::read_head(p)?;
+    if let Some(k) = zebra_core::media::sniff_kind(&head) {
+        return Ok(Dropped::Media(k));
+    }
+    let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if head.starts_with(b"PK\x03\x04") && matches!(ext.as_str(), "pptx" | "pptm" | "ppsx" | "potx") {
+        return Ok(Dropped::Slides);
+    }
+    Ok(Dropped::Other)
 }
 
 // ----------------------------------------------------------------------
@@ -686,14 +741,57 @@ pub fn paste_from_system(app: &mut ZebraApp) -> bool {
     false
 }
 
-/// Paste raw RGBA pixels as a PNG picture at the view centre.
+/// Paste raw RGBA pixels as a PNG picture at the view centre. Scaled and
+/// encoded on a worker: a pasted 20000 x 20000 screenshot would otherwise
+/// hold the window for seconds.
 pub fn paste_rgba(app: &mut ZebraApp, w: u32, h: u32, rgba: Vec<u8>) {
-    let Some(img) = image::RgbaImage::from_raw(w, h, rgba) else { return };
-    let mut png = vec![];
-    if img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).is_ok() {
-        let at = app.canvas_center_world();
-        app.insert_image_bytes(png, at, crate::t!("media-pasted-image"));
+    paste_with(app, move || pasted_png(w, h, rgba));
+}
+
+/// [`paste_rgba`] for egui's pasted picture, converted on the worker too.
+pub fn paste_color_image(app: &mut ZebraApp, img: Arc<egui::ColorImage>) {
+    paste_with(app, move || {
+        let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+        pasted_png(img.size[0] as u32, img.size[1] as u32, rgba)
+    });
+}
+
+fn paste_with(app: &mut ZebraApp, make: impl FnOnce() -> Option<Vec<u8>> + Send + 'static) {
+    let at = app.canvas_center_world();
+    let (tx, rx) = channel();
+    let ctx = app.ctx.clone();
+    let spawned = std::thread::Builder::new().name("zebra-paste".into()).spawn(move || {
+        if let Some(png) = make() {
+            let _ = tx.send(Inserted::Picture(png, at));
+        }
+        ctx.request_repaint();
+    });
+    if spawned.is_ok() {
+        app.media.inserting.push(rx);
+        app.ctx.request_repaint();
     }
+}
+
+/// Longest side of a pasted picture; bigger ones are scaled down to it,
+/// as Keynote does. 8192 px is sharper than any screen shows it.
+pub const MAX_PASTE_SIDE: u32 = 8192;
+
+/// A pasted picture as PNG: None if the pixels don't make a picture (a
+/// size that doesn't match the data, or zero), scaled down to
+/// [`MAX_PASTE_SIDE`] if larger.
+pub fn pasted_png(w: u32, h: u32, rgba: Vec<u8>) -> Option<Vec<u8>> {
+    if w == 0 || h == 0 || (w as u128) * (h as u128) * 4 != rgba.len() as u128 {
+        return None;
+    }
+    let mut img = image::RgbaImage::from_raw(w, h, rgba)?;
+    if w.max(h) > MAX_PASTE_SIDE {
+        let s = MAX_PASTE_SIDE as f64 / w.max(h) as f64;
+        let (nw, nh) = (((w as f64 * s).round() as u32).max(1), ((h as f64 * s).round() as u32).max(1));
+        img = image::imageops::thumbnail(&img, nw, nh);
+    }
+    let mut png = vec![];
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    Some(png)
 }
 
 // ----------------------------------------------------------------------
@@ -1092,14 +1190,14 @@ pub fn document_section(app: &mut ZebraApp, ui: &mut Ui) {
                 let _ = app.editor.begin(crate::t!("media-undo-change-soundtrack"), crate::app::HUMAN);
             }
             if r.changed() {
-                let _ = app.editor.apply(Command::SetSoundtrack { data_base64: String::new(), path: None, looping: None, volume: Some(vol), name: None }, crate::app::HUMAN);
+                let _ = app.editor.apply(Command::SetSoundtrack { data_base64: String::new(), path: None, looping: None, volume: Some(vol), name: None, asset: None }, crate::app::HUMAN);
             }
             if r.drag_stopped() && app.editor.in_transaction() {
                 app.editor.commit_as(&crate::app::HUMAN);
             }
             let mut lp = t.looping;
             if crate::widgets::checkbox(ui, &mut lp, &crate::t!("media-loop")).changed() {
-                app.apply(Command::SetSoundtrack { data_base64: String::new(), path: None, looping: Some(lp), volume: None, name: None });
+                app.apply(Command::SetSoundtrack { data_base64: String::new(), path: None, looping: Some(lp), volume: None, name: None, asset: None });
             }
         }
     }
@@ -1122,7 +1220,7 @@ pub fn step_section(app: &mut ZebraApp, ui: &mut Ui, step: usize) {
                 voiceover_dialog(app, step);
             }
             if crate::widgets::push_button_ext(ui, &crate::t!("media-remove"), crate::widgets::Size::Small, true, None).clicked() {
-                app.apply(Command::SetVoiceover { index: step, data_base64: String::new(), path: None });
+                app.apply(Command::SetVoiceover { index: step, data_base64: String::new(), path: None, asset: None });
             }
         }
     });

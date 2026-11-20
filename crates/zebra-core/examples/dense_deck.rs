@@ -47,7 +47,7 @@ fn main() {
     for i in 0..50u32 {
         let data_base64 = base64::engine::general_purpose::STANDARD.encode(photo(i));
         let (x, y) = ((i % 10) as f64 * 3000.0, 20.0 * 900.0 + (i / 10) as f64 * 2200.0);
-        ed.apply(Command::AddImage { data_base64, x, y, width: Some(2400.0), alt: format!("photo {i}"), id: None }, h.clone()).unwrap();
+        ed.apply(Command::AddImage { data_base64, path: None, x, y, width: Some(2400.0), alt: format!("photo {i}"), id: None }, h.clone()).unwrap();
     }
     io::save(&mut ed.doc, std::path::Path::new(&out)).unwrap();
     println!("{out}: {} elements, {} steps, {} photos", ed.doc.elements.len(), ed.doc.path.len(), ed.doc.assets.len());

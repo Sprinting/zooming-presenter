@@ -73,6 +73,35 @@ pub struct Splice<T> {
 }
 
 impl Change {
+    /// Call `f` with every string this change writes or removes (element
+    /// fields, asset keys, a path step's voice-over...): what it could
+    /// bring back.
+    pub fn visit_strings(&self, f: &mut dyn FnMut(&str)) {
+        fn walk(v: &Value, f: &mut dyn FnMut(&str)) {
+            match v {
+                Value::String(s) => f(s),
+                Value::Array(a) => a.iter().for_each(|x| walk(x, f)),
+                Value::Object(o) => o.values().for_each(|x| walk(x, f)),
+                _ => {}
+            }
+        }
+        for op in &self.patch.0 {
+            match op {
+                PatchOperation::Add(o) => walk(&o.value, f),
+                PatchOperation::Replace(o) => walk(&o.value, f),
+                PatchOperation::Test(o) => walk(&o.value, f),
+                _ => {}
+            }
+        }
+        for s in &self.path {
+            for step in &s.insert {
+                if let Some(v) = &step.voiceover {
+                    f(v);
+                }
+            }
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.patch.0.is_empty() && self.z_order.is_empty() && self.path.is_empty()
     }

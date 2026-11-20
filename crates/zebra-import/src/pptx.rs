@@ -36,9 +36,10 @@ use pptx_parse::{
     Bullet, GraphicFrameData, ParagraphProperties, Picture, PictureCrop, Placeholder, PptxPackage, Relationship, RunProperties, Shape, ShapeNode, ShapeTransform, Slide,
     SlideLayout, SlideMaster, SourceShape, TargetMode, TextAutofit, TextBody, TextCaps,
 };
-use zebra_core::import::{asset_from, av_asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox};
+use crate::pptx_media::MediaSource;
+use zebra_core::import::{asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox};
 use zebra_core::{
-    Align, Crop, Dash, Element, ElementKind, ImageData, ImageMask, InkData, ListKind, MediaKind, ParaFormat, ShapeData, ShapeKind, Size, Soundtrack, SpanFormat, TextData, TextSpan, TextStyle, Transform, VideoData,
+    Align, AssetBytes, Crop, Dash, Element, ElementKind, ImageData, ImageMask, InkData, ListKind, MediaKind, ParaFormat, ShapeData, ShapeKind, Size, Soundtrack, SpanFormat, TextData, TextSpan, TextStyle, Transform, VideoData,
 };
 
 use crate::pptx_xml::{part_info, smart_art, MediaRef, PartInfo, ShapeInfo, SmartArt, StandIn, StyleKind, TextStrike};
@@ -52,8 +53,20 @@ const EMU_PER_PT: f64 = 12_700.0;
 const DEFAULT_SLIDE: (i64, i64) = (12_192_000, 6_858_000);
 
 /// Is this a PowerPoint file (a zip holding `ppt/presentation.xml`)?
+/// Reads the zip's directory, not the whole file; a zip too damaged to
+/// read counts when its first or last 64 KB name the part (it is then
+/// reported damaged, not "not supported").
 pub fn is_pptx(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"PK\x03\x04") && bytes.windows(20).any(|w| w == b"ppt/presentation.xml")
+    const NAME: &[u8] = b"ppt/presentation.xml";
+    if !bytes.starts_with(b"PK\x03\x04") {
+        return false;
+    }
+    if let Ok(z) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) {
+        return z.index_for_name("ppt/presentation.xml").is_some();
+    }
+    let edge = 64 * 1024;
+    let has = |b: &[u8]| b.windows(NAME.len()).any(|w| w == NAME);
+    has(&bytes[..bytes.len().min(edge)]) || has(&bytes[bytes.len().saturating_sub(edge)..])
 }
 
 /// What an OLE compound file is, when it is one Zebra knows: an old
@@ -79,16 +92,22 @@ pub fn compound_file_error(bytes: &[u8]) -> Option<ImportError> {
 
 pub struct PptxReader {
     pkg: PptxPackage,
+    /// The file's media, read from the file as it is needed.
+    src: MediaSource,
     title: String,
 }
 
 impl PptxReader {
-    pub fn new(bytes: &[u8], title: String) -> Result<PptxReader, ImportError> {
-        let pkg = pptx_parse::parse_pptx(bytes).map_err(|_| ImportError::Damaged("PowerPoint"))?;
+    /// `bytes`: the file, mapped (or in memory). The parser is given the
+    /// file without its media ([`MediaSource::open`]).
+    pub fn new(bytes: AssetBytes, title: String) -> Result<PptxReader, ImportError> {
+        let (src, slim) = MediaSource::open(bytes)?;
+        let pkg = pptx_parse::parse_pptx(&slim).map_err(|_| ImportError::Damaged("PowerPoint"))?;
+        drop(slim);
         if pkg.slides.is_empty() {
             return Err(ImportError::Damaged("PowerPoint"));
         }
-        Ok(PptxReader { pkg, title })
+        Ok(PptxReader { pkg, src, title })
     }
 }
 
@@ -128,7 +147,7 @@ impl Reader for PptxReader {
                     infos.insert(part.to_string(), part_info(pkg, part));
                 }
             }
-            let mut r = SlideReader::new(pkg, slide, k, (sw, sh), &mut deck, &mut media, &mut counted, &infos, &opts.theme);
+            let mut r = SlideReader::new(pkg, &self.src, slide, k, (sw, sh), &mut deck, &mut media, &mut counted, &infos, &opts.theme);
             r.has_soundtrack = opts.has_soundtrack;
             r.read();
             let SlideReader { items, pending: texts, voiceover, .. } = r;
@@ -299,6 +318,8 @@ struct SlideReader<'a> {
     k: f64,
     size: (i64, i64),
     deck: &'a mut ImportedDeck,
+    /// The file's media.
+    src: &'a MediaSource,
     /// Asset key of each media part read so far (None: it can't come in).
     media: &'a mut BTreeMap<String, Option<String>>,
     items: Vec<ImportedItem>,
@@ -325,6 +346,7 @@ impl<'a> SlideReader<'a> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         pkg: &'a PptxPackage,
+        src: &'a MediaSource,
         slide: &'a Slide,
         k: f64,
         size: (i64, i64),
@@ -342,7 +364,7 @@ impl<'a> SlideReader<'a> {
             .or_else(|| pkg.themes.first())
             .map(|t| t.format_scheme.clone())
             .unwrap_or_default();
-        SlideReader { pkg, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos, has_soundtrack: false, voiceover: None, zebra }
+        SlideReader { pkg, src, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos, has_soundtrack: false, voiceover: None, zebra }
     }
 
     fn note(&mut self, n: ImportNote) {
@@ -890,7 +912,7 @@ impl<'a> SlideReader<'a> {
         let rels: &[Relationship] = self.pkg.relationships.get(self.part).map(Vec::as_slice).unwrap_or_default();
         let found = m.rels.iter().filter_map(|id| rels.iter().find(|r| &r.id == id)).filter_map(|r| r.resolved_target.as_deref()).find_map(|t| self.pkg.media.iter().find(|x| x.part_path == t));
         let Some(part) = found else { return false };
-        let Ok((key, asset, info)) = av_asset_from(part.bytes.clone()) else { return false };
+        let Some((key, asset, info)) = self.src.av(&part.part_path) else { return false };
         let timing = self.infos.get(self.part).and_then(|i| i.timing.get(&p.base.id)).cloned().unwrap_or_default();
         match info.kind {
             MediaKind::Video => {
@@ -957,8 +979,24 @@ impl<'a> SlideReader<'a> {
         };
         let ct = part.content_type.to_ascii_lowercase();
         let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-        let mut bytes = part.bytes.clone();
         let metafile = ct.contains("emf") || ct.contains("wmf") || matches!(ext.as_str(), "emf" | "wmf" | "emz" | "wmz");
+        if !metafile && !ct.contains("svg") && ext != "svg" {
+            // A plain picture: streamed out of the file, never whole in memory.
+            return match self.src.picture(path) {
+                Some((key, asset)) if asset.ext != "pdf" => {
+                    self.deck.assets.entry(key.clone()).or_insert(asset);
+                    Some(key)
+                }
+                _ => {
+                    self.note(ImportNote::Picture);
+                    None
+                }
+            };
+        }
+        let Some(mut bytes) = self.src.read(path, crate::pptx_media::MAX_CONVERTED) else {
+            self.note(if metafile { ImportNote::Metafile } else { ImportNote::Picture });
+            return None;
+        };
         if metafile {
             // Drawn as SVG, as Keynote converts them.
             match metafile_svg(&bytes) {
