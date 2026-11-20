@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::editor::Editor;
 use crate::geom::{Rect, Vec2};
-use crate::model::{Document, Element, ElementId, ElementKind, FRAME_EDGE_TOLERANCE, frame_holds};
+use crate::model::{Document, Element, ElementId, ElementKind, FRAME_EDGE_TOLERANCE, frame_holds_with};
 
 /// How far an element may draw past its box (strokes, arrowheads, a
 /// connector's label), in world units. The renderer culls with it.
@@ -166,6 +166,9 @@ struct Slot {
     /// `bounds` grown by [`draw_overhang`]; the grid key.
     reach: Rect,
     frame: bool,
+    /// `Element::drawn_area` for frames (which of two is smaller).
+    area: f64,
+    group: Option<String>,
     rank: u64,
     key: Option<Key>,
     /// Key in the frame grid (frames only).
@@ -202,6 +205,8 @@ pub struct SpatialIndex {
     journal: Option<(Vec<ElementId>, u64, u64)>,
     /// Every connector, so a change refreshes those and not every element.
     connectors: std::collections::BTreeSet<ElementId>,
+    /// Each group's members: a frame holds a group whole or not at all.
+    groups: HashMap<String, Vec<u32>>,
 }
 
 impl SpatialIndex {
@@ -355,6 +360,7 @@ impl SpatialIndex {
             if let Some(h) = self.by_id.remove(id) {
                 let s = self.slots[h as usize].take().expect("indexed");
                 self.grid.remove(s.key, h);
+                self.ungroup(s.group.as_deref(), h);
                 if s.frame {
                     self.frames.remove(s.fkey, h);
                 }
@@ -364,13 +370,16 @@ impl SpatialIndex {
         };
         let (bounds, vbounds, reach) = geometry(e);
         let frame = e.is_frame();
+        let area = if frame { e.drawn_area() } else { 0.0 };
         let h = match self.by_id.get(id) {
             Some(&h) => {
                 let s = self.slots[h as usize].as_mut().expect("indexed");
-                if s.bounds == bounds && s.vbounds == vbounds && s.reach == reach && s.frame == frame {
+                if s.bounds == bounds && s.vbounds == vbounds && s.reach == reach && s.frame == frame && s.area.to_bits() == area.to_bits() && s.group == e.group {
                     return;
                 }
                 let (key, fkey, was_frame) = (s.key, s.fkey, s.frame);
+                let old_group = s.group.take();
+                self.ungroup(old_group.as_deref(), h);
                 self.grid.remove(key, h);
                 if was_frame {
                     self.frames.remove(fkey, h);
@@ -384,7 +393,7 @@ impl SpatialIndex {
                 });
                 self.by_id.insert(id.to_string(), h);
                 // Its place in the draw order isn't known here.
-                self.slots[h as usize] = Some(Slot { id: id.to_string(), bounds, vbounds, reach, frame, rank: NOT_DRAWN, key: None, fkey: None });
+                self.slots[h as usize] = Some(Slot { id: id.to_string(), bounds, vbounds, reach, frame, area, group: None, rank: NOT_DRAWN, key: None, fkey: None });
                 self.z_changed();
                 h
             }
@@ -392,10 +401,23 @@ impl SpatialIndex {
         let key = key_of(&reach);
         let fkey = if frame { key_of(&vbounds) } else { None };
         let s = self.slots[h as usize].as_mut().expect("indexed");
-        (s.bounds, s.vbounds, s.reach, s.frame, s.key, s.fkey) = (bounds, vbounds, reach, frame, key, fkey);
+        (s.bounds, s.vbounds, s.reach, s.frame, s.area, s.group, s.key, s.fkey) = (bounds, vbounds, reach, frame, area, e.group.clone(), key, fkey);
+        if let Some(g) = &e.group {
+            self.groups.entry(g.clone()).or_default().push(h);
+        }
         self.grid.insert(key, h);
         if frame {
             self.frames.insert(fkey, h);
+        }
+    }
+
+    fn ungroup(&mut self, g: Option<&str>, h: u32) {
+        let Some(g) = g else { return };
+        if let Some(v) = self.groups.get_mut(g) {
+            v.retain(|&x| x != h);
+            if v.is_empty() {
+                self.groups.remove(g);
+            }
         }
     }
 
@@ -441,16 +463,24 @@ impl SpatialIndex {
         hs.into_iter().map(|h| self.slot(h)).filter(move |s| s.rank != NOT_DRAWN && s.vbounds.intersects(&q))
     }
 
-    /// Smallest frame (then lowest in the draw order) that holds `b`
-    /// ([`frame_holds`]), skipping `id` itself. Same answer as
+    /// [`frame_holds`](crate::model::frame_holds), with group members
+    /// from the index.
+    fn holds<'d>(&self, doc: &'d Document, f: &Element, e: &'d Element) -> bool {
+        frame_holds_with(f, e, |g| self.groups.get(g).into_iter().flatten().filter_map(|&h| doc.elements.get(&self.slot(h).id)))
+    }
+
+    /// Smallest frame (then lowest in the draw order) that holds `e`
+    /// ([`frame_holds`](crate::model::frame_holds)). Same answer as
     /// [`Document::parent_frame`].
-    fn parent_of(&self, id: &str, b: &Rect) -> Option<&Slot> {
-        // A frame holding `b` is at least as wide and as tall, less the
-        // edge tolerance (a few parts in 10^9 of its size).
+    fn parent_of<'d>(&'d self, doc: &'d Document, e: &'d Element) -> Option<&'d Slot> {
+        // A frame holding `e` holds its points, so its box is at least as
+        // wide and as tall as theirs, less the edge tolerance (a few parts
+        // in 10^9 of its size).
+        let b = Rect::from_points(e.held_points())?;
         let min = b.width().max(b.height()) * (1.0 - 1e3 * FRAME_EDGE_TOLERANCE);
-        self.frames_near(b, min)
-            .filter(|f| f.id != id && frame_holds(&f.vbounds, b))
-            .min_by(|x, y| x.vbounds.area().total_cmp(&y.vbounds.area()).then(x.rank.cmp(&y.rank)))
+        self.frames_near(&b, min)
+            .filter(|f| f.id != e.id && doc.elements.get(&f.id).is_some_and(|fe| self.holds(doc, fe, e)))
+            .min_by(|x, y| x.area.total_cmp(&y.area).then(x.rank.cmp(&y.rank)))
     }
 
     /// Panics unless the index matches a fresh build for `doc` (tests and
@@ -459,12 +489,16 @@ impl SpatialIndex {
         assert!(self.usable(doc), "spatial index has pending changes or is missing elements");
         let fresh = SpatialIndex::build(doc);
         assert_eq!(self.connectors, fresh.connectors, "spatial index's connectors");
+        let members = |ix: &SpatialIndex| -> BTreeMap<String, std::collections::BTreeSet<String>> {
+            ix.groups.iter().map(|(g, v)| (g.clone(), v.iter().map(|&h| ix.slot(h).id.clone()).collect())).collect()
+        };
+        assert_eq!(members(self), members(&fresh), "spatial index's groups");
         for (id, &h) in &fresh.by_id {
             let a = fresh.slot(h);
             let Some(&mine) = self.by_id.get(id) else { panic!("spatial index lacks {id}") };
             let b = self.slot(mine);
             let same = |x: &Rect, y: &Rect| x == y || (format!("{x:?}") == format!("{y:?}"));
-            assert!(same(&a.bounds, &b.bounds) && same(&a.vbounds, &b.vbounds) && same(&a.reach, &b.reach) && a.frame == b.frame, "spatial index is stale for {id}: {b:?} vs {a:?}");
+            assert!(same(&a.bounds, &b.bounds) && same(&a.vbounds, &b.vbounds) && same(&a.reach, &b.reach) && a.frame == b.frame && a.area.to_bits() == b.area.to_bits() && a.group == b.group, "spatial index is stale for {id}: {b:?} vs {a:?}");
             assert_eq!(a.rank == NOT_DRAWN, b.rank == NOT_DRAWN, "draw state of {id}");
         }
         // Ranks rise along the draw order.
@@ -498,7 +532,7 @@ impl Editor {
         let fb = f.visual_bounds();
         let mut v: Vec<(u64, &str)> = ix
             .near(&fb)
-            .filter(|s| s.id != f.id && frame_holds(&fb, &s.bounds))
+            .filter(|s| s.id != f.id && self.doc.elements.get(&s.id).is_some_and(|e| ix.holds(&self.doc, f, e)))
             .map(|s| (s.rank, s.id.as_str()))
             .collect();
         v.sort_unstable_by_key(|x| x.0);
@@ -509,31 +543,25 @@ impl Editor {
     pub fn parent_frame(&self, id: &str) -> Option<ElementId> {
         let Some(ix) = self.spatial() else { return self.doc.parent_frame(id) };
         let e = self.doc.elements.get(id)?;
-        ix.parent_of(id, &e.bounds()).map(|f| f.id.clone())
+        ix.parent_of(&self.doc, e).map(|f| f.id.clone())
     }
 
     /// Every element's parent frame at once (elements in no frame are
     /// left out): for queries that need them all.
     pub fn parent_frames(&self) -> HashMap<&str, &str> {
         if let Some(ix) = self.spatial() {
-            return ix
-                .slots
-                .iter()
-                .flatten()
-                .filter_map(|s| Some((s.id.as_str(), ix.parent_of(&s.id, &s.bounds)?.id.as_str())))
-                .collect();
+            return self.doc.elements.values().filter_map(|e| Some((e.id.as_str(), ix.parent_of(&self.doc, e)?.id.as_str()))).collect();
         }
         // Frames smallest first (then back to front): the first that holds
         // an element is its parent.
-        let mut frames: Vec<(f64, usize, &Element, Rect)> =
-            self.doc.ordered().enumerate().filter(|(_, f)| f.is_frame()).map(|(z, f)| (f.visual_bounds().area(), z, f, f.visual_bounds())).collect();
+        let mut frames: Vec<(f64, usize, &Element)> = self.doc.ordered().enumerate().filter(|(_, f)| f.is_frame()).map(|(z, f)| (f.drawn_area(), z, f)).collect();
         frames.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let groups = self.doc.group_members();
         self.doc
             .elements
             .values()
             .filter_map(|e| {
-                let b = e.bounds();
-                let f = frames.iter().find(|(_, _, f, vb)| f.id != e.id && frame_holds(vb, &b))?;
+                let f = frames.iter().find(|(_, _, f)| frame_holds_with(f, e, |g| groups.get(g).into_iter().flatten().copied()))?;
                 Some((e.id.as_str(), f.2.id.as_str()))
             })
             .collect()
@@ -577,14 +605,21 @@ impl Editor {
         self.elements_at(p, tolerance_world).into_iter().rev().find(|e| e.hit(p, tolerance_world, false))
     }
 
-    /// Where a new frame `b` goes in the draw order: behind the lowest
-    /// element it will hold ([`frame_holds`]), else on top.
-    pub(crate) fn frame_insert_pos(&self, b: &Rect) -> usize {
+    /// Where a new frame `f` goes in the draw order: behind the lowest
+    /// element it will hold ([`frame_holds`](crate::model::frame_holds)),
+    /// else on top.
+    pub(crate) fn frame_insert_pos(&self, f: &Element) -> usize {
         let len = self.doc.z_order.len();
         let Some(ix) = self.spatial() else {
-            return self.doc.z_order.iter().position(|o| self.doc.get(o).is_some_and(|x| frame_holds(b, &x.bounds()))).unwrap_or(len);
+            let groups = self.doc.group_members();
+            return self
+                .doc
+                .z_order
+                .iter()
+                .position(|o| self.doc.get(o).is_some_and(|x| frame_holds_with(f, x, |g| groups.get(g).into_iter().flatten().copied())))
+                .unwrap_or(len);
         };
-        let Some(lowest) = ix.near(b).filter(|s| frame_holds(b, &s.bounds)).map(|s| s.rank).min() else {
+        let Some(lowest) = ix.near(&f.visual_bounds()).filter(|s| self.doc.elements.get(&s.id).is_some_and(|x| ix.holds(&self.doc, f, x))).map(|s| s.rank).min() else {
             return len;
         };
         // z_order rises in rank: binary search for it.

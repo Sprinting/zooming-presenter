@@ -242,10 +242,11 @@ impl Editor {
                 clip.elements.push(Element {
                     id: fid.clone(),
                     transform: Transform { x: ox + p.w / 2.0, y: oy + p.h / 2.0, scale: 1.0, rotation: 0.0 },
-                    // A hair bigger than the page, so what fills the whole
-                    // slide (its background, a full-bleed picture) is held
-                    // by the frame and moves with it (`frame_holds`).
-                    size: Size { w: p.w * (1.0 + 1e-5), h: p.h * (1.0 + 1e-5) },
+                    // The page's own size: what fills the whole slide (its
+                    // background, a full-bleed picture) is exactly as big,
+                    // and is held by the frame and moves with it
+                    // ([`crate::model::frame_holds`]).
+                    size: Size { w: p.w, h: p.h },
                     locked: false,
                     name: p.name.clone(),
                     placeholder: false,

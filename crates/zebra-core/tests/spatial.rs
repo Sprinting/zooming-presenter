@@ -1,7 +1,7 @@
 //! The spatial index gives the same answers as the brute-force functions
 //! on `Document`, on random decks (rotated and scaled elements, nested and
-//! equal-sized frames, connectors) through edits, failed batches, undo and
-//! redo.
+//! equal-sized frames, circle frames, lines, groups, connectors) through
+//! edits, failed batches, undo and redo.
 use serde_json::{json, Value};
 use zebra_core::*;
 
@@ -38,8 +38,8 @@ fn pick(ed: &Editor, rng: &mut Rng) -> Option<ElementId> {
 }
 
 /// A new frame's place, brute force: behind the lowest element it holds.
-fn brute_frame_pos(doc: &Document, b: &Rect) -> usize {
-    doc.z_order.iter().position(|o| doc.get(o).is_some_and(|x| frame_holds(b, &x.bounds()))).unwrap_or(doc.z_order.len())
+fn brute_frame_pos(doc: &Document, f: &Element) -> usize {
+    doc.z_order.iter().position(|o| doc.get(o).is_some_and(|x| frame_holds(doc, f, x))).unwrap_or(doc.z_order.len())
 }
 
 fn random_command(ed: &Editor, rng: &mut Rng) -> Value {
@@ -51,7 +51,7 @@ fn random_command(ed: &Editor, rng: &mut Rng) -> Value {
     };
     let (x, y) = (rng.coarse(-3000.0, 3000.0), rng.coarse(-3000.0, 3000.0));
     let rot = if rng.below(3) == 0 { rng.f(-180.0, 180.0) } else { 0.0 };
-    match rng.below(16) {
+    match rng.below(18) {
         0..=2 => {
             let s = rng.coarse(100.0, 4000.0);
             let style = ["bracket", "circle", "rectangle", "invisible"][rng.below(4)];
@@ -86,6 +86,9 @@ fn random_command(ed: &Editor, rng: &mut Rng) -> Value {
             Some(id) => json!({"op":"update","id":id,"patch":{"w":rng.coarse(10.0, 900.0),"x":x}}),
             None => json!({"op":"add_text","text":"x","x":x,"y":y}),
         },
+        // Groups: a frame holds a group whole or not at all.
+        15 => json!({"op":"group","ids":some(rng)}),
+        16 => json!({"op":"ungroup","ids":some(rng)}),
         _ => json!({"op":"move","ids":["no-such-id"],"dx":1,"dy":1}),
     }
 }
@@ -164,9 +167,9 @@ fn index_answers_match_brute_force_on_random_decks() {
                             name: String::new(),
                             placeholder: false,
                             group: None,
-                            kind: ElementKind::Frame(FrameData { style: FrameStyle::Bracket, color: None, slide: false }),
+                            kind: ElementKind::Frame(FrameData { style: serde_json::from_value(c["style"].clone()).unwrap(), color: None, slide: false }),
                         };
-                        brute_frame_pos(&ed.doc, &probe.bounds())
+                        brute_frame_pos(&ed.doc, &probe)
                     });
                     if let Ok(out) = ed.apply(cmd(c), H) {
                         if let Some(want) = new_frame {
