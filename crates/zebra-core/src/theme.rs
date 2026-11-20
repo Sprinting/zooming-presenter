@@ -1,5 +1,5 @@
 //! Built-in themes. A theme is background + three text styles + frame and
-//! shape colours, as in Prezi's 2012 theme wizard.
+//! shape colours.
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -98,7 +98,7 @@ pub struct Theme {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_image: Option<String>,
     /// 3D background: up to three picture layers, back to front, that move
-    /// slower than the canvas as the camera flies (Prezi's 3D background).
+    /// slower than the canvas as the camera flies (a 3D background).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<BackgroundLayer>,
     /// Fonts embedded in the document, so the file looks the same on a Mac

@@ -1,6 +1,6 @@
 //! Insert › Diagram: ready-made arrangements of shapes, arrows, frames and
-//! placeholder text, in the theme's colours (Prezi Classic's diagrams,
-//! the common SmartArt families and a few zooming-canvas patterns).
+//! placeholder text, in the theme's colours (the
+//! common SmartArt families and zooming-canvas patterns).
 //!
 //! Each diagram is built in unit coordinates like a layout (1 unit wide,
 //! centred on (0, 0), about 0.62 tall); the editor scales it. Diagrams

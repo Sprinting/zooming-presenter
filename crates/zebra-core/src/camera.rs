@@ -1,4 +1,4 @@
-//! Camera math and the Prezi "fly" transition (van Wijk & Nuij 2003).
+//! Camera math and the "fly" transition (van Wijk & Nuij 2003).
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -93,7 +93,7 @@ pub struct CameraFlight {
     pub to: Camera,
     pub start: f64,
     pub duration: f64,
-    /// Zoom out mid-flight when far apart (Prezi feel). False = straight tween.
+    /// Zoom out mid-flight when far apart. False = straight tween.
     pub arc: bool,
 }
 

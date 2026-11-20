@@ -1,4 +1,4 @@
-//! The document model. Deliberately small, like classic Prezi.
+//! The document model. Deliberately small.
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -44,7 +44,7 @@ pub struct Document {
     pub soundtrack: Option<Soundtrack>,
 }
 
-/// Playback options for the whole presentation (Prezi's autoplay menu).
+/// Playback options for the whole presentation (the autoplay menu).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
 pub struct PlaySettings {
     /// Advance automatically after this many seconds on each step and

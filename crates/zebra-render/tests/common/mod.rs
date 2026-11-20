@@ -55,7 +55,7 @@ pub fn checker_png() -> Vec<u8> {
     v
 }
 
-/// A small Prezi-like presentation exercising every element kind.
+/// A small zooming presentation exercising every element kind.
 pub fn sample(r: &Renderer, theme: &str) -> Editor {
     let mut ed = Editor::default();
     ed.measure = r.measure();
@@ -65,7 +65,7 @@ pub fn sample(r: &Renderer, theme: &str) -> Editor {
     // Big overview frame with a title.
     add(&mut ed, "f1", 0.0, 0.0, 1600.0, 1000.0, 1.0, 0.0, frame(FrameStyle::Bracket));
     add(&mut ed, "t1", 0.0, -340.0, 0.0, 0.0, 1.0, 0.0, text("Zebra: zoom into ideas", TextStyle::Title));
-    let sub = TextData { text: "A classic-Prezi style canvas".into(), style: TextStyle::Subtitle, italic: true, ..Default::default() };
+    let sub = TextData { text: "A zooming canvas".into(), style: TextStyle::Subtitle, italic: true, ..Default::default() };
     add(&mut ed, "t2", 0.0, -250.0, 0.0, 0.0, 1.0, 0.0, ElementKind::Text(sub));
     // Circle frame with a rotated child.
     add(&mut ed, "f2", -450.0, 120.0, 420.0, 420.0, 1.0, 0.0, frame(FrameStyle::Circle));

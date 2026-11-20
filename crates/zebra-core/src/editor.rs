@@ -987,7 +987,7 @@ impl Editor {
         validate_element(&e, &self.doc)?;
         measure_text(&*self.measure, &self.theme(), &mut e);
         // Frames go behind the lowest element they enclose, so drawing a frame
-        // around content keeps the content visible (Prezi behaviour).
+        // around content keeps the content visible.
         let pos = if e.is_frame() { self.frame_insert_pos(&e) } else { self.doc.z_order.len() };
         self.note(&id);
         self.z_mut().insert(pos, id.clone());

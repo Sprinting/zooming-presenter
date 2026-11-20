@@ -95,7 +95,7 @@ impl Rect {
 }
 
 /// Placement of an element: centre position, uniform scale, rotation in degrees
-/// (clockwise, since y points down). No skew, exactly like classic Prezi.
+/// (clockwise, since y points down). No skew.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Transform {
     pub x: f64,

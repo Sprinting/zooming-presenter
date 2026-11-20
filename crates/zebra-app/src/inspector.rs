@@ -730,7 +730,7 @@ fn path_tab(insp: &mut Insp, ui: &mut Ui, _p: &Palette) {
         }
     });
 
-    // Fade-in builds: classic Prezi "Animate" within a step.
+    // Fade-in builds within a step.
     if sel.len() == 1 {
         let id = insp.el.id.clone();
         let doc = &insp.app.editor.doc;

@@ -1,11 +1,10 @@
 # Zebra
 
-A native zooming-canvas presentation app for macOS, in the spirit of classic
-(2012–2014) Prezi. You get one infinite canvas, frames, a path, and a camera
+A native zooming-canvas presentation app for macOS. You get one infinite canvas, frames, a path, and a camera
 that flies between steps. It's written in Rust (egui for the chrome, vello on
 Metal for the canvas) and uses no web views.
 
-You use it like Prezi: you click, drag and type, and you never need to know a
+You use it directly: you click, drag and type, and you never need to know a
 command. It can also be driven by AI agents, if you choose: click **AI: Off**
 in the toolbar and switch on **Allow AI control**. Then any agent
 on the Mac that can run a command (Claude Code, Codex, Cursor, Gemini CLI, a

@@ -2111,7 +2111,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         t.caret_seen = Some(now);
     }
 
-    // Mini text toolbar, like Prezi's: box style, then character and
+    // Mini text toolbar: box style, then character and
     // paragraph formatting for the selection.
     let mut tb_pos = resp.rect.left_top() - egui::vec2(4.0, 44.0);
     // A text that starts left of the canvas (the view followed the caret):
@@ -2810,7 +2810,7 @@ fn draw_transform_tool(app: &ZebraApp, painter: &Painter, sb: &SelBox) {
 }
 
 /// A text box's width handle: the corner handles' square, upright along
-/// the box, with a double-headed arrow across it (Prezi's width handle).
+/// the box, with a double-headed arrow across it.
 fn draw_width_handle(painter: &Painter, c: Pos2, along: egui::Vec2, col: Color32) {
     let across = along.rot90();
     let (hw, hh) = (4.5, 7.0);
