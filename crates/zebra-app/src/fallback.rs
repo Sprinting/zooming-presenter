@@ -98,7 +98,12 @@ pub fn paint(
                 } else {
                     let fill = if s.fill.is_none() && s.stroke.is_none() { col("theme:shape1") } else { fill };
                     let g = zebra_render::shapes::geometry(s.shape, e.size.w, e.size.h, s.corner_radius);
-                    for pts in flatten(&g.outline, &local) {
+                    for mut pts in flatten(&g.outline, &local) {
+                        // A polygon closes itself: a repeated first point
+                        // would be a zero-length edge.
+                        if pts.len() > 2 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.distance(*b) <= 0.1) {
+                            pts.pop();
+                        }
                         painter.add(Shape::convex_polygon(pts, fill, stroke));
                     }
                 }
@@ -146,18 +151,27 @@ pub fn theme_color(theme: &Theme, c: &str) -> Color32 {
 
 /// Flatten a local-space path into screen polylines, one per subpath.
 fn flatten(path: &kurbo::BezPath, local: &dyn Fn(f64, f64) -> Pos2) -> Vec<Vec<Pos2>> {
+    // Points closer than a tenth of a pixel are dropped: a square-cornered
+    // rectangle's zero-size corner curves gave repeated points, and egui's
+    // polygon fill has no normal for a zero-length edge, so the fill and
+    // an edge went missing.
+    let push = |v: &mut Vec<Pos2>, q: Pos2| {
+        if v.last().is_none_or(|l| l.distance(q) > 0.1) {
+            v.push(q);
+        }
+    };
     let mut out: Vec<Vec<Pos2>> = Vec::new();
     kurbo::flatten(path, 0.5, |el| match el {
         kurbo::PathEl::MoveTo(p) => out.push(vec![local(p.x, p.y)]),
         kurbo::PathEl::LineTo(p) => {
             if let Some(v) = out.last_mut() {
-                v.push(local(p.x, p.y));
+                push(v, local(p.x, p.y));
             }
         }
         kurbo::PathEl::ClosePath => {
             if let Some(v) = out.last_mut() {
                 if let Some(&f) = v.first() {
-                    v.push(f);
+                    push(v, f);
                 }
             }
         }
