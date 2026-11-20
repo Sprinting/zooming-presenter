@@ -360,7 +360,7 @@ impl<'a> Input<'a> {
 
     fn chart(&'a self, c: &'a ChartData, plot: &'a Plot, pool: &'a Pool) -> Owned<'a> {
         let labels_all = c.value_labels || c.look == ChartLook::Labelled;
-        let mut owned = Owned { groups: vec![], code: pool.code.as_deref(), legend: c.legend };
+        let mut owned = Owned { groups: vec![], code: pool.code.as_deref(), legend: c.legend, step: !c.step_ignored(plot) };
         for (ty, grouping, members) in &self.groups {
             let mut series = vec![];
             for &i in members {
@@ -461,7 +461,7 @@ impl Waterfall {
     }
 
     fn chart<'a>(&'a self, c: &'a ChartData, plot: &'a Plot, pool: &'a Pool) -> Owned<'a> {
-        let mut owned = Owned { groups: vec![], code: pool.code.as_deref(), legend: false };
+        let mut owned = Owned { groups: vec![], code: pool.code.as_deref(), legend: false, step: !c.step_ignored(plot) };
         let labels = c.value_labels || c.look == ChartLook::Labelled;
         let mut series = vec![];
         for (n, values) in [&self.base, &self.up, &self.down].into_iter().enumerate() {
@@ -522,6 +522,8 @@ struct Owned<'a> {
     groups: Vec<PlotGroup<'a>>,
     code: Option<&'a str>,
     legend: bool,
+    /// The axis step set is drawn (not too fine for the data).
+    step: bool,
 }
 
 /// Receives the layout's ops and makes marks of them.
@@ -560,11 +562,9 @@ impl Sink<'_, '_> {
                 id: Some("v"),
                 kind: PlotAxisKind::Value,
                 range: PlotAxisRange { min: c.axis_min, max: c.axis_max },
-                major_unit: c.axis_step.filter(|s| {
-                    // A step that would draw more than 64 ticks is automatic.
-                    let span = c.axis_max.unwrap_or(f64::MAX) - c.axis_min.unwrap_or(0.0);
-                    !span.is_finite() || span / s <= 64.0
-                }),
+                // A step that would draw too many gridlines is automatic (the
+                // Axis tab says so).
+                major_unit: c.axis_step.filter(|_| input.step),
                 major_gridlines: grid,
                 major_tick_mark: Some("none"),
                 number_format: code,

@@ -136,7 +136,7 @@ fn set_chart_data_types_grows_and_cuts() {
     let before = chart(&ed, &id);
     for bad in [
         json!({"op": "set_chart_data", "id": id, "rows": 0}),
-        json!({"op": "set_chart_data", "id": id, "rows": 101, "columns": 100}),
+        json!({"op": "set_chart_data", "id": id, "rows": 10_001, "columns": 2}),
         json!({"op": "set_chart_data", "id": id, "at": "nope", "values": [[1]]}),
         json!({"op": "set_chart_data", "id": id, "values": []}),
         json!({"op": "set_chart_data", "id": id}),
@@ -365,18 +365,29 @@ fn a_link_to_a_huge_table_draws_the_first_part() {
     assert!(t.elapsed().as_millis() < 2000);
     assert!(p.cut);
     let cells = (p.categories.len() + 1) * (p.series.len() + 1);
-    assert!(cells <= chart::MAX_CELLS, "{cells}");
+    assert!(cells <= chart::MAX_VALUES, "{cells}");
     assert!(p.series.len() <= chart::MAX_SERIES);
+    // It says what it left out.
+    assert_eq!((p.all_categories, p.all_series), (4999, 20));
+    let q = describe::query(&ed, Query::Chart { id: id.clone() }).unwrap();
+    assert_eq!(q["drawn"]["categories"], json!(p.categories.len()));
+    assert_eq!(q["drawn"]["of_categories"], json!(4999));
     let d = describe::describe(&ed);
     assert!(d.contains("…and"), "{d}");
-    // Unlinking keeps what's drawn, within a chart's own limits.
+    // Unlinking keeps all of it: a chart's data holds what a table can.
     run(&mut ed, json!({"op": "unlink_chart", "id": id})).unwrap();
     let c = chart(&ed, &id);
     assert!(c.check().is_ok());
-    assert!(c.data.n_rows() * c.data.n_cols() <= chart::MAX_CELLS);
-    // Own data over the limit is refused.
+    assert_eq!((c.data.n_rows(), c.data.n_cols()), (4999, 20));
+    assert!(c.plot(&ed.doc).cut);
+    // Own data takes what a table takes (10,100 cells is fine)...
     let big: Vec<Vec<i32>> = vec![vec![1; 101]; 100];
-    assert_eq!(run(&mut ed, json!({"op": "add_chart", "data": big})).unwrap_err().code, "too_big");
+    run(&mut ed, json!({"op": "add_chart", "data": big})).unwrap();
+    // ...and over a table's limit is refused, with the table's reason.
+    let huge: Vec<Vec<i32>> = vec![vec![1; 257]; 2];
+    let err = run(&mut ed, json!({"op": "add_chart", "data": huge})).unwrap_err();
+    assert_eq!(err.code, "too_big");
+    assert!(err.message.contains("256 columns"), "{}", err.message);
 }
 
 #[test]
@@ -454,13 +465,13 @@ fn hostile_chart_files_load_repaired() {
         let _ = c.plot(&ed.doc);
         let _ = describe::describe(&ed);
     }
-    // Ten million cells in a chart's data: cut to its limit.
+    // A million cells in a chart's data: cut to a table's limit.
     let row: Vec<&str> = vec!["1"; 1000];
     let cells: Vec<Vec<&str>> = vec![row; 1000];
     let json = file_with_chart(json!({"type": "chart", "data": {"cells": cells, "columns": [], "rows": []}}));
     let doc = io::from_json(&json).unwrap();
     let ElementKind::Chart(c) = &doc.elements["h1"].kind else { panic!() };
-    assert!(c.data.n_rows() * c.data.n_cols() <= chart::MAX_CELLS);
+    assert!(c.data.n_rows() * c.data.n_cols() <= zebra_core::table::MAX_CELLS);
     assert!(c.check().is_ok());
 }
 

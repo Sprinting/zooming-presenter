@@ -102,6 +102,9 @@ fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
             }
             let p = c.plot(&ed.doc);
             let _ = write!(s, " {} series x {} categories", p.series.len(), p.categories.len());
+            if p.cut {
+                let _ = write!(s, " (of {} x {}: draws the first part)", p.all_series, p.all_categories);
+            }
             if let Some(l) = &c.link {
                 let _ = write!(s, " linked to {}", l.table);
                 if let Some(r) = &l.range {
@@ -313,7 +316,7 @@ pub fn chart_lines(p: &crate::chart::Plot, max: usize) -> Vec<String> {
         out.push(format!("{}: {}{}", truncate(&s.name, 30), vals.join(", "), more(s.values.len())));
     }
     if p.cut {
-        out.push(format!("(draws the first {} series and {} categories)", p.series.len(), p.categories.len()));
+        out.push(format!("(draws the first {} of {} series and {} of {} categories)", p.series.len(), p.all_series, p.categories.len(), p.all_categories));
     }
     out
 }
@@ -459,6 +462,16 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
             o.remove("series");
             o.insert("id".into(), json!(id));
             o.insert("chart_type_code".into(), json!(c.chart_type.code()));
+            // What is drawn, of how much: a chart draws at most
+            // MAX_SERIES series, MAX_CATEGORIES categories, MAX_VALUES values.
+            o.insert(
+                "drawn".into(),
+                json!({"series": p.series.len(), "categories": p.categories.len(), "of_series": p.all_series, "of_categories": p.all_categories, "cut": p.cut,
+                       "limits": {"series": crate::chart::MAX_SERIES, "categories": crate::chart::MAX_CATEGORIES, "values": crate::chart::MAX_VALUES}}),
+            );
+            if c.axis_step.is_some() && c.step_ignored(&p) {
+                o.insert("axis_step_ignored".into(), json!(format!("that step draws more than {} gridlines, so the axis steps automatically", crate::chart::MAX_AXIS_STEPS)));
+            }
             o.insert("look_code".into(), json!(c.look.code()));
             o.insert(
                 "source".into(),

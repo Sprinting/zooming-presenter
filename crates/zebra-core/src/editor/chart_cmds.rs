@@ -11,10 +11,6 @@ fn too_big(l: Limit) -> ZError {
     ZError::new("too_big", l.message()).hint("nothing was changed")
 }
 
-fn too_many_cells() -> ZError {
-    ZError::new("too_big", format!("a chart's data has at most {} cells", chart::MAX_CELLS)).hint("link the chart to a table to draw more (it shows the first part)")
-}
-
 fn inputs(rows: Vec<Vec<CellInput>>) -> ZResult<Vec<Vec<String>>> {
     let rows: Vec<Vec<String>> = rows.into_iter().map(|r| r.into_iter().map(CellInput::into_input).collect()).collect();
     for s in rows.iter().flatten() {
@@ -66,8 +62,8 @@ impl Editor {
                         if nr == 0 || nc == 0 {
                             return Err(ZError::invalid("data is empty").hint("rows of values: [[\"\", \"Q2\"], [\"North\", 1240]]"));
                         }
-                        if chart::over_limit(nr, nc) {
-                            return Err(too_many_cells());
+                        if let Some(l) = chart::over_limit(nr, nc) {
+                            return Err(too_big(l));
                         }
                         ChartData::new(ty, g, body)
                     }
@@ -144,8 +140,11 @@ impl Editor {
                 }
                 let nr = rows.unwrap_or(nr);
                 let nc = columns.unwrap_or(nc);
-                if chart::over_limit(nr, nc) {
-                    return Err(if nr == 0 || nc == 0 { ZError::invalid("a chart's data keeps at least one row and one column") } else { too_many_cells() });
+                if nr == 0 || nc == 0 {
+                    return Err(ZError::invalid("a chart's data keeps at least one row and one column"));
+                }
+                if let Some(l) = chart::over_limit(nr, nc) {
+                    return Err(too_big(l));
                 }
                 if let Some((true, g)) = &given {
                     let mut fresh = TableData::new(nr, nc, t.columns.first().map_or(24.0, |c| c.width / crate::table::COLUMN_EMS));

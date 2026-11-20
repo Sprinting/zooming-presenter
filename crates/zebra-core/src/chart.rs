@@ -18,12 +18,24 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::model::{ColorRef, Document, ElementId, ElementKind};
 use crate::table::{Cell, CellRange, DataFormat, TableData};
 
+// What a chart holds is bounded by the table limits (its own data is a
+// table). What it *draws* is bounded below, so one layout stays fast; past
+// them the chart shows the first part and says so (`Plot::cut`, the
+// inspector's note, the `chart` query's `drawn`).
+
 /// Most series a chart draws (colours repeat past six).
 pub const MAX_SERIES: usize = 64;
 /// Most categories a chart draws.
 pub const MAX_CATEGORIES: usize = 5_000;
-/// Most cells a chart's own data can have (rows x columns).
-pub const MAX_CELLS: usize = 10_000;
+/// Most values a chart draws, names included: (categories + 1) x
+/// (value columns + 1).
+pub const MAX_VALUES: usize = 10_000;
+/// Most gridlines an axis step can draw: the layout engine's own limit.
+/// A finer step draws the automatic one, and the Axis tab says so.
+pub const MAX_AXIS_STEPS: usize = 64;
+/// Most entries the legend lists: the layout engine's own limit. The
+/// inspector says so under Legend when there are more.
+pub const LEGEND_ENTRIES: usize = 8;
 /// A new chart's size (the mockup's 4:3, a third of a frame).
 pub const DEFAULT_W: f64 = 640.0;
 pub const DEFAULT_H: f64 = 440.0;
@@ -292,7 +304,9 @@ impl ChartData {
                 }
             }
         }
-        data.header_columns = 1.min(nc as u8);
+        // Names in row 1 and column A (a baked chart may have neither).
+        data.header_rows = 1;
+        data.header_columns = 1;
         ChartData {
             chart_type,
             look: ChartLook::default(),
@@ -346,11 +360,17 @@ impl ChartData {
     /// What the chart draws: categories and series, cut to the limits.
     pub fn plot(&self, doc: &Document) -> Plot {
         let s = self.source(doc);
-        // Own data always has its names in row 1 and column A; a table's
-        // names are its header row and column, or a first row or column
-        // that holds no numbers.
-        let (names_row, names_col) = if s.linked { s.guess_names() } else { (true, true) };
+        let (names_row, names_col) = self.names(&s);
         extract(&s, self.series_in, self.chart_type, names_row, names_col)
+    }
+
+    /// Whether the source's first row and first column are names.
+    pub fn names(&self, s: &Source) -> (bool, bool) {
+        // Own data has its names in row 1 and column A when it has a
+        // header row and column (a new chart does; one unlinked from
+        // nameless cells doesn't). A table's names are its header row and
+        // column, or a first row or column that holds no numbers.
+        if s.linked { s.guess_names() } else { (self.data.header_rows > 0, self.data.header_columns > 0) }
     }
 
     /// How many series and categories the data holds.
@@ -382,38 +402,75 @@ impl ChartData {
         let s = self.source(doc);
         if s.linked {
             let (names_row, names_col) = s.guess_names();
-            let fits = s.range.rows().saturating_mul(s.range.cols()) <= MAX_CELLS;
-            // As the table has it, when it fits and names its series and
-            // categories; else what the chart draws, named.
-            self.data = if fits && names_row && names_col {
-                let rows: Vec<Vec<String>> = (s.range.r0..=s.range.r1)
-                    .map(|r| {
-                        (s.range.c0..=s.range.c1)
-                            .map(|c| match s.table.cell(r, c) {
-                                Some(cell) if cell.is_formula() => match cell.typed().number() {
-                                    Some(v) => crate::table::plain_number(v),
-                                    None => s.table.shown(r, c, None).text,
-                                },
-                                Some(cell) => cell.input.clone(),
-                                None => String::new(),
-                            })
-                            .collect()
-                    })
-                    .collect();
-                ChartData::new(self.chart_type, &rows, body).data
-            } else {
-                from_plot(self.chart_type, &self.plot(doc), self.series_in, body).data
-            };
+            // All of it, as the table has it (a range of a table always
+            // fits a chart's data), read the way the link read it.
+            let rows: Vec<Vec<String>> = (s.range.r0..=s.range.r1)
+                .map(|r| {
+                    (s.range.c0..=s.range.c1)
+                        .map(|c| match s.table.cell(r, c) {
+                            Some(cell) if cell.is_formula() => match cell.typed().number() {
+                                Some(v) => crate::table::plain_number(v),
+                                None => s.table.shown(r, c, None).text,
+                            },
+                            Some(cell) => cell.input.clone(),
+                            None => String::new(),
+                        })
+                        .collect()
+                })
+                .collect();
+            let mut data = ChartData::new(self.chart_type, &rows, body).data;
+            data.header_rows = names_row as u8;
+            data.header_columns = names_col as u8;
+            self.data = data;
         }
         self.link = None;
+    }
+
+    /// The value axis' span as drawn: the bounds set, else the data's
+    /// (stacked types add up; 100% types run to 1).
+    pub fn value_span(&self, plot: &Plot) -> (f64, f64) {
+        let stacked = matches!(self.chart_type, ChartType::StackedColumn | ChartType::StackedBar | ChartType::StackedArea);
+        let (mut lo, mut hi) = (0.0f64, 0.0f64);
+        let n = plot.categories.len();
+        if self.chart_type == ChartType::PercentColumn {
+            hi = 1.0;
+        } else if stacked || self.chart_type == ChartType::Waterfall {
+            for i in 0..n {
+                let (mut neg, mut pos) = (0.0, 0.0);
+                for s in &plot.series {
+                    let v = s.values.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0);
+                    if v < 0.0 { neg += v } else { pos += v }
+                }
+                if self.chart_type == ChartType::Waterfall {
+                    // A running total: bounded by the sum of magnitudes.
+                    hi += pos.max(0.0);
+                    lo += neg.min(0.0);
+                } else {
+                    lo = lo.min(neg);
+                    hi = hi.max(pos);
+                }
+            }
+        } else {
+            for v in plot.series.iter().flat_map(|s| s.values.iter()).filter(|v| v.is_finite()) {
+                lo = lo.min(*v);
+                hi = hi.max(*v);
+            }
+        }
+        (self.axis_min.unwrap_or(lo), self.axis_max.unwrap_or(hi))
+    }
+
+    /// Whether the axis step set would draw more than [`MAX_AXIS_STEPS`]
+    /// gridlines, so the axis steps automatically instead.
+    pub fn step_ignored(&self, plot: &Plot) -> bool {
+        let Some(step) = self.axis_step else { return false };
+        let (lo, hi) = self.value_span(plot);
+        let span = hi - lo;
+        !(span.is_finite() && step > 0.0 && span / step <= MAX_AXIS_STEPS as f64)
     }
 
     /// What's wrong with the chart, if anything (see [`ChartData::repair`]).
     pub fn check(&self) -> Result<(), String> {
         self.data.check()?;
-        if self.data.n_rows().saturating_mul(self.data.n_cols()) > MAX_CELLS {
-            return Err(format!("a chart's data has at most {MAX_CELLS} cells"));
-        }
         let fin = |v: f64, lo: f64, hi: f64| v.is_finite() && v >= lo && v <= hi;
         if !fin(self.font_size, 0.25, 4.0) {
             return Err("font_size is 0.25 to 4".into());
@@ -451,18 +508,6 @@ impl ChartData {
     pub fn repair(&mut self, body: f64) -> bool {
         let before = self.clone();
         self.data.repair(body);
-        let (nr, nc) = (self.data.n_rows(), self.data.n_cols());
-        if nr.saturating_mul(nc) > MAX_CELLS {
-            let keep_r = (MAX_CELLS / nc.max(1)).max(1);
-            if nr > keep_r {
-                self.data.delete_rows(keep_r, nr - keep_r);
-            }
-            let nc = self.data.n_cols();
-            let keep_c = (MAX_CELLS / self.data.n_rows().max(1)).max(1);
-            if nc > keep_c {
-                self.data.delete_columns(keep_c, nc - keep_c);
-            }
-        }
         let fix = |v: &mut f64, lo: f64, hi: f64, d: f64| {
             if !v.is_finite() {
                 *v = d;
@@ -534,48 +579,6 @@ fn scatter_sample(bubble: bool) -> Vec<Vec<String>> {
     rows
 }
 
-/// Own data for what `plot` shows (names in row 1 and column A).
-fn from_plot(chart_type: ChartType, plot: &Plot, series_in: SeriesIn, body: f64) -> ChartData {
-    let per = chart_type.values_per_series();
-    let mut rows: Vec<Vec<String>> = vec![];
-    let mut head = vec![String::new()];
-    for s in &plot.series {
-        head.push(s.name.clone());
-        for _ in 1..per {
-            head.push(String::new());
-        }
-    }
-    rows.push(head);
-    let num = |v: f64| if v.is_finite() { crate::table::plain_number(v) } else { String::new() };
-    for (i, cat) in plot.categories.iter().enumerate() {
-        let mut row = vec![cat.clone()];
-        for s in &plot.series {
-            match per {
-                2 => {
-                    row.push(num(s.x.get(i).copied().unwrap_or(f64::NAN)));
-                    row.push(num(s.values.get(i).copied().unwrap_or(f64::NAN)));
-                }
-                3 => {
-                    row.push(num(s.x.get(i).copied().unwrap_or(f64::NAN)));
-                    row.push(num(s.values.get(i).copied().unwrap_or(f64::NAN)));
-                    row.push(num(s.sizes.get(i).copied().unwrap_or(f64::NAN)));
-                }
-                _ => row.push(num(s.values.get(i).copied().unwrap_or(f64::NAN))),
-            }
-        }
-        rows.push(row);
-    }
-    if series_in == SeriesIn::Rows {
-        rows = transpose(&rows);
-    }
-    ChartData::new(chart_type, &rows, body)
-}
-
-fn transpose(rows: &[Vec<String>]) -> Vec<Vec<String>> {
-    let nc = rows.iter().map(|r| r.len()).max().unwrap_or(0);
-    (0..nc).map(|c| rows.iter().map(|r| r.get(c).cloned().unwrap_or_default()).collect()).collect()
-}
-
 /// The cells of `t` a link with `range` draws: the range clipped to the
 /// table, or the whole table without its footer rows. None when nothing
 /// is left.
@@ -583,8 +586,18 @@ pub fn link_range(t: &TableData, range: Option<&CellRange>) -> Option<CellRange>
     match range {
         Some(r) => r.clip(t.n_rows(), t.n_cols()),
         None => {
-            let last = t.n_rows().saturating_sub(t.footer_rows as usize).max(1) - 1;
-            (t.n_cols() > 0).then(|| CellRange::new(0, 0, last, t.n_cols() - 1))
+            // The whole table, less footer rows and the empty rows and
+            // columns at its end (a new table's blank cells aren't data).
+            let empty = |r: usize, c: usize| t.cell(r, c).is_none_or(|x| x.input.is_empty());
+            let mut last = t.n_rows().saturating_sub(t.footer_rows as usize).max(1) - 1;
+            let mut right = t.n_cols().checked_sub(1)?;
+            while last > 0 && (0..=right).all(|c| empty(last, c)) {
+                last -= 1;
+            }
+            while right > 0 && (0..=last).all(|r| empty(r, right)) {
+                right -= 1;
+            }
+            Some(CellRange::new(0, 0, last, right))
         }
     }
 }
@@ -651,8 +664,12 @@ pub struct PlotSeries {
 pub struct Plot {
     pub categories: Vec<String>,
     pub series: Vec<PlotSeries>,
-    /// Some data was left out (over the limits).
+    /// Some data was left out (over the drawing limits).
     pub cut: bool,
+    /// How many categories and series the source has (when `cut`, more
+    /// than are drawn).
+    pub all_categories: usize,
+    pub all_series: usize,
 }
 
 /// Read `s` into categories and series.
@@ -682,11 +699,11 @@ pub fn extract(s: &Source, series_in: SeriesIn, chart_type: ChartType, names_row
     let n_series = lanes.div_ceil(per);
     let take = n_series.min(MAX_SERIES);
     plot.cut |= n_series > take;
-    // At most MAX_CELLS cells with the names, so what is drawn always fits
-    // a chart's own data.
+    // At most MAX_VALUES cells with the names.
     let n_points = point1 - first_point + 1;
-    let points = n_points.min(MAX_CATEGORIES).min((MAX_CELLS / (take * per + 1)).saturating_sub(1).max(1));
+    let points = n_points.min(MAX_CATEGORIES).min((MAX_VALUES / (take * per + 1)).saturating_sub(1).max(1));
     plot.cut |= n_points > points;
+    (plot.all_categories, plot.all_series) = (n_points, n_series);
     plot.categories = (0..points)
         .map(|i| {
             let p = first_point + i;
@@ -780,9 +797,10 @@ pub fn move_range(r: CellRange, op: &crate::calc::Reshape, rows: usize, cols: us
     Some(CellRange::new(r0, c0, r1, c1))
 }
 
-/// The limit a chart's own data would break at `rows` x `cols`, if any.
-pub fn over_limit(rows: usize, cols: usize) -> bool {
-    rows == 0 || cols == 0 || rows.saturating_mul(cols) > MAX_CELLS
+/// The table limit a chart's own data would break at `rows` x `cols`, if
+/// any (its data is a table).
+pub fn over_limit(rows: usize, cols: usize) -> Option<crate::table::Limit> {
+    crate::table::Limit::of_size(rows, cols)
 }
 
 #[cfg(test)]
