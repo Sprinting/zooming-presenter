@@ -199,7 +199,9 @@ pub fn remove_autosave(file: &Path) {
 /// Don't Save).
 pub fn remove_autosave_untitled(app: &ZebraApp) {
     app.autosave_job.cancel();
-    zebra_core::io::remove_autosave(&untitled_autosave(app));
+    let a = untitled_autosave(app);
+    let _ = std::fs::remove_file(opening_marker(&a));
+    zebra_core::io::remove_autosave(&a);
 }
 
 /// The person chose Don't Save: their unsaved changes are meant to go,
@@ -236,6 +238,53 @@ pub fn leftover_untitled() -> Vec<PathBuf> {
         .collect();
     v.sort();
     v.into_iter().map(|(_, p)| p).collect()
+}
+
+/// Seconds a reopened autosave must stay open before its "opening" marker
+/// goes: a document whose pictures crash the app does so within this.
+pub const OPENING_SECS: f64 = 5.0;
+
+/// Written next to an untitled autosave while it is being reopened
+/// (`X.zebra.autosave.opening`), removed once its window has shown it for
+/// [`OPENING_SECS`] or closed. Still there at the next launch: that launch
+/// died opening it, so it isn't reopened by itself again (hostile-input
+/// audit H4: anything that crashes on render crashed every launch).
+pub fn opening_marker(autosave: &Path) -> PathBuf {
+    let mut s = autosave.as_os_str().to_owned();
+    s.push(".opening");
+    PathBuf::from(s)
+}
+
+/// Mark `autosave` as being opened. Best effort: no marker, no protection.
+pub fn mark_opening(autosave: &Path) -> Option<PathBuf> {
+    let m = opening_marker(autosave);
+    std::fs::write(&m, b"").ok().map(|_| m)
+}
+
+/// Leftover autosaves split into (those to reopen, those the last launch
+/// died opening), in the same order.
+pub fn split_crashed(leftovers: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    leftovers.into_iter().partition(|p| !opening_marker(p).exists())
+}
+
+/// Move a leftover autosave the person gave up on to the Bin, with its
+/// marker. Elsewhere than the Mac (tests), it is deleted.
+pub fn trash_autosave(autosave: &Path) -> std::io::Result<()> {
+    let _ = std::fs::remove_file(opening_marker(autosave));
+    #[cfg(target_os = "macos")]
+    {
+        // Its media folder goes with it, so Put Back brings both.
+        let media = zebra_core::io::autosave_media_dir(autosave);
+        if media.is_dir() {
+            crate::mac::trash(&media)?;
+        }
+        crate::mac::trash(autosave)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        zebra_core::io::remove_autosave(autosave);
+        Ok(())
+    }
 }
 
 /// A sidecar newer than the file, if any (offer to restore it).

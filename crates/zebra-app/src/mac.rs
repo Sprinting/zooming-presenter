@@ -626,3 +626,11 @@ mod title_row_tests {
         }
     }
 }
+
+/// Move `path` to the Bin (NSFileManager), so it can be put back.
+#[cfg(target_os = "macos")]
+pub fn trash(path: &std::path::Path) -> std::io::Result<()> {
+    use objc2_foundation::{NSFileManager, NSString, NSURL};
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    NSFileManager::defaultManager().trashItemAtURL_resultingItemURL_error(&url, None).map_err(|e| std::io::Error::other(e.localizedDescription().to_string()))
+}

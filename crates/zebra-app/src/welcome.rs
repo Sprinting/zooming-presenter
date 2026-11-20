@@ -128,7 +128,9 @@ fn card(ui: &mut Ui, tex: Option<&TextureHandle>, name: &str, selected: bool, p:
 
 /// The template chooser (a sheet over the window).
 pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
-    if app.welcome.is_none() {
+    // A sheet comes first (the chooser covered the crash sheet at launch):
+    // the chooser waits behind it and shows once it is answered.
+    if app.welcome.is_none() || app.sheet_showing() {
         return;
     }
     previews(app, ctx);

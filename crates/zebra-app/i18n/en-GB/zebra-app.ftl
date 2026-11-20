@@ -393,6 +393,11 @@ sheet-web-exported-message = One file that opens in any current browser.
 sheet-web-exported-folder-message = Saved as a folder: the video and audio are beside the page. Share the whole folder.
 sheet-open-in-browser = Open in Browser
 sheet-done = Done
+sheet-crashed-opening-title = Zebra quit while opening “{ $name }”.
+sheet-crashed-opening-message = Opening it again may make Zebra quit again.
+sheet-open-anyway = Open Anyway
+sheet-move-to-bin = Move to Bin
+sheet-keep-for-later = Keep for Later
 # The exported web page's control bar.
 web-full-screen = Full Screen
 web-play = Play

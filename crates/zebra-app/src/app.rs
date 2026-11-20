@@ -227,6 +227,19 @@ pub struct ZebraApp {
     /// Untitled documents from the last run to reopen, each in its own
     /// window (the first in this one).
     pub reopen_untitled: Vec<PathBuf>,
+    /// Untitled documents the last launch quit while opening: each is
+    /// offered in a sheet instead of reopened (Open Anyway, Move to Bin,
+    /// Keep for Later).
+    pub crashed_untitled: Vec<PathBuf>,
+    /// The marker of the autosave this window reopened, and when; removed
+    /// once the document has been shown for `files::OPENING_SECS`.
+    pub opening_marker: Option<(PathBuf, f64)>,
+    /// How many of those have been asked about (to number "Untitled 2").
+    pub crashed_seq: u32,
+    /// The highest "Untitled" number the shell has given a window: crashed
+    /// documents are numbered after it, so none shares a name with an open
+    /// window. 0 until the shell has numbered the windows.
+    pub untitled_floor: u32,
     /// An agent made this document: its window opens without taking focus.
     pub opened_by_agent: bool,
     pub was_presenting: bool,
@@ -442,6 +455,10 @@ impl ZebraApp {
             recovered: None,
             autosave_name: crate::files::new_autosave_name(),
             reopen_untitled: vec![],
+            crashed_untitled: vec![],
+            opening_marker: None,
+            crashed_seq: 0,
+            untitled_floor: 0,
             opened_by_agent: false,
             was_presenting: false,
             force_quit: false,
@@ -493,7 +510,10 @@ impl ZebraApp {
         // it that window. With nothing to bring back, the file takes this
         // window, or a fresh launch offers the template chooser.
         if launch && crate::mac::restores_windows() {
-            let mut left = crate::files::leftover_untitled().into_iter();
+            // One the last launch died opening is asked about, not reopened.
+            let (left, crashed) = crate::files::split_crashed(crate::files::leftover_untitled());
+            app.crashed_untitled = crashed;
+            let mut left = left.into_iter();
             while let Some(p) = left.next() {
                 if app.reopen_autosave(&p) {
                     app.reopen_untitled = left.collect();
@@ -670,7 +690,7 @@ impl ZebraApp {
         match a {
             // Like Keynote: a new or opened document gets its own window,
             // unless this one is still an untouched new document.
-            New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | OpenPath(_) if self.hosted && !self.is_pristine() => {
+            New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | OpenPath(_) | ReopenAutosave(_) if self.hosted && !self.is_pristine() => {
                 self.spawn.push(a);
             }
             // A file another window has open: the shell shows that window
@@ -728,6 +748,12 @@ impl ZebraApp {
             }
             Open => crate::pickers::ask(self, crate::pickers::Pick::Open),
             OpenPath(p) => self.open_path(&p),
+            ReopenAutosave(p) => {
+                if !self.reopen_autosave(&p) {
+                    let title = crate::t!("app-open-failed-title", name = crate::t!("app-untitled"));
+                    crate::sheets::request(self, crate::sheets::SheetKind::Alert { title, message: crate::t!("app-open-failed-not-zebra") });
+                }
+            }
             Save => {
                 self.save(false);
             }
@@ -1309,17 +1335,34 @@ impl ZebraApp {
 
     /// Open an untitled document's autosave in this window, as the same
     /// untitled, unsaved document (it keeps writing to that autosave).
+    ///
+    /// It is adopted (renamed for this process) and marked as opening
+    /// first: should showing it crash the app, the next launch asks about
+    /// it instead of crashing again (see `files::opening_marker`).
     pub fn reopen_autosave(&mut self, path: &std::path::Path) -> bool {
-        let doc = match zebra_core::io::load_autosave(path, None) {
+        // Open Anyway: the last launch's marker goes; this one's is new.
+        let _ = std::fs::remove_file(crate::files::opening_marker(path));
+        let name = crate::files::adopt_autosave(path);
+        let adopted = crate::files::untitled_dir().join(format!("{name}.zebra.autosave"));
+        let path = if adopted.exists() { adopted } else { path.to_path_buf() };
+        let marker = crate::files::mark_opening(&path);
+        let unmark = |m: &Option<PathBuf>| {
+            if let Some(m) = m {
+                let _ = std::fs::remove_file(m);
+            }
+        };
+        let doc = match zebra_core::io::load_autosave(&path, None) {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("zebra: could not reopen {}: {e}", path.display());
+                unmark(&marker);
                 return false;
             }
         };
         // An empty document has nothing to bring back: no blank window.
         if doc.elements.is_empty() {
-            zebra_core::io::remove_autosave(path);
+            unmark(&marker);
+            zebra_core::io::remove_autosave(&path);
             return false;
         }
         self.editor.load(doc, None);
@@ -1328,8 +1371,42 @@ impl ZebraApp {
         self.editor.revision += 1;
         self.autosaved_rev = self.editor.revision;
         self.welcome = None;
-        self.autosave_name = crate::files::adopt_autosave(path);
+        self.autosave_name = name;
+        self.opening_marker = marker.map(|m| (m, self.now()));
         true
+    }
+
+    /// The reopened document has been shown long enough, or its window is
+    /// going: it didn't crash the app, so its marker goes.
+    pub fn clear_opening_marker(&mut self, now: bool) {
+        if let Some((m, at)) = &self.opening_marker {
+            if now || self.now() - at >= crate::files::OPENING_SECS {
+                let _ = std::fs::remove_file(m);
+                self.opening_marker = None;
+            }
+        }
+    }
+
+    /// Ask about the next untitled document the last launch quit while
+    /// opening, once no other sheet is up.
+    fn ask_about_crashed(&mut self) {
+        if self.sheet.is_some() || self.crashed_untitled.is_empty() {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        if self.open_sheet.is_some() {
+            return;
+        }
+        // In a window, wait for the shell to number the open windows.
+        if self.hosted && self.untitled_floor == 0 {
+            return;
+        }
+        let path = self.crashed_untitled.remove(0);
+        // Its name, without opening it (opening it is what crashed): the
+        // next number after the open windows'.
+        self.crashed_seq += 1;
+        let name = untitled_name("", &crate::t!("app-untitled"), self.untitled_floor + self.crashed_seq);
+        crate::sheets::request(self, crate::sheets::SheetKind::CrashedOpening { path, name });
     }
 
     pub fn after_load(&mut self) {
@@ -1499,6 +1576,11 @@ impl ZebraApp {
     /// of a window that is out of sight (Quit, Close, Save).
     fn background_work(&mut self, ctx: &egui::Context) {
         self.poll_save();
+        self.clear_opening_marker(false);
+        if let Some((_, at)) = &self.opening_marker {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64((crate::files::OPENING_SECS - (self.now() - at)).max(0.1)));
+        }
+        self.ask_about_crashed();
         crate::opening::poll(self);
         crate::files::autosave_tick(self);
         if let Some(wait) = crate::files::autosave_due_in(self) {
