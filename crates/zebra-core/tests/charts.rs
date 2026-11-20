@@ -136,7 +136,7 @@ fn set_chart_data_types_grows_and_cuts() {
     let before = chart(&ed, &id);
     for bad in [
         json!({"op": "set_chart_data", "id": id, "rows": 0}),
-        json!({"op": "set_chart_data", "id": id, "rows": 10_001, "columns": 2}),
+        json!({"op": "set_chart_data", "id": id, "rows": 1_000_001, "columns": 2}),
         json!({"op": "set_chart_data", "id": id, "at": "nope", "values": [[1]]}),
         json!({"op": "set_chart_data", "id": id, "values": []}),
         json!({"op": "set_chart_data", "id": id}),
@@ -384,10 +384,10 @@ fn a_link_to_a_huge_table_draws_the_first_part() {
     let big: Vec<Vec<i32>> = vec![vec![1; 101]; 100];
     run(&mut ed, json!({"op": "add_chart", "data": big})).unwrap();
     // ...and over a table's limit is refused, with the table's reason.
-    let huge: Vec<Vec<i32>> = vec![vec![1; 257]; 2];
+    let huge: Vec<Vec<i32>> = vec![vec![1; 1001]; 2];
     let err = run(&mut ed, json!({"op": "add_chart", "data": huge})).unwrap_err();
     assert_eq!(err.code, "too_big");
-    assert!(err.message.contains("256 columns"), "{}", err.message);
+    assert!(err.message.contains("1000 columns"), "{}", err.message);
 }
 
 #[test]
