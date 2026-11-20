@@ -84,23 +84,162 @@ pub fn app_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("Zebra")
 }
 
-/// Written the first time a person switches on AI control in Zebra's own
-/// window. Until it exists, launch flags (`--api`, `--headless`, debug
-/// demos) can't switch AI control on: the first time is always a person.
+/// The person's AI control switch, as Zebra keeps it between launches.
+///
+/// `granted`: a person has switched AI control on in Zebra's own window at
+/// least once. Until then launch flags (`--api`, `--headless`, debug demos)
+/// can't switch it on: the first time is always a person. `on`: the
+/// person's last choice (None: not kept here; older files).
+///
+/// In a signed Mac build it lives in the login keychain, in an item only
+/// Zebra's own code signature may read or change: another app or script
+/// that tries gets a macOS prompt. The item is per signing certificate, so
+/// a build signed with another certificate (Developer ID, App Store) starts
+/// with AI control off and a person switches it on once, instead of macOS
+/// asking about the old item. Elsewhere (and in tests) it is a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AiSwitch {
+    pub granted: bool,
+    pub on: Option<bool>,
+}
+
+/// The file that keeps the switch where the keychain isn't used.
 pub fn human_grant_file() -> PathBuf {
     app_dir().join("ai-control-granted")
 }
 
-/// Has a person ever switched on AI control in Zebra's window?
-pub fn human_has_granted() -> bool {
-    human_grant_file().exists()
+/// Where the switch is kept.
+enum Store {
+    File(PathBuf),
+    #[cfg(target_os = "macos")]
+    Keychain { account: String },
 }
 
-/// Record that a person switched on AI control. Only Zebra's own UI calls
-/// this; no API method or launch flag reaches it.
+fn store() -> Store {
+    #[cfg(target_os = "macos")]
+    if dev_env("ZEBRA_DATA_DIR").is_none() {
+        if let Some(signer) = keychain::signer() {
+            return Store::Keychain { account: format!("signer-{signer}") };
+        }
+    }
+    Store::File(human_grant_file())
+}
+
+fn parse(v: &[u8]) -> AiSwitch {
+    match v {
+        b"on" => AiSwitch { granted: true, on: Some(true) },
+        b"off" => AiSwitch { granted: true, on: Some(false) },
+        _ => AiSwitch { granted: true, on: None },
+    }
+}
+
+/// The switch as last kept.
+pub fn ai_switch() -> AiSwitch {
+    match store() {
+        Store::File(f) => fs::read(f).map(|v| parse(&v)).unwrap_or_default(),
+        #[cfg(target_os = "macos")]
+        Store::Keychain { account } => keychain::get(&account).map(|v| parse(&v)).unwrap_or_default(),
+    }
+}
+
+/// Has a person ever switched on AI control in Zebra's window?
+pub fn human_has_granted() -> bool {
+    ai_switch().granted
+}
+
+/// Keep the switch's new state. Switching on is only ever the person in
+/// Zebra's window (no API method or launch flag reaches this with `true`);
+/// switching off is the person or an agent. Off before any grant keeps
+/// nothing, so it can't count as one.
+pub fn record_ai_switch(on: bool) -> std::io::Result<()> {
+    if !on && !human_has_granted() {
+        return Ok(());
+    }
+    let v: &[u8] = if on { b"on" } else { b"off" };
+    match store() {
+        Store::File(f) => {
+            fs::create_dir_all(app_dir())?;
+            fs::write(f, v)
+        }
+        #[cfg(target_os = "macos")]
+        Store::Keychain { account } => keychain::set(&account, v),
+    }
+}
+
+/// Record that a person switched on AI control (see [`record_ai_switch`]).
 pub fn record_human_grant() -> std::io::Result<()> {
-    fs::create_dir_all(app_dir())?;
-    fs::write(human_grant_file(), b"")
+    record_ai_switch(true)
+}
+
+/// The keychain item and the signature it is tied to.
+#[cfg(target_os = "macos")]
+mod keychain {
+    use core_foundation::array::{CFArray, CFArrayRef};
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::data::{CFData, CFDataRef};
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::string::{CFString, CFStringRef};
+    use security_framework::os::macos::code_signing::{Flags, SecCode};
+    use sha2::{Digest, Sha256};
+    use std::ffi::c_void;
+
+    const SERVICE: &str = concat!("app.zebra.Zebra", ".ai-control");
+    const NOT_FOUND: i32 = -25300;
+    /// kSecCSSigningInformation
+    const SIGNING_INFORMATION: u32 = 1 << 1;
+
+    #[link(name = "Security", kind = "framework")]
+    unsafe extern "C" {
+        fn SecCodeCopySigningInformation(code: *const c_void, flags: u32, info: *mut CFDictionaryRef) -> i32;
+        fn SecCertificateCopyData(cert: *const c_void) -> CFDataRef;
+        static kSecCodeInfoCertificates: CFStringRef;
+    }
+
+    /// The first 16 hex digits of the SHA-256 of the certificate Zebra is
+    /// signed with. None when it has none (ad hoc or unsigned): such a
+    /// build changes signature every time, so the keychain would ask each
+    /// rebuild; it keeps the file instead.
+    pub fn signer() -> Option<String> {
+        let code = SecCode::for_self(Flags::NONE).ok()?;
+        let mut info: CFDictionaryRef = std::ptr::null();
+        // SAFETY: a valid code object; `info` is returned retained.
+        let status = unsafe { SecCodeCopySigningInformation(code.as_concrete_TypeRef() as *const c_void, SIGNING_INFORMATION, &mut info) };
+        if status != 0 || info.is_null() {
+            return None;
+        }
+        let info: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_create_rule(info) };
+        let key = unsafe { CFString::wrap_under_get_rule(kSecCodeInfoCertificates) };
+        let certs = info.find(&key)?;
+        let certs: CFArray<CFType> = unsafe { CFArray::wrap_under_get_rule(certs.as_CFTypeRef() as CFArrayRef) };
+        let leaf = certs.get(0)?;
+        // SAFETY: the array holds SecCertificate objects.
+        let data = unsafe { SecCertificateCopyData(leaf.as_CFTypeRef()) };
+        if data.is_null() {
+            return None;
+        }
+        let data = unsafe { CFData::wrap_under_create_rule(data) };
+        let hash = Sha256::digest(data.bytes());
+        Some(hash.iter().take(8).map(|b| format!("{b:02x}")).collect())
+    }
+
+    /// The item's value. None when there is none (no grant yet), or macOS
+    /// refused (the person said no to a prompt).
+    pub fn get(account: &str) -> Option<Vec<u8>> {
+        match security_framework::passwords::get_generic_password(SERVICE, account) {
+            Ok(v) => Some(v),
+            Err(e) if e.code() == NOT_FOUND => None,
+            Err(e) => {
+                eprintln!("zebra: couldn't read the AI control switch from the keychain: {e}");
+                None
+            }
+        }
+    }
+
+    /// Create or change the item. Made by Zebra, it trusts only Zebra's
+    /// signature.
+    pub fn set(account: &str, v: &[u8]) -> std::io::Result<()> {
+        security_framework::passwords::set_generic_password(SERVICE, account, v).map_err(|e| std::io::Error::other(e.to_string()))
+    }
 }
 
 pub fn instances_dir() -> PathBuf {

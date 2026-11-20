@@ -447,12 +447,16 @@ impl ZebraApp {
             menu: None,
             media: Default::default(),
         };
-        let saved_ai: bool = storage.and_then(|s| eframe::get_value(s, "ai_enabled")).unwrap_or(false);
+        // The person's choice is kept with the grant (the keychain in a
+        // signed Mac build, where nothing else can change it); the app's
+        // own settings file only counts for older grants that didn't keep it.
+        let switch = zebra_api::discovery::ai_switch();
+        let saved_ai: bool = switch.on.unwrap_or_else(|| storage.and_then(|s| eframe::get_value(s, "ai_enabled")).unwrap_or(false));
         app.ai_saved = saved_ai;
         // The first time is always a person: until someone has switched AI
         // control on in this window, neither a launch flag nor a saved
         // setting turns it on.
-        let granted = zebra_api::discovery::human_has_granted();
+        let granted = switch.granted;
         if let Some(api_opts) = opts.api.filter(|_| granted) {
             app.api_socket = api_opts.socket.clone();
             app.editor.view.agent_permission = api_opts.permission;
@@ -894,10 +898,8 @@ impl ZebraApp {
             ToggleAiControl => {
                 // Only the person reaches this (toolbar, menu, Settings).
                 let on = !self.ai_enabled;
-                if on {
-                    if let Err(e) = zebra_api::discovery::record_human_grant() {
-                        eprintln!("zebra: couldn't record the AI control grant: {e}");
-                    }
+                if let Err(e) = zebra_api::discovery::record_ai_switch(on) {
+                    eprintln!("zebra: couldn't keep the AI control switch: {e}");
                 }
                 self.ai_saved = on;
                 self.set_ai_control(on);
@@ -1412,6 +1414,9 @@ impl ZebraApp {
         if let Some(t) = self.ai_off_at {
             if self.now() >= t {
                 let name = self.agent_name();
+                if let Err(e) = zebra_api::discovery::record_ai_switch(false) {
+                    eprintln!("zebra: couldn't keep the AI control switch: {e}");
+                }
                 self.ai_saved = false;
                 self.set_ai_control(false);
                 self.toast(crate::t!("app-toast-agent-switched-ai-off", name = name.as_str()));
