@@ -184,3 +184,53 @@ fn hostile_tables_draw_without_panicking() {
     }
     let _ = r.capture(&ed, &CaptureTarget::Element { id: "b1".into() }, 200, 100).unwrap();
 }
+
+/// Line-like fills (the style's rules) and strokes (cell borders) in a
+/// display list.
+fn lines(list: &zebra_render::display::DisplayList) -> (usize, usize) {
+    use kurbo::Shape;
+    let mut rules = 0;
+    let mut strokes = 0;
+    for i in &list.items {
+        match i {
+            Item::Fill { path, .. } => {
+                let b = path.bounding_box();
+                if b.width().min(b.height()) < 3.0 && b.width().max(b.height()) > 10.0 {
+                    rules += 1;
+                }
+            }
+            Item::Stroke { .. } => strokes += 1,
+            _ => {}
+        }
+    }
+    (rules, strokes)
+}
+
+#[test]
+fn a_border_of_none_leaves_its_edges_bare() {
+    let r = Renderer::new();
+    let mut ed = editor(&r, "classic");
+    // Grid: rules between rows and columns, an outline and a header rule.
+    sales(&mut ed, "ts3");
+    let cam = camera_on(&ed, 1.0, 360.0, 160.0);
+    let opts = SceneOptions::default();
+    let (rules, strokes) = lines(&r.build_display_list(&ed, &cam, [720.0, 400.0], 1.0, &opts));
+    assert!(rules >= 5 && strokes <= 1, "the style's lines: {rules} rules, {strokes} strokes");
+    // None on every edge: no line at all, and nothing painted over them.
+    run(&mut ed, json!({"op": "format_cells", "id": "b1", "range": "A1:D6", "format": {"border": {"edges": "all", "style": "none"}}}));
+    let (rules, strokes) = lines(&r.build_display_list(&ed, &cam, [720.0, 400.0], 1.0, &opts));
+    assert_eq!((rules, strokes), (0, 0), "a None border draws nothing");
+    // None round B2:C3 only: the lines elsewhere stay.
+    run(&mut ed, json!({"op": "format_cells", "id": "b1", "range": "A1:D6", "clear": true}));
+    run(&mut ed, json!({"op": "format_cells", "id": "b1", "range": "B2:C3", "format": {"border": {"edges": "all", "style": "none"}}}));
+    let (some, _) = lines(&r.build_display_list(&ed, &cam, [720.0, 400.0], 1.0, &opts));
+    assert!(some > 0, "lines outside the range stay");
+    if let Some(d) = std::env::var_os("ZEBRA_SHOTS") {
+        let png = r.capture(&ed, &CaptureTarget::Element { id: "b1".into() }, 720, 400).unwrap();
+        let _ = std::fs::write(std::path::Path::new(&d).join("border-none-b2-c3.png"), png);
+    }
+    // A dashed border replaces the style's line on its edges.
+    run(&mut ed, json!({"op": "format_cells", "id": "b1", "range": "A1:D6", "format": {"border": {"edges": "all", "style": "dashed"}}}));
+    let (rules, strokes) = lines(&r.build_display_list(&ed, &cam, [720.0, 400.0], 1.0, &opts));
+    assert!(rules == 0 && strokes > 0, "{rules} rules under {strokes} border strokes");
+}

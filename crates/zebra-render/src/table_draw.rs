@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use super::*;
-use zebra_core::table::{self, Border, BorderEdges, CellRange, LineStyle, NumLook, Role, TableData, VAlign};
+use zebra_core::table::{self, BorderEdges, CellRange, LineStyle, NumLook, Role, TableData, VAlign};
 use zebra_core::table_style::{self, FootRule, Look, THIN};
 use zebra_core::{Align, TextData, TextStyle};
 
@@ -54,6 +54,118 @@ fn vline(items: &mut Vec<Item>, tl: &Affine, x: f64, y0: f64, y1: f64, w: f64, c
     if y1 > y0 && w > 0.0 {
         fill(items, &Rect::new(x - w / 2.0, y0, x + w / 2.0, y1), tl, color);
     }
+}
+
+/// One cell edge: `H(e, c)` is the line at the top of row `e` over column
+/// `c` (`e` = the row count for the bottom); `V(r, e)` the line at the left
+/// of column `e` beside row `r`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum Edge {
+    H(usize, usize),
+    V(usize, usize),
+}
+
+/// The edges in view that cell borders own, each with the index of the
+/// format that owns it (the last one to set it wins, as it applies last).
+type Owners = HashMap<Edge, usize>;
+
+fn border_owners(t: &TableData, v: View) -> Owners {
+    let mut out = Owners::new();
+    let view = CellRange::new(v.r0, v.c0, v.r1, v.c1);
+    for (i, rf) in t.cell_formats.iter().enumerate() {
+        let Some(b) = &rf.format.border else { continue };
+        let Some(r) = rf.range.clip(t.n_rows(), t.n_cols()) else { continue };
+        if !r.intersects(&view) {
+            continue;
+        }
+        let (top, bottom, left, right, inner_h, inner_v) = match b.edges {
+            BorderEdges::All => (true, true, true, true, true, true),
+            BorderEdges::Outer => (true, true, true, true, false, false),
+            BorderEdges::Inner => (false, false, false, false, true, true),
+            BorderEdges::Horizontal => (false, false, false, false, true, false),
+            BorderEdges::Vertical => (false, false, false, false, false, true),
+            BorderEdges::Top => (true, false, false, false, false, false),
+            BorderEdges::Bottom => (false, true, false, false, false, false),
+            BorderEdges::Left => (false, false, true, false, false, false),
+            BorderEdges::Right => (false, false, false, true, false, false),
+        };
+        // Only what is in view: a screenful of edges at most.
+        let (cs, rs) = (r.c0.max(v.c0)..=r.c1.min(v.c1), r.r0.max(v.r0)..=r.r1.min(v.r1));
+        let mut put = |e: Edge| {
+            out.insert(e, i);
+        };
+        for c in cs.clone() {
+            if top {
+                put(Edge::H(r.r0, c));
+            }
+            if bottom {
+                put(Edge::H(r.r1 + 1, c));
+            }
+            if inner_h {
+                for e in (r.r0 + 1).max(v.r0)..=r.r1.min(v.r1 + 1) {
+                    put(Edge::H(e, c));
+                }
+            }
+        }
+        for row in rs {
+            if left {
+                put(Edge::V(row, r.c0));
+            }
+            if right {
+                put(Edge::V(row, r.c1 + 1));
+            }
+            if inner_v {
+                for e in (r.c0 + 1).max(v.c0)..=r.c1.min(v.c1 + 1) {
+                    put(Edge::V(row, e));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn on_outline(e: &Edge, rows: usize, cols: usize) -> bool {
+    match *e {
+        Edge::H(r, _) => r == 0 || r == rows,
+        Edge::V(_, c) => c == 0 || c == cols,
+    }
+}
+
+/// Edges joined into straight runs: (first, last) of each run of
+/// neighbours along the same line.
+fn runs(edges: impl Iterator<Item = Edge>) -> Vec<(Edge, Edge)> {
+    let mut v: Vec<Edge> = edges.collect();
+    v.sort();
+    v.dedup();
+    let mut out: Vec<(Edge, Edge)> = vec![];
+    for e in v {
+        if let Some((_, last)) = out.last_mut() {
+            let next = match (*last, e) {
+                (Edge::H(a, c), Edge::H(b, d)) => a == b && d == c + 1,
+                (Edge::V(r, a), Edge::V(s, b)) => a == b && s == r + 1,
+                _ => false,
+            };
+            if next {
+                *last = e;
+                continue;
+            }
+        }
+        out.push((e, e));
+    }
+    out
+}
+
+/// Stroke a run of edges from `a` to `z`.
+fn segment(items: &mut Vec<Item>, l: &table::Layout, tl: &Affine, a: Edge, z: Edge, color: Rgba, st: Stroke) {
+    let (p, q) = match (a, z) {
+        (Edge::H(e, c0), Edge::H(_, c1)) => ((l.xs[c0], l.ys[e]), (l.xs[c1 + 1], l.ys[e])),
+        (Edge::V(r0, e), Edge::V(r1, _)) => ((l.xs[e], l.ys[r0]), (l.xs[e], l.ys[r1 + 1])),
+        _ => return,
+    };
+    let mut path = BezPath::new();
+    path.move_to(p);
+    path.line_to(q);
+    stroke(items, &path, tl, color, st);
 }
 
 /// The part of the table on screen: rows r0..=r1, columns c0..=c1.
@@ -141,8 +253,11 @@ impl Ctx<'_> {
         }
         flush(&mut run, items);
 
-        self.rules(t, &l, &look, &tl, v, &merged, row_px, items);
-        self.borders(t, &l, &tl, v, items);
+        // Cell borders own their edges: the style's lines stay off them,
+        // and "None" leaves them bare.
+        let owners = border_owners(t, v);
+        self.rules(t, &l, &look, &tl, v, &merged, row_px, &owners, items);
+        self.borders(t, &l, &tl, &owners, items);
 
         let mut looks = self.column_looks(e, t);
         for (span, paint) in &cells {
@@ -258,7 +373,8 @@ impl Ctx<'_> {
 
     /// The style's lines over the part on screen; none through a merge.
     #[allow(clippy::too_many_arguments)]
-    fn rules(&self, t: &TableData, l: &table::Layout, look: &Look, tl: &Affine, v: View, merged: &HashMap<(usize, usize), CellRange>, row_px: f64, items: &mut Vec<Item>) {
+    #[allow(clippy::too_many_arguments)]
+    fn rules(&self, t: &TableData, l: &table::Layout, look: &Look, tl: &Affine, v: View, merged: &HashMap<(usize, usize), CellRange>, row_px: f64, owners: &Owners, items: &mut Vec<Item>) {
         let n = t.n_rows();
         let hr = t.header_rows as usize;
         let foot = n.saturating_sub(t.footer_rows as usize);
@@ -293,7 +409,7 @@ impl Ctx<'_> {
             let y = l.ys[edge];
             let mut start: Option<f64> = None;
             for c in v.c0..=v.c1 + 1 {
-                let open = c <= v.c1 && !inside_h(edge - 1, c);
+                let open = c <= v.c1 && !inside_h(edge - 1, c) && !owners.contains_key(&Edge::H(edge, c));
                 match (open, start) {
                     (true, None) => start = Some(l.xs[c]),
                     (false, Some(x0)) => {
@@ -314,7 +430,7 @@ impl Ctx<'_> {
                 let x = l.xs[edge];
                 let mut start: Option<f64> = None;
                 for r in v.r0..=v.r1 + 1 {
-                    let open = r <= v.r1 && !inside_v(r, edge - 1);
+                    let open = r <= v.r1 && !inside_v(r, edge - 1) && !owners.contains_key(&Edge::V(r, edge));
                     match (open, start) {
                         (true, None) => start = Some(l.ys[r]),
                         (false, Some(y0)) => {
@@ -327,81 +443,48 @@ impl Ctx<'_> {
             }
         }
         if let Some((c, wd)) = look.outline {
-            stroke(items, &Rect::new(0.0, l.ys[0], l.width(), l.height()), tl, c, Stroke::new(wd * l.font));
+            let (rows, cols) = (t.n_rows(), t.n_cols());
+            if !owners.keys().any(|e| on_outline(e, rows, cols)) {
+                stroke(items, &Rect::new(0.0, l.ys[0], l.width(), l.height()), tl, c, Stroke::new(wd * l.font));
+            } else {
+                // Some of the outline belongs to cell borders: the rest, edge by edge.
+                let st = Stroke::new(wd * l.font).with_caps(Cap::Square);
+                let edges = (v.c0..=v.c1)
+                    .flat_map(|c| [Edge::H(0, c), Edge::H(rows, c)])
+                    .chain((v.r0..=v.r1).flat_map(|r| [Edge::V(r, 0), Edge::V(r, cols)]))
+                    .filter(|e| !owners.contains_key(e));
+                for (a, b) in runs(edges) {
+                    segment(items, l, tl, a, b, c, st.clone());
+                }
+            }
         }
     }
 
     /// Borders set on ranges, over the part on screen.
-    fn borders(&self, t: &TableData, l: &table::Layout, tl: &Affine, v: View, items: &mut Vec<Item>) {
+    fn borders(&self, t: &TableData, l: &table::Layout, tl: &Affine, owners: &Owners, items: &mut Vec<Item>) {
         let th = self.theme;
-        let view = CellRange::new(v.r0, v.c0, v.r1, v.c1);
-        for rf in &t.cell_formats {
-            let Some(b) = &rf.format.border else { continue };
-            let Some(range) = rf.range.clip(t.n_rows(), t.n_cols()) else { continue };
-            if !range.intersects(&view) {
+        // Runs of edges owned by the same format, each drawn in its style.
+        let mut by: HashMap<usize, Vec<Edge>> = HashMap::new();
+        for (e, i) in owners {
+            by.entry(*i).or_default().push(*e);
+        }
+        for (i, edges) in by {
+            let Some(b) = t.cell_formats.get(i).and_then(|f| f.format.border.as_ref()) else { continue };
+            if b.style == LineStyle::None {
                 continue;
             }
-            self.border(t, l, tl, range, view, b, th, items);
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn border(&self, t: &TableData, l: &table::Layout, tl: &Affine, range: CellRange, view: CellRange, b: &Border, th: &Theme, items: &mut Vec<Item>) {
-        let width = b.width.filter(|w| w.is_finite() && *w > 0.0).unwrap_or(1.0).min(l.font);
-        // "None" takes the style's lines away: paint over them in what the
-        // cells sit on.
-        let color = match (b.style, &b.color) {
-            (LineStyle::None, _) => table_style::cell_paint(t, th, &table_style::look(t, th), range.r0, range.c0).under,
-            (_, Some(c)) if !c.is_empty() => th.color(c),
-            _ => th.color(&"theme:frame".to_string()),
-        };
-        let width = if b.style == LineStyle::None { (table_style::THICK * l.font).max(width) } else { width };
-        let st = match b.style {
-            LineStyle::Solid | LineStyle::None => Stroke::new(width).with_caps(Cap::Butt),
-            LineStyle::Dashed => Stroke::new(width).with_caps(Cap::Butt).with_dashes(0.0, [width * 3.0, width * 2.0]),
-            LineStyle::Dotted => Stroke::new(width).with_caps(Cap::Round).with_dashes(0.0, [0.0, width * 2.0]),
-        };
-        let (x0, y0, x1, y1) = l.range_box(&range);
-        let seg = |items: &mut Vec<Item>, p: (f64, f64), q: (f64, f64)| {
-            let mut path = BezPath::new();
-            path.move_to(p);
-            path.line_to(q);
-            stroke(items, &path, tl, color, st.clone());
-        };
-        let (top, bottom, left, right, inner_h, inner_v) = match b.edges {
-            BorderEdges::All => (true, true, true, true, true, true),
-            BorderEdges::Outer => (true, true, true, true, false, false),
-            BorderEdges::Inner => (false, false, false, false, true, true),
-            BorderEdges::Horizontal => (false, false, false, false, true, false),
-            BorderEdges::Vertical => (false, false, false, false, false, true),
-            BorderEdges::Top => (true, false, false, false, false, false),
-            BorderEdges::Bottom => (false, true, false, false, false, false),
-            BorderEdges::Left => (false, false, true, false, false, false),
-            BorderEdges::Right => (false, false, false, true, false, false),
-        };
-        // Long edges only over the rows and columns in view.
-        let (vx0, vx1) = (l.xs[view.c0.max(range.c0)], l.xs[(view.c1.min(range.c1)) + 1]);
-        let (vy0, vy1) = (l.ys[view.r0.max(range.r0)], l.ys[(view.r1.min(range.r1)) + 1]);
-        if top {
-            seg(items, (vx0, y0), (vx1, y0));
-        }
-        if bottom {
-            seg(items, (vx0, y1), (vx1, y1));
-        }
-        if left {
-            seg(items, (x0, vy0), (x0, vy1));
-        }
-        if right {
-            seg(items, (x1, vy0), (x1, vy1));
-        }
-        if inner_h {
-            for r in (range.r0 + 1).max(view.r0)..=range.r1.min(view.r1 + 1) {
-                seg(items, (vx0, l.ys[r]), (vx1, l.ys[r]));
-            }
-        }
-        if inner_v {
-            for c in (range.c0 + 1).max(view.c0)..=range.c1.min(view.c1 + 1) {
-                seg(items, (l.xs[c], vy0), (l.xs[c], vy1));
+            let width = b.width.filter(|w| w.is_finite() && *w > 0.0).unwrap_or(1.0).min(l.font);
+            let color = match &b.color {
+                Some(c) if !c.is_empty() => th.color(c),
+                _ => th.color(&"theme:frame".to_string()),
+            };
+            let st = match b.style {
+                LineStyle::Solid | LineStyle::None => Stroke::new(width).with_caps(Cap::Butt),
+                LineStyle::Dashed => Stroke::new(width).with_caps(Cap::Butt).with_dashes(0.0, [width * 3.0, width * 2.0]),
+                LineStyle::Dotted => Stroke::new(width).with_caps(Cap::Round).with_dashes(0.0, [0.0, width * 2.0]),
+            };
+            for (a, z) in runs(edges.into_iter()) {
+                segment(items, l, tl, a, z, color, st.clone());
             }
         }
     }
