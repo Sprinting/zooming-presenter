@@ -679,3 +679,19 @@ fn element_key_and_id_mismatch_does_not_crash_delete() {
     assert!(r.is_err());
     assert_eq!(io::to_json(&ed.doc), before);
 }
+
+/// Hostile-input audit C3: widths that made renderers abort are refused by
+/// commands; ordinary ones (the inspector goes to 200) still go in, even on
+/// a small shape.
+#[test]
+fn absurd_stroke_width_is_refused() {
+    let mut ed = sample();
+    let s = ed.doc.elements.values().find(|e| matches!(e.kind, ElementKind::Shape(_))).unwrap().id.clone();
+    for bad in [serde_json::json!({"stroke_width": 1e19}), serde_json::json!({"stroke_width": 1e6}), serde_json::json!({"corner_radius": 1e9})] {
+        let r = ed.apply(cmd(serde_json::json!({"op":"update","id":s,"patch":bad})), Origin::agent("a"));
+        assert!(r.is_err(), "{bad}");
+    }
+    ed.apply(cmd(serde_json::json!({"op":"update","id":s,"patch":{"stroke_width":200.0,"w":10.0,"h":10.0}})), Origin::agent("a")).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"add_connector","id":"c9","from":{"x":0,"y":0},"to":{"x":10,"y":0}})), Origin::agent("a")).unwrap();
+    assert!(ed.apply(cmd(serde_json::json!({"op":"update","id":"c9","patch":{"stroke_width":1e15}})), Origin::agent("a")).is_err());
+}

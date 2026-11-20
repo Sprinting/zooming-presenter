@@ -28,6 +28,36 @@ fn world(v: f64) -> bool {
     v.abs() <= WORLD_LIMIT
 }
 
+/// Line widths and corner radii may always be this big (local units),
+/// whatever the element's size: the inspector offers up to 200, and a
+/// shape shrunk below its outline's width must stay editable.
+pub const LINE_FLOOR: f64 = 200.0;
+
+/// Most a shape's outline width or corner radius may be: its larger side
+/// (but at least [`LINE_FLOOR`]). Absurd widths made renderers allocate
+/// gigabytes or panic (hostile-input audit C3).
+pub fn shape_line_limit(size: &Size) -> f64 {
+    size.w.max(size.h).max(LINE_FLOOR)
+}
+
+/// Most a connector's or ink stroke's width may be: the diagonal of the
+/// element and of its points (but at least [`LINE_FLOOR`]).
+fn line_limit<'a>(size: &Size, pts: impl Iterator<Item = (f64, f64)>) -> f64 {
+    let (mut x0, mut y0, mut x1, mut y1) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for (x, y) in pts {
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    size.w.hypot(size.h).max((x1 - x0).hypot(y1 - y0)).max(LINE_FLOOR)
+}
+
+fn connector_limit(size: &Size, d: &ConnectorData) -> f64 {
+    line_limit(size, [(d.from.x, d.from.y), (d.to.x, d.to.y)].into_iter())
+}
+
+fn ink_limit(size: &Size, d: &InkData) -> f64 {
+    line_limit(size, d.points.iter().map(|p| (p.x, p.y)))
+}
+
 /// A key the editor made (`content_key`): safe as a file name. Anything
 /// with a path separator or a dot could leave the media cache folder.
 pub fn safe_asset_key(key: &str) -> bool {
@@ -68,10 +98,19 @@ pub fn element(e: &Element) -> ZResult<()> {
             if !(fin(d.stroke_width) && d.stroke_width >= 0.0 && fin(d.corner_radius) && d.corner_radius >= 0.0) {
                 return bad("stroke width or corner radius");
             }
+            let limit = shape_line_limit(&e.size);
+            if d.stroke_width > limit || d.corner_radius > limit {
+                return Err(ZError::invalid(format!("'{}': stroke width and corner radius are at most {limit}", e.id))
+                    .hint("at most the shape's larger side, or 200"));
+            }
         }
         ElementKind::Ink(d) => {
             if !(world(d.width) && d.width > 0.0) || d.points.iter().any(|p| !(world(p.x) && world(p.y))) {
                 return bad("an ink point or width");
+            }
+            let limit = ink_limit(&e.size, d);
+            if d.width > limit {
+                return Err(ZError::invalid(format!("'{}': ink width is at most {limit}", e.id)).hint("at most the drawing's diagonal, or 200"));
             }
         }
         ElementKind::Icon(d) => {
@@ -82,6 +121,10 @@ pub fn element(e: &Element) -> ZResult<()> {
         ElementKind::Connector(d) => {
             if !(world(d.width) && d.width > 0.0) || [&d.from, &d.to].iter().any(|p| !(world(p.x) && world(p.y) && fin(p.dir.x) && fin(p.dir.y))) {
                 return bad("a connector end or width");
+            }
+            let limit = connector_limit(&e.size, d);
+            if d.width > limit {
+                return Err(ZError::invalid(format!("'{}': connector width is at most {limit}", e.id)).hint("at most the connector's length, or 200"));
             }
         }
         ElementKind::Image(d) => {
@@ -192,12 +235,19 @@ pub fn repair(doc: &mut Document) -> usize {
                 if !(fin(d.corner_radius) && d.corner_radius >= 0.0) {
                     d.corner_radius = 0.0;
                 }
+                let limit = shape_line_limit(&e.size);
+                d.stroke_width = d.stroke_width.min(limit);
+                // Drawn no rounder than half the shorter side anyway.
+                if d.corner_radius > limit {
+                    d.corner_radius = (e.size.w.min(e.size.h) / 2.0).min(limit);
+                }
             }
             ElementKind::Ink(d) => {
                 d.points.retain(|p| world(p.x) && world(p.y));
                 if !(world(d.width) && d.width > 0.0) {
                     d.width = 4.0;
                 }
+                d.width = d.width.min(ink_limit(&e.size, d));
             }
             ElementKind::Icon(d) => d.stroke_width = 2.0,
             ElementKind::Connector(d) => {
@@ -212,6 +262,7 @@ pub fn repair(doc: &mut Document) -> usize {
                         p.dir = crate::geom::Vec2::ZERO;
                     }
                 }
+                d.width = d.width.min(connector_limit(&e.size, d));
             }
             ElementKind::Image(d) => {
                 d.crop = d.crop.filter(|c| fin(c.x) && fin(c.y) && fin(c.w) && fin(c.h)).map(|c| c.clamped()).filter(|c| !c.is_full());

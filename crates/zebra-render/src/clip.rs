@@ -27,9 +27,118 @@ pub const MAX_FRAME_COST: usize = 3_000_000;
 
 /// Clip every oversized item in `items` for a `w`x`h` px target.
 pub(crate) fn clip_items(items: &mut Vec<Item>, w: f64, h: f64) {
+    tame_strokes(items, w, h);
     clip_paths(items, w, h);
     clip_text_and_images(items, w, h);
     cap_items(items, MAX_FRAME_COST);
+}
+
+/// Widest stroke handed to a backend, in viewport diagonals: wider than
+/// this covers the whole target wherever its path is.
+const MAX_STROKE_DIAGONALS: f64 = 4.0;
+/// Segments shorter than this fraction of the stroke width are left out.
+const DEGENERATE: f64 = 1e-6;
+
+/// Strokes as backends can take them (hostile-input audit C3): no wider
+/// than a few viewport diagonals (vello_cpu flattened a 1e19 px outline
+/// into 16 GB), and without segments that are near-zero long next to the
+/// width (vello_cpu panicked inside its thread pool on one, which aborts
+/// the process). A subpath of nothing but such segments stays a dot.
+fn tame_strokes(items: &mut Vec<Item>, w: f64, h: f64) {
+    let max = MAX_STROKE_DIAGONALS * w.hypot(h).max(1.0);
+    items.retain_mut(|it| {
+        let Item::Stroke { path, stroke, .. } = it else { return true };
+        if !stroke.width.is_finite() || stroke.width <= 0.0 {
+            return false;
+        }
+        stroke.width = stroke.width.min(max);
+        if let Some(p) = drop_degenerate(path, stroke.width * DEGENERATE) {
+            *path = p;
+        }
+        !path.elements().is_empty()
+    });
+}
+
+/// `path` without segments whose points all lie within `eps` of where the
+/// segment starts; None if there are none.
+fn drop_degenerate(path: &BezPath, eps: f64) -> Option<BezPath> {
+    let near = |a: Point, b: Point| (a.x - b.x).abs() <= eps && (a.y - b.y).abs() <= eps;
+    let mut last = Point::ZERO;
+    let mut any = false;
+    for el in path.elements() {
+        let tiny = match *el {
+            PathEl::MoveTo(p) => {
+                last = p;
+                false
+            }
+            PathEl::LineTo(p) => near(last, p),
+            PathEl::QuadTo(a, p) => near(last, a) && near(last, p),
+            PathEl::CurveTo(a, b, p) => near(last, a) && near(last, b) && near(last, p),
+            PathEl::ClosePath => false,
+        };
+        if tiny {
+            any = true;
+            break;
+        }
+        if let PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) = *el {
+            last = p;
+        }
+    }
+    if !any {
+        return None;
+    }
+    let mut out = BezPath::new();
+    // Per subpath: its start, the last point kept, whether a segment was kept.
+    let mut start = Point::ZERO;
+    let mut last = Point::ZERO;
+    let mut kept = false;
+    let mut dropped = false;
+    let end_sub = |out: &mut BezPath, start: Point, kept: bool, dropped: bool| {
+        if !kept && dropped {
+            // A dot: one zero-length segment, so round caps still draw it.
+            out.line_to(start);
+        }
+    };
+    for el in path.elements() {
+        match *el {
+            PathEl::MoveTo(p) => {
+                end_sub(&mut out, start, kept, dropped);
+                out.move_to(p);
+                (start, last, kept, dropped) = (p, p, false, false);
+            }
+            PathEl::LineTo(p) => {
+                if near(last, p) {
+                    dropped = true;
+                } else {
+                    out.line_to(p);
+                    (last, kept) = (p, true);
+                }
+            }
+            PathEl::QuadTo(a, p) => {
+                if near(last, a) && near(last, p) {
+                    dropped = true;
+                } else {
+                    out.quad_to(a, p);
+                    (last, kept) = (p, true);
+                }
+            }
+            PathEl::CurveTo(a, b, p) => {
+                if near(last, a) && near(last, b) && near(last, p) {
+                    dropped = true;
+                } else {
+                    out.curve_to(a, b, p);
+                    (last, kept) = (p, true);
+                }
+            }
+            PathEl::ClosePath => {
+                end_sub(&mut out, start, kept, dropped);
+                out.close_path();
+                (last, kept, dropped) = (start, false, false);
+            }
+        }
+    }
+    end_sub(&mut out, start, kept, dropped);
+    Some(out)
 }
 
 /// The area kept around a `w`x`h` px target, and the larger area beyond
@@ -608,6 +717,34 @@ mod tests {
         assert!(b.width() < 400.0);
         // phase continuity: the run starts 1e8 + ~(1e8 - 89) px into the outline
         assert!(stroke.dash_offset > 1e8);
+    }
+
+    #[test]
+    fn absurd_stroke_width_is_clamped_to_the_view() {
+        let mut items = vec![Item::Stroke { path: Rect::new(10.0, 10.0, 50.0, 50.0).to_path(0.1), color: [1; 4], stroke: Stroke::new(1e19) }];
+        clip_items(&mut items, 100.0, 100.0);
+        let Item::Stroke { stroke, .. } = &items[0] else { panic!() };
+        assert!(stroke.width <= 4.0 * 100f64.hypot(100.0) + 1e-9, "{}", stroke.width);
+    }
+
+    #[test]
+    fn near_zero_segments_are_dropped_but_dots_stay() {
+        let mut p = BezPath::new();
+        p.move_to((10.0, 10.0));
+        p.line_to((10.0, 10.0 + 1e-9));
+        p.line_to((60.0, 10.0));
+        let mut dot = BezPath::new();
+        dot.move_to((30.0, 30.0));
+        dot.line_to((30.0, 30.0));
+        let mut items = vec![
+            Item::Stroke { path: p, color: [1; 4], stroke: Stroke::new(100.0) },
+            Item::Stroke { path: dot, color: [1; 4], stroke: Stroke::new(8.0) },
+        ];
+        clip_items(&mut items, 100.0, 100.0);
+        let Item::Stroke { path, .. } = &items[0] else { panic!() };
+        assert_eq!(path.elements(), &[PathEl::MoveTo(Point::new(10.0, 10.0)), PathEl::LineTo(Point::new(60.0, 10.0))]);
+        let Item::Stroke { path, .. } = &items[1] else { panic!() };
+        assert_eq!(path.elements().len(), 2, "a dot keeps its zero-length segment");
     }
 
     #[test]
