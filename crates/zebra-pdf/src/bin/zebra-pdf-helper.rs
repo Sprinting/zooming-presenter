@@ -145,12 +145,12 @@ fn main() {
             continue;
         }
         BUSY_SINCE.store(t0.elapsed().as_millis() as u64 + 1, Ordering::SeqCst);
-        if let Some(m) = misbehave.take() {
-            if let Some(bad) = act_badly(&m, &req) {
-                let _ = (&sock).write_all(&bad);
-                BUSY_SINCE.store(0, Ordering::SeqCst);
-                continue;
-            }
+        if let Some(m) = misbehave.take()
+            && let Some(bad) = act_badly(&m, &req)
+        {
+            let _ = (&sock).write_all(&bad);
+            BUSY_SINCE.store(0, Ordering::SeqCst);
+            continue;
         }
         let reply = handle(pdfium, &mut doc, req, fds);
         BUSY_SINCE.store(0, Ordering::SeqCst);

@@ -637,10 +637,10 @@ fn io(e: std::io::Error) -> PdfError {
 /// small, or else a temporary file of them, already unlinked.
 fn open_request(key: &str, bytes: &AssetBytes) -> Result<(Request, Option<std::fs::File>), PdfError> {
     let len = bytes.len() as u64;
-    if let Some(Ok((f, start, l))) = bytes.file_slice() {
-        if f.metadata().map(|m| m.len() >= start + l).unwrap_or(false) {
-            return Ok((Request::Open { key: key.to_string(), start, len: l, inline: None }, Some(f)));
-        }
+    if let Some(Ok((f, start, l))) = bytes.file_slice()
+        && f.metadata().map(|m| m.len() >= start + l).unwrap_or(false)
+    {
+        return Ok((Request::Open { key: key.to_string(), start, len: l, inline: None }, Some(f)));
     }
     if bytes.len() <= wire::MAX_INLINE {
         return Ok((Request::Open { key: key.to_string(), start: 0, len, inline: Some(bytes.to_vec()) }, None));

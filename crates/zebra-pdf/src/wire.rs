@@ -156,7 +156,7 @@ impl<'a> R<'a> {
 /// A size in points from the helper: finite and not negative (0: not
 /// known), else refused.
 fn points(v: f32) -> Result<f32, WireError> {
-    if v.is_finite() && v >= 0.0 && v < 1e7 { Ok(v) } else { Err(WireError::Bad("size")) }
+    if (0.0..1e7).contains(&v) { Ok(v) } else { Err(WireError::Bad("size")) }
 }
 
 impl Request {
@@ -268,10 +268,13 @@ impl Reply {
     }
 }
 
+/// A whole frame: its tag, its body and the bytes it took.
+pub type Frame<'a> = (u8, &'a [u8], usize);
+
 /// Split one whole frame off the front of `buf`: (tag, body, bytes
 /// used), or None while it is still arriving. A length over
 /// [`MAX_FRAME`] is an error at once, before any of it is waited for.
-pub fn split(buf: &[u8]) -> Result<Option<(u8, &[u8], usize)>, WireError> {
+pub fn split(buf: &[u8]) -> Result<Option<Frame<'_>>, WireError> {
     if buf.len() < 4 {
         return Ok(None);
     }
