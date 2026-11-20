@@ -525,8 +525,20 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30f83770545399f186e7aea0a966e2f1188398c5bc67e3f93eccb9b0a8e2d9b4"
 dependencies = [
+ "crc32fast",
+ "flate2",
  "indexmap",
  "serde",
+]
+
+[[package]]
+name = "betteroffice-metafile"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6c1e38278e14597f2d53e81d3d55e79228412bb9b9d30eb80cc00e69b35b22b"
+dependencies = [
+ "base64",
+ "betteroffice-drawingml",
 ]
 
 [[package]]
@@ -4367,12 +4379,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77bb4b284cf8a5c8ae721594af53387fb755d2196fddb32b2acfb4fa9251fa0c"
 dependencies = [
  "bytemuck",
+ "gif",
+ "image-webp",
  "log",
  "pico-args",
  "rgb",
  "svgtypes",
  "tiny-skia 0.12.0",
  "usvg",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -6761,7 +6776,9 @@ name = "zebra-import"
 version = "0.1.0"
 dependencies = [
  "betteroffice-drawingml",
+ "betteroffice-metafile",
  "betteroffice-pptx-parse",
+ "flate2",
  "image",
  "pdfium-render",
  "quick-xml",

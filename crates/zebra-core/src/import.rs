@@ -108,7 +108,7 @@ pub enum ImportNote {
     /// Shapes Zebra has no match for (custom shapes, curved connectors…)
     /// were left out; their text came in.
     Shape,
-    /// EMF and WMF pictures with no other picture beside them were left out.
+    /// EMF and WMF pictures that could not be drawn were left out.
     Metafile,
     /// Pictures in other formats (TIFF, BMP…) or that could not be read
     /// were left out.

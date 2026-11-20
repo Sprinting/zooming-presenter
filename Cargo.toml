@@ -39,7 +39,10 @@ parley = "0.13"
 unicode-script = "0.5"
 krilla = "0.8"
 # SVG symbols (clip art): parsed and drawn to pixels; no text, no system fonts.
-resvg = { version = "0.50", default-features = false }
+# raster-images: PNG and JPEG data links inside an SVG show (an EMF or WMF
+# picture imported from PowerPoint is an SVG holding its bitmaps that way).
+# Its decoders are the ones `image` already builds.
+resvg = { version = "0.50", default-features = false, features = ["raster-images"] }
 pollster = "1"
 
 # ui

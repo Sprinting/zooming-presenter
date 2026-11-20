@@ -23,6 +23,10 @@ betteroffice-drawingml = "=0.5.1"
 # stand-ins mc:AlternateContent holds), read from the part XML with the XML
 # reader the parser already brings in.
 quick-xml = { version = "0.41", features = ["encoding"] }
+# EMF and WMF pictures as SVG (as Keynote converts them); flate2 (which
+# its `svg` feature brings in anyway) for the compressed .emz and .wmz.
+betteroffice-metafile = { version = "=0.5.1", features = ["svg"] }
+flate2 = "1"
 
 [dev-dependencies]
 zebra-render = { path = "../zebra-render", default-features = false }

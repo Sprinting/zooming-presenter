@@ -10,6 +10,7 @@ not from here, so nothing else lands in the fixtures folder.
 """
 import copy
 import io
+import struct
 import subprocess
 import sys
 import tempfile
@@ -288,49 +289,61 @@ def media_timing(s, xml):
 def as_audio(pic):
     """python-pptx adds videos only: make one a sound, as PowerPoint saves
     one (a:audioFile; p:audio in the timing; the relationship and file
-    name are fixed by `audio_parts` after saving)."""
+    name are fixed by `repack` after saving)."""
     nv = pic._element.find(qn("p:nvPicPr")).find(qn("p:nvPr"))
     nv.find(qn("a:videoFile")).tag = qn("a:audioFile")
 
 
-def audio_parts(path):
-    """Raw zip edits python-pptx can't make: sounds it saved as
-    ppt/media/mediaN.vid get their own extension (.wav, .m4a), and
-    a:audioFile's relationship the audio type."""
+def repack(path, swaps):
+    """Raw zip edits python-pptx can't make. `swaps` maps a part's name to
+    (new name, new bytes or None, content type): its relationships follow
+    it, and a sound's a:audioFile relationship gets the audio type."""
     with zipfile.ZipFile(path) as z:
         parts = {i.filename: z.read(i.filename) for i in z.infolist()}
-    renames = {}
-    for name, data in parts.items():
-        if name.startswith("ppt/media/") and name.endswith(".vid"):
-            ext = "wav" if data[:4] == b"RIFF" else "m4a"
-            renames[name] = name[:-3] + ext
+    base = lambda n: n.rsplit("/", 1)[1]
     out = {}
     for name, data in parts.items():
         if name.endswith(".rels"):
             root = etree.fromstring(data)
             for rel in root:
                 target = rel.get("Target", "")
-                for old, new in renames.items():
-                    if target.endswith(old.rsplit("/", 1)[1]):
-                        rel.set("Target", target[: -len(old.rsplit("/", 1)[1])] + new.rsplit("/", 1)[1])
-                        if rel.get("Type") == RT.VIDEO:
+                for old, (new, _, ct) in swaps.items():
+                    if target.endswith("/" + base(old)):
+                        rel.set("Target", target[: -len(base(old))] + base(new))
+                        if ct.startswith("audio/") and rel.get("Type") == RT.VIDEO:
                             rel.set("Type", RT.AUDIO)
             data = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
         elif name == "[Content_Types].xml":
             root = etree.fromstring(data)
-            ct = "http://schemas.openxmlformats.org/package/2006/content-types"
-            for o in root.findall(f"{{{ct}}}Override"):
-                if o.get("PartName", "").endswith(".vid"):
+            ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+            for o in root.findall(f"{{{ns}}}Override"):
+                if o.get("PartName", "").lstrip("/") in swaps:
                     root.remove(o)
-            for ext, mime in [("wav", "audio/wav"), ("m4a", "audio/mp4")]:
-                d = etree.SubElement(root, f"{{{ct}}}Default")
-                d.set("Extension", ext)
-                d.set("ContentType", mime)
+            have = {d.get("Extension") for d in root.findall(f"{{{ns}}}Default")}
+            for new, _, ct in swaps.values():
+                ext = new.rsplit(".", 1)[1]
+                if ext not in have:
+                    have.add(ext)
+                    d = etree.SubElement(root, f"{{{ns}}}Default")
+                    d.set("Extension", ext)
+                    d.set("ContentType", ct)
             data = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
-        out[renames.get(name, name)] = data
+        new, swapped, _ = swaps.get(name, (name, None, ""))
+        out[new] = data if swapped is None else swapped
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         for name, data in out.items():
             z.writestr(name, data)
+
+
+def sounds(path):
+    """The sounds python-pptx saved as ppt/media/mediaN.vid."""
+    with zipfile.ZipFile(path) as z:
+        out = {}
+        for n in z.namelist():
+            if n.startswith("ppt/media/") and n.endswith(".vid"):
+                wav = z.read(n)[:4] == b"RIFF"
+                out[n] = (n[:-3] + ("wav" if wav else "m4a"), None, "audio/wav" if wav else "audio/mp4")
+        return out
 
 
 def media(prs):
@@ -375,6 +388,69 @@ def media(prs):
 </p:childTnLst></p:cTn></p:par></p:tnLst>''')
 
 
+def emf():
+    """A small EMF drawn by hand: a filled rectangle and an ellipse."""
+    def rec(kind, body):
+        return struct.pack("<II", kind, 8 + len(body)) + body
+
+    def rectl(l, t, r, b):
+        return struct.pack("<iiii", l, t, r, b)
+
+    records = [
+        rec(39, struct.pack("<IIII", 1, 0, 0x0040C0E0, 0)),  # CREATEBRUSHINDIRECT 1: solid, BGR e0c040
+        rec(37, struct.pack("<I", 1)),  # SELECTOBJECT
+        rec(38, struct.pack("<IIiiI", 2, 0, 4, 0, 0x00402010)),  # CREATEPEN 2: solid, 4 wide
+        rec(37, struct.pack("<I", 2)),
+        rec(43, rectl(10, 10, 190, 90)),  # RECTANGLE
+        rec(42, rectl(60, 20, 140, 80)),  # ELLIPSE
+        rec(14, struct.pack("<III", 0, 16, 20)),  # EOF
+    ]
+    body = b"".join(records)
+    size = 88 + len(body)
+    header = struct.pack("<II", 1, 88) + rectl(0, 0, 200, 100) + rectl(0, 0, 6250, 3125)
+    header += struct.pack("<IIIIHHIIIiiii", 0x464D4520, 0x10000, size, len(records) + 1, 3, 0, 0, 0, 0, 1024, 768, 320, 240)
+    assert len(header) == 88
+    return header + body
+
+
+def wmf():
+    """A small placeable WMF drawn by hand: a filled rectangle."""
+    def rec(func, params):
+        return struct.pack("<IH", 3 + len(params) // 2, func) + params
+
+    records = [
+        rec(0x020B, struct.pack("<hh", 0, 0)),  # SETWINDOWORG (y, x)
+        rec(0x020C, struct.pack("<hh", 100, 200)),  # SETWINDOWEXT (y, x)
+        rec(0x02FC, struct.pack("<HIH", 0, 0x0030A040, 0)),  # CREATEBRUSHINDIRECT
+        rec(0x012D, struct.pack("<H", 0)),  # SELECTOBJECT
+        rec(0x041B, struct.pack("<hhhh", 90, 190, 10, 10)),  # RECTANGLE (bottom, right, top, left)
+        rec(0x0000, b""),  # EOF
+    ]
+    body = b"".join(records)
+    words = (18 + len(body)) // 2
+    biggest = max(len(r) for r in records) // 2
+    meta = struct.pack("<HHHIHIH", 1, 9, 0x0300, words, 1, biggest, 0)
+    place = struct.pack("<IHhhhhHI", 0x9AC6CDD7, 0, 0, 0, 200, 100, 96, 0)
+    check = 0
+    for (w,) in struct.iter_unpack("<H", place):
+        check ^= w
+    return place + struct.pack("<H", check) + meta + body
+
+
+def metafiles(prs):
+    """EMF and WMF pictures, and one that can't be drawn. python-pptx
+    takes them as PNGs; `repack` puts the metafiles in after saving."""
+    s = blank(prs)
+    swaps = {}
+    broken = struct.pack("<II", 1, 88) + bytes(32) + struct.pack("<I", 0x464D4520) + bytes(44)
+    for i, (data, ext, ct) in enumerate([(emf(), "emf", "image/x-emf"), (wmf(), "wmf", "image/x-wmf"), (broken, "emf", "image/x-emf")]):
+        pic = s.shapes.add_picture(png(20, 10 + i, (i * 60, 0, 0)), Inches(0.5 + 3 * i), Inches(1), Inches(2.8), Inches(1.4))
+        part = s.part.related_part(pic._element.blip_rId)
+        name = str(part.partname).lstrip("/")
+        swaps[name] = (name.rsplit(".", 1)[0] + "." + ext, data, ct)
+    return swaps
+
+
 def extras(out):
     """What the follow-ups to the first import cover (spec 17b)."""
     prs = Presentation()
@@ -396,8 +472,10 @@ def extras(out):
             strike(s)
     # 4-5. Videos and sounds.
     media(prs)
+    # 6. EMF and WMF.
+    swaps = metafiles(prs)
     prs.save(out)
-    audio_parts(out)
+    repack(out, {**sounds(out), **swaps})
 
 
 if __name__ == "__main__":

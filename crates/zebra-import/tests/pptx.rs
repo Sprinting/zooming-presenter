@@ -282,6 +282,33 @@ fn videos_and_sounds_come_out_of_the_file() {
 }
 
 #[test]
+fn emf_and_wmf_pictures_are_drawn_as_svg() {
+    let ed = editor();
+    let deck = read("extras.pptx", &ed);
+    let svgs: Vec<String> = deck.pages[5]
+        .items
+        .iter()
+        .filter_map(|i| match &i.element.kind {
+            ElementKind::Image(img) => Some(&deck.assets[&img.asset]),
+            _ => None,
+        })
+        .map(|a| {
+            assert_eq!(a.ext, "svg");
+            String::from_utf8(a.bytes.to_vec()).unwrap()
+        })
+        .collect();
+    // The EMF's yellow rectangle and ellipse, the WMF's green rectangle;
+    // the third can't be drawn: left out, noted.
+    assert_eq!(svgs.len(), 2, "{:?}", deck.pages[5].items.iter().map(|i| i.element.kind.type_name()).collect::<Vec<_>>());
+    assert!(svgs[0].starts_with("<svg") && svgs[0].to_ascii_lowercase().contains("#e0c040"), "{}", svgs[0]);
+    assert!(svgs[1].to_ascii_lowercase().contains("#40a030"), "{}", svgs[1]);
+    assert_eq!(deck.notes.get(&ImportNote::Metafile), Some(&1));
+    // Each fills its picture's box: 2.8 x 1.4 inches.
+    let first = deck.pages[5].items.iter().find(|i| matches!(i.element.kind, ElementKind::Image(_))).unwrap();
+    assert!((first.element.size.w - 280.0).abs() < 0.01 && (first.element.size.h - 140.0).abs() < 0.01);
+}
+
+#[test]
 fn on_the_canvas_slides_are_frames_with_steps_and_one_undo_removes_them() {
     let mut ed = editor();
     ed.apply(serde_json::from_value(serde_json::json!({"op":"add_frame","id":"f1","x":0,"y":0,"w":800,"h":600,"add_to_path":true})).unwrap(), Origin::Human).unwrap();
@@ -503,7 +530,7 @@ fn powerpoint_is_offered() {
 #[test]
 fn render_for_a_look() {
     let Some(dir) = std::env::var_os("ZEBRA_PPTX_PNG_DIR") else { return };
-    for f in ["deck16x9.pptx", "deck4x3.pptx"] {
+    for f in ["deck16x9.pptx", "deck4x3.pptx", "extras.pptx"] {
         let r = zebra_render::Renderer::new();
         let mut ed = Editor::default();
         ed.measure = r.measure();

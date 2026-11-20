@@ -14,7 +14,8 @@
 //!   (sizes are ranked deck-wide into title, subtitle and body, as the PDF
 //!   prototype did) and keeps its size on the slide through its scale;
 //!   sizes within a box become relative spans;
-//! - pictures (PNG, JPEG, GIF, SVG) and the basic shapes Zebra has, with
+//! - pictures (PNG, JPEG, GIF, SVG; EMF and WMF drawn as SVG through
+//!   BetterOffice's metafile player) and the basic shapes Zebra has, with
 //!   their fill, line and text; groups stay groups;
 //! - videos as Zebra videos (their pictures as posters); sounds as the
 //!   slide's voice-over, or the document's music when they play across
@@ -785,12 +786,19 @@ impl<'a> SlideReader<'a> {
         };
         let ct = part.content_type.to_ascii_lowercase();
         let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-        if ct.contains("emf") || ct.contains("wmf") || matches!(ext.as_str(), "emf" | "wmf" | "emz" | "wmz") {
-            self.note(ImportNote::Metafile);
-            return None;
-        }
         let mut bytes = part.bytes.clone();
-        if ct.contains("svg") || ext == "svg" {
+        let metafile = ct.contains("emf") || ct.contains("wmf") || matches!(ext.as_str(), "emf" | "wmf" | "emz" | "wmz");
+        if metafile {
+            // Drawn as SVG, as Keynote converts them.
+            match metafile_svg(&bytes) {
+                Some(svg) => bytes = svg,
+                None => {
+                    self.note(ImportNote::Metafile);
+                    return None;
+                }
+            }
+        }
+        if metafile || ct.contains("svg") || ext == "svg" {
             // Zebra knows an SVG by its first tag.
             match bytes.windows(4).position(|w| w == b"<svg") {
                 Some(i) => {
@@ -1139,6 +1147,26 @@ impl<'a> SlideReader<'a> {
         }
         resolve_color_value_to_hex_with_theme(Some(c), Some(&self.theme)).map(|h| h.to_ascii_lowercase())
     }
+}
+
+/// An EMF or WMF picture (or a gzipped .emz or .wmz) as an SVG document;
+/// None when it can't be drawn.
+fn metafile_svg(bytes: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    /// A compressed metafile bigger than this is refused.
+    const MAX: u64 = 64 << 20;
+    let mut plain = vec![];
+    let bytes = if bytes.starts_with(&[0x1f, 0x8b]) {
+        flate2::read::GzDecoder::new(bytes).take(MAX + 1).read_to_end(&mut plain).ok()?;
+        (plain.len() as u64 <= MAX).then_some(plain.as_slice())?
+    } else {
+        bytes
+    };
+    if !ooxml_metafile::is_metafile(bytes) {
+        return None;
+    }
+    let svg = ooxml_metafile::to_svg(bytes).ok()?;
+    (svg.width > 0.0 && svg.height > 0.0).then(|| svg.markup.into_bytes())
 }
 
 fn scheme_color(slot: &str) -> ColorValue {
