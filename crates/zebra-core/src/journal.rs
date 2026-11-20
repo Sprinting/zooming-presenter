@@ -110,6 +110,11 @@ impl Journal {
         }
     }
 
+    /// Element `id` as it was before the batch, if it was touched and existed.
+    pub(crate) fn before(&self, id: &str) -> Option<&Element> {
+        self.elements.get(id).and_then(Option::as_ref)
+    }
+
     /// Did the draw order change?
     pub(crate) fn z_touched(&self) -> bool {
         self.z_order.is_some()
