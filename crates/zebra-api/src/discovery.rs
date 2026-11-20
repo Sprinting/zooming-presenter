@@ -23,8 +23,6 @@ pub struct Instance {
     pub api_version: u32,
     /// Unix seconds.
     pub started_at: u64,
-    #[serde(default)]
-    pub headless: bool,
     /// The discovery file itself (not serialised).
     #[serde(skip)]
     pub file: PathBuf,
@@ -87,7 +85,7 @@ pub fn app_dir() -> PathBuf {
 /// The person's AI control switch, as Zebra keeps it between launches.
 ///
 /// `granted`: a person has switched AI control on in Zebra's own window at
-/// least once. Until then launch flags (`--api`, `--headless`, debug demos)
+/// least once. Until then launch flags (`--api`, debug demos)
 /// can't switch it on: the first time is always a person. `on`: the
 /// person's last choice (None: not kept here; older files).
 ///
@@ -104,7 +102,7 @@ pub struct AiSwitch {
 }
 
 impl AiSwitch {
-    /// May a launch flag (`--api`, `--headless`) start AI control? Only
+    /// May a launch flag (`--api`) start AI control? Only
     /// once a person has switched it on, and not after the person or an
     /// agent switched it off since (`on == None` is an older grant that
     /// didn't keep the choice: it counts as on).
@@ -116,9 +114,9 @@ impl AiSwitch {
     /// ran it (None: it can).
     pub fn flag_refusal(&self) -> Option<&'static str> {
         if !self.granted {
-            Some("AI control stays off until a person switches it on in Zebra once (the AI button in the toolbar). After that, --api and --headless work.")
+            Some("AI control stays off until a person switches it on in Zebra once (the AI button in the toolbar). After that, --api works.")
         } else if self.on == Some(false) {
-            Some("AI control was switched off, so --api and --headless stay off until a person switches it back on in Zebra (the AI button in the toolbar).")
+            Some("AI control was switched off, so --api stays off until a person switches it back on in Zebra (the AI button in the toolbar).")
         } else {
             None
         }
@@ -403,7 +401,7 @@ pub fn running_apps() -> Vec<u32> {
 /// What to tell an agent when no instance accepts AI control.
 pub fn not_accepting_message() -> String {
     match running_apps().as_slice() {
-        [] => "Zebra isn't open. Ask the person to open Zebra and switch on AI control (the AI button in Zebra's toolbar). An agent can't switch it on. Developers: `zebra --headless --api` runs a private instance.".to_string(),
+        [] => "Zebra isn't open. Ask the person to open Zebra and switch on AI control (the AI button in Zebra's toolbar). An agent can't switch it on.".to_string(),
         [pid] => format!("Zebra is open (pid {pid}), but AI control is switched off. Ask the person to switch it on (the AI button in Zebra's toolbar). An agent can't switch it on."),
         pids => format!(
             "Zebra is open (pids {}), but AI control is switched off. Ask the person to switch it on (the AI button in Zebra's toolbar). An agent can't switch it on.",

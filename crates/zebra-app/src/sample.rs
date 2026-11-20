@@ -119,7 +119,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             "agent" => {
                 let agent = Origin::agent("Claude");
                 app.demo_agent = Some("Claude".into());
-                let _ = app.editor.apply(Command::AddText { text: "Added by the agent".into(), x: 0.0, y: -250.0, style: TextStyle::Subtitle, scale: Some(1.2), place: None, id: None, markdown: false, on: None, color: None }, agent.clone());
+                let _ = app.editor.apply(Command::AddText { text: "Added by the agent".into(), x: 0.0, y: -250.0, style: TextStyle::Subtitle, scale: Some(1.2), place: None, id: None, on: None, color: None }, agent.clone());
                 let found = app.editor.doc.ordered().find(|e| e.id == "why").map(|e| e.id.clone());
                 if let Some(c) = found {
                     let _ = app.editor.apply(Command::Update { id: c.clone(), patch: zebra_core::ElementPatch { frame_style: Some(FrameStyle::Bracket), ..Default::default() } }, agent.clone());
@@ -138,7 +138,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 let p = app.canvas.rect.center();
                 crate::canvas::begin_new_text(app, p);
                 if let Some(t) = &mut app.canvas.text {
-                    t.rich = zebra_core::rich::from_markdown("Why **zebras** have *stripes*\n\n- flies get [confused](https://example.com)\n  - really ~~maybe~~\n1. first\n2. second");
+                    t.rich = demo_rich_text();
                     t.buf = t.rich.text.clone();
                 }
             }
@@ -183,7 +183,8 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                     add(app, serde_json::json!({"op":"add_text","text":text,"on":id}));
                 }
                 add(app, serde_json::json!({"op":"add_shape","id":"goal","shape":"rounded_rect","x":420,"y":-20,"w":300,"h":160,"fill":"theme:shape1"}));
-                add(app, serde_json::json!({"op":"add_text","text":"**Launch** in March","markdown":true,"on":"goal"}));
+                add(app, serde_json::json!({"op":"add_text","id":"goal_text","text":"Launch in March","on":"goal"}));
+                add(app, serde_json::json!({"op":"format_text","id":"goal_text","find":"Launch","format":{"bold":true}}));
                 add(app, serde_json::json!({"op":"add_connector","from":{"element":"n4"},"to":{"element":"goal"},"route":"curved"}));
                 let _ = app.editor.view(ViewCommand::FitAll { animate: false }, H);
                 app.select(vec!["n2".into()]);
@@ -348,6 +349,30 @@ fn demo_parallax(app: &mut ZebraApp) {
         zebra_core::BackgroundLayer { asset: b, depth: 0.45, opacity: 1.0 },
     ];
     let _ = app.editor.apply(Command::SaveTheme { theme: t, apply: true, to_library: false }, H);
+}
+
+/// The `richtext` demo: every span and list format at once.
+fn demo_rich_text() -> zebra_core::TextData {
+    use zebra_core::model::{ListKind, SpanFormat};
+    use zebra_core::rich::{apply_format, format_paragraphs};
+    let mut t = zebra_core::TextData { text: "Why zebras have stripes\nflies get confused\nreally maybe\nfirst\nsecond".into(), ..Default::default() };
+    let on = |text: &str, word: &str| {
+        let start = text[..text.find(word).unwrap_or(0)].chars().count();
+        (start, start + word.chars().count())
+    };
+    for (word, format) in [
+        ("zebras", SpanFormat { bold: Some(true), ..Default::default() }),
+        ("stripes", SpanFormat { italic: Some(true), ..Default::default() }),
+        ("confused", SpanFormat { link: Some("https://example.com".into()), ..Default::default() }),
+        ("maybe", SpanFormat { strike: Some(true), ..Default::default() }),
+    ] {
+        let (s, e) = on(&t.text, word);
+        apply_format(&mut t, s, e, &format);
+    }
+    format_paragraphs(&mut t, 1, 2, Some(ListKind::Bullet), None, 0, None);
+    format_paragraphs(&mut t, 2, 2, None, Some(1), 0, None);
+    format_paragraphs(&mut t, 3, 4, Some(ListKind::Number), None, 0, None);
+    t
 }
 
 // ----------------------------------------------------------------------

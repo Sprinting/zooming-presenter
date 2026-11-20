@@ -40,23 +40,9 @@ fn quote(s: &str) -> String {
     }
 }
 
-/// The reverse of [`quote`].
-fn unquote(s: &str) -> String {
-    match s.strip_prefix('\'').and_then(|r| r.strip_suffix('\'')) {
-        Some(inner) => inner.replace(r"'\''", "'"),
-        None => s.to_string(),
-    }
-}
-
 /// The text a person pastes into any agent's chat.
 pub fn agent_prompt(ctl: &str) -> String {
     crate::t!("cli-agent-prompt", ctl = ctl)
-}
-
-/// An MCP server entry for apps that take a JSON config.
-pub fn mcp_config(ctl: &str) -> String {
-    let cmd = unquote(ctl);
-    format!("{{\n  \"mcpServers\": {{\n    \"zebra\": {{ \"command\": {}, \"args\": [\"mcp\"] }}\n  }}\n}}", serde_json::to_string(&cmd).unwrap_or_default())
 }
 
 /// `None` when installing isn't offered (no bundled binary, sandboxed, or
@@ -107,16 +93,11 @@ mod tests {
         let s = install_script("/Users/k/Kartik's \"Apps\"/Zebra.app/Contents/MacOS/zebractl", "Zebra wants to install \"zebractl\"");
         assert!(s.contains(r#"quoted form of "/Users/k/Kartik's \"Apps\"/Zebra.app/Contents/MacOS/zebractl""#), "{s}");
         assert!(!s.contains(r"\'"), "no backslash-apostrophe, which AppleScript rejects: {s}");
-        let q = quote("/Users/k/Kartik's Apps/zebractl");
-        assert_eq!(unquote(&q), "/Users/k/Kartik's Apps/zebractl");
-        let v: serde_json::Value = serde_json::from_str(&mcp_config(&q)).unwrap();
-        assert_eq!(v["mcpServers"]["zebra"]["command"], "/Users/k/Kartik's Apps/zebractl");
+        assert_eq!(quote("/Users/k/Kartik's Apps/zebractl"), r"'/Users/k/Kartik'\''s Apps/zebractl'");
     }
 
     #[test]
-    fn mcp_config_is_json() {
-        let v: serde_json::Value = serde_json::from_str(&mcp_config("'/Applications/My Zebra.app/Contents/MacOS/zebractl'")).unwrap();
-        assert_eq!(v["mcpServers"]["zebra"]["command"], "/Applications/My Zebra.app/Contents/MacOS/zebractl");
+    fn quote_wraps_a_path_with_spaces() {
         assert_eq!(quote("/a b/c"), "'/a b/c'");
     }
 }

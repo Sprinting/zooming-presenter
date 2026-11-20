@@ -18,8 +18,8 @@ fn bench(n: usize) -> Editor {
         let (x, y) = (gx as f64 * 1200.0, gy as f64 * 900.0);
         let cmds = vec![
             Command::AddFrame { style: Default::default(), x, y, w: 1000.0, h: 700.0, rotation: 0.0, name: None, id: None, add_to_path: cell % 5 == 0, find_space: false },
-            Command::AddText { text: format!("Section {gy}.{gx}"), x, y: y - 250.0, style: zebra_core::TextStyle::Title, scale: Some(0.6), place: None, id: None, markdown: false, on: None, color: None },
-            Command::AddText { text: "First point\nSecond point\nThird point".into(), x, y, style: zebra_core::TextStyle::Body, scale: None, place: None, id: None, markdown: false, on: None, color: None },
+            Command::AddText { text: format!("Section {gy}.{gx}"), x, y: y - 250.0, style: zebra_core::TextStyle::Title, scale: Some(0.6), place: None, id: None, on: None, color: None },
+            Command::AddText { text: "First point\nSecond point\nThird point".into(), x, y, style: zebra_core::TextStyle::Body, scale: None, place: None, id: None, on: None, color: None },
             Command::AddShape { shape: zebra_core::ShapeKind::Ellipse, x: x + 350.0, y: y + 200.0, w: 120.0, h: 120.0, rotation: 0.0, fill: None, stroke: None, id: None },
         ];
         ed.apply_batch(cmds, Some("cell".into()), h.clone()).unwrap();

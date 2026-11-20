@@ -982,8 +982,8 @@ impl Editor {
                 };
                 self.insert_element(e, out)?;
             }
-            Command::AddText { text, x, y, style, scale, place, id, markdown, on, color } => {
-                let mut data = if markdown { TextData { style, ..crate::rich::from_markdown(&text) } } else { TextData { text, style, ..Default::default() } };
+            Command::AddText { text, x, y, style, scale, place, id, on, color } => {
+                let mut data = TextData { text, style, ..Default::default() };
                 data.color = color.filter(|c| !c.trim().is_empty());
                 let host = match &on {
                     Some(h) => {

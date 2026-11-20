@@ -1,6 +1,5 @@
 //! `zebra` — open the app. `zebra talk.zebra` opens a file.
-//! `zebra --api` also lets AI agents drive this window (see docs/API.md);
-//! `zebra --headless --api` runs with no window at all.
+//! `zebra --api` also lets AI agents drive this window (see docs/API.md).
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -28,9 +27,6 @@ struct Cli {
     /// an agent gets.
     #[arg(long, value_name = "LEVEL")]
     agent_permission: Option<String>,
-    /// No window: only the API (implies --api).
-    #[arg(long)]
-    headless: bool,
     /// Debug: take a screenshot after SECS seconds, save it to PNG and quit.
     #[arg(long, num_args = 2, value_names = ["SECS", "PNG"], hide = true)]
     screenshot_after: Option<Vec<String>>,
@@ -61,29 +57,20 @@ fn main() -> anyhow::Result<()> {
         Some("edit") => Permission::Edit,
         Some(other) => anyhow::bail!("--agent-permission must be observe, edit or full (got '{other}')"),
     };
-    let mut api_opts = ApiOptions { socket: cli.api_socket.clone(), permission: cap };
+    let api_opts = ApiOptions { socket: cli.api_socket.clone(), permission: cap };
     // The first time is always a person: no flag turns AI control on until
     // someone has switched it on in Zebra's window once.
     for v in zebra_api::discovery::ignored_overrides() {
         eprintln!("zebra: {v} is ignored by this build (only developer builds use it)");
     }
     // New media is spilled to files beside the autosaves and mapped, not
-    // kept on the heap (headless agents too).
+    // kept on the heap.
     zebra_app::files::start_spilling();
     // The clip-art index takes a moment to read: do it before anyone asks.
     let _ = std::thread::Builder::new().name("zebra-symbols".into()).spawn(|| {
         let _ = zebra_core::symbols::library();
     });
     let refused = zebra_api::discovery::ai_switch().flag_refusal();
-    if cli.headless {
-        // No window and no person: only while the person's switch is on.
-        if let Some(why) = refused {
-            anyhow::bail!("{why}");
-        }
-        // No window, so no person to ask: the person's saved choice.
-        api_opts.permission = zebra_app::app::launch_permission(zebra_app::app::saved_agent_permission(), cap);
-        return zebra_api::run_headless(api_opts, cli.file);
-    }
     let screenshot = match &cli.screenshot_after {
         Some(v) if v.len() == 2 => Some((v[0].parse::<f64>()?, PathBuf::from(&v[1]))),
         _ => None,

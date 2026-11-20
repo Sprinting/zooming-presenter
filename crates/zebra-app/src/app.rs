@@ -1791,15 +1791,6 @@ pub fn launch_permission(saved: Option<zebra_core::view::Permission>, cap: zebra
 /// `eframe::storage_dir(APP_ID)`.
 pub const APP_ID: &str = "dev.zebra.Zebra";
 
-/// The person's saved agent permission (the AI button / Settings), read
-/// from the app's settings file, for a run with no window (headless).
-pub fn saved_agent_permission() -> Option<zebra_core::view::Permission> {
-    let f = eframe::storage_dir(APP_ID)?.join("app.ron");
-    let kv: HashMap<String, String> = ron::de::from_str(&std::fs::read_to_string(f).ok()?).ok()?;
-    let v: String = ron::de::from_str(kv.get("agent_permission")?).ok()?;
-    Some(parse_permission(&v))
-}
-
 pub fn parse_permission(s: &str) -> zebra_core::view::Permission {
     use zebra_core::view::Permission::*;
     match s {
@@ -1897,7 +1888,7 @@ mod launch_permission_tests {
         assert_eq!(launch_permission(None, Full), Edit, "never chose: edit, even with --agent-permission full");
         assert_eq!(launch_permission(Some(Edit), Full), Edit);
         assert_eq!(launch_permission(Some(Observe), Full), Observe);
-        assert_eq!(launch_permission(Some(Full), Full), Full, "headless keeps full only when the person chose it");
+        assert_eq!(launch_permission(Some(Full), Full), Full, "full only when the person chose it");
         assert_eq!(launch_permission(Some(Full), Observe), Observe);
         assert_eq!(launch_permission(Some(Full), Edit), Edit);
     }

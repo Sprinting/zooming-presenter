@@ -246,7 +246,7 @@ fn click_at(h: &mut Harness<'static, ZebraApp>, p: Pos2, count: usize) {
 fn d6_undo_in_a_text_box_knows_nothing_of_the_last_one() {
     let mut h = harness();
     let add = |h: &mut Harness<'static, ZebraApp>, text: &str, y: f64, id: &str| {
-        h.state_mut().apply(Command::AddText { text: text.into(), x: 0.0, y, style: Default::default(), scale: None, color: None, id: Some(id.into()), markdown: false, on: None, place: None });
+        h.state_mut().apply(Command::AddText { text: text.into(), x: 0.0, y, style: Default::default(), scale: None, color: None, id: Some(id.into()), on: None, place: None });
     };
     add(&mut h, "Add a title", -200.0, "a");
     add(&mut h, "Topic 1", 200.0, "b");

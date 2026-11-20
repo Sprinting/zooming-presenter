@@ -1111,7 +1111,7 @@ impl Document {
 pub const FRAME_EDGE_TOLERANCE: f64 = 1e-9;
 
 /// THE frame-ownership rule, the one every part of Zebra uses (moving a
-/// frame, describe, the elements query, lint, builds, the spatial index):
+/// frame, describe, the elements query, builds, the spatial index):
 /// a frame with visual bounds `frame` (see [`Element::visual_bounds`])
 /// holds an element with bounds `b` when `b` lies inside `frame` (an
 /// element exactly on the edge is inside) and is smaller in area. Both are

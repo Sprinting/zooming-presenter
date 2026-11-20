@@ -222,9 +222,9 @@ fn full_session() {
     let s = c.call("schema", json!({})).unwrap();
     assert!(s["command"]["oneOf"].is_array() || s["command"]["anyOf"].is_array());
 
-    // Quit ends the headless loop and cleans up.
+    // Disconnect ends the loop and cleans up.
     let file_path = inst.file.clone();
-    c.call("quit", json!({})).unwrap();
+    c.call("disconnect", json!({})).unwrap();
     for _ in 0..100 {
         if h.is_finished() {
             break;
@@ -296,67 +296,8 @@ fn paused_returns_paused() {
     let e = rpc_err(c.call("apply", json!({"command":{"op":"add_text","text":"x"}})));
     assert_eq!(e.kind(), "paused");
     assert!(e.hint_text().is_some());
-    let e = rpc_err(c.call("quit", json!({})));
-    assert_eq!(e.kind(), "permission", "quit refused in GUI mode");
     stop.store(true, std::sync::atomic::Ordering::SeqCst);
     assert_eq!(host.join().unwrap(), 1, "clients() lists the connected agent");
-}
-
-#[test]
-fn mcp_bridge() {
-    let h = start(Permission::Edit);
-    let sock = h.socket.clone();
-    let tok = h.token.clone();
-    let mut mcp = zebra_api::mcp::McpServer::new(move || Ok(Client::connect_hello(&sock, "mcp-test", &tok)?));
-    let input = [
-        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}),
-        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
-        json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
-        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"apply_commands","arguments":{"label":"Intro","commands":[
-            {"op":"add_frame","id":"f_intro","x":0,"y":0,"add_to_path":true},
-            {"op":"add_text","text":"From MCP","style":"title","place":{"relative_to":"f_intro","side":"inside"}}]}}}),
-        json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"describe","arguments":{}}}),
-        json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"apply_commands","arguments":{"commands":[{"op":"nope"}]}}}),
-        json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"capture","arguments":{"target":{"step":0},"width":200,"height":120}}}),
-        json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"undo","arguments":{}}}),
-        json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"list_commands","arguments":{}}}),
-        json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"view","arguments":{"command":{"op":"fit_all"}}}}),
-        json!({"jsonrpc":"2.0","id":10,"method":"ping"}),
-    ];
-    let text: String = input.iter().map(|v| v.to_string() + "\n").collect();
-    let mut out = Vec::new();
-    mcp.serve(std::io::Cursor::new(text), &mut out).unwrap();
-    let resps: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-    assert_eq!(resps.len(), 10, "one response per request, none for the notification");
-    let by_id = |id: i64| resps.iter().find(|r| r["id"] == id).unwrap_or_else(|| panic!("no response {id}")).clone();
-
-    let init = by_id(1);
-    assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
-    assert!(init["result"]["instructions"].as_str().unwrap().contains("y grows DOWN"));
-    let tools = by_id(2)["result"]["tools"].as_array().unwrap().clone();
-    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for n in ["get_state", "describe", "apply_commands", "view", "query", "capture", "undo", "list_commands"] {
-        assert!(names.contains(&n), "missing tool {n}");
-    }
-    let apply = tools.iter().find(|t| t["name"] == "apply_commands").unwrap();
-    assert!(apply["inputSchema"]["$defs"]["Command"].is_object());
-    assert_eq!(by_id(3)["result"]["isError"], false, "{}", by_id(3));
-    assert!(by_id(4)["result"]["content"][0]["text"].as_str().unwrap().contains("From MCP"));
-    let bad = by_id(5);
-    assert_eq!(bad["result"]["isError"], true);
-    assert!(bad["result"]["content"][0]["text"].as_str().unwrap().contains("add_text"), "{bad}");
-    let cap = by_id(6);
-    if cap["result"]["isError"] == false {
-        assert_eq!(cap["result"]["content"][0]["type"], "image");
-        assert_eq!(cap["result"]["content"][0]["mimeType"], "image/png");
-    } else {
-        assert!(cap["result"]["content"][0]["text"].as_str().unwrap().contains("unimplemented"), "{cap}");
-    }
-    assert_eq!(by_id(7)["result"]["isError"], false);
-    assert!(by_id(8)["result"]["content"][0]["text"].as_str().unwrap().contains("add_frame"));
-    assert_eq!(by_id(9)["result"]["isError"], false, "{}", by_id(9));
-    assert_eq!(by_id(10)["result"], json!({}));
-    h.stop().unwrap();
 }
 
 fn write_png(p: &std::path::Path) {

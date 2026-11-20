@@ -33,7 +33,6 @@ Developer options (end users never need these; AI control is a switch in the app
 | `--api` | Switch AI control on at launch, as if you had flipped the switch. |
 | `--api-socket <path>` | Use this socket path instead of the default. |
 | `--agent-permission observe\|edit` | Lower what a connected agent may do this run. It never raises it: agents get at most what you chose from the AI button in the toolbar. |
-| `--headless` | Run with no window, API only (for batch generation). `zebractl` starts this mode for you. |
 
 The first build also builds the web player: `crates/zebra-web/build.rs`
 compiles that crate for `wasm32-unknown-unknown` (release, into
@@ -161,8 +160,7 @@ control**. The popover gives you a sentence to paste into any agent's chat. It
 points the agent at `zebractl --help`, by the tool's full path inside
 `Zebra.app`, so nothing has to be installed. Optional extras in the same
 popover: **Install command-line tool** (puts `zebractl` on your PATH, direct
-download builds only) and **Use with MCP** (a JSON snippet for apps that take
-an MCP server config). The switch is remembered between launches. Switching it
+download builds only). The switch is remembered between launches. Switching it
 off, or an agent running `zebractl disconnect`, closes the socket at once.
 
 A connected agent uses the same commands that the buttons and gestures use:
@@ -179,7 +177,7 @@ A connected agent uses the same commands that the buttons and gestures use:
   typing, the agent's edits wait. Each of the agent's changes is a normal,
   labelled undo step.
 
-See [docs/API.md](docs/API.md) for the protocol, `zebractl` and the MCP setup.
+See [docs/API.md](docs/API.md) for the protocol and `zebractl`.
 
 ## Repository layout
 
@@ -187,8 +185,8 @@ See [docs/API.md](docs/API.md) for the protocol, `zebractl` and the MCP setup.
 |---|---|
 | `crates/zebra-core` | Document model, the command bus (the only way to change state), undo, camera flights, themes, file format |
 | `crates/zebra-render` | Display list, text layout, vello GPU canvas, CPU captures, PDF export |
-| `crates/zebra-api` | JSON-RPC automation server, headless mode |
-| `crates/zebra-ctl` | `zebractl` CLI and MCP bridge (shipped inside Zebra.app) |
+| `crates/zebra-api` | JSON-RPC automation server |
+| `crates/zebra-ctl` | `zebractl` CLI (shipped inside Zebra.app) |
 | `crates/zebra-web` | Web player (core + renderer built for wasm32, page script in `web/`) and the HTML exporter; browser check in `tests/browser/check.js` |
 | `scripts/bundle-macos.sh`, `packaging/macos/` | Builds Zebra.app with zebractl inside; Info.plist and App Store entitlements |
 | `crates/zebra-app` | This app (`zebra` binary) |

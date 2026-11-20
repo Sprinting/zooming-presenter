@@ -195,7 +195,7 @@ impl Dispatcher {
         self.flush_events(server, docs);
 
         inner.shared.poll.store(!self.waits.is_empty() || !self.deferred.is_empty() || !self.jobs.is_empty() || !self.saves.is_empty(), std::sync::atomic::Ordering::SeqCst);
-        handled || self.disconnect_requested || self.quit_requested || shown(docs) != before
+        handled || self.disconnect_requested || shown(docs) != before
     }
 
     fn flush_events(&mut self, server: &ApiServer, docs: &mut dyn Documents) {
@@ -562,18 +562,7 @@ impl Dispatcher {
                 // Any agent may switch AI control off; only the human can turn
                 // it back on (there is deliberately no API to enable it).
                 self.disconnect_requested = true;
-                if self.headless {
-                    self.quit_requested = true;
-                }
                 json!({ "ok": true, "message": "AI control is now off. Only the person using Zebra can turn it back on." })
-            }
-            Call::Quit => {
-                if !self.headless {
-                    return Err(RpcError::app("permission", "quit is only available for headless instances")
-                        .hint("the human closes the window"));
-                }
-                self.quit_requested = true;
-                json!({ "ok": true })
             }
         })
     }

@@ -30,10 +30,6 @@ pub enum Command {
         place: Option<Placement>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<ElementId>,
-        /// Read `text` as Markdown: `**bold**`, `*italic*`, `~~strike~~`,
-        /// `[text](url)`, `- ` bullets, `1. ` numbers, nested by indenting.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        markdown: bool,
         /// Type on a shape (like double-clicking it): the text is centred
         /// on the shape, wraps inside it and is grouped with it. `x`,`y`
         /// are then ignored.
@@ -860,8 +856,6 @@ pub enum Query {
     /// The diagrams `add_diagram` accepts.
     Diagrams,
     History,
-    /// Layout lint: overlaps, text unreadable at its step, empty steps...
-    Lint,
     /// Templates and layouts that `apply_template` / `add_layout` accept,
     /// the person's saved templates (`saved`) and whether `sample` is there.
     Templates,

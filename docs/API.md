@@ -6,7 +6,7 @@ and the person keeps working in the same window while an agent edits. The
 API is off unless you turn it on.
 
 * **Transport:** JSON-RPC 2.0. Each message is one JSON object on its own line, sent over a Unix domain socket.
-* **Clients:** `zebractl` (a command-line tool), `zebractl mcp` (an MCP server for Claude Code and other MCP clients), or any program that can open a Unix socket.
+* **Clients:** `zebractl` (a command-line tool) or any program that can open a Unix socket.
 * **Rules for agents:** an agent never moves the person's camera, changes their selection or takes keyboard focus, unless the person grants it `full` permission. Agent edits show up in the person's undo history under the agent's name. The person can pause agents at any time, and the person always wins a conflict.
 
 ---
@@ -31,9 +31,8 @@ asking the person to switch it on.
 | How | What happens |
 |---|---|
 | `zebra --api [file.zebra]` | Opens the normal window with AI control already switched on. |
-| `zebra --headless --api [file]` | Runs with no window and the same API. Good for generating decks and for CI. The process prints `ZEBRA_API_READY {...}` on stdout when it is ready. |
 | `--api-socket <path>` | Uses this socket path instead of the default one. |
-| `--agent-permission observe\|edit` | Lowers the permission for this run. It never raises it: agents get at most the person's choice from the AI button in the toolbar (`edit` if they never chose). `--headless` uses that choice too. |
+| `--agent-permission observe\|edit` | Lowers the permission for this run. It never raises it: agents get at most the person's choice from the AI button in the toolbar (`edit` if they never chose). |
 
 ### Permissions
 
@@ -43,9 +42,7 @@ asking the person to switch it on.
 | `edit` (default) | Make undoable document edits. It gets its **own** camera and selection, which are drawn dashed and violet. Present-mode and tool commands are refused. |
 | `full` | Everything in `edit`, plus driving the visible camera, selection and present mode, and `open`/`save`. |
 
-`zebractl mcp --spawn-headless` starts its private instance with the person's choice from the AI button (`edit` if they never chose); no flag raises it.
-
-`--api` and `--headless` only work while AI control is switched on. Once the person or an agent (`disconnect`) switches it off, they stay off until the person switches it back on in Zebra.
+`--api` only works while AI control is switched on. Once the person or an agent (`disconnect`) switches it off, it stays off until the person switches it back on in Zebra.
 
 ### Discovery (like Chrome's `DevToolsActivePort`)
 
@@ -59,7 +56,7 @@ Each instance with the API enabled writes a discovery file when it starts and re
 ```json
 { "pid": 4242, "socket": "/var/folders/…/T/zebra-501/4242.sock",
   "token": "9f2c…", "version": "0.1.0", "api_version": 1,
-  "started_at": 1763380000, "headless": false }
+  "started_at": 1763380000 }
 ```
 
 Mac App Store builds are sandboxed, so the app's own Application Support and
@@ -161,7 +158,7 @@ than one document open, events carry the `document` id they come from.
 * An explicitly labelled `apply`, `batch` or transaction is always its own undo step. Single `apply` calls from the same agent that arrive less than 2 s apart are grouped into one step.
 * An agent that disconnects while its transaction is open has that transaction aborted.
 * **Sizes.** An element's own `w` and `h` are at scale 1; on the canvas it is that times its `transform.scale`. `bounds` (in `query element`) and the sizes `describe` prints are world units, scale included. So a box that should be 900 wide at scale 1.5 needs `w` 600. Or use `resize`, which takes the size on the canvas.
-* **Frames.** An element belongs to a frame only while it sits wholly inside it (`parent_frame`, the frame's `contents`). One that crosses the edge belongs to no frame, doesn't move with it, and `lint` reports it as `outside_frame`. Deleting a frame deletes only the frame: what was inside stays where it is. To remove both, delete the frame's `contents` too.
+* **Frames.** An element belongs to a frame only while it sits wholly inside it (`parent_frame`, the frame's `contents`). One that crosses the edge belongs to no frame and doesn't move with it. Deleting a frame deletes only the frame: what was inside stays where it is. To remove both, delete the frame's `contents` too.
 
 ### View: camera, selection, presenting (not undoable)
 
@@ -182,8 +179,7 @@ than one document open, events carry the `document` id they come from.
 | `open` | `{"path": "/abs/deck.zebra", "force"?: false}` | needs `full`; fails with `unsaved_changes` unless `force` is set, and with `already_open` when another document has that file open |
 | `save` | `{"path"?: "/abs/deck.zebra"}` | needs `full`; with no `path` it saves to the current file; fails with `already_open` when another document has that file open |
 | `save_template` | `{"name"?: "Quarterly review"}` | needs `full`; File › Save as Template: the document into the person's My Templates (default name: its title; a template of that name stays, this one becomes "name 2"). Returns `{"path", "template"}`; `apply_template` takes that `template` (`saved:<name>`) |
-| `disconnect` | – | switches AI control off in the app (the person must switch it back on); in headless mode it quits |
-| `quit` | – | headless instances only |
+| `disconnect` | – | switches AI control off in the app (the person must switch it back on) |
 
 Capture targets:
 
@@ -251,7 +247,7 @@ Errors are JSON-RPC errors whose `data` explains how to fix the problem:
 | -32000 | `unsaved_changes` | `open` or `close_document` would discard unsaved work. Save first, or pass `force` (`open`) or `discard` (`close_document`). |
 | -32000 | `already_open` | `open` or `save` names a file another document has open (two documents on one file overwrite each other's saves). The message names that document's id: work in it with `"document"`, or save to another path. |
 | -32000 | `timeout` | A `wait` condition was not met in time. |
-| -32000 | `unsupported` | This Zebra can't do it: `play` in a headless instance or off macOS, or `set_poster` with `at` where no video decoder exists (only macOS has one). |
+| -32000 | `unsupported` | This Zebra can't do it: `play` off macOS, or `set_poster` with `at` where no video decoder exists (only macOS has one). |
 | -32000 | `io`, `bad_file`, `no_path`, `unimplemented` | File and renderer problems. |
 
 **"Human wins":** while the person is dragging or typing, agent edits are
@@ -290,7 +286,6 @@ zebractl events --follow [--filter document_changed,step_changed]   # JSON lines
 zebractl wait idle | step 3 | revision 12 | mode present  [--timeout-ms 10000]
 zebractl raw '{"method":"state"}'
 zebractl commands [--markdown | --json]
-zebractl mcp [--spawn-headless [--file deck.zebra] [--zebra-bin path]]
 ```
 
 Global options:
@@ -307,49 +302,10 @@ valid values, and set exit status 1.
 
 ---
 
-## 5. MCP (Claude Code, Claude Desktop, other MCP clients)
+## 5. Walkthrough: a 3-step presentation
 
 ```sh
-# attach to the Zebra window you have open (switch on AI control in the app)
-claude mcp add zebra -- zebractl mcp
-
-# or give the agent its own private, invisible document
-claude mcp add zebra-headless -- zebractl mcp --spawn-headless
-```
-
-`zebractl mcp` is a stdio MCP server that supports protocol version
-`2025-06-18`. It connects to Zebra the first time a tool is called, and
-reconnects if Zebra restarts. In MCP the agent's default name is `Claude`;
-change it with `--agent`. It offers these tools. Their schemas come from the
-same Rust types as the API.
-
-| Tool | Does |
-|---|---|
-| `describe` | Returns the text outline. Start here. |
-| `get_state` | Returns the session state. |
-| `apply_commands` | `{commands: [...], label?}`: atomic, one undo step. |
-| `view` | `{command, wait?}`: camera, selection, presenting. Waits until the camera is idle. |
-| `query` | `{query: {q: …}}`: read-only queries. |
-| `capture` | `{target?, width?, height?}`: returns an MCP **image** content block. |
-| `undo` | `{redo?, steps?}`. |
-| `list_commands` | The full command reference as compact text. |
-| `list_documents` | The open documents. Every other tool takes an optional `document`. |
-| `new_document` | A new, empty document in its own window; returns its id. |
-| `close_document` | `{document, discard?}`: refused with unsaved changes unless `discard`. |
-| `copy_to` | `{ids, to, at?, dx?, dy?}`: copy elements into another open document. |
-| `import_file` | `{path, from?, to?}`: a PDF's pages as frames with path steps, one undo step. |
-
-The server's `instructions` teach the model the essentials. The ids are
-short (`f1`, `t3`). Coordinates are world units. x and y are the centre of
-an element, and y grows downward. Frames carry their contents when they
-move. Path steps are 0-based. Theme colour slots look like `theme:accent`.
-
----
-
-## 6. Walkthrough: a 3-step presentation
-
-```sh
-zebra --headless --api &      # or use the app with AI control switched on
+# Open Zebra and switch on AI control first.
 
 cat > deck.json <<'EOF'
 [
@@ -372,7 +328,6 @@ EOF
 
 zebractl apply -f deck.json --label "Build deck"   # one undo step
 zebractl describe                                  # check ids, text and the path
-zebractl query lint                                # overlaps, unreadable text
 zebractl screenshot --step 2 -o step2.png          # look at what the audience will see
 zebractl present 0 && zebractl wait step 0
 zebractl next && zebractl wait step 1
@@ -380,16 +335,12 @@ zebractl export pdf -o why-zebras.pdf
 zebractl save ~/why-zebras.zebra
 ```
 
-From an MCP client the same work is one `apply_commands` call with
-`label: "Build deck"`, then `capture {"target":{"step":2}}` to check the
-result.
-
 ---
 
-## 7. Command reference
+## 6. Command reference
 
 This section is generated by `zebractl commands --markdown`. The same data
-is returned by the `commands` method and the `list_commands` MCP tool.
+is returned by the `commands` method.
 
 <!-- BEGIN GENERATED -->
 ### Document commands
@@ -399,7 +350,7 @@ Send with `apply {"command": ...}` or inside `batch {"commands": [...]}`. Undoab
 | op | params | description | example |
 |---|---|---|---|
 | `add_element` | element: NewElement | Add any element. Most callers prefer the `add_*` helpers. | `{"op":"add_element","element":{"x":0,"y":0,"kind":{"type":"shape","shape":"ellipse"},"w":150,"h":150}}` |
-| `add_text` | color?: string, id?: string, markdown?: boolean, on?: string, place?: Placement, scale?: number, style?: TextStyle, text: string, x?: number, y?: number | Double-click-to-write: add a text box. `x`,`y` is the centre. If `scale` is omitted the text is sized to read well at the given `place` (or at scale 1). | `{"op":"add_text","text":"Hello world","x":0,"y":-200,"style":"title"}` |
+| `add_text` | color?: string, id?: string, on?: string, place?: Placement, scale?: number, style?: TextStyle, text: string, x?: number, y?: number | Double-click-to-write: add a text box. `x`,`y` is the centre. If `scale` is omitted the text is sized to read well at the given `place` (or at scale 1). | `{"op":"add_text","text":"Hello world","x":0,"y":-200,"style":"title"}` |
 | `add_frame` | add_to_path?: boolean, find_space?: boolean, h?: number, id?: string, name?: string, rotation?: number, style?: FrameStyle, w?: number, x?: number, y?: number | Add a frame. `w`,`h` are world units at scale 1 (default 800x600). | `{"op":"add_frame","x":0,"y":0,"w":800,"h":600,"style":"bracket","name":"Intro","add_to_path":true}` |
 | `add_shape` | fill?: string, h?: number, id?: string, rotation?: number, shape: ShapeKind, stroke?: string, w?: number, x?: number, y?: number | Add a shape. An empty `fill` or `stroke` means none. | `{"op":"add_shape","shape":"arrow","x":500,"y":0,"w":300,"h":60,"fill":"theme:accent"}` |
 | `add_image` | alt?: string, data_base64: string, id?: string, width?: number, x?: number, y?: number (or path: string, an absolute file path, instead of data_base64) | Insert an image from bytes (base64). The API also accepts `path`. | `{"op":"add_image","path":"/Users/me/logo.png","x":0,"y":300,"width":400,"alt":"Logo"}` |
@@ -501,7 +452,6 @@ Send with `query {"query": ...}`. Read-only.
 | `symbols` | limit?: integer, query?: string, set?: string | Search the clip-art library (sets, then symbols by name or keyword). With no `query` and no `set`, lists the sets. | `{"q":"symbols"}` |
 | `diagrams` |  | The diagrams `add_diagram` accepts. | `{"q":"diagrams"}` |
 | `history` |  |  | `{"q":"history"}` |
-| `lint` |  | Layout lint: overlaps, text unreadable at its step, empty steps... | `{"q":"lint"}` |
 | `templates` |  | Templates and layouts that `apply_template` / `add_layout` accept, the person's saved templates (`saved`) and whether `sample` is there. | `{"q":"templates"}` |
 | `fonts` |  | Font families installed on this machine (any can be used in a theme). | `{"q":"fonts"}` |
 | `perf` |  | Memory and speed: heap in use, cache sizes, frame times, repaints. | `{"q":"perf"}` |

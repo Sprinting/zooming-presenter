@@ -29,7 +29,7 @@ fn text_box(h: &mut Harness<'static, ZebraApp>, scale: f64, rotation: f64) -> St
         let app = h.state_mut();
         let out = app
             .editor
-            .apply(Command::AddText { text: WORDS.into(), x: c.x, y: c.y, style: Default::default(), scale: Some(scale / app.editor.view.camera.zoom), place: None, id: None, markdown: false, on: None, color: None }, H)
+            .apply(Command::AddText { text: WORDS.into(), x: c.x, y: c.y, style: Default::default(), scale: Some(scale / app.editor.view.camera.zoom), place: None, id: None, on: None, color: None }, H)
             .unwrap();
         let id = out.created[0].clone();
         if rotation != 0.0 {
@@ -180,7 +180,7 @@ fn no_width_handles_on_a_multi_selection() {
     let b = {
         let app = h.state_mut();
         let c = e.transform.center();
-        let out = app.editor.apply(Command::AddText { text: "Other".into(), x: c.x, y: c.y + e.size.h * e.transform.scale * 3.0, style: Default::default(), scale: Some(e.transform.scale), place: None, id: None, markdown: false, on: None, color: None }, H).unwrap();
+        let out = app.editor.apply(Command::AddText { text: "Other".into(), x: c.x, y: c.y + e.size.h * e.transform.scale * 3.0, style: Default::default(), scale: Some(e.transform.scale), place: None, id: None, on: None, color: None }, H).unwrap();
         out.created[0].clone()
     };
     h.state_mut().select(vec![a.clone().into(), b]);

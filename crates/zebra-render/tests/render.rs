@@ -249,8 +249,13 @@ fn rich_text_links_hit_and_formats_draw() {
     let r = zebra_render::Renderer::new();
     let mut ed = zebra_core::Editor::default();
     ed.measure = r.measure();
-    let cmd: zebra_core::Command = serde_json::from_value(serde_json::json!({"op":"add_text","id":"t","x":100,"y":50,"markdown":true,"text":"[Open the site](https://example.com) **now**"})).unwrap();
-    ed.apply(cmd, zebra_core::Origin::Human).unwrap();
+    for j in [
+        serde_json::json!({"op":"add_text","id":"t","x":100,"y":50,"text":"Open the site now"}),
+        serde_json::json!({"op":"format_text","id":"t","find":"Open the site","format":{"link":"https://example.com"}}),
+        serde_json::json!({"op":"format_text","id":"t","find":"now","format":{"bold":true}}),
+    ] {
+        ed.apply(serde_json::from_value(j).unwrap(), zebra_core::Origin::Human).unwrap();
+    }
     let e = ed.doc.get("t").unwrap().clone();
     let (w, _h) = e.world_size();
     // Left part of the text is the link; the far right ("now") is not.
