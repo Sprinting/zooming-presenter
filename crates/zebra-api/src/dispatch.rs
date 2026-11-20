@@ -73,7 +73,7 @@ fn shown(docs: &mut dyn Documents) -> u64 {
             e.in_transaction().hash(&mut h);
             format!(
                 "{:?}",
-                ((&v.camera, v.flight.is_some(), &v.selection, &v.agent_selection, &v.agent_camera, &v.mode, &v.tool), (&v.present, v.follow_agent, v.agent_paused, &v.agent_permission, &v.agent_status, &e.agent_cursor, e.agent_cursor_time.to_bits()))
+                ((&v.camera, v.flight.is_some(), &v.selection, &v.agent_selection, &v.agent_camera, &v.mode, &v.tool), (&v.present, v.follow_agent, v.agent_paused, &v.agent_permission, v.beta_features, &v.agent_status, &e.agent_cursor, e.agent_cursor_time.to_bits()))
             )
             .hash(&mut h);
         }
@@ -294,6 +294,8 @@ impl Dispatcher {
             let Call::Import { path, first, last } = p.call else { unreachable!() };
             let theme = editor.theme();
             let has_soundtrack = editor.doc.soundtrack.is_some();
+            // Importing PowerPoint is a beta feature (told once the file is read).
+            let pptx_allowed = editor.check_beta(zebra_core::beta::BetaFeature::PptxImport).is_ok();
             let (tx, rx) = std::sync::mpsc::channel();
             let waker = server.inner.shared.waker.clone();
             let (doc, origin) = (doc.clone(), p.origin.clone());
@@ -301,6 +303,9 @@ impl Dispatcher {
             let spawned = std::thread::Builder::new().name("zebra-import".into()).spawn(move || {
                 let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 let deck = zebra_import::open(&path).and_then(|r| {
+                    if !pptx_allowed && r.kind() == "PowerPoint" {
+                        return Err(zebra_import::ImportError::BetaOff);
+                    }
                     let mut o = zebra_import::Options::all(theme);
                     o.first = first.unwrap_or(1);
                     o.last = last.unwrap_or(usize::MAX);
@@ -747,12 +752,17 @@ fn import_error(e: zebra_import::ImportError) -> RpcError {
         E::NoEngine(_) => "no_engine",
         E::Read(_) => "io",
         E::Cancelled => "cancelled",
+        E::BetaOff => zebra_core::beta::CODE,
     };
     let r = RpcError::app(code, e.to_string());
     match e {
         E::NotSupported => r.hint(format!("Zebra imports: {}", zebra_import::EXTENSIONS.join(", "))),
         E::OldPowerPoint => r.hint("open it in PowerPoint or Keynote and save it as .pptx, then import that"),
         E::AllHidden => r.hint("choose slides that are shown, or show the hidden ones in PowerPoint first"),
+        E::BetaOff => match zebra_core::beta::BetaFeature::PptxImport.error().hint {
+            Some(h) => r.hint(h),
+            None => r,
+        },
         _ => r,
     }
 }
@@ -1147,7 +1157,7 @@ fn wait_result(editor: &Editor) -> Value {
 
 /// Event names, for `subscribe {events}` validation.
 pub const EVENT_NAMES: &[&str] =
-    &["document_changed", "selection_changed", "mode_changed", "step_changed", "agents_paused", "saved"];
+    &["document_changed", "selection_changed", "mode_changed", "step_changed", "agents_paused", "saved", "beta_features"];
 
 pub(crate) fn _assert_event_names(e: &Event) -> &'static str {
     // Compile-time reminder: keep EVENT_NAMES in sync with zebra_core::editor::Event.
@@ -1158,5 +1168,6 @@ pub(crate) fn _assert_event_names(e: &Event) -> &'static str {
         Event::StepChanged { .. } => EVENT_NAMES[3],
         Event::AgentsPaused { .. } => EVENT_NAMES[4],
         Event::Saved { .. } => EVENT_NAMES[5],
+        Event::BetaFeatures { .. } => EVENT_NAMES[6],
     }
 }

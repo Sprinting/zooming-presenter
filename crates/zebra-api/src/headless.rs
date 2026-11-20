@@ -9,7 +9,7 @@ use zebra_core::Editor;
 
 use crate::{ApiOptions, ApiServer, Dispatcher};
 
-fn run_loop(opts: ApiOptions, open: Option<PathBuf>, stop: &AtomicBool, ready: impl FnOnce(&ApiServer)) -> anyhow::Result<()> {
+fn run_loop(opts: ApiOptions, open: Option<PathBuf>, beta: bool, stop: &AtomicBool, ready: impl FnOnce(&ApiServer)) -> anyhow::Result<()> {
     let signal = Arc::new((Mutex::new(false), Condvar::new()));
     let s2 = signal.clone();
     let waker: crate::Waker = Arc::new(move || {
@@ -26,6 +26,9 @@ fn run_loop(opts: ApiOptions, open: Option<PathBuf>, stop: &AtomicBool, ready: i
     })));
     let mut editor = Editor::default();
     editor.measure = renderer.measure();
+    // The person's switch, which agents can't change.
+    editor.set_beta_features(beta);
+    editor.drain_events();
     if let Some(p) = open {
         let doc = zebra_core::io::load(&p).map_err(|e| anyhow::anyhow!("cannot open {}: {e}", p.display()))?;
         editor.load(doc, Some(p));
@@ -70,13 +73,20 @@ pub struct HeadlessHandle {
 }
 
 impl HeadlessHandle {
+    /// Beta features off, as a new install of the app has them.
     pub fn spawn(opts: ApiOptions, open: Option<PathBuf>) -> anyhow::Result<HeadlessHandle> {
+        Self::spawn_with_beta(opts, open, false)
+    }
+
+    /// [`HeadlessHandle::spawn`] with beta features on or off (see
+    /// `zebra_core::beta`), as if the person had set them so.
+    pub fn spawn_with_beta(opts: ApiOptions, open: Option<PathBuf>, beta: bool) -> anyhow::Result<HeadlessHandle> {
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = std::sync::mpsc::channel();
         let stop2 = stop.clone();
         let thread = std::thread::Builder::new().name("zebra-headless".into()).spawn(move || {
             let tx2 = tx.clone();
-            let r = run_loop(opts, open, &stop2, move |s| {
+            let r = run_loop(opts, open, beta, &stop2, move |s| {
                 let _ = tx2.send(Ok((s.socket_path(), s.token().to_string())));
             });
             if let Err(e) = &r {
