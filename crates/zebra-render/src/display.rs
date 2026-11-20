@@ -436,7 +436,7 @@ impl Ctx<'_> {
     /// drawn if cached, else the picture already drawn shows through.
     fn page_tiles(&self, page: &PageRef, whole: &Affine, fw: f64, fh: f64, c: Crop, pic_w: u32) -> Vec<Item> {
         use crate::images::TILE_PREFIX;
-        use crate::pages::{tile_for, PageRequest, MAX_PAGE_PX, MAX_TILE_PIXELS, TILE};
+        use crate::pages::{tile_for, PageRequest, MAX_PAGE_PX, MAX_TILE_PIXELS};
         let mut out = vec![];
         let Some(raster) = self.r.page_raster() else { return out };
         let Some(pdf) = self.editor.doc.assets.get(&page.pdf) else { return out };
