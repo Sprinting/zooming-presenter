@@ -8,6 +8,7 @@ use zebra_core::{Command, Origin, Theme};
 
 use crate::app::ZebraApp;
 use crate::style;
+use crate::widgets as w;
 
 const H: Origin = Origin::Human;
 /// Seconds without a change before a burst of edits becomes one undo step.
@@ -15,6 +16,8 @@ const COMMIT_AFTER: f64 = 0.8;
 /// Which styles get a Weight pop-up next to their font: Title, Subtitle,
 /// Body. (Kartik hasn't decided whether Subtitle and Body get one.)
 const WEIGHT_POPUP: [bool; 3] = [true, true, true];
+/// The Weight pop-up's width.
+const WEIGHT_W: f32 = 104.0;
 
 pub struct ThemeEditor {
     /// The theme being edited (a custom theme of this document).
@@ -109,10 +112,13 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
-        .default_width(320.0)
-        .default_pos(ctx.content_rect().right_top() + egui::vec2(-360.0, 70.0))
+        .default_width(WIDTH)
+        .default_pos(ctx.content_rect().right_top() + egui::vec2(-WIDTH - 40.0, 70.0))
         .show(ctx, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false, false]).max_height((ctx.content_rect().height() - 200.0).min(560.0)).show(ui, |ui| {
+            // A fixed width: the rows fill it, so an auto-sizing window
+            // grew a little every frame.
+            ui.set_width(WIDTH);
+            egui::ScrollArea::vertical().auto_shrink([false, true]).max_height((ctx.content_rect().height() - 200.0).min(560.0)).show(ui, |ui| {
                 changed |= editor_ui(app, ui, &mut te);
             });
             footer(app, ui, &mut te, &mut close);
@@ -153,19 +159,28 @@ fn apply_draft(app: &mut ZebraApp, te: &mut ThemeEditor, now: f64) {
     te.last_change = Some(now);
 }
 
+/// Content width of the theme editor.
+const WIDTH: f32 = 440.0;
+
 /// Returns true when the draft changed.
+///
+/// Laid out like the inspector: 11 pt labels right-aligned in one column,
+/// the kit's controls after them (text field, pop-up buttons, colour
+/// wells, number fields with steppers). It used to mix egui combo boxes,
+/// drag values and buttons, with each row's controls at a different x.
 fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
     let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label(crate::t!("theme-editor-name"));
-        changed |= ui.text_edit_singleline(&mut te.draft.name).lost_focus();
+    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+    w::row(ui, &crate::t!("theme-editor-name"), |ui| {
+        let wdt = ui.available_width();
+        changed |= w::text_field(ui, &mut te.draft.name, wdt, "").lost_focus();
     });
-    ui.horizontal(|ui| {
-        ui.label(crate::t!("theme-editor-start-from"));
-        ui.menu_button(crate::t!("theme-editor-choose-theme"), |ui| {
+    w::row(ui, &crate::t!("theme-editor-start-from"), |ui| {
+        let wdt = ui.available_width();
+        w::popup_button(ui, "start-from", &crate::t!("theme-editor-choose-theme"), wdt, |ui| {
             let all: Vec<Theme> = Theme::builtins().into_iter().chain(app.editor.doc.themes.iter().cloned()).collect();
             for t in all {
-                if t.id != te.draft.id && ui.selectable_label(false, crate::words::theme_name(&t)).clicked() {
+                if t.id != te.draft.id && w::menu_item(ui, &crate::words::theme_name(&t), None).clicked() {
                     let (id, name) = (te.draft.id.clone(), te.draft.name.clone());
                     te.draft = t;
                     te.draft.id = id;
@@ -176,8 +191,8 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
         });
     });
 
-    section(ui, &crate::t!("theme-editor-section-colours"));
-    egui::Grid::new("theme-colours").num_columns(4).spacing([10.0, 6.0]).show(ui, |ui| {
+    let _ = section(ui, &crate::t!("theme-editor-section-colours"));
+    {
         let d = &mut te.draft;
         let mut rows: Vec<(String, &mut String)> = vec![
             (crate::t!("theme-editor-colour-background"), &mut d.background),
@@ -192,33 +207,36 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
         for (i, s) in d.shapes.iter_mut().enumerate() {
             rows.push((shape_names[i].clone(), s));
         }
-        for (i, (label, hex)) in rows.into_iter().enumerate() {
-            let mut c = hex_to_c32(hex);
-            ui.label(label);
-            if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).changed() {
-                *hex = c32_to_hex(c);
-                changed = true;
-            }
-            if i % 2 == 1 {
-                ui.end_row();
-            }
+        // Two label/well pairs to a line; each label in its own column.
+        let mut it = rows.into_iter().enumerate().peekable();
+        while it.peek().is_some() {
+            ui.horizontal(|ui| {
+                for _ in 0..2 {
+                    let Some((i, (label, hex))) = it.next() else { break };
+                    let p = style::Palette::of(ui.ctx());
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(w::LABEL_W, w::H_REGULAR), egui::Sense::hover());
+                    ui.painter().text(egui::pos2(r.right() - 2.0, r.center().y), egui::Align2::RIGHT_CENTER, label, style::ui_font(11.0), p.weak);
+                    if let Some(c) = w::color_well(ui, ("theme-colour", i), hex_to_c32(hex)) {
+                        *hex = c32_to_hex(c);
+                        changed = true;
+                    }
+                }
+            });
         }
-    });
+    }
 
-    section(ui, &crate::t!("theme-editor-section-fonts"));
+    let _ = section(ui, &crate::t!("theme-editor-section-fonts"));
     let families = te.families.clone();
     let font_tip = crate::t!("theme-editor-font-tip");
-    let labels = [crate::t!("theme-editor-font-title"), crate::t!("theme-editor-font-subtitle"), crate::t!("theme-editor-font-body")];
-    // Label, Font pop-up, Weight pop-up, size: one row per style, the
-    // columns lined up.
-    egui::Grid::new("theme-fonts").num_columns(4).spacing([6.0, 6.0]).show(ui, |ui| {
-        for (i, label) in labels.into_iter().enumerate() {
-            let st = match i {
-                0 => &mut te.draft.title,
-                1 => &mut te.draft.subtitle,
-                _ => &mut te.draft.body,
-            };
-            ui.label(RichText::new(label).size(12.0)).on_hover_text(&font_tip);
+    for (i, label) in [crate::t!("theme-editor-font-title"), crate::t!("theme-editor-font-subtitle"), crate::t!("theme-editor-font-body")].into_iter().enumerate() {
+        let st = match i {
+            0 => &mut te.draft.title,
+            1 => &mut te.draft.subtitle,
+            _ => &mut te.draft.body,
+        };
+        let query = &mut te.font_query[i];
+        // Label, Font pop-up, Weight pop-up, size: one row per style.
+        w::row(ui, &label, |ui| {
             let shown = match st.font.as_str() {
                 "Sans" => crate::t!("theme-editor-font-sans-shown"),
                 "Serif" => crate::t!("theme-editor-font-serif-shown"),
@@ -226,122 +244,142 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
                 "Hand" => crate::t!("theme-editor-font-hand-shown"),
                 f => f.to_string(),
             };
-            // One width for the three, so the rows line up; a long
-            // installed font's name is cut short (its full name is in the
-            // list).
-            egui::ComboBox::from_id_salt(("font", i)).selected_text(shown).width(196.0).truncate().height(320.0).show_ui(ui, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut te.font_query[i]).hint_text(crate::t!("theme-editor-search-fonts")));
-                let q = te.font_query[i].to_lowercase();
-                for f in families.iter().filter(|f| q.is_empty() || f.to_lowercase().contains(&q)).take(400) {
-                    if ui.selectable_label(st.font == *f, font_label(f)).clicked() && st.font != *f {
-                        st.font = f.clone();
-                        // Keep the weight if the new font has it, else
-                        // take its nearest face.
-                        let have: Vec<u16> = app.font_faces(f).iter().map(|x| x.weight).collect();
-                        if !have.is_empty() {
-                            st.weight = zebra_core::theme::nearest_weight(&have, st.weight);
+            // Room for the Weight pop-up, the size field, its stepper and
+            // the gaps: a row that overflowed widened every row after it.
+            let weight_w = if WEIGHT_POPUP[i] { WEIGHT_W + 6.0 } else { 0.0 };
+            let wdt = (ui.available_width() - 112.0 - weight_w).max(100.0);
+            w::popup_button_named(ui, ("font", i), Some(&label), &shown, wdt, |ui| {
+                ui.add_space(2.0);
+                let sw = ui.available_width().max(200.0);
+                w::search_field(ui, query, sw, &crate::t!("theme-editor-search-fonts"));
+                ui.add_space(4.0);
+                let q = query.to_lowercase();
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for f in families.iter().filter(|f| q.is_empty() || f.to_lowercase().contains(&q)).take(400) {
+                        if w::menu_check(ui, st.font == *f, &font_label(f), None).clicked() && st.font != *f {
+                            st.font = f.clone();
+                            // Keep the weight if the new font has it, else
+                            // take its nearest face.
+                            let have: Vec<u16> = app.font_faces(f).iter().map(|x| x.weight).collect();
+                            if !have.is_empty() {
+                                st.weight = zebra_core::theme::nearest_weight(&have, st.weight);
+                            }
+                            changed = true;
                         }
-                        changed = true;
                     }
-                }
-            });
+                });
+            })
+            .on_hover_text(&font_tip);
             if WEIGHT_POPUP[i] {
                 let faces = app.font_faces(&st.font);
                 let shown = crate::words::style_face_name(&faces, st.weight);
-                egui::ComboBox::from_id_salt(("weight", i)).selected_text(shown).width(96.0).truncate().height(320.0).show_ui(ui, |ui| {
+                w::popup_button_named(ui, ("weight", i), Some(&crate::t!("theme-editor-weight")), &shown, WEIGHT_W, |ui| {
                     for f in &faces {
-                        if ui.selectable_label(st.weight == f.weight, crate::words::face_name(f)).clicked() && st.weight != f.weight {
+                        if w::menu_check(ui, st.weight == f.weight, &crate::words::face_name(f), None).clicked() && st.weight != f.weight {
                             st.weight = f.weight;
                             changed = true;
                         }
                     }
                 })
-                .response
                 .on_hover_text(crate::t!("theme-editor-weight"));
-            } else {
-                ui.label("");
             }
-            let r = ui.add(egui::DragValue::new(&mut st.size).range(8.0..=400.0).speed(0.5).suffix(format!(" {}", crate::t!("theme-editor-unit-pt"))));
-            changed |= r.drag_stopped() || (r.changed() && !r.dragged());
-            ui.end_row();
-        }
-    });
+            let mut size = st.size;
+            if w::number_field(ui, &mut size, w::Num::pt().range(8.0, 400.0).step(1.0).decimals(1).width(78.0)).changed() {
+                st.size = size;
+                changed = true;
+            }
+        });
+    }
     if !te.draft.fonts.is_empty() {
         let names: Vec<&str> = te.draft.fonts.keys().map(|s| s.as_str()).collect();
-        ui.label(RichText::new(crate::t!("theme-editor-embedded-fonts", fonts = names.join(", "))).size(11.0).weak());
+        w::caption(ui, crate::t!("theme-editor-embedded-fonts", fonts = names.join(", ")));
     }
 
-    section(ui, &crate::t!("theme-editor-section-background"));
-    ui.horizontal(|ui| {
-        ui.label(crate::t!("theme-editor-picture"));
-        if ui.button(if te.draft.background_image.is_some() { crate::t!("theme-editor-replace") } else { crate::t!("theme-editor-choose") }).clicked() {
+    let _ = section(ui, &crate::t!("theme-editor-section-background"));
+    w::row(ui, &crate::t!("theme-editor-picture"), |ui| {
+        if w::push_button(ui, &if te.draft.background_image.is_some() { crate::t!("theme-editor-replace") } else { crate::t!("theme-editor-choose") }).clicked() {
             if let Some(key) = pick_image(app) {
                 te.draft.background_image = Some(key);
                 changed = true;
             }
         }
-        if te.draft.background_image.is_some() && ui.button(crate::t!("theme-editor-remove")).clicked() {
+        if te.draft.background_image.is_some() && w::push_button(ui, &crate::t!("theme-editor-remove")).clicked() {
             te.draft.background_image = None;
             changed = true;
         }
     });
 
-    ui.add_space(4.0);
-    ui.label(RichText::new(crate::t!("theme-editor-3d-background")).font(style::bold(12.0)))
-        .on_hover_text(crate::t!("theme-editor-3d-background-tip"));
+    section(ui, &crate::t!("theme-editor-3d-background")).on_hover_text(crate::t!("theme-editor-3d-background-tip"));
     let mut remove = None;
     for (i, l) in te.draft.layers.iter_mut().enumerate() {
-        ui.horizontal(|ui| {
-            ui.label(crate::t!("theme-editor-layer", number = (i + 1)));
-            let r = ui.add(egui::Slider::new(&mut l.depth, 0.0..=1.0).show_value(false).text(crate::t!("theme-editor-depth"))).on_hover_text(crate::t!("theme-editor-depth-tip"));
-            changed |= r.drag_stopped() || (r.changed() && !r.dragged());
-            let r = ui.add(egui::Slider::new(&mut l.opacity, 0.1..=1.0).show_value(false).text(crate::t!("theme-editor-opacity")));
-            changed |= r.drag_stopped() || (r.changed() && !r.dragged());
-            if ui.small_button(crate::t!("theme-editor-remove-layer-button")).on_hover_text(crate::t!("theme-editor-remove-layer")).clicked() {
+        w::row(ui, &crate::t!("theme-editor-layer", number = (i + 1)), |ui| {
+            // An icon, not the ✕ glyph: the UI font has no ✕ and drew a box.
+            let tip = crate::t!("theme-editor-remove-layer");
+            if w::icon_button(ui, crate::icons::Icon::Close, 20.0, true, false, &tip).on_hover_text(&tip).clicked() {
                 remove = Some(i);
             }
+        });
+        let (depth, opacity) = (crate::t!("theme-editor-depth"), crate::t!("theme-editor-opacity"));
+        w::row(ui, &depth, |ui| {
+            let r = w::slider(ui, &mut l.depth, 0.0..=1.0, 180.0, &depth).on_hover_text(crate::t!("theme-editor-depth-tip"));
+            changed |= r.drag_stopped() || (r.changed() && !r.dragged());
+        });
+        w::row(ui, &opacity, |ui| {
+            let r = w::slider(ui, &mut l.opacity, 0.1..=1.0, 180.0, &opacity);
+            changed |= r.drag_stopped() || (r.changed() && !r.dragged());
         });
     }
     if let Some(i) = remove {
         te.draft.layers.remove(i);
         changed = true;
     }
-    if te.draft.layers.len() < MAX_LAYERS && ui.button(crate::t!("theme-editor-add-layer")).clicked() {
-        if let Some(asset) = pick_image(app) {
-            // New layers come nearer than the ones behind them.
-            let depth = 0.15 + 0.25 * te.draft.layers.len() as f64;
-            te.draft.layers.push(BackgroundLayer { asset, depth, opacity: 1.0 });
-            changed = true;
-        }
+    if te.draft.layers.len() < MAX_LAYERS {
+        w::row(ui, "", |ui| {
+            if w::push_button(ui, &crate::t!("theme-editor-add-layer")).clicked() {
+                if let Some(asset) = pick_image(app) {
+                    // New layers come nearer than the ones behind them.
+                    let depth = 0.15 + 0.25 * te.draft.layers.len() as f64;
+                    te.draft.layers.push(BackgroundLayer { asset, depth, opacity: 1.0 });
+                    changed = true;
+                }
+            }
+        });
     }
 
     changed
 }
 
-/// Save as Theme… and Done, under the scrolling part.
+/// Save as Theme… and Done, under the scrolling part: a Mac dialog button
+/// row, the default button (Done) rightmost, 12 pt between the buttons.
 fn footer(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor, close: &mut bool) {
-    ui.separator();
-    ui.horizontal(|ui| {
-        if ui.button(crate::t!("theme-editor-save-as-theme")).on_hover_text(crate::t!("theme-editor-save-as-theme-tip")).clicked() {
+    ui.add_space(8.0);
+    w::separator(ui);
+    ui.add_space(12.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        if w::default_button_w(ui, &crate::t!("theme-editor-done"), 80.0).clicked() {
+            *close = true;
+        }
+        if w::push_button(ui, &crate::t!("theme-editor-save-as-theme")).on_hover_text(crate::t!("theme-editor-save-as-theme-tip")).clicked() {
             te.status = Some(match crate::library::themes_dir().map(|d| crate::library::save_theme(&app.editor.doc, &te.draft, &d)) {
                 Some(Ok(p)) => crate::t!("theme-editor-saved", name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
                 Some(Err(e)) => crate::t!("theme-editor-save-failed", error = e.message.as_str()),
                 None => crate::t!("theme-editor-no-themes-folder"),
             });
         }
-        if ui.button(crate::t!("theme-editor-done")).clicked() {
-            *close = true;
-        }
     });
     if let Some(s) = &te.status {
-        ui.label(RichText::new(s).size(11.0).weak());
+        w::caption(ui, s.clone());
     }
 }
 
-fn section(ui: &mut Ui, title: &str) {
-    ui.add_space(8.0);
-    ui.label(RichText::new(title).font(style::bold(12.0)));
+/// A group heading: 13 pt semibold, as in the inspector.
+fn section(ui: &mut Ui, title: &str) -> egui::Response {
+    let p = style::Palette::of(ui.ctx());
+    ui.add_space(10.0);
+    let r = ui.label(RichText::new(title).font(style::semibold(13.0)).color(p.text));
     ui.add_space(2.0);
+    r
 }
 
 /// Ask for a picture and store it as a document asset; returns its key.

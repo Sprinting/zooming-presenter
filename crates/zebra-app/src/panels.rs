@@ -146,7 +146,7 @@ fn toolbar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     }
     ai_item(app, &mut right, p);
     let ex = w::toolbar_item(&mut right, Icon::Share, &crate::t!("toolbar-export"), ToolbarState { menu: true, enabled: !app.editor.doc.elements.is_empty(), ..st() }).on_hover_text(&crate::t!("toolbar-export-tip"));
-    egui::Popup::menu(&ex).width(220.0).show(|ui| {
+    egui::Popup::menu(&ex).style(crate::widgets::menu_style).width(220.0).show(|ui| {
         if w::menu_item(ui, &crate::t!("toolbar-export-pdf"), Action::ExportPdf.shortcut_text().as_deref()).clicked() {
             app.queued.push(Action::ExportPdf);
         }
@@ -158,7 +158,7 @@ fn toolbar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         }
     });
     let th = w::toolbar_item(&mut right, Icon::Theme, &crate::t!("toolbar-theme"), ToolbarState { menu: true, ..st() }).on_hover_text(&crate::t!("toolbar-theme-tip"));
-    egui::Popup::menu(&th).width(230.0).show(|ui| theme_menu(app, ui));
+    egui::Popup::menu(&th).style(crate::widgets::menu_style).width(230.0).show(|ui| theme_menu(app, ui));
     let right_start = right.min_rect().left();
 
     // Centre group, centred in the window when it fits between the others.
@@ -183,7 +183,7 @@ fn st() -> ToolbarState {
 
 fn view_item(app: &mut ZebraApp, ui: &mut Ui) {
     let r = w::toolbar_item(ui, Icon::SidebarLeft, &crate::t!("toolbar-view"), ToolbarState { menu: true, ..st() }).on_hover_text(&crate::t!("toolbar-view-tip"));
-    egui::Popup::menu(&r).width(230.0).show(|ui| {
+    egui::Popup::menu(&r).style(crate::widgets::menu_style).width(230.0).show(|ui| {
         if w::menu_check(ui, app.show_sidebar, &crate::t!("toolbar-view-path-sidebar"), Action::ToggleSidebar.shortcut_text().as_deref()).clicked() {
             app.queued.push(Action::ToggleSidebar);
         }
@@ -215,7 +215,7 @@ fn zoom_item(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let galley = painter.layout_no_wrap(crate::t!("toolbar-zoom"), style::ui_font(11.0), p.text.gamma_multiply(0.9));
     painter.galley(Pos2::new(rect.center().x - galley.size().x / 2.0, rect.bottom() - galley.size().y - 1.0), galley, p.text);
     let resp = resp.on_hover_text(&crate::t!("toolbar-zoom"));
-    egui::Popup::menu(&resp).width(200.0).show(|ui| {
+    egui::Popup::menu(&resp).style(crate::widgets::menu_style).width(200.0).show(|ui| {
         if w::menu_item(ui, &crate::t!("toolbar-zoom-to-fit"), Action::FitAll.shortcut_text().as_deref()).clicked() {
             app.queued.push(Action::FitAll);
         }
@@ -251,7 +251,7 @@ fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     if play.clicked() {
         app.queued.push(Action::PresentStart);
     }
-    egui::Popup::context_menu(&play).show(|ui| {
+    egui::Popup::context_menu(&play).style(crate::widgets::menu_style).show(|ui| {
         if w::menu_item(ui, &crate::t!("toolbar-play-from-start"), Action::PresentStart.shortcut_text().as_deref()).clicked() {
             app.queued.push(Action::PresentStart);
         }
@@ -273,7 +273,7 @@ fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     }
     let fs = app.editor.view.frame_style;
     let fr = w::toolbar_item(ui, Icon::Frame(fs), &crate::t!("toolbar-frame"), ToolbarState { active: tool == Tool::Frame, menu: true, ..st() }).on_hover_text({ let k = Action::FrameTool.shortcut_text().unwrap_or_default(); format!("{}\n{}", crate::i18n::with_shortcut(crate::t!("toolbar-frame"), &Action::FrameTool), crate::t!("toolbar-frame-tip-detail", key = k.as_str())) });
-    egui::Popup::menu(&fr).width(190.0).show(|ui| {
+    egui::Popup::menu(&fr).style(crate::widgets::menu_style).width(190.0).show(|ui| {
         for s in FrameStyle::ALL {
             if menu_icon_row(ui, Icon::Frame(s), frame_name(s), fs == s && tool == Tool::Frame).clicked() {
                 app.queued.push(Action::SetFrameStyle(s));
@@ -287,7 +287,7 @@ fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     });
     let shape_active = matches!(tool, Tool::Rectangle | Tool::Ellipse | Tool::Triangle);
     let sh = w::toolbar_item(ui, Icon::Shapes, &crate::t!("toolbar-shape"), ToolbarState { active: shape_active, menu: true, ..st() }).on_hover_text(&crate::t!("toolbar-shape-tip"));
-    egui::Popup::menu(&sh).width(200.0).show(|ui| {
+    egui::Popup::menu(&sh).style(crate::widgets::menu_style).width(200.0).show(|ui| {
         for (i, t, l) in [(Icon::Rect, Tool::Rectangle, &crate::t!("toolbar-shape-rectangle")), (Icon::Ellipse, Tool::Ellipse, &crate::t!("toolbar-shape-ellipse"))] {
             if menu_icon_row(ui, i, l, tool == t).clicked() {
                 app.queued.push(Action::SetTool(t));
@@ -305,7 +305,7 @@ fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         _ => Icon::Arrow,
     };
     let ln = w::toolbar_item(ui, line_icon, &crate::t!("toolbar-line"), ToolbarState { active: line_active, menu: true, ..st() }).on_hover_text(&crate::t!("toolbar-line-tip"));
-    egui::Popup::menu(&ln).width(190.0).show(|ui| {
+    egui::Popup::menu(&ln).style(crate::widgets::menu_style).width(190.0).show(|ui| {
         for (i, t, l) in [(Icon::Line, Tool::Line, &crate::t!("toolbar-line")), (Icon::Arrow, Tool::Arrow, &crate::t!("toolbar-line-arrow")), (Icon::Pen, Tool::Pen, &crate::t!("toolbar-line-draw"))] {
             if menu_icon_row(ui, i, l, tool == t).clicked() {
                 app.queued.push(Action::SetTool(t));
@@ -313,7 +313,7 @@ fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         }
     });
     let md = w::toolbar_item(ui, Icon::Media, &crate::t!("toolbar-media"), ToolbarState { menu: true, ..st() }).on_hover_text(&crate::t!("toolbar-media-tip"));
-    egui::Popup::menu(&md).width(200.0).show(|ui| {
+    egui::Popup::menu(&md).style(crate::widgets::menu_style).width(200.0).show(|ui| {
         if menu_icon_row(ui, Icon::Image, &crate::t!("toolbar-media-image"), false).clicked() {
             app.queued.push(Action::InsertImage);
         }
@@ -382,19 +382,19 @@ fn theme_menu(app: &mut ZebraApp, ui: &mut Ui) {
     }
     let mine = crate::library::list_themes();
     if !mine.is_empty() {
-        ui.separator();
-        ui.label(RichText::new(&crate::t!("toolbar-theme-my-themes")).size(11.0).weak());
+        w::menu_separator(ui);
+        // NSMenu section header: 11 pt semibold, secondary colour, row inset.
+        let (hr, _) = ui.allocate_exact_size(EVec2::new(ui.available_width(), 20.0), Sense::hover());
+        ui.painter().text(Pos2::new(hr.left() + 10.0, hr.center().y), Align2::LEFT_CENTER, crate::t!("toolbar-theme-my-themes"), style::semibold(11.0), p_weak(ui));
         for (_, doc, t) in mine {
-            if ui.button(crate::words::theme_name(&t)).clicked() {
+            if w::menu_item(ui, &crate::words::theme_name(&t), None).clicked() {
                 crate::theme_editor::apply_library_theme(app, &doc, &t);
-                ui.close();
             }
         }
     }
-    ui.separator();
-    if ui.button(&crate::t!("toolbar-theme-customize")).on_hover_text(&crate::t!("toolbar-theme-customize-tip")).clicked() {
+    w::menu_separator(ui);
+    if w::menu_item(ui, &crate::t!("toolbar-theme-customize"), None).on_hover_text(crate::t!("toolbar-theme-customize-tip")).clicked() {
         app.queued.push(Action::ThemeEditor);
-        ui.close();
     }
 }
 
@@ -594,7 +594,7 @@ fn status_bar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
     let icon = Rect::from_center_size(Pos2::new(rect.left() + 7.0, rect.center().y), EVec2::splat(13.0));
     paint_icon(ui.painter(), icon, Icon::Sparkles, if connected { AGENT } else { p.weak });
     let max_w = rect.width() - 30.0;
-    let mut job = egui::text::LayoutJob::simple_singleline(text, style::ui_font(11.5), color);
+    let mut job = egui::text::LayoutJob::simple_singleline(text, style::ui_font(11.0), color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(max_w);
     let galley = ui.painter().layout_job(job);
     ui.painter().galley(Pos2::new(icon.right() + 6.0, rect.center().y - galley.size().y / 2.0), galley, color);
@@ -792,7 +792,7 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
         let matches: Vec<Action> = all.into_iter().filter(|a| ql.split_whitespace().all(|w| a.label().to_lowercase().contains(w))).collect();
         // The list may be shorter than when the row was picked.
         sel = sel.min(matches.len().saturating_sub(1));
-        let m = egui::Modal::new(app.uid("palette")).backdrop_color(Color32::TRANSPARENT).show(ctx, |ui| {
+        let m = egui::Modal::new(app.uid("palette")).frame(style::palette_frame(p)).backdrop_color(Color32::TRANSPARENT).show(ctx, |ui| {
             ui.set_width(440.0);
             let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(&crate::t!("palette-hint")).desired_width(f32::INFINITY).font(FontId::proportional(15.0)));
             r.request_focus();
@@ -847,7 +847,7 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
     }
 
     if app.show_shortcuts {
-        let m = egui::Modal::new(app.uid("shortcuts")).show(ctx, |ui| {
+        let m = egui::Modal::new(app.uid("shortcuts")).frame(style::sheet_frame(p)).show(ctx, |ui| {
             ui.set_width(540.0);
             ui.label(RichText::new(&crate::t!("shortcuts-title")).font(style::semibold(15.0)));
             w::caption(ui, &crate::t!("shortcuts-caption"));
@@ -903,16 +903,23 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
                 (crate::t!("shortcuts-agent"), k(&[Action::ToggleActivity, Action::StopAgents])),
                 (crate::t!("shortcuts-settings"), k(&[Action::Settings])),
             ];
-            egui::Grid::new("sc").num_columns(2).spacing([24.0, 6.0]).striped(true).show(ui, |ui| {
+            egui::Grid::new("sc").num_columns(2).spacing([24.0, 0.0]).min_row_height(24.0).striped(true).show(ui, |ui| {
+                // Table rows: text inset 6 pt from the stripe's edges.
                 for (a, k) in &rows {
-                    ui.label(a);
-                    ui.label(RichText::new(k).color(p.weak));
+                    ui.horizontal(|ui| {
+                        ui.add_space(6.0);
+                        ui.label(a);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(k).color(p.weak));
+                        ui.add_space(6.0);
+                    });
                     ui.end_row();
                 }
             });
-            ui.add_space(10.0);
+            ui.add_space(20.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if w::default_button(ui, &crate::t!("shortcuts-done")).clicked() {
+                if w::default_button_w(ui, &crate::t!("shortcuts-done"), 80.0).clicked() {
                     app.show_shortcuts = false;
                 }
             });
@@ -1005,4 +1012,9 @@ pub fn about(app: &mut ZebraApp, ctx: &egui::Context) {
     if !app.show_about {
         ctx.data_mut(|d| d.remove::<u32>(egui::Id::unique("zebra-about-frames")));
     }
+}
+
+/// Secondary label colour for the current appearance.
+fn p_weak(ui: &Ui) -> Color32 {
+    Palette::of(ui.ctx()).weak
 }

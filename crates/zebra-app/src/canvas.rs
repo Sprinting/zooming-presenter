@@ -756,7 +756,7 @@ fn rename_overlay(app: &mut ZebraApp, ui: &mut Ui) {
     let Some(e) = app.editor.doc.get(&id) else { return };
     let tl = app.canvas.w2s(&app.editor, e.corners()[0]);
     let r = ERect::from_min_size(tl + egui::vec2(0.0, -24.0), egui::vec2(200.0, 22.0));
-    let resp = ui.put(r, egui::TextEdit::singleline(&mut text).font(style::ui_font(11.5)).margin(egui::vec2(6.0, 3.0)).id_salt("frame-rename"));
+    let resp = ui.put(r, egui::TextEdit::singleline(&mut text).font(style::ui_font(11.0)).margin(egui::vec2(6.0, 3.0)).id_salt("frame-rename"));
     if !focused {
         resp.request_focus();
         if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), resp.id) {
@@ -1898,15 +1898,15 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         }
         if let Some(word) = t.spell_word.clone() {
             let mut keep = false;
-            resp.context_menu(|ui| {
+            egui::Popup::context_menu(&resp).style(crate::widgets::menu_style).width(200.0).show(|ui| {
                 keep = true;
                 let text: String = t.buf.chars().skip(word.start).take(word.end - word.start).collect();
                 let guesses = crate::spell::guesses(&t.buf, word.clone());
                 if guesses.is_empty() {
-                    ui.label(egui::RichText::new(crate::t!("spell-no-guesses")).weak());
+                    crate::widgets::menu_row(ui, None, &crate::t!("spell-no-guesses"), None, false);
                 }
                 for g in guesses {
-                    if ui.button(&g).clicked() {
+                    if crate::widgets::menu_item(ui, &g, None).clicked() {
                         let b0 = t.buf.char_indices().nth(word.start).map_or(t.buf.len(), |(b, _)| b);
                         let b1 = t.buf.char_indices().nth(word.end).map_or(t.buf.len(), |(b, _)| b);
                         t.buf.replace_range(b0..b1, &g);
@@ -1914,14 +1914,14 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                         ui.close();
                     }
                 }
-                ui.separator();
-                if ui.button(crate::t!("spell-learn")).clicked() {
+                crate::widgets::menu_separator(ui);
+                if crate::widgets::menu_item(ui, &crate::t!("spell-learn"), None).clicked() {
                     crate::spell::learn(&text);
                     crate::spell::invalidate(&mut t.spell);
                     t.spell_word = None;
                     ui.close();
                 }
-                if ui.button(crate::t!("spell-ignore")).clicked() {
+                if crate::widgets::menu_item(ui, &crate::t!("spell-ignore"), None).clicked() {
                     crate::spell::ignore(&text);
                     crate::spell::invalidate(&mut t.spell);
                     t.spell_word = None;
@@ -2007,35 +2007,37 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     let pb = rich::paragraph_of(&t.rich, sb);
     let cur_list = rich::para(&t.rich, pa).0;
     let tb = egui::Area::new(app.uid("zebra-text-toolbar")).fixed_pos(tb_pos).order(egui::Order::Foreground).show(ctx, |ui| {
-        style::float_frame(&p).inner_margin(egui::Margin::same(3)).show(ui, |ui| {
+        style::float_frame(&p).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
+                use crate::widgets::{bar_button, bar_divider, bar_toggle};
                 for (s, label) in [(TextStyle::Title, crate::t!("canvas-text-style-title")), (TextStyle::Subtitle, crate::t!("canvas-text-style-subtitle")), (TextStyle::Body, crate::t!("canvas-text-style-body"))] {
-                    if ui.selectable_label(t.style == s, label).clicked() {
+                    if bar_toggle(ui, t.style == s, label).clicked() {
                         t.style = s;
                         refocus = true;
                     }
                 }
-                ui.separator();
-                if ui.selectable_label(is_bold, egui::RichText::new(crate::t!("canvas-text-bold-glyph")).strong()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-bold"), &crate::actions::Action::Bold)).clicked() {
+                bar_divider(ui);
+                if bar_toggle(ui, is_bold, egui::RichText::new(crate::t!("canvas-text-bold-glyph")).strong()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-bold"), &crate::actions::Action::Bold)).clicked() {
                     fx.push(Fx::Bold);
                 }
-                if ui.selectable_label(is_italic, egui::RichText::new(crate::t!("canvas-text-italic-glyph")).italics()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-italic"), &crate::actions::Action::Italic)).clicked() {
+                if bar_toggle(ui, is_italic, egui::RichText::new(crate::t!("canvas-text-italic-glyph")).italics()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-italic"), &crate::actions::Action::Italic)).clicked() {
                     fx.push(Fx::Italic);
                 }
-                if ui.selectable_label(is_under, egui::RichText::new(crate::t!("canvas-text-underline-glyph")).underline()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-underline"), &crate::actions::Action::Underline)).clicked() {
+                if bar_toggle(ui, is_under, egui::RichText::new(crate::t!("canvas-text-underline-glyph")).underline()).on_hover_text(crate::i18n::with_shortcut(crate::t!("canvas-text-underline"), &crate::actions::Action::Underline)).clicked() {
                     fx.push(Fx::Underline);
                 }
-                if ui.selectable_label(is_strike, egui::RichText::new(crate::t!("canvas-text-strikethrough-glyph")).strikethrough()).on_hover_text(crate::t!("canvas-text-strikethrough")).clicked() {
+                if bar_toggle(ui, is_strike, egui::RichText::new(crate::t!("canvas-text-strikethrough-glyph")).strikethrough()).on_hover_text(crate::t!("canvas-text-strikethrough")).clicked() {
                     fx.push(Fx::Strike);
                 }
-                if ui.button(crate::t!("canvas-text-bigger-glyph")).on_hover_text(crate::t!("canvas-text-bigger")).clicked() {
+                if bar_button(ui, crate::t!("canvas-text-bigger-glyph")).on_hover_text(crate::t!("canvas-text-bigger")).clicked() {
                     fx.push(Fx::Bigger);
                 }
-                if ui.button(crate::t!("canvas-text-smaller-glyph")).on_hover_text(crate::t!("canvas-text-smaller")).clicked() {
+                if bar_button(ui, crate::t!("canvas-text-smaller-glyph")).on_hover_text(crate::t!("canvas-text-smaller")).clicked() {
                     fx.push(Fx::Smaller);
                 }
-                ui.menu_button(crate::t!("canvas-text-colour"), |ui| {
+                let colour_btn = bar_button(ui, crate::t!("canvas-text-colour"));
+                egui::Popup::menu(&colour_btn).style(crate::widgets::menu_style).width(160.0).show(|ui| {
                     for (slot, name) in [
                         ("", crate::t!("canvas-colour-default")),
                         ("theme:title", crate::t!("canvas-colour-title")),
@@ -2046,51 +2048,53 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                         ("theme:shape4", crate::t!("canvas-colour-n", n = 4)),
                     ] {
                         let c = if slot.is_empty() { color } else { crate::fallback::theme_color(&theme, slot) };
-                        if ui.button(egui::RichText::new(format!("■  {name}")).color(c)).clicked() {
+                        if crate::widgets::menu_swatch(ui, c, &name).clicked() {
                             fx.push(Fx::Color(slot.to_string()));
-                            ui.close();
                         }
                     }
                 });
-                if ui.selectable_label(t.link_draft.is_some(), crate::t!("canvas-text-link")).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-link"), egui::Modifiers::COMMAND, egui::Key::K)).clicked() {
+                if bar_toggle(ui, t.link_draft.is_some(), crate::t!("canvas-text-link")).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-link"), egui::Modifiers::COMMAND, egui::Key::K)).clicked() {
                     fx.push(Fx::Link);
                 }
-                ui.separator();
-                if ui.selectable_label(cur_list == ListKind::Bullet, "•").on_hover_text(crate::t!("canvas-text-bulleted-list")).clicked() {
+                bar_divider(ui);
+                if bar_toggle(ui, cur_list == ListKind::Bullet, "•").on_hover_text(crate::t!("canvas-text-bulleted-list")).clicked() {
                     fx.push(Fx::List(if cur_list == ListKind::Bullet { ListKind::None } else { ListKind::Bullet }));
                 }
-                if ui.selectable_label(cur_list == ListKind::Number, "1.").on_hover_text(crate::t!("canvas-text-numbered-list")).clicked() {
+                if bar_toggle(ui, cur_list == ListKind::Number, "1.").on_hover_text(crate::t!("canvas-text-numbered-list")).clicked() {
                     fx.push(Fx::List(if cur_list == ListKind::Number { ListKind::None } else { ListKind::Number }));
                 }
                 // Drawn icons, not ⇤/⇥ characters: the UI fonts may not
                 // have those glyphs (egui would draw an empty box).
-                if crate::widgets::icon_button(ui, crate::icons::Icon::Outdent, 22.0, true, false, &crate::t!("canvas-text-decrease-indent")).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-decrease-indent"), egui::Modifiers::SHIFT, egui::Key::Tab)).clicked() {
+                if crate::widgets::icon_button(ui, crate::icons::Icon::Outdent, 24.0, true, false, &crate::t!("canvas-text-decrease-indent")).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-decrease-indent"), egui::Modifiers::SHIFT, egui::Key::Tab)).clicked() {
                     fx.push(Fx::Indent(-1));
                 }
-                if crate::widgets::icon_button(ui, crate::icons::Icon::Indent, 22.0, true, false, &crate::t!("canvas-text-increase-indent")).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-increase-indent"), egui::Modifiers::NONE, egui::Key::Tab)).clicked() {
+                if crate::widgets::icon_button(ui, crate::icons::Icon::Indent, 24.0, true, false, &crate::t!("canvas-text-increase-indent")).on_hover_text(crate::i18n::with_key(crate::t!("canvas-text-increase-indent"), egui::Modifiers::NONE, egui::Key::Tab)).clicked() {
                     fx.push(Fx::Indent(1));
                 }
-                ui.separator();
-                if ui.button(crate::t!("canvas-text-done")).clicked() {
+                bar_divider(ui);
+                if bar_button(ui, crate::t!("canvas-text-done")).clicked() {
                     committed = true;
                 }
             });
             if let Some(mut url) = t.link_draft.take() {
                 let mut keep = true;
+                ui.add_space(2.0);
                 ui.horizontal(|ui| {
+                    ui.add_space(4.0);
                     ui.label(crate::t!("canvas-link-to"));
-                    let r = ui.add(egui::TextEdit::singleline(&mut url).hint_text(crate::t!("canvas-link-hint")).desired_width(240.0));
+                    let hint = crate::t!("canvas-link-hint");
+                    let r = crate::widgets::text_field(ui, &mut url, 240.0, &hint);
                     if !r.has_focus() && !r.lost_focus() && url.is_empty() {
                         r.request_focus();
                     }
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                    if ui.button(crate::t!("canvas-link-apply")).clicked() || enter {
+                    if crate::widgets::push_button(ui, &crate::t!("canvas-link-apply")).clicked() || enter {
                         let fmt = SpanFormat { link: Some(url.trim().to_string()), ..Default::default() };
                         rich::apply_format(&mut t.rich, ra, rb, &fmt);
                         keep = false;
                         refocus = true;
                     }
-                    if ui.button(crate::t!("canvas-link-remove")).clicked() {
+                    if crate::widgets::push_button(ui, &crate::t!("canvas-link-remove")).clicked() {
                         rich::apply_format(&mut t.rich, ra, rb, &SpanFormat { link: Some(String::new()), ..Default::default() });
                         keep = false;
                         refocus = true;
@@ -2501,7 +2505,7 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
     if let (Some(fid), false) = (chip_frame, path_mode) {
         if let Some(e) = ed.doc.get(&fid) {
             let tl = app.canvas.w2s(ed, e.corners()[0]);
-            let galley = painter.layout_no_wrap(crate::words::element_label(e, &ed.doc), style::ui_font(11.5), p.text);
+            let galley = painter.layout_no_wrap(crate::words::element_label(e, &ed.doc), style::ui_font(11.0), p.text);
             let chev_w = 20.0;
             let r = ERect::from_min_size(tl + egui::vec2(0.0, -24.0), egui::vec2(galley.size().x + 14.0 + chev_w, galley.size().y.max(14.0) + 8.0));
             let chev = ERect::from_min_max(egui::pos2(r.max.x - chev_w, r.min.y), r.max);
@@ -2830,7 +2834,7 @@ fn context_menu(app: &mut ZebraApp, resp: &egui::Response) {
             app.queued.push(a);
         }
     };
-    egui::Popup::context_menu(resp).width(220.0).show(|ui| {
+    egui::Popup::context_menu(resp).style(crate::widgets::menu_style).width(220.0).show(|ui| {
         let sel = app.selection();
         let one = (sel.len() == 1).then(|| app.editor.doc.get(&sel[0]).cloned()).flatten();
         if sel.is_empty() {

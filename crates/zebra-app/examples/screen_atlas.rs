@@ -646,6 +646,63 @@ fn main() {
         for (cap, act) in wins {
             a.run(cap, false, false, move |h| perform(h, act));
         }
+        a.run("Theme editor with a 3D background layer", false, false, |h| {
+            perform(h, Action::ThemeEditor);
+            let layer: zebra_core::theme::BackgroundLayer = serde_json::from_value(serde_json::json!({"asset":"none","depth":0.3,"opacity":0.8})).unwrap();
+            if let Some(te) = h.state_mut().theme_ed.as_mut() {
+                te.draft.layers.push(layer);
+            }
+        });
+        a.run("Background music added (inspector, nothing selected)", false, false, |h| {
+            // A tiny silent WAV: the inspector only needs a track to show.
+            let wav = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+            let cmd = zebra_core::Command::SetSoundtrack { data_base64: wav.into(), path: None, looping: Some(true), volume: Some(0.6), name: Some("music.wav".into()) };
+            let _ = h.state_mut().editor.apply(cmd, HUMAN);
+        });
+        a.run("A step with a voice-over (frame selected, Path tab)", false, false, |h| {
+            let wav = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+            let _ = h.state_mut().editor.apply(zebra_core::Command::SetVoiceover { index: 0, data_base64: wav.into(), path: None }, HUMAN);
+            select(h, &["one"]);
+            let tabs = zebra_app::inspector::tabs_for(h.state().editor.doc.get("one").map(|e| e.kind.clone()).as_ref(), false);
+            if let Some(t) = tabs.last() {
+                h.state_mut().inspector_tab = *t;
+            }
+            settle(h, 4);
+        });
+        a.run("Box selected, Custom colour well clicked", false, false, |h| {
+            select(h, &["box"]);
+            settle(h, 3);
+            let well = zebra_app::t!("widgets-colour-well");
+            click_label(h, &well);
+            settle(h, 3);
+        });
+        a.run("Sidebar footer menu (the chevron)", false, false, |h| {
+            let tip = zebra_app::t!("sidebar-more-tip");
+            click_label(h, &tip);
+            settle(h, 3);
+        });
+        a.run("Box selected, Shape pop-up open", false, false, |h| {
+            select(h, &["box"]);
+            settle(h, 3);
+            let p = h.query_all_by_role(egui::accesskit::Role::ComboBox).map(|n| n.rect().center()).find(|p| p.x > 1100.0);
+            if let Some(p) = p {
+                click_at(h, p, PointerButton::Primary);
+            }
+            settle(h, 3);
+        });
+        a.run("Frame selected, Path tab, step Autoplay pop-up open", false, false, |h| {
+            select(h, &["one"]);
+            let tabs = zebra_app::inspector::tabs_for(h.state().editor.doc.get("one").map(|e| e.kind.clone()).as_ref(), false);
+            if let Some(t) = tabs.last() {
+                h.state_mut().inspector_tab = *t;
+            }
+            settle(h, 4);
+            let p = h.query_all_by_role(egui::accesskit::Role::ComboBox).map(|n| n.rect().center()).find(|p| p.x > 1100.0);
+            if let Some(p) = p {
+                click_at(h, p, PointerButton::Primary);
+            }
+            settle(h, 3);
+        });
         a.run("Symbols & Shapes: Icons tab", false, false, |h| {
             perform(h, Action::ShapeLibrary);
             h.state_mut().library.tab = zebra_app::shape_library::Tab::Icons;

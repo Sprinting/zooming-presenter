@@ -350,7 +350,7 @@ fn style_tab(insp: &mut Insp, ui: &mut Ui) {
                 let mut picked = None;
                 w::popup_button(ui, "shape-kind", &crate::words::shape_name(s.shape), wdt, |ui| {
                     for &k in ShapeKind::ALL.iter().filter(|k| k.is_line() == s.shape.is_line()) {
-                        if ui.selectable_label(s.shape == k, crate::words::shape_name(k)).clicked() {
+                        if w::menu_check(ui, s.shape == k, &crate::words::shape_name(k), None).clicked() {
                             picked = Some(k);
                         }
                     }

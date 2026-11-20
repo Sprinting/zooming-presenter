@@ -140,6 +140,27 @@ pub fn float_frame(p: &Palette) -> egui::Frame {
         .shadow(Shadow { offset: [0, 2], blur: 10, spread: 0, color: Color32::from_black_alpha(if p.dark { 90 } else { 30 }) })
 }
 
+/// A sheet or modal dialog (template chooser, keyboard shortcuts, the
+/// opening progress panel): AppKit's 20 pt content inset, 10 pt corners.
+/// egui's own `Modal` frame used the 5 pt menu inset, which put text and
+/// buttons almost on the edge.
+pub fn sheet_frame(p: &Palette) -> egui::Frame {
+    egui::Frame::new()
+        .fill(p.panel)
+        .stroke(Stroke::new(1.0, if p.dark { Color32::from_gray(0x50) } else { Color32::from_black_alpha(40) }))
+        .corner_radius(CornerRadius::same(10))
+        .inner_margin(Margin::same(SHEET_MARGIN as i8))
+        .shadow(Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(if p.dark { 120 } else { 55 }) })
+}
+
+/// Content inset of sheets and dialogs (AppKit: 20 pt).
+pub const SHEET_MARGIN: f32 = 20.0;
+
+/// The command palette: a Spotlight-style field, so a tighter 8 pt inset.
+pub fn palette_frame(p: &Palette) -> egui::Frame {
+    sheet_frame(p).inner_margin(Margin::same(8))
+}
+
 macro_rules! font {
     ($p:literal) => {
         include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/", $p))
@@ -347,7 +368,9 @@ pub fn apply_visuals(ctx: &egui::Context) {
             v.weak_text_color = Some(p.weak);
             v.popup_shadow = Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if dark { 110 } else { 40 }) };
             v.window_shadow = Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(if dark { 120 } else { 55 }) };
-            v.striped = true;
+            // Only tables stripe their rows (Grid::striped); galleries and
+            // forms are plain, as in AppKit.
+            v.striped = false;
             v.handle_shape = egui::style::HandleShape::Circle;
             v.slider_trailing_fill = true;
             s.spacing.button_padding = egui::vec2(9.0, 2.0);

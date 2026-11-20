@@ -73,7 +73,7 @@ fn presenter_view_shows_notes_and_drives_the_show() {
     // Embedded in tests: the presenter view is a window inside the main one.
     h.get_by_label_contains("Open with the question");
     h.get_by_label_contains("Step 2 of 6");
-    h.get_by_label("Next  ▶").click();
+    h.get_by_label("Next").click();
     h.run_steps(2);
     assert_eq!(h.state().editor.view.present.build, 1, "Next reveals the first fade-in");
     h.get_by_label("Exit").click();

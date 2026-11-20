@@ -30,8 +30,8 @@ fn pdfium_licences() -> &'static [(String, String)] {
 }
 
 fn entry(ui: &mut egui::Ui, p: &Palette, name: &str, by: &str, licence: &str, url: &str) {
-    ui.label(RichText::new(name).font(style::semibold(12.5)).color(p.text));
-    ui.label(RichText::new(crate::t!("credits-by", author = by, licence = licence)).size(11.5).color(p.weak));
+    ui.label(RichText::new(name).font(style::semibold(13.0)).color(p.text));
+    ui.label(RichText::new(crate::t!("credits-by", author = by, licence = licence)).size(11.0).color(p.weak));
     if !url.is_empty() {
         ui.add(egui::Label::new(RichText::new(url).size(11.0).color(p.weak)).selectable(true));
     }
@@ -62,7 +62,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
                         }
                     }
                     None => {
-                        ui.label(RichText::new(crate::symbols_ui::not_installed()).size(11.5).color(p.weak));
+                        ui.label(RichText::new(crate::symbols_ui::not_installed()).size(11.0).color(p.weak));
                     }
                 }
                 ui.add_space(6.0);

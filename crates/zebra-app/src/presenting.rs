@@ -14,6 +14,7 @@ use zebra_core::{Command, Document, Editor, Mode, Origin, ViewCommand};
 
 use crate::app::ZebraApp;
 use crate::style::{self, Palette, ACCENT};
+use crate::widgets as w;
 
 const H: Origin = Origin::Human;
 
@@ -26,7 +27,7 @@ pub struct Stage {
     pub presenter_view: bool,
     /// Name of the display to play on; None = the window's own display.
     pub display: Option<String>,
-    /// The Playback options window is open.
+/// The Playback options window is open.
     pub show_playback: bool,
     /// Presenter timer: when it started, and the elapsed time while paused.
     pub timer_start: f64,
@@ -168,50 +169,42 @@ pub fn sidebar_notes(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
 pub fn step_section(app: &mut ZebraApp, ui: &mut Ui, p: &Palette, step: usize) {
     let Some(s) = app.editor.doc.path.get(step).cloned() else { return };
     ui.add_space(8.0);
-    ui.label(RichText::new(crate::t!("present-path-step", step = ((step + 1) as u64))).font(style::bold(12.0)).color(p.weak));
+    ui.label(RichText::new(crate::t!("present-path-step", step = ((step + 1) as u64))).font(style::semibold(11.0)).color(p.weak));
     ui.add_space(2.0);
     notes_editor(app, ui, step, 4, "inspector");
     ui.add_space(4.0);
 
-    // Transition: Auto, or seconds.
-    ui.horizontal(|ui| {
-        ui.label(crate::t!("present-transition"));
+    // Transition and autoplay as inspector rows (label column, then the
+    // kit's controls), not loose egui labels, checkboxes and drag values.
+    w::row(ui, &crate::t!("present-transition"), |ui| {
         let mut auto = s.duration.is_none();
         let mut secs = s.duration.unwrap_or(1.5);
-        if ui.checkbox(&mut auto, crate::t!("present-transition-auto")).on_hover_text(crate::t!("present-transition-auto-tip")).changed() {
+        if w::checkbox(ui, &mut auto, &crate::t!("present-transition-auto")).on_hover_text(crate::t!("present-transition-auto-tip")).changed() {
             set_step_timing(app, step, Some(if auto { -1.0 } else { secs }), None);
         }
-        if !auto {
-            let r = ui.add(egui::DragValue::new(&mut secs).range(0.0..=10.0).speed(0.05).suffix(secs_suffix()).fixed_decimals(1));
-            if r.changed() {
-                set_step_timing(app, step, Some(secs), None);
-            }
+        if !auto && w::number_field(ui, &mut secs, w::Num::secs().range(0.0, 10.0).step(0.1).width(70.0)).changed() {
+            set_step_timing(app, step, Some(secs), None);
         }
     });
-    // Autoplay on this step: presentation default, or seconds.
-    ui.horizontal(|ui| {
-        ui.label(crate::t!("present-autoplay"));
-        let mut own = s.dwell.is_some();
+    w::row(ui, &crate::t!("present-autoplay"), |ui| {
+        let own = s.dwell.is_some();
         let mut secs = s.dwell.or(app.editor.doc.play.autoplay).unwrap_or(10.0);
         let def = match app.editor.doc.play.autoplay {
             Some(d) => crate::t!("present-dwell-default-time", time = fmt_secs(d)),
             None => crate::t!("present-dwell-default-off"),
         };
         let lbl = if own { crate::t!("present-dwell-own") } else { def };
-        egui::ComboBox::from_id_salt(("dwell", step)).selected_text(lbl).width(118.0).show_ui(ui, |ui| {
-            if ui.selectable_label(!own, crate::t!("present-dwell-presentation-default")).clicked() {
-                own = false;
+        let width = if own { (ui.available_width() - 76.0).max(90.0) } else { ui.available_width() };
+        w::popup_button(ui, ("dwell", step), &lbl, width, |ui| {
+            if w::menu_check(ui, !own, &crate::t!("present-dwell-presentation-default"), None).clicked() && own {
                 set_step_timing(app, step, None, Some(-1.0));
             }
-            if ui.selectable_label(own, crate::t!("present-dwell-own-for-step")).clicked() && !own {
+            if w::menu_check(ui, own, &crate::t!("present-dwell-own-for-step"), None).clicked() && !own {
                 set_step_timing(app, step, None, Some(secs));
             }
         });
-        if own {
-            let r = ui.add(egui::DragValue::new(&mut secs).range(1.0..=600.0).speed(0.2).suffix(secs_suffix()).fixed_decimals(0));
-            if r.changed() {
-                set_step_timing(app, step, None, Some(secs));
-            }
+        if own && w::number_field(ui, &mut secs, w::Num::secs().range(1.0, 600.0).step(1.0).decimals(0).width(70.0)).changed() {
+            set_step_timing(app, step, None, Some(secs));
         }
     });
 }
@@ -225,11 +218,6 @@ fn set_step_timing(app: &mut ZebraApp, step: usize, duration: Option<f64>, dwell
     app.report(r);
 }
 
-/// " s" after a seconds field.
-fn secs_suffix() -> String {
-    format!(" {}", crate::t!("present-seconds-unit"))
-}
-
 pub fn fmt_secs(s: f64) -> String {
     let secs = if s.fract().abs() < 1e-9 { format!("{s:.0}") } else { format!("{s:.1}") };
     crate::t!("present-seconds", secs = secs)
@@ -238,48 +226,48 @@ pub fn fmt_secs(s: f64) -> String {
 /// Autoplay, loop, presenter view and display: the Playback options.
 pub fn playback_ui(app: &mut ZebraApp, ui: &mut Ui) {
     let play = app.editor.doc.play;
-    ui.label(RichText::new(crate::t!("present-autoplay")).font(style::bold(12.0)));
-    ui.horizontal(|ui| {
-        let mut choice = |ui: &mut Ui, label: &str, v: Option<f64>| {
-            if ui.selectable_label(play.autoplay == v, label).clicked() && play.autoplay != v {
-                app.apply(Command::SetPlayback { autoplay: Some(v.unwrap_or(0.0)), looping: None });
-            }
-        };
-        choice(ui, &crate::t!("present-autoplay-off"), None);
-        for s in AUTOPLAY_CHOICES {
-            choice(ui, &fmt_secs(s), Some(s));
-        }
-        if let Some(a) = play.autoplay.filter(|a| !AUTOPLAY_CHOICES.contains(a)) {
-            let _ = ui.selectable_label(true, fmt_secs(a));
-        }
-    });
-    ui.label(RichText::new(crate::t!("present-autoplay-help", key = "P")).size(11.0).weak());
-    ui.add_space(4.0);
+    let p = style::Palette::of(ui.ctx());
+    ui.spacing_mut().item_spacing.y = 6.0;
+    ui.label(RichText::new(crate::t!("present-autoplay")).font(style::semibold(13.0)).color(p.text));
+    // A segmented control (one choice of several), not a row of tinted chips.
+    let mut items: Vec<(Option<f64>, String)> = vec![(None, crate::t!("present-autoplay-off"))];
+    items.extend(AUTOPLAY_CHOICES.iter().map(|s| (Some(*s), fmt_secs(*s))));
+    if let Some(a) = play.autoplay.filter(|a| !AUTOPLAY_CHOICES.contains(a)) {
+        items.push((Some(a), fmt_secs(a)));
+    }
+    let segs: Vec<(Option<f64>, w::Seg)> = items.iter().map(|(v, l)| (*v, w::Seg::Text(l.as_str()))).collect();
+    let mut cur = play.autoplay;
+    if w::segmented(ui, &mut cur, &segs, Some(ui.available_width())).changed() && cur != play.autoplay {
+        app.apply(Command::SetPlayback { autoplay: Some(cur.unwrap_or(0.0)), looping: None });
+    }
+    w::caption(ui, crate::t!("present-autoplay-help", key = "P"));
     let mut lp = play.looping;
-    if ui.checkbox(&mut lp, crate::t!("present-loop")).changed() {
+    if w::checkbox(ui, &mut lp, &crate::t!("present-loop")).changed() {
         app.apply(Command::SetPlayback { autoplay: None, looping: Some(lp) });
     }
-    ui.separator();
-    ui.label(RichText::new(crate::t!("present-presenting")).font(style::bold(12.0)));
-    ui.checkbox(&mut app.stage.presenter_view, crate::t!("present-show-presenter-view"))
-        .on_hover_text(crate::t!("present-show-presenter-view-tip"));
+    ui.add_space(4.0);
+    w::separator(ui);
+    ui.add_space(4.0);
+    ui.label(RichText::new(crate::t!("present-presenting")).font(style::semibold(13.0)).color(p.text));
+    w::checkbox(ui, &mut app.stage.presenter_view, &crate::t!("present-show-presenter-view")).on_hover_text(crate::t!("present-show-presenter-view-tip"));
     let displays = displays(ui.ctx());
     let current = app.stage.display.clone().unwrap_or_else(|| crate::t!("present-this-display"));
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
         ui.label(crate::t!("present-play-on"));
-        egui::ComboBox::from_id_salt("play-display").selected_text(current).width(170.0).show_ui(ui, |ui| {
-            if ui.selectable_label(app.stage.display.is_none(), crate::t!("present-this-display")).clicked() {
+        w::popup_button(ui, "play-display", &current, 190.0, |ui| {
+            if w::menu_check(ui, app.stage.display.is_none(), &crate::t!("present-this-display"), None).clicked() {
                 app.stage.display = None;
             }
             for d in &displays {
-                if ui.selectable_label(app.stage.display.as_deref() == Some(d.name.as_str()), &d.name).clicked() {
+                if w::menu_check(ui, app.stage.display.as_deref() == Some(d.name.as_str()), &d.name, None).clicked() {
                     app.stage.display = Some(d.name.clone());
                 }
             }
         });
     });
     if displays.len() < 2 {
-        ui.label(RichText::new(crate::t!("present-connect-second-display")).size(11.0).weak());
+        w::caption(ui, crate::t!("present-connect-second-display"));
     }
 }
 
@@ -448,7 +436,11 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
     let bg = Color32::from_rgb(0x16, 0x17, 0x1a);
     let fg = Color32::from_gray(235);
     let weak = Color32::from_gray(150);
-    egui::CentralPanel::default().frame(egui::Frame::new().fill(bg).inner_margin(egui::Margin::same(18))).show(ui, |ui| {
+    egui::CentralPanel::default().frame(egui::Frame::new().fill(bg).inner_margin(egui::Margin::same(20))).show(ui, |ui| {
+        // Dark controls on the dark presenter display (Keynote's), whatever
+        // the system appearance: light bezels sat on near-black before.
+        ui.style_mut().visuals = egui::Visuals::dark();
+        ui.style_mut().spacing.item_spacing.x = 8.0;
         // Top bar: position, timer, clock.
         ui.horizontal(|ui| {
             let pos = match step {
@@ -475,14 +467,14 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(RichText::new(clock_text()).size(26.0).color(fg).monospace());
                 ui.add_space(24.0);
-                if ui.button(crate::t!("present-timer-reset")).on_hover_text(crate::t!("present-timer-reset-tip")).clicked() {
+                if w::push_button(ui, &crate::t!("present-timer-reset")).on_hover_text(crate::t!("present-timer-reset-tip")).clicked() {
                     app.stage.timer_start = now;
                     if app.stage.timer_paused.is_some() {
                         app.stage.timer_paused = Some(0.0);
                     }
                 }
                 let paused = app.stage.timer_paused.is_some();
-                if ui.button(if paused { crate::t!("present-timer-resume") } else { crate::t!("present-timer-pause") }).on_hover_text(if paused { crate::t!("present-timer-resume-tip") } else { crate::t!("present-timer-pause-tip") }).clicked() {
+                if w::push_button(ui, &if paused { crate::t!("present-timer-resume") } else { crate::t!("present-timer-pause") }).on_hover_text(if paused { crate::t!("present-timer-resume-tip") } else { crate::t!("present-timer-pause-tip") }).clicked() {
                     match app.stage.timer_paused.take() {
                         Some(e) => app.stage.timer_start = now - e,
                         None => app.stage.timer_paused = Some(now - app.stage.timer_start),
@@ -492,12 +484,14 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
                 ui.label(RichText::new(format!("{:02}:{:02}:{:02}", e / 3600, e / 60 % 60, e % 60)).size(26.0).color(ACCENT.gamma_multiply(1.3)).monospace());
             });
         });
-        ui.add_space(10.0);
+        ui.add_space(12.0);
 
         let avail = ui.available_rect_before_wrap();
         let top_h = (avail.height() * 0.58).max(160.0);
         let cur_w = (avail.width() * 0.6).min(top_h * 1.6);
-        let cur = Rect::from_min_size(avail.min, EVec2::new(cur_w, cur_w / 1.6));
+        // Both slides start on one line, under the row that holds the
+        // "Next" caption (the current slide used to sit 22 pt higher).
+        let cur = Rect::from_min_size(avail.min + EVec2::new(0.0, 22.0), EVec2::new(cur_w, cur_w / 1.6));
         let nxt_w = (avail.width() - cur_w - 24.0).max(120.0);
         let nxt = Rect::from_min_size(egui::pos2(cur.right() + 24.0, avail.top() + 22.0), EVec2::new(nxt_w, nxt_w / 1.6));
         let painter = ui.painter().clone();
@@ -532,24 +526,26 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
         });
 
         // Bottom bar.
-        let bar = Rect::from_min_max(egui::pos2(avail.left(), avail.bottom() - 34.0), avail.max);
-        let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar));
-        bar_ui.horizontal(|ui| {
-            if ui.add(egui::Button::new(format!("◀  {}", crate::t!("present-previous"))).min_size(EVec2::new(110.0, 30.0))).clicked() {
+        // One button size (regular, 22 pt) across the bar; they were 30 pt
+        // egui buttons next to 19 pt ones.
+        let bar = Rect::from_min_max(egui::pos2(avail.left(), avail.bottom() - w::H_REGULAR), avail.max);
+        let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        bar_ui.horizontal_centered(|ui| {
+            if w::icon_text_button(ui, crate::icons::Icon::ChevronLeft, &crate::t!("present-previous"), true).clicked() {
                 let _ = app.editor.view(ViewCommand::Prev, H);
             }
-            if ui.add(egui::Button::new(format!("{}  ▶", crate::t!("present-next"))).min_size(EVec2::new(110.0, 30.0))).clicked() {
+            if w::icon_text_button(ui, crate::icons::Icon::ChevronRight, &crate::t!("present-next"), true).clicked() {
                 let _ = app.editor.view(ViewCommand::Next, H);
             }
-            ui.add_space(16.0);
-            if ui.button(crate::t!("canvas-text-smaller-glyph")).on_hover_text(crate::t!("present-notes-smaller")).clicked() {
+            ui.add_space(12.0);
+            if w::push_button_ext(ui, &crate::t!("canvas-text-smaller-glyph"), w::Size::Regular, true, Some(36.0)).on_hover_text(crate::t!("present-notes-smaller")).clicked() {
                 app.stage.notes_size = (app.stage.notes_size - 2.0).max(12.0);
             }
-            if ui.button(crate::t!("canvas-text-bigger-glyph")).on_hover_text(crate::t!("present-notes-larger")).clicked() {
+            if w::push_button_ext(ui, &crate::t!("canvas-text-bigger-glyph"), w::Size::Regular, true, Some(36.0)).on_hover_text(crate::t!("present-notes-larger")).clicked() {
                 app.stage.notes_size = (app.stage.notes_size + 2.0).min(48.0);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new(crate::t!("present-end-show")).min_size(EVec2::new(90.0, 30.0))).on_hover_text(crate::i18n::key_text(egui::Modifiers::NONE, egui::Key::Escape)).clicked() {
+                if w::push_button(ui, &crate::t!("present-end-show")).on_hover_text(crate::i18n::key_text(egui::Modifiers::NONE, egui::Key::Escape)).clicked() {
                     let _ = app.editor.view(ViewCommand::ExitPresent, H);
                 }
             });
