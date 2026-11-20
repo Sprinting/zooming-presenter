@@ -244,6 +244,32 @@ fn a_subscriber_that_never_reads_is_dropped() {
     assert_eq!(c.call("ping", json!({})).unwrap(), "pong");
 }
 
+/// Hostile-input audit L2: replies count toward the same cap. A client
+/// that asks for big replies and never reads them is disconnected, instead
+/// of its queue growing for as long as Zebra runs.
+#[test]
+fn a_client_that_never_reads_its_replies_is_dropped() {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    let host = Host::start(Permission::Edit);
+    let mut c = host.connect("writer");
+    c.call("describe", json!({})).unwrap();
+    c.call("apply", json!({"command":{"op":"add_text","id":"big","text":"y".repeat(1 << 20)}})).unwrap();
+    let mut deaf = UnixStream::connect(&host.socket).unwrap();
+    writeln!(deaf, "{}", json!({"jsonrpc":"2.0","id":1,"method":"hello","params":{"name":"deaf","token":host.token}})).unwrap();
+    let mut gone = false;
+    for i in 0..200 {
+        // Each reply is over 1 MB.
+        if writeln!(deaf, "{}", json!({"jsonrpc":"2.0","id":i + 2,"method":"query","params":{"q":"element","id":"big"}})).is_err() {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(gone, "the client that stopped reading was disconnected");
+    assert_eq!(c.call("ping", json!({})).unwrap(), "pong");
+}
+
 /// R28: nothing in a request is acted on before `hello`. `add_image
 /// {path}` used to open the file first, so anyone who could reach the
 /// socket could learn which files exist.
