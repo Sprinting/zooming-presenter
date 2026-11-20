@@ -68,3 +68,35 @@ fn gpu_matches_cpu() {
         assert!(far_frac < 0.001, "{theme}: too many differing pixels ({far_frac})");
     }
 }
+
+/// Many small faded groups (placeholder text greeked to bars at fit-all on
+/// a big deck) used to open one full-screen layer each, overflowing vello's
+/// fixed buffers: the whole frame came out black.
+#[test]
+fn many_opacity_groups_dont_black_out_the_frame() {
+    use kurbo::{Rect, Shape};
+    use zebra_render::display::{DisplayList, Item};
+    let Some((device, queue, _)) = device() else { return };
+    let mut gpu = GpuRenderer::new(&device).expect("vello init");
+    let (w, h) = (2680u32, 1740u32);
+    let mut items = Vec::new();
+    for i in 0..300 {
+        let (x, y) = ((i % 20) as f64 * 130.0 + 20.0, (i / 20) as f64 * 110.0 + 20.0);
+        // Two items per group, so the layer can't be folded away.
+        items.push(Item::PushOpacity(0.5));
+        items.push(Item::Fill { path: Rect::new(x, y, x + 40.0, y + 3.0).to_path(0.1), color: [20, 20, 20, 255] });
+        items.push(Item::Fill { path: Rect::new(x, y + 6.0, x + 30.0, y + 9.0).to_path(0.1), color: [20, 20, 20, 255] });
+        items.push(Item::PopOpacity);
+        // And single-item groups, which are folded into the colour.
+        items.push(Item::PushOpacity(0.5));
+        items.push(Item::Fill { path: Rect::new(x, y + 20.0, x + 40.0, y + 23.0).to_path(0.1), color: [20, 20, 20, 255] });
+        items.push(Item::PopOpacity);
+    }
+    let list = DisplayList { width_px: w, height_px: h, background: [255, 255, 255, 255], items, ..Default::default() };
+    let g = gpu.render_to_rgba(&device, &queue, &list).expect("render");
+    let c = render_rgba(&list);
+    let dark = g.chunks(4).filter(|p| p[0] < 4 && p[1] < 4 && p[2] < 4).count();
+    assert!(dark * 10 < (w * h) as usize, "GPU frame is mostly black: {dark} px");
+    let diff = g.chunks(4).zip(c.chunks(4)).filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 24)).count();
+    assert!(diff * 1000 < (w * h) as usize, "GPU differs from CPU in {diff} px");
+}

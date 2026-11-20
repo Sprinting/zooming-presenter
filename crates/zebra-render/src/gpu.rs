@@ -1,7 +1,7 @@
 //! GPU canvas: vello renders the display list into a wgpu texture on eframe's
 //! device (Metal on macOS) and egui shows it as an image.
 use egui_wgpu::wgpu;
-use kurbo::{Affine, Rect};
+use kurbo::{Affine, Rect, Shape};
 use vello::peniko::{BlendMode, Color, Fill, Mix};
 use vello::{AaConfig, AaSupport, RenderParams, RendererOptions, Scene};
 
@@ -17,7 +17,27 @@ fn color(c: Rgba) -> Color {
 pub fn encode_scene(scene: &mut Scene, list: &DisplayList) {
     let full = Rect::new(0.0, 0.0, list.width_px as f64, list.height_px as f64);
     scene.fill(Fill::NonZero, Affine::IDENTITY, color(list.background), None, &full);
-    for item in &list.items {
+    let layer_rects = layer_bounds(&list.items, full);
+    let mut skip_pop = Vec::new();
+    let mut alpha = 1.0f32;
+    for (i, item) in list.items.iter().enumerate() {
+        // A group holding one fill or stroke: fold the opacity into its
+        // colour instead of opening a layer (same pixels, much cheaper).
+        if let Item::PushOpacity(a) = item {
+            if matches!(list.items.get(i + 2), Some(Item::PopOpacity))
+                && matches!(list.items.get(i + 1), Some(Item::Fill { .. } | Item::Stroke { .. }))
+            {
+                alpha = *a;
+                skip_pop.push(i + 2);
+                continue;
+            }
+        }
+        if skip_pop.last() == Some(&i) {
+            skip_pop.pop();
+            alpha = 1.0;
+            continue;
+        }
+        let color = |c: Rgba| color(c).multiply_alpha(alpha);
         match item {
             Item::Fill { path, color: c } => scene.fill(Fill::NonZero, Affine::IDENTITY, color(*c), None, path),
             Item::Stroke { path, color: c, stroke } => scene.stroke(stroke, Affine::IDENTITY, color(*c), None, path),
@@ -42,11 +62,76 @@ pub fn encode_scene(scene: &mut Scene, list: &DisplayList) {
                 }
             }
             Item::Image { image, transform } => scene.draw_image(&image.data, *transform),
-            Item::PushOpacity(a) => scene.push_layer(Fill::NonZero, BlendMode::from(Mix::Normal), *a, Affine::IDENTITY, &full),
+            // A layer costs work in every tile its clip covers, so bound it
+            // to what it holds: dozens of full-screen layers (faded tiny
+            // text at fit-all) overflowed vello's fixed buffers and the
+            // whole frame came out black.
+            Item::PushOpacity(a) => {
+                scene.push_layer(Fill::NonZero, BlendMode::from(Mix::Normal), *a, Affine::IDENTITY, &layer_rects[i])
+            }
             Item::PopOpacity | Item::PopClip => scene.pop_layer(),
             Item::PushClip(path) => scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, path),
         }
     }
+}
+
+/// For each `PushOpacity`, the device rect its group can touch (clamped to
+/// the frame); other entries are unused.
+fn layer_bounds(items: &[Item], full: Rect) -> Vec<Rect> {
+    let mut out = vec![full; items.len()];
+    // Open groups: (index, bounds so far, any unbounded item).
+    let mut open: Vec<(usize, Option<Rect>, bool)> = Vec::new();
+    let mut clips: Vec<Option<Rect>> = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let r = match item {
+            Item::Fill { path, .. } => Some(path.bounding_box()),
+            Item::Stroke { path, stroke, .. } => Some(path.bounding_box().inflate(stroke.width * 2.0 + 2.0, stroke.width * 2.0 + 2.0)),
+            Item::Text { layout, transform, .. } => {
+                // Glyphs can overhang the layout box (italics, accents): pad.
+                let pad = layout.runs.iter().map(|r| r.font_size as f64).fold(0.0, f64::max);
+                let b = Rect::new(-pad, -pad, layout.width + pad, layout.height + pad);
+                Some(transform.transform_rect_bbox(b))
+            }
+            Item::Image { image, transform } => {
+                Some(transform.transform_rect_bbox(Rect::new(0.0, 0.0, image.width as f64, image.height as f64)))
+            }
+            Item::PushOpacity(_) => {
+                open.push((i, None, false));
+                continue;
+            }
+            Item::PushClip(path) => {
+                clips.push(Some(path.bounding_box()));
+                continue;
+            }
+            Item::PopClip => {
+                clips.pop();
+                continue;
+            }
+            Item::PopOpacity => {
+                let Some((at, b, unbounded)) = open.pop() else { continue };
+                let b = if unbounded { full } else { b.map_or(Rect::ZERO, |b| b.inflate(2.0, 2.0).intersect(full)) };
+                out[at] = b;
+                // The finished group counts as one item of its parent.
+                if let Some(parent) = open.last_mut() {
+                    parent.1 = Some(parent.1.map_or(b, |p| p.union(b)));
+                    parent.2 |= unbounded;
+                }
+                continue;
+            }
+        };
+        // A clip bounds what's inside it.
+        let r = match (r, clips.iter().flatten().next_back()) {
+            (Some(r), Some(c)) => Some(r.intersect(*c)),
+            (r, _) => r,
+        };
+        if let Some(g) = open.last_mut() {
+            match r {
+                Some(r) if r.is_finite() => g.1 = Some(g.1.map_or(r, |p| p.union(r))),
+                _ => g.2 = true,
+            }
+        }
+    }
+    out
 }
 
 /// vello renderer bound to one wgpu device. Usable headless (tests,
