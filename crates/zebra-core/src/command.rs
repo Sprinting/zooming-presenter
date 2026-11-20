@@ -598,6 +598,7 @@ pub enum Command {
     /// the given `cells` (rows of values; a formula starts with `=`), or
     /// `csv` (comma- or tab-separated text). Cells are typed as a person
     /// types them: `1240`, `£980,000`, `13.7%`, `20/11/2026`, `=SUM(B2:B5)`.
+    /// A value that starts with `'` is kept as text, and the `'` isn't shown.
     AddTable {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rows: Option<usize>,
