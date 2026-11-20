@@ -202,3 +202,41 @@ fn copying_a_web_video_carries_its_poster() {
     assert!(b.doc.assets.contains_key(v.poster.as_ref().unwrap()));
     assert!(v.is_card());
 }
+
+/// A deck saves as the lowest format that can read it: 1 without web
+/// videos (older builds still open it), 2 with one. A format 1 build
+/// refuses a format 2 file as newer, never dropping the web video.
+#[test]
+fn the_format_version_says_web_videos() {
+    assert_eq!(FORMAT_VERSION, 2);
+    let version = |ed: &Editor| serde_json::from_str::<serde_json::Value>(&io::to_json(&ed.doc)).unwrap()["format_version"].as_u64().unwrap();
+    let mut ed = Editor::default();
+    ed.apply(cmd(json!({"op":"add_text","text":"Hello"})), Origin::Human).unwrap();
+    assert_eq!(version(&ed), 1);
+    assert_eq!(io::required_version(&ed.doc), 1);
+    let id = ed.apply(cmd(json!({"op":"add_web_video","url":"https://vimeo.com/76979871"})), Origin::Human).unwrap().created[0].clone();
+    assert_eq!(version(&ed), 2);
+    let json = io::to_json(&ed.doc);
+    // This build reads it back.
+    assert!(io::from_json(&json).unwrap().get(&id).is_some());
+    // An old reader: the same check with FORMAT_VERSION 1.
+    let ver = serde_json::from_str::<serde_json::Value>(&json).unwrap()["format_version"].as_u64().unwrap() as u32;
+    assert!(ver > 1, "a format 1 build refuses it");
+    let mut newer: serde_json::Value = serde_json::from_str(&json).unwrap();
+    newer["format_version"] = json!(FORMAT_VERSION + 1);
+    let e = io::from_json(&newer.to_string()).unwrap_err();
+    assert_eq!(e.code, "bad_file");
+    assert!(e.message.contains("newer"), "{}", e.message);
+    // Deleting the web video makes it a format 1 deck again.
+    ed.apply(cmd(json!({"op":"delete","ids":[id]})), Origin::Human).unwrap();
+    assert_eq!(version(&ed), 1);
+    // And a saved .zebra carries it too.
+    let dir = tmp("version");
+    ed.apply(cmd(json!({"op":"add_web_video","url":"https://youtu.be/dQw4w9WgXcQ"})), Origin::Human).unwrap();
+    let file = dir.join("v.zebra");
+    io::save(&mut ed.doc, &file).unwrap();
+    let mut z = zip::ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+    let mut s = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("document.json").unwrap(), &mut s).unwrap();
+    assert!(s.starts_with("{\n  \"format_version\": 2"), "{}", &s[..40]);
+}
