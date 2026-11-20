@@ -94,7 +94,9 @@ pub enum ImportNote {
     HiddenSlide,
     /// Charts with no picture of them in the file were left out.
     Chart,
-    /// SmartArt graphics were left out.
+    /// SmartArt graphics were left out: neither a Zebra diagram, the
+    /// shapes PowerPoint saved of them nor a list of their items could be
+    /// made (their data is missing or unreadable).
     SmartArt,
     /// Tables were left out.
     Table,

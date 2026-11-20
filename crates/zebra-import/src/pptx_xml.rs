@@ -6,9 +6,13 @@
 //! Shapes are found by their `cNvPr/@id` (unique within a part), walking
 //! the shape tree the way the parser does: of an `mc:AlternateContent`,
 //! only the branch the parser reads counts.
+//!
+//! Also a SmartArt graphic's data model: its items and their hierarchy,
+//! which the model doesn't keep.
 use std::collections::BTreeMap;
 
 use pptx_parse::PptxPackage;
+use zebra_core::diagrams::Item;
 
 const DRAWINGML_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const PRESENTATIONML_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
@@ -281,6 +285,8 @@ pub(crate) struct Elem {
     pub name: String,
     pub attrs: Vec<(String, String)>,
     pub children: Vec<Elem>,
+    /// The text directly inside it (not its children's).
+    pub text: String,
 }
 
 impl Elem {
@@ -325,6 +331,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Option<Elem> {
             .map(|a| (String::from_utf8_lossy(a.key.as_ref()).into_owned(), a.decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, decoder).map(|v| v.into_owned()).unwrap_or_default()))
             .collect(),
         children: vec![],
+        text: String::new(),
     };
     let mut stack: Vec<Elem> = vec![];
     let mut n = 0usize;
@@ -340,6 +347,27 @@ pub(crate) fn parse(bytes: &[u8]) -> Option<Elem> {
             Event::Empty(e) => Some(elem(&e)),
             Event::End(_) => Some(stack.pop()?),
             Event::Eof => return None,
+            Event::Text(t) => {
+                if let Some(e) = stack.last_mut() {
+                    e.text.push_str(&t.xml_content(quick_xml::XmlVersion::Implicit1_0).ok()?);
+                }
+                None
+            }
+            Event::CData(t) => {
+                if let Some(e) = stack.last_mut() {
+                    e.text.push_str(&t.decode().ok()?);
+                }
+                None
+            }
+            Event::GeneralRef(r) => {
+                if let Some(e) = stack.last_mut() {
+                    match r.resolve_char_ref().ok()? {
+                        Some(c) => e.text.push(c),
+                        None => e.text.push_str(quick_xml::escape::resolve_predefined_entity(&r.decode().ok()?)?),
+                    }
+                }
+                None
+            }
             _ => None,
         };
         if let Some(e) = done {
@@ -355,6 +383,89 @@ pub(crate) fn parse(bytes: &[u8]) -> Option<Elem> {
     }
 }
 
+/// A SmartArt graphic's data model (`dgm:dataModel`): its items in the
+/// hierarchy its `parOf` connections make, and its layout's name.
+#[derive(Debug, Default)]
+pub(crate) struct SmartArt {
+    /// The last part of the layout's id (`process1` of
+    /// `urn:microsoft.com/office/officeart/2005/8/layout/process1`).
+    pub layout: Option<String>,
+    pub items: Vec<Item>,
+}
+
+/// At most this many items are read from a data model.
+const MAX_ITEMS: usize = 4_096;
+
+/// Read a SmartArt data part, and its layout part when there is one. None
+/// when the data part isn't a data model.
+pub(crate) fn smart_art(data: &[u8], layout: Option<&[u8]>) -> Option<SmartArt> {
+    let root = parse(data)?;
+    if root.local() != "dataModel" {
+        return None;
+    }
+    let pts: Vec<&Elem> = root.child("ptLst").map(|l| l.children.iter().filter(|c| c.local() == "pt").collect()).unwrap_or_default();
+    let kind = |p: &Elem| p.attr("type").unwrap_or("node").to_string();
+    let doc: Vec<&str> = pts.iter().filter(|p| kind(p) == "doc").filter_map(|p| p.attr("modelId")).collect();
+    let name = |id: &str| id.rsplit('/').next().unwrap_or(id).to_string();
+    let from_layout = layout.and_then(parse).and_then(|l| l.attr("uniqueId").map(name));
+    let from_doc = || pts.iter().filter(|p| kind(p) == "doc").find_map(|p| p.child("prSet")?.attr("loTypeId").map(name));
+    let layout = from_layout.or_else(from_doc).filter(|l| !l.is_empty());
+    // Items (`node`, and an org chart's `asst`) by id, with their words.
+    let mut words: BTreeMap<&str, String> = BTreeMap::new();
+    for p in &pts {
+        if matches!(kind(p).as_str(), "node" | "asst") {
+            if let Some(id) = p.attr("modelId") {
+                words.insert(id, point_text(p));
+            }
+        }
+    }
+    // parOf connections, each parent's children in order.
+    let mut kids: BTreeMap<&str, Vec<(i64, usize, &str)>> = BTreeMap::new();
+    let mut has_parent = std::collections::BTreeSet::new();
+    let cxns = root.child("cxnLst").map(|l| l.children.iter().filter(|c| c.local() == "cxn").collect::<Vec<_>>()).unwrap_or_default();
+    for (i, c) in cxns.iter().enumerate() {
+        if c.attr("type").unwrap_or("parOf") != "parOf" {
+            continue;
+        }
+        let (Some(src), Some(dest)) = (c.attr("srcId"), c.attr("destId")) else { continue };
+        let ord = c.attr("srcOrd").and_then(|o| o.parse().ok()).unwrap_or(i64::MAX);
+        kids.entry(src).or_default().push((ord, i, dest));
+        has_parent.insert(dest);
+    }
+    for v in kids.values_mut() {
+        v.sort();
+    }
+    let mut roots: Vec<&str> = doc.iter().flat_map(|d| kids.get(d).into_iter().flatten().map(|k| k.2)).filter(|id| words.contains_key(id)).collect();
+    if roots.is_empty() {
+        roots = pts.iter().filter_map(|p| p.attr("modelId")).filter(|id| words.contains_key(id) && !has_parent.contains(id)).collect();
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    fn build<'x>(id: &'x str, words: &BTreeMap<&'x str, String>, kids: &BTreeMap<&'x str, Vec<(i64, usize, &'x str)>>, seen: &mut std::collections::BTreeSet<&'x str>, depth: usize) -> Option<Item> {
+        if depth > 32 || seen.len() >= MAX_ITEMS || !seen.insert(id) {
+            return None;
+        }
+        let text = words.get(id)?.clone();
+        let children = kids.get(id).into_iter().flatten().filter_map(|k| build(k.2, words, kids, seen, depth + 1)).collect();
+        Some(Item { text, children })
+    }
+    let items = roots.into_iter().filter_map(|r| build(r, &words, &kids, &mut seen, 0)).collect();
+    Some(SmartArt { layout, items })
+}
+
+/// A point's words (`dgm:t`), a line for each paragraph.
+fn point_text(p: &Elem) -> String {
+    let Some(t) = p.child("t") else { return String::new() };
+    let lines: Vec<String> = t
+        .descendants()
+        .into_iter()
+        .filter(|e| e.local() == "p")
+        .map(|para| para.descendants().into_iter().filter(|e| e.local() == "t" || e.local() == "br").map(|e| if e.local() == "br" { " " } else { e.text.as_str() }).collect::<String>())
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,6 +477,8 @@ mod tests {
         let rpr = root.child("r").and_then(|r| r.child("rPr")).unwrap();
         assert_eq!(strike(rpr), Some(true));
         assert_eq!(rpr.attr("lang"), Some("en"));
+        assert_eq!(root.child("r").and_then(|r| r.child("t")).unwrap().text, "x & y");
+        assert_eq!(parse(b"<t>a&#233;<![CDATA[<b>]]>&gt;</t>").unwrap().text, "a\u{e9}<b>>");
         assert!(parse(b"<a><b></a>").is_none());
         assert!(parse(b"<a>").is_none());
         assert!(parse(b"").is_none());

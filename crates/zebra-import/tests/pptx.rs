@@ -328,6 +328,69 @@ fn equations_are_found_and_noted() {
 }
 
 #[test]
+fn smart_art_comes_in_as_a_diagram_its_shapes_or_a_list() {
+    let mut ed = editor();
+    let deck = read("smartart.pptx", &ed);
+    let els = |page: usize| deck.pages[page].items.iter().map(|i| &i.element).collect::<Vec<_>>();
+    let one_group = |page: usize| {
+        let g = els(page)[1..].iter().map(|e| e.group.clone()).collect::<std::collections::BTreeSet<_>>();
+        assert!(g.len() == 1 && g.iter().all(Option::is_some), "slide {}: {g:?}", page + 1);
+    };
+    // Each graphic's box: 1 to 9 inches across, 1 to 5 down.
+    let inside = |e: &Element| (100.0 - 0.01..=900.01).contains(&e.transform.x) && (100.0 - 0.01..=500.01).contains(&e.transform.y);
+
+    // Basic Process: Zebra's process diagram, a step for each item with
+    // its child as the note, in the theme's colours (not the drawing
+    // PowerPoint saved).
+    assert_eq!(kinds(&deck, 0), count(&[("shape:Rectangle", 1), ("shape:RoundedRect", 3), ("shape:Arrow", 2), ("text", 4)]));
+    let mut words: Vec<(f64, String)> = els(0).iter().filter_map(|e| if let ElementKind::Text(t) = &e.kind { Some((e.transform.x, t.text.clone())) } else { None }).collect();
+    words.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let words: Vec<&str> = words.iter().map(|w| w.1.as_str()).collect();
+    assert!(words == ["Plan", "Build", "Test it", "Ship"] || words == ["Plan", "Test it", "Build", "Ship"], "{words:?}");
+    one_group(0);
+    for e in &els(0)[1..] {
+        assert!(inside(e), "{e:?}");
+        assert!(!e.placeholder);
+        if let ElementKind::Shape(s) = &e.kind {
+            assert!(s.fill.as_deref().is_none_or(|f| f.starts_with("theme:")), "{s:?}");
+        }
+    }
+    let steps: Vec<f64> = els(0).iter().filter(|e| matches!(&e.kind, ElementKind::Shape(s) if s.shape == ShapeKind::RoundedRect)).map(|e| e.transform.x).collect();
+    assert!(steps.windows(2).all(|w| w[1] > w[0] + 100.0), "{steps:?}");
+    assert!((steps[1] - 500.0).abs() < 1.0, "the diagram is centred in the graphic's box: {steps:?}");
+
+    // A pyramid: no Zebra diagram, so the shapes PowerPoint saved,
+    // where it saved them, with their words, grouped.
+    assert_eq!(kinds(&deck, 1), count(&[("shape:Rectangle", 1), ("shape:Triangle", 1), ("shape:Trapezoid", 1), ("text", 2)]));
+    assert_eq!(texts(&els(1)), ["Top", "Base"]);
+    one_group(1);
+    let top = els(1).into_iter().find(|e| matches!(&e.kind, ElementKind::Shape(s) if s.shape == ShapeKind::Triangle)).unwrap();
+    assert!((top.transform.x - 500.0).abs() < 0.01 && (top.transform.y - 200.0).abs() < 0.01, "{:?}", top.transform);
+    assert!((top.size.w - 300.0).abs() < 0.01 && (top.size.h - 200.0).abs() < 0.01, "{:?}", top.size);
+
+    // No drawing saved: the items as a bulleted list, by level.
+    let list = text(&deck, 2, "Goals");
+    assert_eq!(list.text, "Goals\nGrow\nKeep\nRisks");
+    assert_eq!(list.paras.iter().map(|p| p.indent).collect::<Vec<_>>(), [0, 1, 1, 0]);
+    assert!(list.paras.iter().all(|p| p.list == Some(ListKind::Bullet)), "{:?}", list.paras);
+
+    // A data model that can't be read and no drawing: left out, noted.
+    assert_eq!(kinds(&deck, 3), count(&[("shape:Rectangle", 1)]));
+    assert_eq!(deck.notes.get(&ImportNote::SmartArt), Some(&1), "{:?}", deck.notes);
+
+    // On the canvas the diagram's words fit their steps.
+    let out = ed.import_deck(&deck, "Import smartart.pptx".into(), Origin::Human).unwrap();
+    let doc = &ed.doc;
+    let made: Vec<&Element> = out.created.iter().filter_map(|id| doc.get(id)).collect();
+    let boxes: Vec<zebra_core::Rect> = made.iter().filter(|e| matches!(&e.kind, ElementKind::Shape(s) if s.shape == ShapeKind::RoundedRect)).map(|e| e.bounds()).collect();
+    for word in ["Plan", "Build", "Ship"] {
+        let e = made.iter().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text == word)).unwrap();
+        let b = e.bounds();
+        assert!(boxes.iter().any(|r| b.x0 >= r.x0 - 0.5 && b.x1 <= r.x1 + 0.5 && b.y0 >= r.y0 - 0.5 && b.y1 <= r.y1 + 0.5), "{word} at {b:?} is in no step: {boxes:?}");
+    }
+}
+
+#[test]
 fn on_the_canvas_slides_are_frames_with_steps_and_one_undo_removes_them() {
     let mut ed = editor();
     ed.apply(serde_json::from_value(serde_json::json!({"op":"add_frame","id":"f1","x":0,"y":0,"w":800,"h":600,"add_to_path":true})).unwrap(), Origin::Human).unwrap();
@@ -508,7 +571,7 @@ fn damaged_and_other_files_give_an_error_never_a_panic() {
 fn broken_parts_give_an_error_or_a_partial_deck_never_a_panic() {
     use std::io::{Read, Write};
     let ed = editor();
-    for name in ["deck16x9.pptx", "deck4x3.pptx", "extras.pptx"] {
+    for name in ["deck16x9.pptx", "deck4x3.pptx", "extras.pptx", "smartart.pptx"] {
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(fixture(name))).unwrap();
         let mut parts = vec![];
         for i in 0..z.len() {
@@ -553,7 +616,7 @@ fn powerpoint_is_offered() {
 #[test]
 fn render_for_a_look() {
     let Some(dir) = std::env::var_os("ZEBRA_PPTX_PNG_DIR") else { return };
-    for f in ["deck16x9.pptx", "deck4x3.pptx", "extras.pptx"] {
+    for f in ["deck16x9.pptx", "deck4x3.pptx", "extras.pptx", "smartart.pptx"] {
         let r = zebra_render::Renderer::new();
         let mut ed = Editor::default();
         ed.measure = r.measure();

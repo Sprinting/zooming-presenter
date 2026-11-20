@@ -4,8 +4,8 @@
     python3 gen_pptx.py OUT_DIR
 
 Needs python-pptx (1.0.2), Pillow, and ffmpeg (with libx264 and aac) for
-the tiny playable video and music. Writes deck16x9.pptx, deck4x3.pptx and
-extras.pptx to OUT_DIR; copy them next to this script. Run it from a scratch directory,
+the tiny playable video and music. Writes deck16x9.pptx, deck4x3.pptx,
+extras.pptx and smartart.pptx to OUT_DIR; copy them next to this script. Run it from a scratch directory,
 not from here, so nothing else lands in the fixtures folder.
 """
 import copy
@@ -515,9 +515,97 @@ def extras(out):
     repack(out, {**sounds(out), **swaps})
 
 
+DGM = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
+DSP = "http://schemas.microsoft.com/office/drawing/2008/diagram"
+DGM_RT = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+DGM_CT = "application/vnd.openxmlformats-officedocument.drawingml."
+
+
+def smart_art(prs, n, layout, items, drawing=None, data=None):
+    """A SmartArt graphic on a slide of its own, its parts written by
+    hand: the data model (`items` as (text, children) pairs), the layout
+    (only its id) and, when given, the drawing PowerPoint saves of it
+    (`drawing`: dsp:sp elements). `data` replaces the data model."""
+    from pptx.opc.package import Part
+    from pptx.opc.packuri import PackURI
+    s = blank(prs)
+    ids = iter(range(1, 1000))
+    pts, cxns = [], []
+
+    def pt(text):
+        return (f'<a:p><a:r><a:rPr lang="en-GB"/><a:t>{text}</a:t></a:r></a:p>' if text else '<a:p><a:endParaRPr lang="en-GB"/></a:p>')
+
+    def add(parent, kids):
+        # Written last child first: the order is srcOrd's, not the file's.
+        for order, (text, children) in reversed(list(enumerate(kids))):
+            me = f"{{{next(ids)}}}"
+            pts.append(f'<dgm:pt modelId="{me}"><dgm:prSet phldrT="[Text]"/><dgm:spPr/><dgm:t><a:bodyPr/><a:lstStyle/>{pt(text)}</dgm:t></dgm:pt>')
+            trans = next(ids)
+            pts.append(f'<dgm:pt modelId="{{{trans}}}" type="parTrans" cxnId="{{c{trans}}}"/>')
+            # What PowerPoint lays out for the point: not an item.
+            pts.append(f'<dgm:pt modelId="{{p{trans}}}" type="pres"><dgm:prSet presAssocID="{me}" presName="node"/><dgm:spPr/></dgm:pt>')
+            cxns.append(f'<dgm:cxn modelId="{{c{trans}}}" srcId="{parent}" destId="{me}" srcOrd="{order}" destOrd="0" parTransId="{{{trans}}}"/>')
+            cxns.append(f'<dgm:cxn modelId="{{x{trans}}}" type="presOf" srcId="{me}" destId="{{p{trans}}}" srcOrd="0" destOrd="0"/>')
+            add(me, children)
+
+    uid = f"urn:microsoft.com/office/officeart/2005/8/layout/{layout}"
+    add("{0}", items)
+    model = (f'<dgm:dataModel xmlns:dgm="{DGM}" xmlns:a="{A}"><dgm:ptLst>'
+             f'<dgm:pt modelId="{{0}}" type="doc"><dgm:prSet loTypeId="{uid}"/><dgm:spPr/><dgm:t><a:bodyPr/><a:lstStyle/>{pt("")}</dgm:t></dgm:pt>'
+             + "".join(pts) + '</dgm:ptLst><dgm:cxnLst>' + "".join(cxns) + '</dgm:cxnLst><dgm:bg/><dgm:whole/></dgm:dataModel>')
+    lo = (f'<dgm:layoutDef xmlns:dgm="{DGM}" xmlns:a="{A}" uniqueId="{uid}"><dgm:title val=""/><dgm:desc val=""/>'
+          '<dgm:layoutNode name="diagram"/></dgm:layoutDef>')
+
+    def part(name, ct, blob, rt):
+        p = Part(PackURI(f"/ppt/diagrams/{name}{n}.xml"), ct, s.part.package, blob.encode())
+        return s.part.relate_to(p, rt)
+
+    dm = part("data", DGM_CT + "diagramData+xml", data or model, DGM_RT + "diagramData")
+    lid = part("layout", DGM_CT + "diagramLayout+xml", lo, DGM_RT + "diagramLayout")
+    if drawing is not None:
+        part("drawing", "application/vnd.ms-office.drawingml.diagramDrawing+xml",
+             f'<dsp:drawing xmlns:dgm="{DGM}" xmlns:dsp="{DSP}" xmlns:a="{A}"><dsp:spTree>'
+             '<dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/>'
+             + "".join(drawing) + '</dsp:spTree></dsp:drawing>',
+             "http://schemas.microsoft.com/office/2007/relationships/diagramDrawing")
+    s.shapes._spTree.append(etree.fromstring(
+        f'<p:graphicFrame xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}">'
+        f'<p:nvGraphicFramePr><p:cNvPr id="4" name="Diagram {n}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>'
+        f'<p:xfrm><a:off x="{Inches(1)}" y="{Inches(1)}"/><a:ext cx="{Inches(8)}" cy="{Inches(4)}"/></p:xfrm>'
+        f'<a:graphic><a:graphicData uri="{DGM}"><dgm:relIds xmlns:dgm="{DGM}" r:dm="{dm}" r:lo="{lid}"/></a:graphicData></a:graphic>'
+        '</p:graphicFrame>'))
+
+
+def dsp_shape(prst, box, colour, text):
+    """A shape of a SmartArt drawing, placed in the graphic's own box."""
+    x, y, w, h = (int(Inches(v)) for v in box)
+    return (f'<dsp:sp modelId="{{{text}}}"><dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr>'
+            f'<dsp:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm><a:prstGeom prst="{prst}"><a:avLst/></a:prstGeom>'
+            f'<a:solidFill><a:srgbClr val="{colour}"/></a:solidFill><a:ln><a:noFill/></a:ln></dsp:spPr>'
+            '<dsp:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/>'
+            f'<a:r><a:rPr lang="en-GB" sz="2000"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr><a:t>{text}</a:t></a:r></a:p></dsp:txBody>'
+            f'<dsp:txXfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></dsp:txXfrm></dsp:sp>')
+
+
+def smartart(out):
+    """SmartArt (spec 17b item 9): a layout Zebra has a diagram for (its
+    drawing is a stale single box, which the diagram wins over); one it
+    hasn't, with the drawing PowerPoint saved; one with no drawing; one
+    whose data model can't be read."""
+    prs = Presentation()
+    stale = [dsp_shape("rect", (0, 0, 8, 4), "999999", "Stale")]
+    smart_art(prs, 1, "process1", [("Plan", []), ("Build", [("Test it", [])]), ("Ship", [])], drawing=stale)
+    pyramid = [dsp_shape("triangle", (2.5, 0, 3, 2), "4472C4", "Top"), dsp_shape("trapezoid", (1, 2, 6, 2), "ED7D31", "Base")]
+    smart_art(prs, 2, "pyramid1", [("Top", []), ("Base", [])], drawing=pyramid)
+    smart_art(prs, 3, "hierarchy3", [("Goals", [("Grow", []), ("Keep", [])]), ("Risks", [])])
+    smart_art(prs, 4, "process1", [], data="<nonsense/>")
+    prs.save(out)
+
+
 if __name__ == "__main__":
     out = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     out.mkdir(parents=True, exist_ok=True)
     deck16x9(out / "deck16x9.pptx")
     deck4x3(out / "deck4x3.pptx")
     extras(out / "extras.pptx")
+    smartart(out / "smartart.pptx")
