@@ -33,7 +33,27 @@ pub const MAX_RECT_PX: u32 = 4096;
 /// bigger pages, so a page filling a 5K screen is ~40 tiles, not ~150
 /// (each tile is the whole page drawn again, clipped).
 pub fn tile_for(pw: u32) -> u32 {
-    (pw / 8).clamp(TILE, 4 * TILE)
+    (pw / 8).clamp(TILE, 2 * TILE)
+}
+
+/// Width to draw a page `on_screen` pixels across at: the smallest level
+/// `TILE * √2^k` that covers it (capped at [`MAX_PAGE_PX`]). Every second
+/// level is a power of two, so half a level is a level.
+pub fn page_level(on_screen: f64) -> u32 {
+    let mut k = 0u32;
+    loop {
+        let pw = level(k);
+        if pw as f64 >= on_screen || pw >= MAX_PAGE_PX {
+            return pw.min(MAX_PAGE_PX);
+        }
+        k += 1;
+    }
+}
+
+fn level(k: u32) -> u32 {
+    // Odd levels are 724 << m exactly, so half of one is the level below.
+    let base = if k % 2 == 0 { TILE } else { (TILE as f64 * std::f64::consts::SQRT_2).round() as u32 };
+    base << (k / 2)
 }
 /// Widest a page is ever drawn (pixels across the whole page). Beyond
 /// this zoom the tiles are scaled up.

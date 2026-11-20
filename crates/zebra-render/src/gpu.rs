@@ -142,11 +142,20 @@ pub struct GpuRenderer {
     /// Milliseconds of the last render: (scene encode, vello submit, error
     /// scope wait). For the `perf` query.
     pub last_ms: [f32; 3],
+    /// Pictures drawn in the last frame (blob ids).
+    last_images: std::collections::HashSet<u64>,
+    /// Frames still to draw so pictures that didn't fit show (see
+    /// [`GpuRenderer::needs_another_frame`]).
+    settle: u8,
 }
 
 /// Frames heavier than this (see [`crate::frame_cost`]) don't leave their
 /// encoding buffers behind.
 const SHRINK_AFTER_COST: usize = 200_000;
+
+/// Pictures in a frame above this many pixels might not fit next to the
+/// last frames' in vello's atlas (8192² = 67M).
+const SETTLE_ABOVE_PX: u64 = 8_000_000;
 
 fn renderer_options() -> RendererOptions {
     RendererOptions { antialiasing_support: AaSupport::area_only(), ..Default::default() }
@@ -156,7 +165,7 @@ impl GpuRenderer {
     pub fn new(device: &wgpu::Device) -> Result<Self, String> {
         let renderer = vello::Renderer::new(device, renderer_options())
         .map_err(|e| format!("vello init failed: {e}"))?;
-        Ok(GpuRenderer { renderer, scene: Scene::new(), last_ms: [0.0; 3] })
+        Ok(GpuRenderer { renderer, scene: Scene::new(), last_ms: [0.0; 3], last_images: Default::default(), settle: 0 })
     }
 
     /// Render `list` into `view` (an Rgba8Unorm texture with STORAGE_BINDING,
@@ -168,6 +177,7 @@ impl GpuRenderer {
         list: &DisplayList,
         view: &wgpu::TextureView,
     ) -> Result<(), String> {
+        self.note_images(list);
         let t0 = std::time::Instant::now();
         self.scene.reset();
         encode_scene(&mut self.scene, list);
@@ -202,6 +212,35 @@ impl GpuRenderer {
             return Err(format!("vello render failed, renderer reset: {e}"));
         }
         res.map_err(|e| format!("vello render failed: {e}"))
+    }
+
+    /// True when the frame just drawn may have left pictures out, so the
+    /// host should draw it again (at most twice per change).
+    ///
+    /// vello keeps every picture of the last three frames in one 8192²
+    /// atlas and leaves out what doesn't fit, without telling us. Zooming
+    /// a big PDF page swaps whole sets of tiles, and the new set could
+    /// find the atlas still full of the old one: tiles went missing, and
+    /// with nothing else to repaint the window they stayed missing. Two
+    /// more frames let vello drop the old set and place the new one.
+    pub fn needs_another_frame(&self) -> bool {
+        self.settle > 0
+    }
+
+    fn note_images(&mut self, list: &DisplayList) {
+        let mut ids = std::collections::HashSet::new();
+        let mut px = 0u64;
+        for it in &list.items {
+            if let Item::Image { image, .. } = it {
+                if ids.insert(image.data.data.id()) {
+                    px += image.width as u64 * image.height as u64;
+                }
+            }
+        }
+        let new = ids.iter().any(|id| !self.last_images.contains(id));
+        // Small sets can't fill the atlas; don't spend frames on them.
+        self.settle = if new && px > SETTLE_ABOVE_PX { 2 } else { self.settle.saturating_sub(1) };
+        self.last_images = ids;
     }
 
     /// Render off-screen and read back straight RGBA8 rows (for tests and
@@ -344,6 +383,9 @@ impl VelloCanvas {
             let bg = list.background;
             ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]));
             return;
+        }
+        if gpu.needs_another_frame() {
+            ui.ctx().request_repaint();
         }
         if let Some(id) = self.texture_id {
             let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
