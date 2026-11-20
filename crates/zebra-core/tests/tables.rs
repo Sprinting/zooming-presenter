@@ -499,3 +499,47 @@ fn fuzzed_table_files_never_panic() {
         load_ok_or_refused(&file_with_table(k));
     }
 }
+
+/// Reshaping a table and its formula sheet together (the fast path) ends
+/// where a sheet built afresh from the table does, over a run of random
+/// edits, undos and redos.
+#[test]
+fn the_kept_formula_sheet_agrees_with_a_fresh_one() {
+    let mut ed = big(30, 6, true);
+    run(&mut ed, json!({"op": "set_cells", "id": "b1", "at": "B3", "values": [["=B2*2", "£5", "=A3+B3"], ["=SUM(B2:B3)", "13.7%", "x"]]})).unwrap();
+    let mut rng = Rng(0x5eed_1234_abcd);
+    for step in 0..120 {
+        let t = table(&ed, "b1");
+        let (n, c) = (t.n_rows(), t.n_cols());
+        let pick = |rng: &mut Rng, k: usize| (rng.next() as usize) % k.max(1);
+        let op = match pick(&mut rng, 9) {
+            0 => json!({"op": "insert_rows", "id": "b1", "index": pick(&mut rng, n + 1), "count": 1 + pick(&mut rng, 2)}),
+            1 if n > 4 => json!({"op": "delete_rows", "id": "b1", "index": 1 + pick(&mut rng, n - 2), "count": 1}),
+            2 => json!({"op": "insert_columns", "id": "b1", "index": pick(&mut rng, c + 1), "count": 1}),
+            3 if c > 3 => json!({"op": "delete_columns", "id": "b1", "index": pick(&mut rng, c - 1), "count": 1}),
+            4 => json!({"op": "move_rows", "id": "b1", "from": 1 + pick(&mut rng, n - 2), "count": 1, "to": 1 + pick(&mut rng, n - 2)}),
+            5 => json!({"op": "move_columns", "id": "b1", "from": pick(&mut rng, c), "count": 1, "to": pick(&mut rng, c)}),
+            6 => json!({"op": "sort_table", "id": "b1", "column": pick(&mut rng, c), "descending": rng.next() % 2 == 0}),
+            7 => {
+                let _ = ed.undo(Origin::Human);
+                continue;
+            }
+            _ => json!({"op": "set_cells", "id": "b1", "at": table::cell_name(1 + pick(&mut rng, n - 2), pick(&mut rng, c)), "values": [[(rng.next() % 500) as i64]]}),
+        };
+        let _ = run(&mut ed, op);
+        let kept = table(&ed, "b1");
+        let mut fresh = kept.clone();
+        for row in fresh.cells.iter_mut() {
+            for cell in row.iter_mut() {
+                cell.value = None;
+                cell.format = None;
+            }
+        }
+        calc::Calc::new().recalc("x", &mut fresh);
+        for r in 0..kept.n_rows() {
+            for c in 0..kept.n_cols() {
+                assert_eq!(kept.cells[r][c].value, fresh.cells[r][c].value, "step {step}: {} = {:?}", table::cell_name(r, c), kept.cells[r][c].input);
+            }
+        }
+    }
+}

@@ -3,7 +3,7 @@
 //! formulas again before it returns, so the new values are part of the
 //! same undo step as the edit.
 use super::*;
-use crate::calc::{reshape, Reshape};
+use crate::calc::Reshape;
 use crate::table::{CellFormat, CellInput, CellRange, Limit, RangeFormat, TableData, MAX_HEADERS};
 
 /// An input over a limit, as the API reports it.
@@ -98,8 +98,9 @@ impl Editor {
                 // Grow (formulas see the new rows as typing on would).
                 if c0 + cols > t.n_cols() {
                     let n = t.n_cols();
-                    reshape(t, &Reshape::InsertColumns { at: n, count: c0 + cols - n }).map_err(ZError::invalid)?;
+                    self.reshape_table(&id, &Reshape::InsertColumns { at: n, count: c0 + cols - n })?;
                 }
+                let t = self.table_mut(&id)?;
                 // Writing from the body on: new rows go in above the
                 // footer, which moves down out of the way. From the footer
                 // on: they go at the end.
@@ -109,8 +110,9 @@ impl Editor {
                     return Err(too_big(l));
                 }
                 if need > 0 {
-                    reshape(t, &Reshape::InsertRows { at, count: need }).map_err(ZError::invalid)?;
+                    self.reshape_table(&id, &Reshape::InsertRows { at, count: need })?;
                 }
+                let t = self.table_mut(&id)?;
                 for (dr, row) in values.into_iter().enumerate() {
                     for (dc, input) in row.into_iter().enumerate() {
                         let (r, c) = (r0 + dr, c0 + dc);
@@ -136,7 +138,7 @@ impl Editor {
                 if let Some(l) = Limit::of_size(t.n_rows().saturating_add(count), t.n_cols()) {
                     return Err(too_big(l));
                 }
-                reshape(t, &Reshape::InsertRows { at: index, count }).map_err(ZError::invalid)?;
+                self.reshape_table(&id, &Reshape::InsertRows { at: index, count })?;
                 id
             }
             Command::InsertColumns { id, index, count } => {
@@ -150,7 +152,7 @@ impl Editor {
                 if let Some(l) = Limit::of_size(t.n_rows(), t.n_cols().saturating_add(count)) {
                     return Err(too_big(l));
                 }
-                reshape(t, &Reshape::InsertColumns { at: index, count }).map_err(ZError::invalid)?;
+                self.reshape_table(&id, &Reshape::InsertColumns { at: index, count })?;
                 id
             }
             Command::DeleteRows { id, index, count } => {
@@ -161,7 +163,7 @@ impl Editor {
                 if count == t.n_rows() {
                     return Err(ZError::invalid("a table keeps at least one row").hint("delete the table instead"));
                 }
-                reshape(t, &Reshape::DeleteRows { at: index, count }).map_err(ZError::invalid)?;
+                self.reshape_table(&id, &Reshape::DeleteRows { at: index, count })?;
                 id
             }
             Command::DeleteColumns { id, index, count } => {
@@ -172,7 +174,7 @@ impl Editor {
                 if count == t.n_cols() {
                     return Err(ZError::invalid("a table keeps at least one column").hint("delete the table instead"));
                 }
-                reshape(t, &Reshape::DeleteColumns { at: index, count }).map_err(ZError::invalid)?;
+                self.reshape_table(&id, &Reshape::DeleteColumns { at: index, count })?;
                 id
             }
             Command::MoveRows { id, from, count, to } => {
@@ -181,7 +183,7 @@ impl Editor {
                 if count == 0 || from.saturating_add(count) > n || to > n {
                     return Err(ZError::invalid(format!("rows out of range ({n} rows, 0-based)")));
                 }
-                reshape(t, &Reshape::MoveRows { from, count, to }).map_err(ZError::invalid)?;
+                self.reshape_table(&id, &Reshape::MoveRows { from, count, to })?;
                 id
             }
             Command::MoveColumns { id, from, count, to } => {
@@ -190,7 +192,7 @@ impl Editor {
                 if count == 0 || from.saturating_add(count) > n || to > n {
                     return Err(ZError::invalid(format!("columns out of range ({n} columns, 0-based)")));
                 }
-                reshape(t, &Reshape::MoveColumns { from, count, to }).map_err(ZError::invalid)?;
+                self.reshape_table(&id, &Reshape::MoveColumns { from, count, to })?;
                 id
             }
             Command::MergeCells { id, range } => {
@@ -262,7 +264,7 @@ impl Editor {
                     return Err(ZError::invalid("can't sort rows that have cells merged across them").hint("unmerge them first"));
                 }
                 let order = t.sort_order(column, descending);
-                reshape(t, &Reshape::SortRows { order }).map_err(ZError::invalid)?;
+                self.reshape_table(&id, &Reshape::SortRows { order })?;
                 id
             }
             _ => unreachable!("apply_table takes table commands"),
@@ -272,6 +274,20 @@ impl Editor {
             out.changed.push(id);
         }
         Ok(())
+    }
+
+    /// Change the shape of table `id` (noted for undo already) and rewrite
+    /// its formulas to match.
+    ///
+    /// The table's formula sheet is not reshaped with it: IronCalc moves
+    /// every cell of a sheet one by one (75 ms to insert a row at the top
+    /// of 100,000 cells), while sending the moved cells again at the next
+    /// recalculation takes 15 ms.
+    fn reshape_table(&mut self, id: &str, op: &Reshape) -> ZResult<()> {
+        match self.doc.elements.get_mut(id).map(|e| &mut e.kind) {
+            Some(ElementKind::Table(t)) => crate::calc::reshape(t, op).map_err(ZError::invalid),
+            _ => Err(ZError::invalid(format!("'{id}' is not a table"))),
+        }
     }
 
     /// The table to change (noted for undo), unlocked.
@@ -415,7 +431,15 @@ pub(super) fn measure_table(m: &dyn TextMeasure, theme: &Theme, e: &mut Element,
     let mut fits = vec![0.0f64; n];
     for (r, fit) in fits.iter_mut().enumerate() {
         if let Some((row, f, h)) = reuse.get(&t.cells[r].id()) {
-            if row.same(&t.cells[r]) && *h == t.rows[r].height {
+            // The same row, or one whose formulas were only rewritten
+            // (references moved by an insert above): it shows the same.
+            let shows_same = || {
+                row.len() == t.cells[r].len()
+                    && row.iter().zip(t.cells[r].iter()).all(|(a, b)| {
+                        if a.is_formula() && b.is_formula() { a.value == b.value && a.format == b.format } else { a == b }
+                    })
+            };
+            if *h == t.rows[r].height && (row.same(&t.cells[r]) || shows_same()) {
                 *fit = *f;
                 continue;
             }

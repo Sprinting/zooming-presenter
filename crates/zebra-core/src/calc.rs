@@ -413,6 +413,38 @@ mod imp {
         s.to_string()
     }
 
+    /// Give the sheet one cell's input. Plain numbers and words skip
+    /// IronCalc's reading of the text (most of a big table), and every
+    /// cell starts from the plain style, so a format a moved value left
+    /// behind doesn't stick to what comes in its place.
+    fn feed(m: &mut Model<'static>, row: i32, col: i32, input: &str) {
+        let Ok(ws) = m.workbook.worksheet_mut(0) else { return };
+        let _ = ws.cell_clear_contents_with_style(row, col, 0);
+        if input.is_empty() {
+            return;
+        }
+        let plain_number = !input.is_empty()
+            && input.len() < 24
+            && input.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'-')
+            && input.bytes().any(|b| b.is_ascii_digit());
+        if plain_number {
+            if let Ok(v) = input.parse::<f64>() {
+                if v.is_finite() {
+                    let _ = ws.set_cell_with_number(row, col, v, 0);
+                    return;
+                }
+            }
+        }
+        let wordy = input.chars().next().is_some_and(|c| c.is_alphabetic())
+            && !matches!(input.to_ascii_lowercase().as_str(), "true" | "false")
+            && !input.contains(['@', ':', '/', '.', '%']);
+        if wordy {
+            let _ = m.update_cell_with_text(0, row, col, input);
+            return;
+        }
+        let _ = m.set_user_input(0, row, col, input_for(input));
+    }
+
     pub fn recalc(sheets: &mut HashMap<String, Sheet>, id: &str, t: &mut TableData) -> bool {
         let sheet = sheets.entry(id.to_string()).or_insert_with(|| Sheet { model: new_model(), rows: vec![] });
         let m = &mut sheet.model;
@@ -430,14 +462,7 @@ mod imp {
                 if n == w {
                     continue;
                 }
-                let (row, col) = (r as i32 + 1, c as i32 + 1);
-                if n.is_empty() {
-                    if let Ok(ws) = m.workbook.worksheet_mut(0) {
-                        let _ = ws.cell_clear_contents(row, col);
-                    }
-                } else {
-                    let _ = m.set_user_input(0, row, col, input_for(n));
-                }
+                feed(m, r as i32 + 1, c as i32 + 1, n);
             }
         }
         m.evaluate();
