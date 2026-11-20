@@ -7,7 +7,7 @@ Metal for the canvas) and uses no web views.
 
 You use it like Prezi: you click, drag and type, and you never need to know a
 command. It can also be driven by AI agents, if you choose: click **AI: Off**
-in the toolbar and switch on **Let AI agents control Zebra**. Then any agent
+in the toolbar and switch on **Allow AI control**. Then any agent
 on the Mac that can run a command (Claude Code, Codex, Cursor, Gemini CLI, a
 shell script) can read and edit the same presentation while you watch, using
 the `zebractl` tool bundled inside the app (see [docs/API.md](docs/API.md)).
@@ -103,15 +103,15 @@ rewrites it).
 | Save | ⌘S |
 | Save As… | ⇧⌘S |
 | Import… | ⇧⌘I |
-| Export PDF… | ⌘E |
+| Export as PDF… | ⌘E |
 | Duplicate | ⌘D |
 | Delete | ⌫ or Del |
-| Deselect | Esc |
+| Deselect All | Esc |
 | Select Tool | V |
 | Hand Tool | H |
 | Text Tool | T |
 | Rectangle Tool | R |
-| Ellipse Tool | O |
+| Oval Tool | O |
 | Line Tool | L |
 | Arrow Tool | A |
 | Pen Tool | D |
@@ -124,9 +124,9 @@ rewrites it).
 | Lock | ⌘L |
 | Zoom In | ⌘= or ⌘+ |
 | Zoom Out | ⌘− |
-| Zoom to Fit All | ⇧1 or ! |
+| Zoom to Fit | ⇧1 or ! |
 | Zoom to Selection | ⇧2 |
-| Actual Size (100%) | ⌘0 |
+| Actual Size | ⌘0 |
 | Show Sidebar | ⌃⌘S or ⌘\ |
 | Show Inspector | ⌥⌘I |
 | Keyboard Shortcuts | ? |
@@ -135,13 +135,13 @@ rewrites it).
 | Ungroup | ⌥⇧⌘G |
 | Edit Path | P |
 | Add Selection to Path | ⇧⌘A |
-| Play Presentation | ⌥⌘P or ⌘↵ or F5 |
+| Play from Start | ⌥⌘P or ⌘↵ or F5 |
 | Play from Current Step | ⌥⇧⌘P or ⌥⌘↵ or ⇧F5 |
 | Agent Activity | ⌘J |
 | Stop Agent | ⌘. |
 | Command Palette… | ⇧⌘P or ⌘K |
 | Close | ⌘W |
-| Frame Tool (cycle style) | F |
+| Frame Tool | F |
 | Redo | ⇧⌘Z or ⌘Y |
 | Bold | ⌘B |
 | Italic | ⌘I |
@@ -156,8 +156,8 @@ rewrites it).
 
 ## Working with an AI agent
 
-Click the **AI** button in the toolbar and switch on **Let AI agents control
-Zebra**. The popover gives you a sentence to paste into any agent's chat. It
+Click the **AI** button in the toolbar and switch on **Allow AI
+control**. The popover gives you a sentence to paste into any agent's chat. It
 points the agent at `zebractl --help`, by the tool's full path inside
 `Zebra.app`, so nothing has to be installed. Optional extras in the same
 popover: **Install command-line tool** (puts `zebractl` on your PATH, direct

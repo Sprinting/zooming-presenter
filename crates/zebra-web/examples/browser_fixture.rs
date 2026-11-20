@@ -18,7 +18,7 @@ pub const HT: u32 = 800;
 
 /// English words for the sample's `sample-*` keys, from the app's .ftl.
 fn words() -> std::collections::HashMap<String, String> {
-    include_str!("../../zebra-app/i18n/en-US/zebra-app.ftl")
+    include_str!("../../zebra-app/i18n/en-GB/zebra-app.ftl")
         .lines()
         .filter_map(|l| l.split_once(" = "))
         .filter(|(k, _)| k.starts_with("sample-"))

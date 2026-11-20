@@ -142,7 +142,7 @@ mod language_tests {
         let v = available();
         // Run with --nocapture on a Mac to see its preferred languages.
         println!("system languages: {:?}", DesktopLanguageRequester::requested_languages());
-        assert!(v.iter().any(|(id, name)| id == "en-US" && name == "English"), "{v:?}");
+        assert!(v.iter().any(|(id, name)| id == "en-GB" && name == "English"), "{v:?}");
         assert_eq!(language_name("xx-YY"), "xx-YY");
         assert!(v.iter().any(|(id, _)| *id == system_language()));
     }

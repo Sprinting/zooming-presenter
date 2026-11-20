@@ -637,7 +637,7 @@ pub struct ImageData {
     #[serde(default, skip_serializing_if = "is_default")]
     pub mask: ImageMask,
     /// Set when the picture is a symbol from the clip-art library (Insert ›
-    /// Symbols & Shapes). Its SVG is the asset, so it draws without the
+    /// Shapes, Icons & Symbols). Its SVG is the asset, so it draws without the
     /// library.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<SymbolLook>,

@@ -27,7 +27,7 @@ fn ai_control_is_switched_on_by_the_human_and_off_by_an_agent() {
     // Human: click the AI toolbar item, then the switch.
     h.get_by_label("AI").click();
     h.run_steps(3);
-    h.get_by_role_and_label(egui::accesskit::Role::Switch, "Let AI agents control Zebra").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Switch, "Allow AI control").click();
     h.run_steps(3);
     assert!(h.state().ai_enabled && h.state().api.is_some(), "the switch should turn AI control on");
     let socket = h.state().api.as_ref().unwrap().socket_path();

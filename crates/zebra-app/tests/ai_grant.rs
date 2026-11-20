@@ -50,7 +50,7 @@ fn launch_flag_needs_a_person_to_switch_ai_control_on_first() {
         h.get_by_label("AI").click();
         h.run_steps(3);
         let switch = || egui::accesskit::Role::Switch;
-        h.get_by_role_and_label(switch(), "Let AI agents control Zebra").click();
+        h.get_by_role_and_label(switch(), "Allow AI control").click();
         h.run_steps(3);
         assert!(h.state().ai_enabled && h.state().ai_saved && h.state().api.is_some());
         assert!(zebra_api::discovery::human_has_granted(), "the person's click records the grant");
@@ -64,7 +64,7 @@ fn launch_flag_needs_a_person_to_switch_ai_control_on_first() {
         let switch = || egui::accesskit::Role::Switch;
         h.get_by_label("AI").click();
         h.run_steps(3);
-        h.get_by_role_and_label(switch(), "Let AI agents control Zebra").click();
+        h.get_by_role_and_label(switch(), "Allow AI control").click();
         h.run_steps(3);
         assert!(!h.state().ai_enabled && !h.state().ai_saved && h.state().api.is_none());
         assert_eq!(zebra_api::discovery::ai_switch(), zebra_api::discovery::AiSwitch { granted: true, on: Some(false) });

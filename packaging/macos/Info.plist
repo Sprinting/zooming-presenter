@@ -4,6 +4,7 @@
 <dict>
   <key>CFBundleName</key><string>Zebra</string>
   <key>CFBundleDisplayName</key><string>Zebra</string>
+  <key>CFBundleDevelopmentRegion</key><string>en_GB</string>
   <!-- PLACEHOLDER until the product is named; must match BUNDLE_ID in zebra-api/src/discovery.rs -->
   <key>CFBundleIdentifier</key><string>app.zebra.Zebra</string>
   <key>CFBundleExecutable</key><string>zebra</string>

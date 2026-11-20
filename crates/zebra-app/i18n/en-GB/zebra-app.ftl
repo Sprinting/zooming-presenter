@@ -25,7 +25,7 @@ app-untitled = Untitled
 app-untitled-numbered = { $title } { $no }
 app-agent-default-name = Agent
 app-window-title-edited = { $name } — Edited
-app-file-filter-zebra = Zebra presentation
+app-file-filter-zebra = Zebra Presentation
 app-file-filter-image = Image
 app-file-filter-video = Video
 app-file-filter-audio = Audio
@@ -34,22 +34,22 @@ app-file-filter-import = PDF
 app-file-filter-png = PNG
 app-ai-start-failed = Couldn't start AI control: { $error }
 # When something a person did can't be done (details go to the log).
-app-error-locked = It's locked. Unlock it first.
-app-error-busy = An agent is in the middle of a change. Try again in a moment.
+app-error-locked = This object is locked. Unlock it first.
+app-error-busy = An agent is making a change. Try again in a moment.
 app-error-io = Couldn't read or write the file.
-app-error-not-empty = The canvas isn't empty.
-app-error-not-found = That's no longer there.
+app-error-not-empty = The canvas already has content.
+app-error-not-found = That object no longer exists.
 app-error-other = Couldn't do that.
-app-toast-nothing-to-play = Nothing to play yet. Double-click the canvas to write something first.
-app-toast-presenter-view-on = Presenter view will open when you present.
+app-toast-nothing-to-play = There's nothing to play yet. Double-click the canvas to add text.
+app-toast-presenter-view-on = Presenter view opens when you play the presentation.
 app-toast-presenter-view-off = Presenter view is off.
-app-toast-agent-stopped = Agent stopped. Resume it from the AI button in the toolbar.
-app-toast-read-failed = Could not read { $path }: { $error }
-app-toast-read-dropped-failed = Could not read dropped file: { $error }
-app-toast-agent-switched-ai-off = { $name } switched AI control off. Turn it back on from the AI button.
+app-toast-agent-stopped = Agent stopped. To resume it, click AI in the toolbar.
+app-toast-read-failed = Couldn't read { $path }: { $error }
+app-toast-read-dropped-failed = Couldn't read the dropped file: { $error }
+app-toast-agent-switched-ai-off = { $name } turned off AI control. To turn it on again, click AI in the toolbar.
 app-open-failed-title = The document “{ $name }” could not be opened.
 app-open-failed-newer = It was made by a newer version of Zebra.
-app-open-failed-not-zebra = It isn't a Zebra presentation, or it is damaged.
+app-open-failed-not-zebra = It isn't a Zebra presentation, or it's damaged.
 app-open-failed-missing = The file no longer exists.
 app-open-failed-permission = You don't have permission to read it.
 app-open-failed-unreadable = The file couldn't be read.
@@ -58,9 +58,9 @@ app-save-failed-title = The document “{ $name }” could not be saved.
 app-undo-lock = Lock
 app-undo-unlock = Unlock
 app-undo-paste = Paste
+app-undo-add-to-path = Add to Path
+app-undo-add-current-view = Add Current View
 app-undo-import = Import { $name }
-app-undo-add-to-path = Add to path
-app-undo-add-current-view = Add current view
 app-undo-nudge = Nudge
 
 ## ---- end app.rs ----
@@ -74,7 +74,7 @@ status-agent-paused = { $name }: paused
 status-agent-action = { $name }: { $action }
 status-agent-note = { $name }: { $note }
 status-hide-note = Hide
-status-activity = Activity
+status-activity = Agent Activity
 toolbar-add-step = Add Step
 toolbar-add-step-tip-view = Add the current view as a step
 toolbar-add-step-tip-selection = Add the selection as a step
@@ -84,13 +84,13 @@ toolbar-format-tip-show = Show the inspector
 toolbar-export = Export
 toolbar-export-tip = Export as PDF, PNG or web page
 toolbar-export-pdf = PDF…
-toolbar-export-png = PNG of Current View…
+toolbar-export-png = Current View as PNG…
 toolbar-export-html = Web Page (HTML)…
 toolbar-theme = Theme
 toolbar-theme-tip = Change the presentation's colours and fonts
 toolbar-view = View
-toolbar-view-tip = Show or hide the path sidebar and inspector
-toolbar-view-path-sidebar = Path Sidebar
+toolbar-view-tip = Show or hide the sidebar, inspector and agent activity
+toolbar-view-path-sidebar = Sidebar
 toolbar-view-inspector = Inspector
 toolbar-view-agent-activity = Agent Activity
 toolbar-view-edit-path = Edit Path
@@ -110,83 +110,83 @@ toolbar-play-from-current = Play from Current Step
 toolbar-presenter-view = Presenter View
 toolbar-playback-options = Playback Options…
 toolbar-text = Text
-toolbar-text-tip-detail = Or double-click anywhere on the canvas
+toolbar-text-tip-detail = Or double-click the canvas
 toolbar-frame = Frame
 toolbar-frame-tip-detail = Press { $key } again to change the style
 toolbar-frame-selection = Frame Selection
 toolbar-shape = Shape
-toolbar-shape-tip = Shapes and icons
+toolbar-shape-tip = Shapes, icons and symbols
 toolbar-shape-rectangle = Rectangle
-toolbar-shape-ellipse = Ellipse
+toolbar-shape-ellipse = Oval
 toolbar-line = Line
 toolbar-line-tip = Lines, arrows and drawing
 toolbar-line-arrow = Arrow
-toolbar-line-draw = Draw
+toolbar-line-draw = Pen
 toolbar-media = Media
 toolbar-media-tip =
-    Images, video and audio
+    Images, video and background music
     Or drop files on the canvas
 toolbar-media-image = Image…
 toolbar-media-video = Video…
-toolbar-media-audio = Audio…
+toolbar-media-audio = Background Music…
 toolbar-theme-my-themes = My Themes
-toolbar-theme-customize = Customize Theme…
-toolbar-theme-customize-tip = Colours, fonts, background picture and 3D background
+toolbar-theme-customize = Customise Theme…
+toolbar-theme-customize-tip = Colours, fonts and background images
 ai-toolbar = AI
 ai-toolbar-error = AI: Error
 ai-tip-off = Let an AI agent work in Zebra
-ai-tip-waiting = AI control is on, waiting for an agent
-ai-tip-paused = Agent paused. Click for agent controls
-ai-tip-connected = Agent connected. Click for agent controls
-ai-control-switch = Let AI agents control Zebra
-ai-control-switch-tip = Only you can switch this on. An agent can switch it off.
-ai-caption-on = Agents on this Mac that can run a command (Claude Code, Codex, Cursor, Gemini CLI, your own scripts) can now see and edit this window. You can watch, undo, pause or stop them at any time.
-ai-caption-off = Off: nothing outside Zebra can see or change your work. Switch it on to let an AI agent on this Mac build or edit presentations with you.
+ai-tip-waiting = AI control is on. No agent is connected.
+ai-tip-paused = Agent paused. Click to see agent controls.
+ai-tip-connected = Agent connected. Click to see agent controls.
+ai-control-switch = Allow AI control
+ai-control-switch-tip = Only you can turn this on. Agents can turn it off.
+ai-caption-on = Agents on this Mac that can run commands, such as Claude Code, Codex, Cursor, Gemini CLI or your own scripts, can now see and edit this window. You can watch, undo, pause or stop them at any time.
+ai-caption-off = While this is off, nothing outside Zebra can see or change your work. Turn it on to let an AI agent on this Mac edit presentations with you.
 ai-connect-title = Connect an Agent
 ai-connect-paste = Paste this into your agent's chat:
 ai-zebractl-installed = ✓ zebractl is installed on this Mac
 ai-install-cli = Install Command-Line Tool…
-ai-install-cli-tip = Adds `zebractl` to /usr/local/bin so agents can type just `zebractl`. macOS asks for your password.
-ai-toast-cli-installed = Installed zebractl. Agents can now run `zebractl --help`.
+ai-install-cli-tip = Installs zebractl in /usr/local/bin so that agents can run it by name. macOS asks for your password.
+ai-toast-cli-installed = zebractl is installed. Agents can now run zebractl --help.
 ai-toast-cli-install-failed = Couldn't install zebractl: { $error }
 ai-mcp-setup = MCP Setup…
-ai-mcp-caption = Optional. For apps that take an MCP server config (Claude Desktop, Cursor, and others):
-ai-no-agent = No agent connected yet.
+ai-mcp-caption = Optional. For apps that use an MCP server configuration, such as Claude Desktop or Cursor:
+ai-no-agent = No agent is connected.
 ai-pause = Pause
 ai-resume = Resume
-ai-pause-tip = Temporarily stop the agent from making changes
+ai-pause-tip = Stop the agent from making changes until you resume it
 ai-revert-changes = Revert Changes…
 ai-revert-tip = Undo everything the agent did since your last change
-ai-follow-camera = Follow the agent's camera
-ai-follow-tip = Move your view to wherever the agent is working
-ai-show-activity = Show Activity
-ai-permission-title = What agents may do
-ai-permission-observe = Look only
-ai-permission-edit = Edit the presentation (default)
-ai-permission-full = Full control (also your view, files, presenting)
+ai-follow-camera = Follow agent
+ai-follow-tip = Show the part of the canvas that the agent is working on
+ai-show-activity = Show Agent Activity
+ai-permission-title = Agents can:
+ai-permission-observe = View only
+ai-permission-edit = Edit the presentation
+ai-permission-full = Full control, including the view, files and playing
 copy-box-copy = Copy
 copy-box-copied = Copied
-canvas-hint-title = Double-click anywhere to write
-canvas-hint-detail = Press { $key } for a frame, drop images here, or choose File › New from Sample
+canvas-hint-title = Double-click anywhere to add text
+canvas-hint-detail = Press { $key } for a frame, drop images here or choose File › New from Sample
 canvas-back-to-content = Back to Content
-canvas-back-to-content-tip = Zoom to fit everything
-recover-message = Unsaved changes from an earlier session were found.
+canvas-back-to-content-tip = Zoom out to show everything
+recover-message = You have unsaved changes from an earlier session.
 recover-dismiss = Dismiss
 recover-restore = Restore
 activity-title = Agent Activity
 activity-close = Close
-activity-caption = Every change an agent makes appears here and on your undo stack.
+activity-caption = Every change that an agent makes is listed here. You can undo it like your own changes.
 activity-pause = Pause
 activity-resume = Resume
-activity-pause-tip = Temporarily stop the agent from making changes
+activity-pause-tip = Stop the agent from making changes until you resume it
 activity-resume-tip = Let the agent continue
-activity-revert = Revert…
+activity-revert = Revert Changes…
 activity-revert-tip = Undo everything the agent did since your last change
-activity-follow = Follow the agent
-activity-follow-tip = Move your view to wherever the agent is working
+activity-follow = Follow agent
+activity-follow-tip = Show the part of the canvas that the agent is working on
 activity-empty = No agent changes yet.
 activity-connected = Connected
-activity-none-connected = No agent connected.
+activity-none-connected = No agent is connected.
 activity-seconds-ago = { $seconds } s ago
 activity-minutes-ago = { $minutes } min ago
 activity-item-meta = { $origin } · { $when } · { $count ->
@@ -194,19 +194,19 @@ activity-item-meta = { $origin } · { $when } · { $count ->
        *[other] { $count } objects
     }
 activity-item-meta-plain = { $origin } · { $when }
-activity-item-tip = Click to show these objects
+activity-item-tip = Click to zoom to these objects
 # Who made a change, when it was the person using this Mac.
 origin-you = You
 palette-hint = Type a command
 shortcuts-title = Keyboard Shortcuts
-shortcuts-caption = Every shortcut is also a menu item or a button.
-shortcuts-write-text = Write text
+shortcuts-caption = Every shortcut also has a menu item or a button.
+shortcuts-write-text = Add text
 shortcuts-write-text-keys = Double-click anywhere
-shortcuts-select-hand = Select tool · Hand tool
+shortcuts-select-hand = Select Tool · Hand Tool
 shortcuts-select-hand-keys = { $select } · { $hand } (or hold { $space })
-shortcuts-text-frame = Text · Frame (again to change style)
-shortcuts-shapes = Rectangle · Ellipse · Line · Arrow · Draw
-shortcuts-insert-image = Insert image
+shortcuts-text-frame = Text Tool · Frame Tool (press again to change style)
+shortcuts-shapes = Rectangle · Oval · Line · Arrow · Pen
+shortcuts-insert-image = Insert Image
 shortcuts-pan-zoom = Pan · Zoom
 shortcuts-pan-zoom-keys = Two-finger scroll · Pinch, or { $modifier }-scroll
 shortcuts-zoom = Zoom to Fit · Zoom to Selection · Actual Size
@@ -218,14 +218,14 @@ shortcuts-rotate-keys = Hold { $modifier } while rotating
 shortcuts-path = Edit Path · Add to Path
 shortcuts-play = Play · Play from Current Step
 shortcuts-while-playing = While playing
-shortcuts-while-playing-keys = { $next } or { $space } next · { $back } back · { $home } overview · { $black } or { $white } blank · { $stop } stop
+shortcuts-while-playing-keys = { $next } or { $space } next · { $back } back · { $home } overview · { $black } or { $white } blank · { $stop } exit
 shortcuts-panels = Show Inspector · Show Sidebar
 shortcuts-agent = Agent Activity · Stop Agent
 shortcuts-settings = Settings
 shortcuts-done = Done
 about-name = Zebra
 about-version = Version { $version }
-about-blurb = A zooming canvas for presentations, in the spirit of classic Prezi. Drivable by AI agents through an opt-in local API.
+about-blurb = A zooming canvas for presentations. AI agents on this Mac can work on your presentations too, once you allow AI control.
 
 ## ---- end panels.rs ----
 
@@ -233,7 +233,7 @@ about-blurb = A zooming canvas for presentations, in the spirit of classic Prezi
 ## ---- sidebar.rs ----
 
 sidebar-untitled-frame = Untitled Frame
-sidebar-missing-step = (missing)
+sidebar-missing-step = Missing
 sidebar-step-view = View
 sidebar-step-overview = Overview
 sidebar-path = Path
@@ -246,18 +246,18 @@ sidebar-edit-path = Edit Path
 sidebar-done-tip = Finish editing the path
 sidebar-edit-path-tip = Click objects on the canvas to add them as steps, in order
 sidebar-no-steps = No Steps
-sidebar-no-steps-caption = Select a frame and click Add Step in the toolbar, or click Edit Path and then click frames in order.
+sidebar-no-steps-caption = Select a frame and click Add Step in the toolbar. Or click Edit Path, then click the frames in order.
 sidebar-build-count = { $count ->
-    [one] { $count } build
-   *[other] { $count } builds
+    [one] { $count } fade-in
+   *[other] { $count } fade-ins
 }
 sidebar-step-tip =
     Step { $number }: { $label }
-    Click to go there. Drag to reorder. Right-click for more.
+    Click to go to this step. Drag to reorder. Right-click for more options.
 sidebar-go-to-step = Go to Step
 sidebar-play-from-here = Play from Here
 sidebar-select-on-canvas = Select on Canvas
-sidebar-show-fade-ins-dimmed = Show Later Fade-ins Dimmed
+sidebar-show-fade-ins-dimmed = Show Later Fade-Ins Dimmed
 sidebar-duplicate-step = Duplicate Step
 sidebar-move-to-start = Move to Start
 sidebar-move-to-end = Move to End
@@ -275,7 +275,7 @@ sidebar-pick-a-frame = Pick a frame
 sidebar-pick-a-frame-tip = Click a frame on the canvas or draw one. Esc cancels.
 sidebar-undo-insert-step = Insert Step
 sidebar-more-tip = More path actions
-sidebar-path-from-frames = Path from Frames
+sidebar-path-from-frames = Create Path from Frames
 sidebar-add-current-view = Add Current View
 sidebar-clear-path = Clear Path…
 
@@ -290,12 +290,12 @@ settings-canvas = Canvas
 settings-presenting = Presenting
 settings-agents = Agents
 settings-keyboard = Keyboard
-settings-keys-caption = Click a shortcut, then press the new keys. Esc cancels.
-settings-keys-type = Type keys…
+settings-keys-caption = Click a shortcut, then press the new keys. Press Esc to cancel.
+settings-keys-type = Press keys…
 settings-keys-none = None
 settings-keys-remove = Remove shortcut
-settings-keys-moved = { $keys } was { $action }'s shortcut. { $action } has none now.
-settings-keys-taken = { $keys } is { $action }. It can't be changed.
+settings-keys-moved = { $keys } was the shortcut for { $action }. { $action } now has no shortcut.
+settings-keys-taken = { $keys } is reserved for { $action } and can't be changed.
 settings-keys-restore = Restore Defaults
 settings-keys-search = Search
 settings-keys-no-results = No Results
@@ -305,30 +305,30 @@ settings-default-theme = Theme for new presentations:
 settings-language = Language:
 settings-language-system = System ({ $language })
 settings-appearance = Appearance:
-settings-appearance-caption = Zebra follows the system's Light or Dark appearance and accent colour. The canvas uses the presentation's theme.
+settings-appearance-caption = Zebra uses the appearance set in System Settings. The canvas uses the presentation's theme.
 settings-scrolling = Scrolling:
 settings-scroll-auto = Trackpad pans, mouse wheel zooms
-settings-scroll-zoom = Always zoom (classic Prezi)
-settings-scroll-pan = Always pan; { $modifier }-scroll zooms
+settings-scroll-zoom = Always zoom
+settings-scroll-pan = Always pan, { $modifier }-scroll to zoom
 settings-snapping = Snapping:
 settings-snap-to-objects = Snap to other objects while moving
-settings-snap-caption = Hold { $modifier } while dragging to move freely.
+settings-snap-caption = Hold { $modifier } while dragging to turn off snapping.
 settings-reduce-motion = Reduce motion:
-settings-follow-system = Follow System Setting
+settings-follow-system = Use System Setting
 settings-on = On
 settings-off = Off
-settings-reduce-motion-caption = On: steps move in a quick straight line, without zooming out.
+settings-reduce-motion-caption = When on, steps move in a quick straight line, without zooming out.
 settings-ai-control = AI control:
-settings-ai-switch = Let AI agents control Zebra
-settings-ai-switch-caption = Only you can switch this on. An agent can switch it off.
-settings-agents-may = Agents may:
-settings-permission-observe = Look only
+settings-ai-switch = Allow AI control
+settings-ai-switch-caption = Only you can turn this on. Agents can turn it off.
+settings-agents-may = Agents can:
+settings-permission-observe = View only
 settings-permission-edit = Edit the presentation
-settings-permission-full = Also move the view, open and save files, and present
+settings-permission-full = Full control, including the view, files and playing
 settings-cli = Command-line tool:
 settings-cli-installed = zebractl is installed in /usr/local/bin.
-settings-cli-install = Install zebractl…
-settings-toast-cli-installed = Installed zebractl.
+settings-cli-install = Install Command-Line Tool…
+settings-toast-cli-installed = zebractl is installed. Agents can now run zebractl --help.
 settings-toast-cli-install-failed = Couldn't install zebractl: { $error }
 
 ## ---- end settings.rs ----
@@ -339,16 +339,16 @@ settings-toast-cli-install-failed = Couldn't install zebractl: { $error }
 welcome-title = Choose a Template
 welcome-my-templates = My Templates
 welcome-recent = Recent
-welcome-recent-empty = Nothing opened yet.
+welcome-recent-empty = No recent presentations
 welcome-open = Open…
 welcome-create = Create
 welcome-cancel = Cancel
 welcome-toast-template-open-failed = Couldn't open the template: { $error }
 welcome-toast-templates-folder-missing = Couldn't find the templates folder.
-welcome-toast-template-saved = Saved “{ $name }” to My Templates. Find it in File ▸ New from Template…
+welcome-toast-template-saved = Saved “{ $name }” to My Templates. To use it, choose File › New from Template.
 welcome-toast-template-save-failed = Couldn't save the template: { $error }
 layouts-title = Layouts
-layouts-caption = Click a layout to add it to the middle of the view. Its frames join the path.
+layouts-caption = Click a layout to add it to the centre of the view. Its frames are added to the path.
 
 ## ---- end welcome.rs ----
 
@@ -367,14 +367,14 @@ sheet-clear-path-message = This removes { $count ->
    *[other] all { $count } steps
 } from the path. Frames and objects stay on the canvas. You can undo this.
 sheet-clear-path = Clear Path
-sheet-auto-path-title = Replace the path?
-sheet-auto-path-message = Steps that are not frames have speaker notes. The notes go with them. You can undo this.
+sheet-auto-path-title = Replace the path with all frames?
+sheet-auto-path-message = Some steps that will be removed have speaker notes. The notes are removed too. You can undo this.
 sheet-auto-path = Replace Path
-sheet-revert-agent-title = Revert the changes { $name } made?
-sheet-revert-agent-message = This undoes everything { $name } did since your last change. Redo ({ $shortcut }) brings it back.
+sheet-revert-agent-title = Revert the changes that { $name } made?
+sheet-revert-agent-message = This undoes everything that { $name } did since your last change. To get it back, choose Edit › Redo ({ $shortcut }).
 sheet-revert = Revert
 sheet-full-control-title = Give agents full control?
-sheet-full-control-message = Agents will also be able to move your view, open and save files, and start presenting.
+sheet-full-control-message = Agents will also be able to move your view, open and save files, and play the presentation.
 sheet-allow-full-control = Allow Full Control
 sheet-toast-nothing-to-revert = { $name } has no changes to revert.
 
@@ -385,7 +385,7 @@ sheet-toast-nothing-to-revert = { $name } has no changes to revert.
 
 export-toast-exporting = Exporting…
 export-toast-exported = Exported { $path }
-export-toast-failed = Export failed: { $error }
+export-toast-failed = Couldn't export: { $error }
 # A web page exported from a deck set in SF Pro, SF Mono, New York...
 export-toast-apple-ui-font = { $family } is licensed by Apple only for interface mock-ups, so its text went into the page as pictures. Consider Inter.
 app-file-filter-html = Web page
@@ -407,8 +407,8 @@ web-unsupported = This browser can’t show this presentation. Try a current Saf
 ## ---- cli.rs ----
 
 cli-agent-prompt = Zebra (a zooming presentation app) is open on my Mac and I've allowed AI control. Run `{ $ctl } --help` to learn how to drive it, then its `describe` command to see what's on the canvas. Pass `--agent` with your name on every command.
-cli-install-prompt = Zebra wants to install the zebractl command so AI agents can use it.
-cli-error-not-bundled = zebractl isn't inside this copy of Zebra
+cli-install-prompt = Zebra wants to install the zebractl command so that AI agents can use it.
+cli-error-not-bundled = this copy of Zebra doesn't include zebractl
 cli-error-cancelled = cancelled
 
 ## ---- end cli.rs ----
@@ -471,7 +471,7 @@ inspector-width = Width
 inspector-section-image = Image
 inspector-description = Description
 inspector-alt-text-hint = Alt text
-inspector-alt-text-caption = Read aloud by VoiceOver and used in exported PDFs.
+inspector-alt-text-caption = VoiceOver reads it aloud, and exported PDFs include it.
 inspector-section-drawing = Drawing
 # Text tab
 inspector-para-title = Title
@@ -483,25 +483,25 @@ inspector-bold = Bold
 inspector-italic = Italic
 inspector-section-alignment = Alignment
 inspector-align-left = Align Left
-inspector-align-centre = Centre
+inspector-align-centre = Align Centre
 inspector-align-right = Align Right
 inspector-bullets = Bullets
 inspector-bullets-none = None
 inspector-bullets-on = Bullets
-inspector-undo-format-paragraphs = Format paragraphs
+inspector-undo-format-paragraphs = Format Paragraphs
 inspector-edit-text = Edit Text
 # $key is the Return key glyph.
 inspector-edit-text-tip = Edit the text in place  { $key } or double-click
 # Arrange tab
 inspector-section-size = Size
 inspector-height = Height
-inspector-size-caption = Width and height keep the proportions, as in Prezi.
+inspector-size-caption = Width and height change together to keep the proportions.
 inspector-section-rotate = Rotate
 inspector-angle = Angle
 inspector-section-position = Position
 inspector-pos-x = X
 inspector-pos-y = Y
-inspector-position-caption = Canvas coordinates of the centre.
+inspector-position-caption = The position of the centre on the canvas.
 inspector-section-layer = Layer
 inspector-forward = Forward
 inspector-forward-tip = Bring forward one layer
@@ -512,15 +512,15 @@ inspector-to-front-tip = Bring to front
 inspector-to-back = To Back
 inspector-to-back-tip = Send to back
 inspector-unlock = Unlock
-inspector-unlock-tip = Unlock so it can be moved and edited
+inspector-unlock-tip = Unlock so that it can be moved and edited
 inspector-lock = Lock
-inspector-lock-tip = Lock in place
+inspector-lock-tip = Lock so that it can't be moved or edited
 inspector-duplicate = Duplicate
 inspector-duplicate-tip = Duplicate the selection
 inspector-group = Group
-inspector-group-tip = Select, move and resize these together
+inspector-group-tip = Move and resize these objects together
 inspector-ungroup = Ungroup
-inspector-ungroup-tip = Separate the group
+inspector-ungroup-tip = Split the group into separate objects
 inspector-frame-selection = Frame Selection
 inspector-frame-selection-tip = Draw a frame around the selection
 inspector-section-align = Align
@@ -551,23 +551,23 @@ inspector-on-path-steps = { $count ->
    *[other] On the path as steps { $list }.
 }
 inspector-remove-from-path = Remove from Path
-inspector-remove-from-path-tip = Remove every step that zooms to this
+inspector-remove-from-path-tip = Remove every step that zooms to this object
 inspector-undo-remove-from-path = Remove from Path
 inspector-section-animation = Animation
 inspector-fade-in-on-step = Fade in on step { $step }
-inspector-fade-in-tip = Appears with a click after the camera arrives
+inspector-fade-in-tip = Appears with the next click after the view reaches this step
 # Nothing selected: presentation settings
 inspector-presentation = Presentation
 inspector-doc-title = Title
 inspector-untitled = Untitled
 inspector-section-theme = Theme
 inspector-path-steps = { $count ->
-    [0] No steps yet. Select a frame and choose Add to Path, or use Edit Path.
+    [0] No steps yet. Select a frame and choose Add to Path, or click Edit Path.
     [one] { $count } step.
    *[other] { $count } steps.
 }
 inspector-edit-path = Edit Path
-inspector-edit-path-tip = Click objects to add steps
+inspector-edit-path-tip = Click objects on the canvas to add them as steps, in order
 inspector-from-frames = From Frames
 inspector-from-frames-tip = Replace the path with every frame, in reading order
 
@@ -582,7 +582,7 @@ inspector-section-outline = Outline
 inspector-corners = Corners
 inspector-section-icon = Icon
 inspector-replace-icon = Replace…
-inspector-replace-icon-tip = Pick another icon from the library
+inspector-replace-icon-tip = Choose another icon
 inspector-weight = Weight
 inspector-section-route = Route
 inspector-route-straight = Straight
@@ -596,14 +596,14 @@ inspector-head-start = Start
 inspector-head-end = End
 inspector-connector-label = Label
 inspector-connector-label-hint = Text on the line
-inspector-connector-attached = { $attached } of 2 ends attached. Drag an end onto an object to stick it there.
+inspector-connector-attached = { $attached } of 2 ends attached. To attach an end, drag it onto an object.
 inspector-section-video = Video
 
 ## ---- end inspector_s3.rs ----
 
 
 ## ---- shape_library.rs ----
-library-window-title = Symbols & Shapes
+library-window-title = Shapes, Icons & Symbols
 library-window-replace-icon = Replace Icon
 library-tab-shapes = Shapes
 library-tab-icons = Icons
@@ -625,7 +625,7 @@ library-icons-count = { $count ->
 # Name of a built-in theme copied for editing.
 theme-editor-custom-name = { $name } (custom)
 theme-editor-window-title = Theme
-theme-editor-undo-edit = Edit theme
+theme-editor-undo-edit = Edit Theme
 theme-editor-name = Name
 theme-editor-start-from = Start from
 theme-editor-choose-theme = Choose a theme…
@@ -645,7 +645,7 @@ theme-editor-section-fonts = Fonts
 theme-editor-font-title = Title
 theme-editor-font-subtitle = Subtitle
 theme-editor-font-body = Body
-theme-editor-font-tip = Any installed font. It's embedded in the file when you save, so it shows on other Macs too.
+theme-editor-font-tip = You can use any installed font. Zebra saves it in the file, so the text looks the same on other Macs.
 # The four built-in font families, in the font list and as the chosen font.
 theme-editor-font-sans = Sans
 theme-editor-font-serif = Serif
@@ -658,23 +658,23 @@ theme-editor-font-hand-shown = Handwriting (Caveat)
 theme-editor-search-fonts = Search fonts
 # Unit after the font size (points).
 theme-editor-unit-pt = pt
-theme-editor-embedded-fonts = Embedded in the file: { $fonts }
+theme-editor-embedded-fonts = Saved in the file: { $fonts }
 theme-editor-section-background = Background
-theme-editor-picture = Picture
+theme-editor-picture = Image
 theme-editor-replace = Replace…
 theme-editor-choose = Choose…
 theme-editor-remove = Remove
-theme-editor-3d-background = 3D background
-theme-editor-3d-background-tip = Up to three pictures behind the canvas that move slower than it as you zoom and pan, for depth.
+theme-editor-3d-background = 3D Background
+theme-editor-3d-background-tip = Up to three images behind the canvas. They move more slowly than the canvas when you zoom and pan, which adds depth.
 theme-editor-layer = Layer { $number }
-theme-editor-depth = depth
-theme-editor-depth-tip = Left: far away, barely moves. Right: moves with the canvas.
-theme-editor-opacity = opacity
+theme-editor-depth = Depth
+theme-editor-depth-tip = Left: the layer looks far away and barely moves. Right: it moves with the canvas.
+theme-editor-opacity = Opacity
 theme-editor-remove-layer = Remove layer
 theme-editor-remove-layer-button = ✕
 theme-editor-add-layer = Add Layer…
 theme-editor-save-as-theme = Save as Theme…
-theme-editor-save-as-theme-tip = Keep this theme for other presentations
+theme-editor-save-as-theme-tip = Save this theme to use in other presentations
 theme-editor-saved = Saved “{ $name }” to My Themes.
 theme-editor-save-failed = Couldn't save the theme: { $error }
 theme-editor-no-themes-folder = Couldn't find the themes folder.
@@ -724,9 +724,9 @@ action-save-as-template = Save as Template…
 action-open = Open…
 action-save = Save
 action-save-as = Save As…
-action-export-pdf = Export PDF…
-action-export-png = Export View as PNG…
-action-export-html = Export Web Page (HTML)…
+action-export-pdf = Export as PDF…
+action-export-png = Export Current View as PNG…
+action-export-html = Export as Web Page (HTML)…
 action-import = Import…
 action-close = Close
 action-quit = Quit Zebra
@@ -738,17 +738,17 @@ action-paste = Paste
 action-duplicate = Duplicate
 action-delete = Delete
 action-select-all = Select All
-action-deselect = Deselect
-action-frame-tool = Frame Tool (cycle style)
-action-insert-frame = New Frame
+action-deselect = Deselect All
+action-frame-tool = Frame Tool
+action-insert-frame = Frame
 action-insert-image = Image…
 action-insert-layout = Layout…
 action-insert-diagram = Diagram…
-action-insert-symbols = Symbols & Shapes…
+action-insert-symbols = Shapes, Icons & Symbols…
 action-insert-music = Background Music…
 action-replace-image = Replace Image…
 action-crop-image = Crop Image
-action-play-pause-video = Play / Pause Video
+action-play-pause-video = Play/Pause Video
 action-wrap-in-frame = Frame Selection
 action-insert-video = Video…
 action-bold = Bold
@@ -763,9 +763,9 @@ action-group = Group
 action-ungroup = Ungroup
 action-zoom-in = Zoom In
 action-zoom-out = Zoom Out
-action-fit-all = Zoom to Fit All
+action-fit-all = Zoom to Fit
 action-zoom-to-selection = Zoom to Selection
-action-zoom-reset = Actual Size (100%)
+action-zoom-reset = Actual Size
 action-toggle-sidebar = Show Sidebar
 action-toggle-properties = Show Inspector
 action-toggle-reduce-motion = Reduce Motion
@@ -775,33 +775,33 @@ action-settings = Settings…
 action-toggle-path-edit = Edit Path
 action-add-to-path = Add Selection to Path
 action-add-current-view = Add Current View to Path
-action-auto-path = Path from Frames
+action-auto-path = Create Path from Frames
 action-clear-path = Clear Path…
-action-present-start = Play Presentation
+action-present-start = Play from Start
 action-present-current = Play from Current Step
 action-toggle-presenter-view = Presenter View
 action-playback-options = Playback Options…
-action-toggle-ai-control = Let AI Agents Control Zebra
+action-toggle-ai-control = Allow AI Control
 action-toggle-activity = Agent Activity
-action-pause-agents = Pause / Resume Agent
+action-pause-agents = Pause or Resume Agent
 action-stop-agents = Stop Agent
 action-follow-agent = Follow Agent
 action-revert-agent = Revert Agent's Changes…
-action-theme-editor = Customize Theme…
+action-theme-editor = Customise Theme…
 action-about = About Zebra
 action-new-from-template = New from Template: { $name }
 action-set-tool = { $tool } Tool
 action-set-frame-style = { $style } Frame
-action-agent-permission-observe = Agents May Look Only
-action-agent-permission-edit = Agents May Edit
-action-agent-permission-full = Agents Have Full Control…
+action-agent-permission-observe = Agents Can Only View
+action-agent-permission-edit = Agents Can Edit
+action-agent-permission-full = Give Agents Full Control…
 action-set-theme = Theme: { $name }
 tool-select = Select
 tool-hand = Hand
 tool-text = Text
 tool-frame = Frame
 tool-rectangle = Rectangle
-tool-ellipse = Ellipse
+tool-ellipse = Oval
 tool-triangle = Triangle
 tool-line = Line
 tool-arrow = Arrow
@@ -829,7 +829,7 @@ menu-file = File
 menu-export-to = Export To
 menu-edit = Edit
 menu-insert = Insert
-menu-frame = Frame
+menu-frame = Frame Style
 menu-shape = Shape
 menu-format = Format
 menu-font = Font
@@ -866,36 +866,36 @@ menu-mac-services = Services
 menu-mac-hide = Hide Zebra
 menu-mac-hide-others = Hide Others
 menu-mac-show-all = Show All
-menu-mac-minimize = Minimize
+menu-mac-minimize = Minimise
 menu-mac-zoom = Zoom
-menu-mac-full-screen = Toggle Full Screen
+menu-mac-full-screen = Enter Full Screen
 menu-mac-bring-all-to-front = Bring All to Front
 
 ## ---- end menu_mac.rs ----
 
 
 ## ---- canvas.rs ----
-canvas-chip-zoom-into-frame = Zoom into Frame
+canvas-chip-zoom-into-frame = Zoom Into Frame
 canvas-chip-rename-hint = Double-click to rename
 canvas-toast-rename-failed = Couldn't rename the frame.
-canvas-undo-move-connector-end = Move connector end
+canvas-undo-move-connector-end = Move Connector End
 canvas-undo-rotate = Rotate
 canvas-undo-resize = Resize
 canvas-undo-move = Move
-canvas-undo-text-width = Change text width
-canvas-undo-add-text = Add text
-canvas-undo-edit-text = Edit text
+canvas-undo-add-text = Add Text
+canvas-undo-edit-text = Edit Text
+canvas-undo-text-width = Change Text Width
 # $step is the 1-based step number.
-canvas-toast-step-retargeted = Step { $step } now points here
+canvas-toast-step-retargeted = Step { $step } now zooms here
 canvas-toast-framed-objects = { $count ->
     [one] Framed { $count } object
    *[other] Framed { $count } objects
 }
 canvas-toast-added-step = Added step { $step }
-canvas-toast-shape-locked = This shape is locked — unlock it to type on it
-canvas-toast-text-locked = This text is locked — unlock it to edit
-canvas-toast-text-kept = Text box was removed. Your text is kept as a new one.
-canvas-text-placeholder = Type something
+canvas-toast-shape-locked = This shape is locked. Unlock it to add text.
+canvas-toast-text-locked = This text is locked. Unlock it to edit it.
+canvas-toast-text-kept = The text box was deleted, so your text is now in a new one.
+canvas-text-placeholder = Type here
 canvas-text-style-title = Title
 canvas-text-style-subtitle = Subtitle
 canvas-text-style-body = Body
@@ -931,7 +931,7 @@ canvas-link-remove = Remove
 canvas-agent-editing-here = { $name } is editing here
 canvas-locked = Locked
 # $modifier is the modifier key glyph (⇧).
-canvas-rotate-hint = Rotate  ·  { $modifier } snaps to 15°
+canvas-rotate-hint = Rotate  ·  Hold { $modifier } to snap to 15°
 # Beside the rotate handle while turning: "45°".
 canvas-rotate-angle = { $degrees }°
 canvas-menu-add-text-here = Add Text Here
@@ -943,43 +943,46 @@ canvas-menu-replace-icon = Replace Icon…
 
 
 ## ---- presenting.rs ----
-present-notes-hint = Speaker notes: what to say at this step
+present-notes-hint = Speaker notes for this step
 # $step is the 1-based step number.
-present-notes-step = Notes · step { $step }
-present-path-step = Path step { $step }
+present-notes-step = Notes · Step { $step }
+present-path-step = Step { $step }
 present-transition = Transition
-present-transition-auto = Auto
-present-transition-auto-tip = Zebra picks a time from the distance flown
+present-transition-auto = Automatic
+present-transition-auto-tip = The time depends on how far the view moves
 present-autoplay = Autoplay
 # $time is a duration such as "10 s".
 present-dwell-default-time = Default ({ $time })
 present-dwell-default-off = Default (off)
-present-dwell-own = Own time
-present-dwell-presentation-default = Presentation default
-present-dwell-own-for-step = Own time for this step
-present-undo-change-step-timing = Change step timing
+present-dwell-own = Custom
+present-dwell-presentation-default = Presentation Default
+present-dwell-own-for-step = Custom Time for This Step
+present-undo-change-step-timing = Change Step Timing
 # A number of seconds, $secs already formatted ("10", "1.5").
 present-seconds = { $secs } s
 # Unit after a seconds field.
 present-seconds-unit = s
 present-autoplay-off = Off
 # $key is the pause key.
-present-autoplay-help = Steps with their own time keep it. Press { $key } while presenting to pause.
-present-loop = Loop: start again after the last step
+present-autoplay-help = Steps with a custom time keep it. To pause, press { $key } while playing.
+present-loop = Start again after the last step
 present-presenting = Presenting
 present-show-presenter-view = Show presenter view
-present-show-presenter-view-tip = Notes, the next step and a timer in a second window, on another display
+present-show-presenter-view-tip = Shows notes, the next step and a timer on another display
 present-this-display = This window's display
 present-play-on = Play on
-present-connect-second-display = Connect a second display to present on one and see the presenter view on the other.
-present-playback-window = Playback
-present-built-in-display = Built-in display
+present-connect-second-display = To use presenter view, connect a second display.
+present-playback-window = Playback Options
+present-built-in-display = Built-in Display
 present-display-n = Display { $n }
-present-toast-autoplay-paused = Autoplay paused ({ $key } to resume)
+present-toast-autoplay-paused = Autoplay paused. Press { $key } to resume.
 present-toast-autoplay-resumed = Autoplay resumed
 present-presenter-window-title = Presenter View
 present-presenter-step-of = Step { $step } of { $count }
-present-presenter-overview = Overview · { $count } steps
+present-presenter-overview = Overview · { $count ->
+    [one] 1 step
+   *[other] { $count } steps
+}
 present-presenter-autoplay-paused = Autoplay paused
 present-presenter-autoplay = Autoplay { $time }
 present-timer-reset = Reset
@@ -996,9 +999,9 @@ present-back-to-start = Back to step 1
 present-end-of-presentation = End of presentation
 present-no-notes = No notes for this step.
 present-previous = Previous
-present-notes-smaller = Smaller notes
-present-notes-larger = Larger notes
-present-end-show = End Show
+present-notes-smaller = Make notes smaller
+present-notes-larger = Make notes larger
+present-end-show = Exit
 present-rendering = Rendering…
 
 ## ---- end presenting.rs ----
@@ -1007,11 +1010,14 @@ present-rendering = Rendering…
 ## ---- present.rs ----
 present-toast-opened-link = Opened { $url }
 # Presentation HUD. $key is the key glyph that returns to the path (→).
-present-hud-off-path = { $step } of { $count }  ·  { $key } returns to the path
+present-hud-off-path = { $step } of { $count }  ·  Press { $key } to return to the path
 present-hud-step-of = { $step } of { $count }
-present-hud-overview = Overview  ·  { $count } steps
+present-hud-overview = Overview  ·  { $count ->
+    [one] 1 step
+   *[other] { $count } steps
+}
 # $key is the exit key name (Esc).
-present-hud-exit = { $key } to exit
+present-hud-exit = Press { $key } to exit
 present-hud-previous-step = Previous Step
 present-hud-next-step = Next Step
 
@@ -1019,7 +1025,7 @@ present-hud-next-step = Next Step
 
 
 ## ---- media_ui.rs ----
-media-toast-video-macos-only = Videos play in Zebra on macOS. Here you see the poster frame.
+media-toast-video-macos-only = Videos play only on macOS. Zebra shows the poster frame instead.
 # $error is the reason from the media player.
 media-error-play-video = Couldn't play the video: { $error }
 media-error-play-soundtrack = Couldn't play the background music: { $error }
@@ -1033,26 +1039,26 @@ media-pasted-image = Pasted image
 media-toast-unlock-to-crop = Unlock the image to crop it.
 media-undo-crop = Crop
 # $done_key and $cancel_key are key glyphs (↵, Esc).
-media-crop-bar = Drag edges to crop · { $done_key } Done · { $cancel_key } Cancel
+media-crop-bar = Drag the edges to crop · { $done_key } Done · { $cancel_key } Cancel
 media-crop-done = Done
 media-crop-finish = Finish cropping
-media-crop = Crop…
-media-crop-tip = Crop the picture (or double-click it)
-media-uncrop = Uncrop
+media-crop = Crop
+media-crop-tip = Crop the image, or double-click it
+media-uncrop = Reset Crop
 media-replace = Replace…
-media-replace-image-tip = Swap the picture, keeping its place and size
-media-replace-video-tip = Swap the video, keeping its place, size and settings
+media-replace-image-tip = Replace the image and keep its position and size
+media-replace-video-tip = Replace the video and keep its position, size and settings
 media-mask = Mask
 media-mask-square = Square
 media-mask-rounded = Rounded
 media-mask-circle = Circle
 media-image-size = { $width } × { $height } px
-media-image-size-gif = { $width } × { $height } px · animated GIF plays on the canvas
+media-image-size-gif = { $width } × { $height } px · Animated GIF
 media-pause = Pause
 media-play = Play
-media-play-tip = Play in place (or double-click the video)
-media-video-macos-only = Video plays on macOS; the poster shows here.
-media-autoplay-on-step = Auto-play on its step
+media-play-tip = Play the video on the canvas, or double-click it
+media-video-macos-only = Videos play only on macOS. The poster frame is shown here.
+media-autoplay-on-step = Play when its step starts
 media-loop = Loop
 media-mute = Mute
 media-trim-start = Start
@@ -1066,18 +1072,18 @@ media-poster-use-frame = Use This Frame
 media-poster-use-frame-tip = Show this frame until the video plays
 media-poster-choose = Choose…
 media-poster-remove-tip = Remove the poster
-media-soundtrack-heading = BACKGROUND MUSIC
-media-add-music = Add Music…
-media-add-music-tip = Background music that plays while presenting
-media-music = Music
+media-soundtrack-heading = Background Music
+media-add-music = Add Background Music…
+media-add-music-tip = Music that plays during the whole presentation
+media-music = Untitled
 media-music-name = Music: { $name }
 media-remove = Remove
 media-volume = Volume
-media-undo-change-soundtrack = Change background music
-media-voiceover-heading = STEP { $step } VOICE-OVER
-media-add-recording = Add Recording…
-media-add-recording-tip = Audio that plays when this step is reached
-media-recorded = Recorded
+media-undo-change-soundtrack = Change Background Music
+media-voiceover-heading = Step { $step } Voice-Over
+media-add-recording = Add Voice-Over…
+media-add-recording-tip = Audio that plays when the presentation reaches this step
+media-recorded = Voice-over added
 
 ## ---- end media_ui.rs ----
 
@@ -1130,13 +1136,13 @@ shape-rectangle = Rectangle
 shape-rounded-rect = Rounded Rectangle
 shape-ellipse = Oval
 shape-triangle = Triangle
-shape-right-triangle = Right Triangle
+shape-right-triangle = Right-Angled Triangle
 shape-diamond = Diamond
 shape-pentagon = Pentagon
 shape-hexagon = Hexagon
 shape-octagon = Octagon
 shape-parallelogram = Parallelogram
-shape-trapezoid = Trapezoid
+shape-trapezoid = Trapezium
 shape-star = Star
 shape-sparkle = Four-Point Star
 shape-burst = Burst
@@ -1153,7 +1159,7 @@ shape-sticky-note = Sticky Note
 shape-document = Document
 shape-cylinder = Cylinder
 shape-cube = Cube
-shape-pill = Pill
+shape-pill = Capsule
 shape-delay = Half Round
 shape-chevron = Chevron
 shape-tag = Tag
@@ -1161,76 +1167,79 @@ shape-block-arrow-right = Block Arrow Right
 shape-block-arrow-left = Block Arrow Left
 shape-block-arrow-up = Block Arrow Up
 shape-block-arrow-down = Block Arrow Down
-shape-block-arrow-both = Block Arrow Both Ways
+shape-block-arrow-both = Double Block Arrow
 shape-line = Line
 shape-arrow = Arrow
 shape-double-arrow = Double Arrow
 
 ## Object types, where an object has no name or text of its own
-element-frame = frame
-element-text = text
-element-shape = shape
-element-image = image
-element-video = video
-element-ink = drawing
-element-icon = icon
-element-connector = connector
+element-frame = Frame
+element-text = Text
+element-shape = Shape
+element-image = Image
+element-video = Video
+element-ink = Drawing
+element-icon = Icon
+element-connector = Connector
 
 ## History: the Edit menu's Undo/Redo, the Activity panel, the status bar
 history-add-element = Add { $kind }
-history-add-text = Add text "{ $text }"
-history-add-frame = Add frame
+history-add-text = Add Text “{ $text }”
+history-add-frame = Add Frame
 history-add-shape = Add { $shape }
-history-insert-image = Insert image
-history-add-icon = Add icon { $name }
-history-add-connector = Add connector
-history-insert-video = Insert video
-history-replace-image = Replace image
-history-replace-video = Replace video
-history-set-poster = Set poster frame
-history-add-soundtrack = Add background music
-history-change-soundtrack = Change background music
-history-remove-soundtrack = Remove background music
-history-remove-voiceover = Remove voice-over
-history-add-voiceover = Add voice-over
+history-insert-image = Insert Image
+history-add-icon = Add Icon: { $name }
+history-add-connector = Add Connector
+history-insert-video = Insert Video
+history-replace-image = Replace Image
+history-replace-video = Replace Video
+history-set-poster = Set Poster Frame
+history-add-soundtrack = Add Background Music
+history-change-soundtrack = Change Background Music
+history-remove-soundtrack = Remove Background Music
+history-remove-voiceover = Remove Voice-Over
+history-add-voiceover = Add Voice-Over
 history-crop = Crop
 history-highlight = Highlight
 history-draw = Draw
-history-edit-text = Edit text
-history-format-text = Format text
-history-format-paragraphs = Format paragraphs
-history-change-properties = Change properties
+history-edit-text = Edit Text
+history-format-text = Format Text
+history-format-paragraphs = Format Paragraphs
+history-change-properties = Change Properties
 history-move = Move
 history-resize = Resize
 history-rotate = Rotate
 history-delete = Delete { $count ->
-        [one] 1 object
-       *[other] { $count } objects
+        [one] 1 Object
+       *[other] { $count } Objects
     }
 history-duplicate = Duplicate
-history-change-order = Change order
-history-frame-selection = Frame selection
+history-change-order = Change Order
+history-frame-selection = Frame Selection
 history-arrange = Arrange
 history-align = Align
 history-group = Group
 history-ungroup = Ungroup
-history-add-step = Add path step
-history-remove-step = Remove path step
-history-reorder-path = Reorder path
-history-edit-step = Edit path step
-history-clear-path = Clear path
-history-path-from-frames = Path from frames
-history-theme = Theme: { $theme }
+history-add-step = Add Step
+history-remove-step = Remove Step
+history-reorder-path = Reorder Steps
+history-edit-step = Edit Step
+history-clear-path = Clear Path
+history-path-from-frames = Create Path from Frames
+history-theme = Apply Theme: { $theme }
 history-rename = Rename
-history-change-autoplay = Change autoplay
-history-edit-theme = Edit theme
-history-delete-theme = Delete theme
-history-add-picture = Add picture
-history-template = Template: { $template }
-history-insert-layout = Insert layout: { $layout }
-history-insert-symbol = Insert symbol { $name }
-history-insert-diagram = Insert diagram: { $diagram }
-history-changes = { $count } changes
+history-change-autoplay = Change Autoplay
+history-edit-theme = Edit Theme
+history-delete-theme = Delete Theme
+history-add-picture = Add Image
+history-template = Apply Template: { $template }
+history-insert-layout = Insert Layout: { $layout }
+history-insert-symbol = Insert Symbol: { $name }
+history-insert-diagram = Insert Diagram: { $diagram }
+history-changes = { $count ->
+    [one] 1 Change
+   *[other] { $count } Changes
+}
 
 ## Built-in themes, layouts and templates (names and descriptions)
 theme-name-classic = Classic
@@ -1240,40 +1249,40 @@ theme-name-paper = Paper
 theme-name-night = Night
 layout-name-title = Title
 layout-description-title = A frame with a title and a subtitle.
-layout-name-title-bullets = Title and bullets
+layout-name-title-bullets = Title & Bullets
 layout-description-title-bullets = A heading over a bulleted list.
-layout-name-two-columns = Two columns
+layout-name-two-columns = Two Columns
 layout-description-two-columns = A heading over two framed columns.
-layout-name-three-circles = Three circles
+layout-name-three-circles = Three Circles
 layout-description-three-circles = Three circle frames in a row.
-layout-name-grid = Grid of four
+layout-name-grid = Grid of Four
 layout-description-grid = Four frames in a two-by-two grid.
-layout-name-zoom-detail = Zoom into detail
-layout-description-zoom-detail = A big frame with three small frames to zoom into.
+layout-name-zoom-detail = Zoom Into Detail
+layout-description-zoom-detail = A big frame with three small frames inside it to zoom into.
 layout-name-timeline = Timeline
 layout-description-timeline = Five stops along an arrow.
-layout-name-hub = Hub and spokes
-layout-description-hub = A central idea with six around it.
+layout-name-hub = Hub & Spokes
+layout-description-hub = A central idea with six ideas around it.
 layout-name-comparison = Comparison
 layout-description-comparison = Two frames side by side.
-layout-name-picture = Picture and caption
-layout-description-picture = Room for a picture next to a heading and text.
+layout-name-picture = Image & Caption
+layout-description-picture = An image next to a heading and text.
 template-name-blank = Blank
 template-description-blank = An empty canvas.
-template-name-big-picture = Big picture
-template-description-big-picture = A central idea and four topics around it, with an overview at the start and end.
+template-name-big-picture = Big Picture
+template-description-big-picture = A central idea with four topics around it. The presentation starts and ends on an overview.
 template-name-timeline = Timeline
 template-description-timeline = Six moments along an arrow, from left to right.
 template-name-journey = Journey
-template-description-journey = A winding road of stops, each a little deeper than the last.
-template-name-mind-map = Mind map
+template-description-journey = Stops along a winding road. Each stop zooms a little deeper.
+template-name-mind-map = Mind Map
 template-description-mind-map = A central topic with six branches.
 template-name-pitch = Pitch
-template-description-pitch = Problem, solution, market, model, team and the ask.
+template-description-pitch = Problem, solution, market, business model, team and the ask.
 template-name-lesson = Lesson
 template-description-lesson = Objectives, three chapters with details to zoom into, and a recap.
 template-name-story = Story
-template-description-story = Beginning, middle and end, each zooming deeper into the last.
+template-description-story = Beginning, middle and end. Each part zooms deeper into the one before.
 
 ## Spelling menu (right-click a word with a red dotted line)
 spell-no-guesses = No Guesses Found
@@ -1292,23 +1301,23 @@ credits-licence-text = Licence text
 
 ## Symbols tab (Insert › Symbols & Shapes)
 symbols-not-installed = The symbol library isn't installed.
+symbols-all-sets = All Sets
 symbols-old-pack = This version of Zebra can't read the symbol library.
-symbols-all-sets = All sets
 symbols-group-emoji = Emoji
-symbols-group-colour = Colour icons
-symbols-group-drawn = Hand-drawn
+symbols-group-colour = Colour Icons
+symbols-group-drawn = Hand-Drawn
 symbols-group-people = People
-symbols-group-mono = One colour
-symbols-group-classic = Classic clip art
+symbols-group-mono = One Colour
+symbols-group-classic = Classic Clip Art
 symbols-pick-a-set = Choose a set or search { $count } symbols.
 symbols-none-match = No symbols match.
 symbols-count = { $count ->
     [one] { $count } symbol
    *[other] { $count } symbols
 }
-symbols-count-many = First { $count } symbols
+symbols-count-many = Showing the first { $count } symbols
 symbols-sticker = Sticker
-symbols-sticker-tip = White outline and a soft shadow
+symbols-sticker-tip = Adds a white outline and a soft shadow
 symbols-outline-colour = Outline Colour
 symbols-fill-colour = Fill Colour
 symbols-swatch-dark = Dark
@@ -1316,53 +1325,53 @@ symbols-swatch-white = White
 
 ## Insert › Diagram
 diagrams-title = Diagrams
-diagrams-caption = Click a diagram to add it to the middle of the view.
+diagrams-caption = Click a diagram to add it to the centre of the view.
 diagram-name-process = Process
 diagram-description-process = Steps in a row joined by arrows.
-diagram-name-cycle = Circular process
-diagram-description-cycle = Steps round a loop, the last feeding back to the first.
+diagram-name-cycle = Circular Process
+diagram-description-cycle = Steps in a loop. The last step leads back to the first.
 diagram-name-timeline = Timeline
-diagram-description-timeline = Dated points along one line, labels above and below.
+diagram-description-timeline = Dates along one line, with labels above and below.
 diagram-name-perspective = Perspective
-diagram-description-perspective = Frames shrinking toward a vanishing point. Its frames join the path.
+diagram-description-perspective = Frames that shrink towards a vanishing point. Its frames are added to the path.
 diagram-name-funnel = Funnel
-diagram-description-funnel = Many inputs narrowing to one outcome.
+diagram-description-funnel = Many inputs that narrow to one result.
 diagram-name-iceberg = Iceberg
-diagram-description-iceberg = A small tip above the waterline, the larger part below.
-diagram-name-org-chart = Organisation chart
-diagram-description-org-chart = A top-down tree.
-diagram-name-block-list = Block list
+diagram-description-iceberg = A small tip above the waterline and a larger part below it.
+diagram-name-org-chart = Organisation Chart
+diagram-description-org-chart = A tree that branches from the top down.
+diagram-name-block-list = Block List
 diagram-description-block-list = Side-by-side blocks, each with a heading.
-diagram-name-numbered-list = Numbered list
-diagram-description-numbered-list = Rows with a numbered marker.
-diagram-name-chevrons = Chevron process
-diagram-description-chevrons = Interlocking arrows.
+diagram-name-numbered-list = Numbered List
+diagram-description-numbered-list = Rows, each with a number.
+diagram-name-chevrons = Chevron Process
+diagram-description-chevrons = Arrows that fit into each other in a row.
 diagram-name-step-up = Step-up
-diagram-description-step-up = Rising steps toward a goal.
-diagram-name-segmented-ring = Segmented ring
-diagram-description-segmented-ring = A ring in four parts around a centre idea.
+diagram-description-step-up = Steps that rise towards a goal.
+diagram-name-segmented-ring = Segmented Ring
+diagram-description-segmented-ring = A ring in four parts around a central idea.
 diagram-name-tree = Tree
-diagram-description-tree = Branches out to the right, for breakdowns and decisions.
-diagram-name-venn2 = Two-circle Venn
+diagram-description-tree = Branches that spread to the right, for breakdowns and decisions.
+diagram-name-venn2 = Two-Circle Venn
 diagram-description-venn2 = Two overlapping sets.
-diagram-name-venn3 = Three-circle Venn
+diagram-name-venn3 = Three-Circle Venn
 diagram-description-venn3 = Three overlapping sets.
 diagram-name-target = Target
-diagram-description-target = Rings from the outer context to the inner focus.
-diagram-name-inverted-pyramid = Inverted pyramid
-diagram-description-inverted-pyramid = Wide at the top, narrowing to one point.
-diagram-name-mind-map = Mind map
-diagram-description-mind-map = Branches from a central topic.
+diagram-description-target = Rings from the broad context on the outside to the main point in the centre.
+diagram-name-inverted-pyramid = Inverted Pyramid
+diagram-description-inverted-pyramid = Wide at the top and narrowing to one point.
+diagram-name-mind-map = Mind Map
+diagram-description-mind-map = Branches around a central topic.
 diagram-name-fishbone = Fishbone
-diagram-description-fishbone = Causes branching into one effect.
+diagram-description-fishbone = Causes that lead to one effect.
 diagram-name-columns = Columns
-diagram-description-columns = Cards sorted into to do, doing and done.
-diagram-name-zoom-nest = Zoom-in nest
-diagram-description-zoom-nest = Frames inside frames. Its frames join the path.
+diagram-description-columns = Cards in three columns: To do, Doing and Done.
+diagram-name-zoom-nest = Nested Frames
+diagram-description-zoom-nest = Frames inside frames. Its frames are added to the path.
 diagram-name-orbit = Orbit
-diagram-description-orbit = Frames round a centre. Its frames join the path.
-diagram-name-big-picture = Big picture
-diagram-description-big-picture = An overview frame with detail frames inside. Its frames join the path.
+diagram-description-orbit = Frames around a centre. Its frames are added to the path.
+diagram-name-big-picture = Big Picture
+diagram-description-big-picture = An overview frame with detail frames inside it. Its frames are added to the path.
 
 ## Text that diagrams, layouts and templates put on the canvas: placeholders
 ## and frame names (content-frame-*). Filled in once, when the diagram,
