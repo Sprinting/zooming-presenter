@@ -54,25 +54,70 @@ fn is_plain(f: &SpanFormat) -> bool {
 /// paragraph count and drops trailing default entries.
 pub fn normalize(t: &mut TextData) {
     let n = char_len(&t.text);
+    // One sorted sweep over the span edges. Overlaying the covering spans in
+    // order is, field by field, "the last span that sets it wins", so each
+    // field keeps the indices of the covering spans that set it and reads
+    // the largest. O(spans log spans); a nested loop was O(spans²), which a
+    // pptx with 100k runs turned into minutes.
+    let live: Vec<(usize, usize, usize)> =
+        t.spans.iter().enumerate().map(|(i, s)| (s.start.min(n), s.end.min(n), i)).filter(|(a, b, _)| a < b).collect();
     let mut cuts: Vec<usize> = vec![0, n];
-    for s in &t.spans {
-        cuts.push(s.start.min(n));
-        cuts.push(s.end.min(n));
+    for &(a, b, _) in &live {
+        cuts.push(a);
+        cuts.push(b);
     }
     cuts.sort_unstable();
     cuts.dedup();
+    let mut starts: Vec<(usize, usize)> = live.iter().map(|&(a, _, i)| (a, i)).collect();
+    let mut ends: Vec<(usize, usize)> = live.iter().map(|&(_, b, i)| (b, i)).collect();
+    starts.sort_unstable();
+    ends.sort_unstable();
+    let sets = |f: &SpanFormat| -> [bool; 7] {
+        [
+            f.bold.is_some(),
+            f.italic.is_some(),
+            f.underline.is_some(),
+            f.strike.is_some(),
+            f.color.is_some(),
+            f.link.is_some(),
+            f.size.is_some(),
+        ]
+    };
+    let mut setters: [std::collections::BTreeSet<usize>; 7] = Default::default();
+    let (mut si, mut ei) = (0, 0);
     let mut out: Vec<TextSpan> = vec![];
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);
-        if a >= b {
-            continue;
-        }
-        let mut f = SpanFormat::default();
-        for s in &t.spans {
-            if s.start.min(n) <= a && s.end.min(n) >= b {
-                f = overlay(&f, &s.format);
+        while ei < ends.len() && ends[ei].0 <= a {
+            let i = ends[ei].1;
+            for (k, on) in sets(&t.spans[i].format).into_iter().enumerate() {
+                if on {
+                    setters[k].remove(&i);
+                }
             }
+            ei += 1;
         }
+        while si < starts.len() && starts[si].0 <= a {
+            let i = starts[si].1;
+            for (k, on) in sets(&t.spans[i].format).into_iter().enumerate() {
+                if on {
+                    setters[k].insert(i);
+                }
+            }
+            si += 1;
+        }
+        let top = |k: usize| setters[k].last().map(|&i| &t.spans[i].format);
+        // The same clean-up `overlay` does: empty strings clear, size 1 is
+        // plain.
+        let f = overlay(&SpanFormat::default(), &SpanFormat {
+            bold: top(0).and_then(|f| f.bold),
+            italic: top(1).and_then(|f| f.italic),
+            underline: top(2).and_then(|f| f.underline),
+            strike: top(3).and_then(|f| f.strike),
+            color: top(4).and_then(|f| f.color.clone()),
+            link: top(5).and_then(|f| f.link.clone()),
+            size: top(6).and_then(|f| f.size),
+        });
         if is_plain(&f) {
             continue;
         }
@@ -711,6 +756,91 @@ mod tests {
         assert_eq!(slice(&t, 5, 2).text, "");
         assert_eq!(slice(&t, 99, 0).text, "");
         assert_eq!(slice(&t, 0, 3).text, "one");
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::*;
+
+    /// The old nested loop, kept as the reference.
+    fn slow(t: &TextData) -> Vec<TextSpan> {
+        let n = char_len(&t.text);
+        let mut cuts: Vec<usize> = vec![0, n];
+        for s in &t.spans {
+            cuts.push(s.start.min(n));
+            cuts.push(s.end.min(n));
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut out: Vec<TextSpan> = vec![];
+        for w in cuts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let mut f = SpanFormat::default();
+            for s in &t.spans {
+                if s.start.min(n) <= a && s.end.min(n) >= b {
+                    f = overlay(&f, &s.format);
+                }
+            }
+            if is_plain(&f) {
+                continue;
+            }
+            match out.last_mut() {
+                Some(last) if last.end == a && last.format == f => last.end = b,
+                _ => out.push(TextSpan { start: a, end: b, format: f }),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_sweep_matches_the_nested_loop() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = |m: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        };
+        for _ in 0..2000 {
+            let mut t = TextData { text: "x".repeat(rnd(30) as usize), ..Default::default() };
+            for _ in 0..rnd(12) {
+                let pick = |r: u64| match r {
+                    0 => None,
+                    1 => Some(false),
+                    _ => Some(true),
+                };
+                let format = SpanFormat {
+                    bold: pick(rnd(3)),
+                    italic: pick(rnd(3)),
+                    underline: pick(rnd(4)),
+                    strike: pick(rnd(5)),
+                    color: [None, Some(""), Some("#ff0000"), Some("accent")][rnd(4) as usize].map(String::from),
+                    link: [None, Some(""), Some("https://a.example")][rnd(3) as usize].map(String::from),
+                    size: [None, Some(1.0), Some(2.0), Some(f64::NAN), Some(-1.0)][rnd(5) as usize],
+                };
+                let (a, b) = (rnd(40) as usize, rnd(40) as usize);
+                t.spans.push(TextSpan { start: a, end: b, format });
+            }
+            let want = slow(&t);
+            normalize(&mut t);
+            assert_eq!(t.spans, want);
+        }
+    }
+
+    /// H1 of the 20 Nov audit: 100k nested runs took minutes.
+    #[test]
+    fn a_hundred_thousand_runs_normalize_quickly() {
+        let n = 100_000;
+        let mut t = TextData { text: "x".repeat(2 * n), ..Default::default() };
+        for i in 0..n {
+            let format = SpanFormat { bold: Some(i % 2 == 0), size: Some(1.0 + (i % 3) as f64), ..Default::default() };
+            t.spans.push(TextSpan { start: i, end: 2 * n - i, format });
+        }
+        let at = std::time::Instant::now();
+        normalize(&mut t);
+        assert!(at.elapsed().as_secs_f32() < 5.0, "took {:?}", at.elapsed());
+        assert_eq!(t.spans.first().map(|s| s.start), Some(0));
     }
 }
 
