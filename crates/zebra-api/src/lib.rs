@@ -40,6 +40,7 @@ pub use zebra_core::view::Permission;
 pub mod catalogue;
 pub mod client;
 pub mod discovery;
+pub mod library;
 mod dispatch;
 mod headless;
 pub mod mcp;

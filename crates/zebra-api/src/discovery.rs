@@ -46,7 +46,7 @@ pub const BUNDLE_ID: &str = "app.zebra.Zebra";
 pub const DEV_OVERRIDES: bool = cfg!(any(debug_assertions, feature = "dev-overrides"));
 
 /// A folder override from the environment, in dev builds only.
-fn dev_env(name: &str) -> Option<std::ffi::OsString> {
+pub(crate) fn dev_env(name: &str) -> Option<std::ffi::OsString> {
     if DEV_OVERRIDES { std::env::var_os(name) } else { None }
 }
 
