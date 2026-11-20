@@ -6818,6 +6818,7 @@ dependencies = [
  "krilla",
  "kurbo",
  "parley",
+ "png",
  "pollster",
  "resvg",
  "serde",

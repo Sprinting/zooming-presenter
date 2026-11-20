@@ -99,3 +99,54 @@ fn big_gif_screen_with_many_frames_stays_in_budget() {
     // 30 frames at full size would be 480 MB.
     assert!(peak < 80 * MB, "peak {} MB", peak / MB);
 }
+
+/// A `side` square grey PNG of zeros, written row by row (never held whole).
+fn big_grey_png(side: u32) -> Vec<u8> {
+    let mut out = vec![];
+    {
+        let mut e = png::Encoder::new(&mut out, side, side);
+        e.set_color(png::ColorType::Grayscale);
+        e.set_depth(png::BitDepth::Eight);
+        let mut w = e.write_header().unwrap();
+        let mut s = w.stream_writer().unwrap();
+        let row = vec![0u8; side as usize];
+        for _ in 0..side {
+            std::io::Write::write_all(&mut s, &row).unwrap();
+        }
+        s.finish().unwrap();
+    }
+    out
+}
+
+/// H3: a 1.2 MB 16000x16000 PNG took 3.2 GB (three full copies) and 38 s.
+/// Now its rows stream into the level drawn, so even level 0 (8192 px,
+/// 268 MB) stays under 400 MB.
+#[test]
+fn huge_png_streams_into_its_level() {
+    let bytes: zebra_core::AssetBytes = big_grey_png(16000).into();
+    let cache = zebra_render::images::ImageCache::default();
+    let (img, peak) = measure(|| cache.get("p", "png", &bytes, (16000, 16000), 0, true));
+    assert_eq!(img.map(|d| d.width()), Some(8192));
+    eprintln!("16000x16000 PNG at level 0: peak {} MB", peak / MB);
+    assert!(peak < 400 * MB, "level 0 peak {} MB", peak / MB);
+}
+
+/// H3: JPEG and WebP decode under the limits and shrink from their own
+/// pixel format (no RGBA copy of the full picture).
+#[test]
+fn jpeg_shrinks_without_an_rgba_copy() {
+    let img = image::RgbImage::from_pixel(3000, 2000, image::Rgb([200, 100, 50]));
+    let mut jpg = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut jpg, image::ImageFormat::Jpeg).unwrap();
+    drop(img);
+    let bytes: zebra_core::AssetBytes = jpg.into_inner().into();
+    let cache = zebra_render::images::ImageCache::default();
+    let (d, peak) = measure(|| cache.get("j", "jpg", &bytes, (3000, 2000), 2, true));
+    let d = d.unwrap();
+    assert_eq!(d.width(), 750);
+    // The RGB decode (18 MB) and the levels, not an RGBA copy on top (24 MB).
+    assert!(peak < 30 * MB, "peak {} MB", peak / MB);
+    let zebra_render::images::Decoded::Still(l) = d else { panic!() };
+    let px = &l.data.data.data()[..4];
+    assert!((px[0] as i32 - 200).abs() < 6 && (px[1] as i32 - 100).abs() < 6, "{px:?}");
+}

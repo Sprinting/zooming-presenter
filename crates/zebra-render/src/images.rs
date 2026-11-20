@@ -513,24 +513,124 @@ fn decode_job(job: &Job) -> Vec<(u8, Decoded)> {
         // the whole logical screen once per frame.
         return decode_gif(asset, &job.bytes, level).map(|a| vec![(job.key.1, a)]).unwrap_or_default();
     }
-    let Some(img) = decode_limited(&job.bytes) else { return vec![] };
-    let rgba = img.to_rgba8();
-    drop(img);
-    let (iw, ih) = (rgba.width(), rgba.height());
-    let make = |l: u8| {
-        let (lw, lh) = level_size(iw, ih, l);
-        let px = if (lw, lh) == (iw, ih) {
-            rgba.as_raw().clone()
-        } else {
-            image::imageops::resize(&rgba, lw, lh, image::imageops::FilterType::Triangle).into_raw()
-        };
-        Decoded::Still(Arc::new(ImageLevel::from_rgba(asset, lw, lh, px)))
-    };
-    let mut out = vec![(job.key.1, make(level))];
+    decode_still(asset, &job.bytes, job.key.1)
+}
+
+/// A still picture at `want` (and its smallest level), sized from its
+/// header before anything is decoded: a PNG streams row by row into the
+/// levels, so its full size never exists; JPEG and WebP decode once under
+/// [`decode_limits`] and shrink from their own pixel format, with no RGBA
+/// copy and no clone of level 0.
+fn decode_still(asset: &str, bytes: &[u8], want: u8) -> Vec<(u8, Decoded)> {
+    let Some((iw, ih)) = header_size(bytes) else { return vec![] };
+    let last = last_level(iw, ih);
+    let level = want.min(last);
+    let (lw, lh) = level_size(iw, ih, level);
+    let (sw, sh) = level_size(iw, ih, last);
+    let out_bytes = (lw as u64 * lh as u64 + sw as u64 * sh as u64) * 4;
+    let mut shrinks = vec![Shrink::new(iw, ih, lw, lh)];
     if level != last {
-        out.push((last, make(last)));
+        shrinks.push(Shrink::new(iw, ih, sw, sh));
+    }
+    let streamed = bytes.starts_with(b"\x89PNG") && {
+        let _permit = DecodeBytes::acquire(out_bytes + iw as u64 * 16);
+        stream_png(bytes, &mut shrinks).is_some()
+    };
+    if !streamed {
+        shrinks = vec![Shrink::new(iw, ih, lw, lh)];
+        if level != last {
+            shrinks.push(Shrink::new(iw, ih, sw, sh));
+        }
+        let _permit = DecodeBytes::acquire(out_bytes + iw as u64 * ih as u64 * 4);
+        let Some(img) = decode_limited(bytes) else { return vec![] };
+        if (img.width(), img.height()) != (iw, ih) {
+            return vec![];
+        }
+        let (raw, channels): (std::borrow::Cow<[u8]>, usize) = match &img {
+            image::DynamicImage::ImageLuma8(b) => (b.as_raw().into(), 1),
+            image::DynamicImage::ImageLumaA8(b) => (b.as_raw().into(), 2),
+            image::DynamicImage::ImageRgb8(b) => (b.as_raw().into(), 3),
+            image::DynamicImage::ImageRgba8(b) => (b.as_raw().into(), 4),
+            other => (other.to_rgba8().into_raw().into(), 4),
+        };
+        for row in raw.chunks_exact(iw as usize * channels) {
+            for s in shrinks.iter_mut() {
+                s.push(row, channels);
+            }
+        }
+    }
+    let mut it = shrinks.into_iter();
+    let mut out = vec![];
+    if let Some(s) = it.next() {
+        out.push((want, Decoded::Still(Arc::new(s.finish(asset)))));
+    }
+    if let Some(s) = it.next() {
+        out.push((last, Decoded::Still(Arc::new(s.finish(asset)))));
     }
     out
+}
+
+/// Width and height from the header, if inside the decode limits.
+fn header_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
+    (w > 0 && h > 0 && w <= MAX_DECODE_DIM && h <= MAX_DECODE_DIM).then_some((w, h))
+}
+
+/// Feed a non-interlaced PNG's rows to `shrinks`. None if it isn't one (or
+/// is broken), so the caller can decode it whole instead.
+fn stream_png(bytes: &[u8], shrinks: &mut [Shrink]) -> Option<()> {
+    let mut d = png::Decoder::new_with_limits(std::io::Cursor::new(bytes), png::Limits { bytes: MAX_DECODE_ALLOC as usize });
+    d.set_transformations(png::Transformations::normalize_to_color8());
+    let mut r = d.read_info().ok()?;
+    if r.info().interlaced {
+        return None;
+    }
+    let channels = match r.output_color_type() {
+        (png::ColorType::Grayscale, png::BitDepth::Eight) => 1,
+        (png::ColorType::GrayscaleAlpha, png::BitDepth::Eight) => 2,
+        (png::ColorType::Rgb, png::BitDepth::Eight) => 3,
+        (png::ColorType::Rgba, png::BitDepth::Eight) => 4,
+        _ => return None,
+    };
+    // A truncated file keeps the rows it has; the rest stays clear.
+    while let Ok(Some(row)) = r.next_row() {
+        for s in shrinks.iter_mut() {
+            s.push(row.data(), channels);
+        }
+    }
+    Some(())
+}
+
+/// Most bytes all decodes in flight may be estimated to need at once
+/// (header size times the pixel formats, plus the levels made). One
+/// decode bigger than this runs alone.
+pub const DECODE_BYTES: u64 = 512 << 20;
+
+/// A share of [`DECODE_BYTES`], given back on drop.
+struct DecodeBytes(u64);
+
+static IN_FLIGHT: Mutex<u64> = Mutex::new(0);
+static FREED: std::sync::Condvar = std::sync::Condvar::new();
+
+impl DecodeBytes {
+    /// Wait until `n` bytes fit beside the decodes already running.
+    fn acquire(n: u64) -> DecodeBytes {
+        let n = n.min(DECODE_BYTES);
+        let mut g = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+        while *g > 0 && *g + n > DECODE_BYTES {
+            g = FREED.wait(g).unwrap_or_else(|e| e.into_inner());
+        }
+        *g += n;
+        DecodeBytes(n)
+    }
+}
+
+impl Drop for DecodeBytes {
+    fn drop(&mut self) {
+        let mut g = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+        *g = g.saturating_sub(self.0);
+        FREED.notify_all();
+    }
 }
 
 /// Largest picture side any decoder accepts. Bigger ones are drawn as the
@@ -703,6 +803,7 @@ fn decode_gif(asset: &str, bytes: &[u8], level: u8) -> Option<Decoded> {
     let (lw, lh) = level_size(w, h, level);
 
     let (cw, ch) = (w as usize, h as usize);
+    let _permit = DecodeBytes::acquire(area * 8 + (keep * level_bytes(level)) as u64);
     let mut canvas = vec![0u8; cw * ch * 4];
     let mut saved: Vec<u8> = vec![];
     let mut frames: Vec<Arc<ImageLevel>> = vec![];

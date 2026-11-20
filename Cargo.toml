@@ -25,6 +25,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # The GIF decoder image builds, used directly so a frame never costs a
 # whole logical screen (hostile-input audit C1).
 gif = "0.14"
+# The PNG decoder image builds, used directly to stream rows (audit H3).
+png = "0.18"
 base64 = "0.22"
 # Clip-art pack: per-symbol zstd frames with a per-set dictionary. Pure
 # Rust decoder (no C build); the app never compresses.
