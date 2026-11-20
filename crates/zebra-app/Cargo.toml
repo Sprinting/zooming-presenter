@@ -56,6 +56,7 @@ block2 = "0.6"
 winit = "0.30"
 
 [dev-dependencies]
+zebra-pdf.workspace = true
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 ruzstd.workspace = true
 

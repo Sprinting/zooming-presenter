@@ -349,7 +349,8 @@ impl ZebraApp {
                 let waker_ctx = ctx.clone();
                 renderer.images().set_waker(Some(Arc::new(move || waker_ctx.request_repaint())));
                 // Imported PDF pages are drawn again from the PDF when
-                // zoomed in past their pictures.
+                // zoomed in past their pictures, by the PDF helper
+                // process (never PDFium in this one).
                 renderer.set_page_raster(Some(Arc::new(|r: &zebra_render::pages::PageRequest| {
                     zebra_import::pdf::raster(&r.pdf, &r.bytes, r.index, r.page_px, r.rect)
                 })));
@@ -1681,6 +1682,7 @@ impl ZebraApp {
         crate::media_ui::tick(self);
         self.handle_close(&ctx);
         self.sync_present_mode(&ctx);
+        self.pdf_notes();
         crate::sidebar::check_focus(self);
 
         if self.editor.view.mode == Mode::Present {
@@ -1919,6 +1921,19 @@ impl ZebraApp {
         if ctx.input(|i| i.viewport().close_requested()) && !self.force_quit && self.editor.dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(Action::Quit));
+        }
+    }
+
+    /// A PDF page of this document couldn't be drawn sharper (its helper
+    /// ran out of memory or time on it): say so once per PDF per session,
+    /// never while presenting (the note waits until the show ends).
+    fn pdf_notes(&mut self) {
+        if self.editor.view.mode == Mode::Present {
+            return;
+        }
+        let assets = &self.editor.doc.assets;
+        if !zebra_import::pdf::take_draw_failures(|k| assets.contains_key(k)).is_empty() {
+            self.note(crate::t!("pdf-note-not-sharper"));
         }
     }
 
