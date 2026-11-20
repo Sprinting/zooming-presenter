@@ -62,10 +62,45 @@ fn recolour(svg: &str, style: &SvgStyle) -> String {
 /// An SVG may hold pictures of its own, but only inside itself (`data:`
 /// links). The default also opens any file an `<image href>` names, so a
 /// picture someone sent could pull a file from this Mac into an export.
+///
+/// A picture inside is taken only when its header says it is at most
+/// [`MAX_NESTED_PX`] pixels, and all of them together at most
+/// [`MAX_NESTED_TOTAL_PX`]: resvg decodes it whole, with no limit (a 43 KB
+/// pptx holding a 20000² PNG took 1.5 GB). A picture refused is left out;
+/// the rest of the SVG draws.
 fn options() -> usvg::Options<'static> {
     let mut opt = usvg::Options::default();
     opt.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    let default = usvg::ImageHrefResolver::default_data_resolver();
+    let taken = std::sync::atomic::AtomicU64::new(0);
+    opt.image_href_resolver.resolve_data = Box::new(move |mime, data, o| {
+        if let Some(px) = nested_pixels(&data) {
+            let px = px.filter(|px| *px <= MAX_NESTED_PX)?;
+            let before = taken.fetch_add(px, std::sync::atomic::Ordering::Relaxed);
+            if before + px > MAX_NESTED_TOTAL_PX {
+                return None;
+            }
+        }
+        default(mime, data, o)
+    });
     opt
+}
+
+/// Most pixels one picture inside an SVG may have (the SVG itself is drawn
+/// at most [`MAX_RASTER_SIDE`]², so more adds nothing it can show).
+pub const MAX_NESTED_PX: u64 = 16 << 20;
+/// Most pixels all the pictures inside one SVG may have together.
+pub const MAX_NESTED_TOTAL_PX: u64 = 64 << 20;
+
+/// For a raster picture (PNG, JPEG, GIF, WebP…): Some(its pixels, from its
+/// header; None when the header can't be read). None for anything else (a
+/// nested SVG, which usvg reads itself).
+fn nested_pixels(data: &[u8]) -> Option<Option<u64>> {
+    let mut r = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?;
+    r.format()?;
+    // Only the header is read; its size is what is being judged.
+    r.no_limits();
+    Some(r.into_dimensions().ok().map(|(w, h)| w as u64 * h as u64))
 }
 
 /// Draw `svg` into a `w` x `h` picture (premultiplied RGBA8), fitted and
@@ -375,6 +410,45 @@ mod tests {
         );
         let px = rasterize(svg.as_bytes(), &SvgStyle::default(), 10, 10).unwrap();
         assert_eq!(at(&px, 10, 5, 5), [0, 160, 0, 255]);
+    }
+
+    /// 20 Nov audit, M2: a 20000² PNG inside an SVG was decoded whole
+    /// (1.5 GB). It is now left out from its header; a small one still
+    /// shows next to it, and an unreadable one is left out.
+    #[test]
+    fn a_huge_bitmap_inside_an_svg_is_left_out() {
+        use base64::Engine;
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        // A PNG header saying `side` square (the pixels are never reached).
+        let header = |side: u32| {
+            let mut out = vec![];
+            let mut e = png::Encoder::new(&mut out, side, side);
+            e.set_color(png::ColorType::Grayscale);
+            let mut w = e.write_header().unwrap();
+            // The start of the pixels (a decoder reads the header up to them).
+            w.write_chunk(png::chunk::IDAT, &[0x78, 0x9c]).unwrap();
+            std::mem::forget(w);
+            out
+        };
+        let huge = header(20000);
+        assert_eq!(nested_pixels(&huge), Some(Some(400_000_000)));
+        assert_eq!(nested_pixels(b"<svg/>"), None);
+        let mut small = vec![];
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 160, 0, 255])).write_to(&mut std::io::Cursor::new(&mut small), image::ImageFormat::Png).unwrap();
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><image width="10" height="10" href="data:image/png;base64,{}"/><image x="10" width="10" height="10" preserveAspectRatio="none" href="data:image/png;base64,{}"/></svg>"#,
+            b64(&huge),
+            b64(&small)
+        );
+        let px = rasterize(svg.as_bytes(), &SvgStyle::default(), 20, 10).unwrap();
+        assert_eq!(at(&px, 20, 15, 5), [0, 160, 0, 255]);
+        assert_eq!(at(&px, 20, 5, 5)[3], 0);
+        // Many pictures that each fit, but not all together.
+        let opt = options();
+        let big = std::sync::Arc::new(header(4096));
+        let took: Vec<bool> = (0..6).map(|_| (opt.image_href_resolver.resolve_data)("image/png", big.clone(), &opt).is_some()).collect();
+        assert_eq!(took, [true, true, true, true, false, false]);
+        assert!((options().image_href_resolver.resolve_data)("image/png", std::sync::Arc::new(b"\x89PNG\r\n\x1a\n garbage".to_vec()), &opt).is_none());
     }
 
     #[test]
