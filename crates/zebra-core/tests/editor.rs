@@ -742,3 +742,35 @@ fn pasting_many_shapes_is_not_quadratic() {
     assert_eq!(out.created.len(), n);
     assert!(took.as_secs_f32() < 10.0, "took {took:?}");
 }
+
+/// A document with one custom theme, as a file holds it, for the theme
+/// repair tests.
+fn doc_json_with_theme(edit: impl FnOnce(&mut serde_json::Value)) -> String {
+    let mut ed = Editor::default();
+    let mut t = zebra_core::theme::Theme::resolve("classic");
+    t.id = "mine".into();
+    t.name = "Mine".into();
+    t.base = Some("classic".into());
+    ed.apply(Command::SaveTheme { theme: t, apply: true, to_library: false }, Origin::Human).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&zebra_core::io::to_json(&ed.doc)).unwrap();
+    edit(&mut v["themes"][0]);
+    v.to_string()
+}
+
+/// W7 of the 20 Nov audit: a theme weight of 0 or 65535 from a file is
+/// brought into 1..=1000 on open, so saving the theme again works.
+#[test]
+fn out_of_range_theme_weights_are_repaired_on_open() {
+    let json = doc_json_with_theme(|t| {
+        t["title"]["weight"] = 0.into();
+        t["body"]["weight"] = 65535.into();
+    });
+    let doc = zebra_core::io::from_json(&json).unwrap();
+    let t = &doc.themes[0];
+    assert_eq!((t.title.weight, t.subtitle.weight, t.body.weight), (1, 400, 1000));
+    let mut ed = Editor::default();
+    ed.doc = doc;
+    let theme = ed.doc.themes[0].clone();
+    ed.apply(Command::SaveTheme { theme, apply: true, to_library: false }, Origin::Human).expect("the repaired theme saves");
+}
+

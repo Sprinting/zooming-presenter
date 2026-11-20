@@ -313,6 +313,17 @@ pub fn repair(doc: &mut Document) -> usize {
         doc.next_id = doc.elements.keys().filter_map(|k| k.trim_start_matches(|c: char| !c.is_ascii_digit()).parse::<u64>().ok()).max().map_or(1, |m| m.saturating_add(1));
         fixed += 1;
     }
+    // Custom theme weights a file can hold (u16) but save_theme refuses:
+    // the nearest weight in range. The renderer draws the nearest face.
+    for t in &mut doc.themes {
+        for s in [&mut t.title, &mut t.subtitle, &mut t.body] {
+            let w = s.weight.clamp(1, 1000);
+            if w != s.weight {
+                s.weight = w;
+                fixed += 1;
+            }
+        }
+    }
     doc.play.autoplay = doc.play.autoplay.filter(|d| fin(*d) && *d > 0.0);
     if let Some(s) = &mut doc.soundtrack {
         if !fin(s.volume) {
