@@ -139,8 +139,11 @@ impl Editor {
         }
         let mut out = r?;
         // Only the copies, not the elements a group command touched again.
-        out.created.retain(|id| new_id.values().any(|n| n == id));
-        out.changed.retain(|id| !out.created.contains(id));
+        // Sets, not scans: a 100k-shape import pasted in O(N²).
+        let copies: std::collections::HashSet<&str> = new_id.values().map(String::as_str).collect();
+        out.created.retain(|id| copies.contains(id.as_str()));
+        let created: std::collections::HashSet<&str> = out.created.iter().map(String::as_str).collect();
+        out.changed.retain(|id| !created.contains(id.as_str()));
         Ok(out)
     }
 }

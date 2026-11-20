@@ -713,3 +713,32 @@ fn next_id_at_the_top_of_u64_is_repaired() {
     ed.apply(cmd(serde_json::json!({"op":"add_shape","shape":"ellipse","x":0,"y":0})), Origin::Human).unwrap();
     ed.apply(cmd(serde_json::json!({"op":"add_shape","shape":"ellipse","x":0,"y":0})), Origin::Human).unwrap();
 }
+
+/// H2 of the 20 Nov audit: pasting many shapes was O(N²) in sorting out
+/// which ids were the copies (99k shapes took 59 s in release).
+#[test]
+fn pasting_many_shapes_is_not_quadratic() {
+    let mut src = Editor::default();
+    src.apply(cmd(serde_json::json!({"op":"add_shape","id":"s","shape":"rectangle"})), Origin::Human).unwrap();
+    let one = src.doc.get("s").unwrap().clone();
+    // Debug build: 20k took 10.3 s before the fix and 1.5 s after; 30k
+    // takes 2.4 s.
+    let n = 30_000;
+    let elements = (0..n)
+        .map(|i| {
+            let mut e = one.clone();
+            e.id = format!("s{i}");
+            e.transform.x = (i % 200) as f64 * 120.0;
+            e.transform.y = (i / 200) as f64 * 120.0;
+            e
+        })
+        .collect();
+    let clip = zebra_core::clip::Clip { elements, assets: Default::default() };
+    let mut dst = Editor::default();
+    let at = std::time::Instant::now();
+    let out = dst.paste_clip(&clip, 0.0, 0.0, None, Origin::Human).unwrap();
+    let took = at.elapsed();
+    eprintln!("pasted {n} shapes in {took:?}");
+    assert_eq!(out.created.len(), n);
+    assert!(took.as_secs_f32() < 10.0, "took {took:?}");
+}
