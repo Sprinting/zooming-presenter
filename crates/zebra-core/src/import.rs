@@ -26,6 +26,11 @@ pub struct ImportedDeck {
     pub assets: BTreeMap<String, Asset>,
     /// What could not come in as it was, and how often.
     pub notes: BTreeMap<ImportNote, usize>,
+    /// The slides (1-based, ascending) a note is about, for the notes that
+    /// name them: slides left out ([`ImportNote::PageSkipped`] from a
+    /// PowerPoint file), [`ImportNote::TextCut`], [`ImportNote::Simplified`].
+    /// The note's count is then the number of slides.
+    pub slides: BTreeMap<ImportNote, Vec<usize>>,
     /// Music the file plays across its pages (an asset in `assets`); it
     /// becomes the document's background music unless it has some.
     pub soundtrack: Option<Soundtrack>,
@@ -121,10 +126,23 @@ pub enum ImportNote {
     Gradient,
     /// Other objects (ink, add-in content…) were left out.
     Other,
+    /// Text boxes longer than [`crate::rich::MAX_INSERT_CHARS`] were cut
+    /// to that many characters (the paste limit).
+    TextCut,
+    /// Formatting past [`MAX_IMPORT_SPANS`] style changes in a box was
+    /// dropped (the rest takes the box's own style).
+    Simplified,
+    /// Slide layouts, masters or themes that couldn't be read were left out
+    /// (their slides came in without their design).
+    Design,
 }
 
+/// Most formatted spans an imported text box keeps (the text renderer
+/// lays out at most 60,000 style changes in a paragraph).
+pub const MAX_IMPORT_SPANS: usize = 60_000;
+
 impl ImportNote {
-    pub const ALL: [ImportNote; 14] = [
+    pub const ALL: [ImportNote; 17] = [
         ImportNote::PageSkipped,
         ImportNote::HiddenSlide,
         ImportNote::Chart,
@@ -139,6 +157,9 @@ impl ImportNote {
         ImportNote::Flip,
         ImportNote::Gradient,
         ImportNote::Other,
+        ImportNote::TextCut,
+        ImportNote::Simplified,
+        ImportNote::Design,
     ];
 
     /// English, for the API and the undo history of agents.
@@ -158,8 +179,57 @@ impl ImportNote {
             ImportNote::Flip => ("flipped object shown unflipped", "flipped objects shown unflipped"),
             ImportNote::Gradient => ("gradient made a solid colour", "gradients made solid colours"),
             ImportNote::Other => ("other object left out", "other objects left out"),
+            ImportNote::TextCut => ("slide with text cut to 100,000 characters", "slides with text cut to 100,000 characters"),
+            ImportNote::Simplified => ("slide with formatting simplified", "slides with formatting simplified"),
+            ImportNote::Design => ("slide design that couldn't be read", "slide designs that couldn't be read"),
         };
         format!("{n} {}", if n == 1 { one } else { many })
+    }
+
+    /// [`Self::english`], naming the slides when the note has them:
+    /// "2 unreadable slides left out (2, 5–9)".
+    pub fn english_with(self, n: usize, slides: &[usize]) -> String {
+        if slides.is_empty() {
+            return self.english(n);
+        }
+        let head = match self {
+            ImportNote::PageSkipped => format!("{n} {}", if n == 1 { "unreadable slide left out" } else { "unreadable slides left out" }),
+            _ => self.english(n),
+        };
+        let (groups, more) = slide_groups(slides);
+        let more = if more > 0 { format!(" and {more} more") } else { String::new() };
+        format!("{head} ({}{more})", groups.join(", "))
+    }
+}
+
+/// How many groups of slide numbers a note lists before "and N more".
+pub const SLIDE_GROUPS: usize = 8;
+
+/// Slide numbers as a note lists them: runs of consecutive numbers as
+/// ranges ("5–9"), at most [`SLIDE_GROUPS`] groups, and how many numbers
+/// are left after them.
+pub fn slide_groups(slides: &[usize]) -> (Vec<String>, usize) {
+    let mut runs: Vec<(usize, usize)> = vec![];
+    for &n in slides {
+        match runs.last_mut() {
+            Some(r) if n == r.1 + 1 => r.1 = n,
+            Some(r) if n <= r.1 => {}
+            _ => runs.push((n, n)),
+        }
+    }
+    let shown: Vec<String> = runs.iter().take(SLIDE_GROUPS).map(|&(a, b)| if a == b { a.to_string() } else { format!("{a}\u{2013}{b}") }).collect();
+    let more = runs.iter().skip(SLIDE_GROUPS).map(|&(a, b)| b - a + 1).sum();
+    (shown, more)
+}
+
+impl ImportedDeck {
+    /// Note `n` about slide `slide` (1-based), once per slide.
+    pub fn note_slide(&mut self, n: ImportNote, slide: usize) {
+        let list = self.slides.entry(n).or_default();
+        if let Err(at) = list.binary_search(&slide) {
+            list.insert(at, slide);
+        }
+        self.notes.insert(n, list.len());
     }
 }
 

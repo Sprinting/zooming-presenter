@@ -5,6 +5,7 @@
 //! The file is opened and read on a worker thread; the window keeps
 //! drawing. The pages land in one undo step through
 //! [`zebra_core::Editor::import_deck`].
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
@@ -82,27 +83,37 @@ fn failed(app: &mut ZebraApp, path: &Path, e: ImportError) {
     crate::sheets::request(app, crate::sheets::SheetKind::Alert { title: crate::t!("import-failed-title", name = file_name(path)), message });
 }
 
-/// The lines of the summary sheet, one per kind of note.
-pub fn note_lines(notes: &std::collections::BTreeMap<ImportNote, usize>) -> Vec<String> {
+/// The lines of the summary sheet, one per kind of note. `slides`: the
+/// slides each note is about, for the notes that name them.
+pub fn note_lines(notes: &BTreeMap<ImportNote, usize>, slides: &BTreeMap<ImportNote, Vec<usize>>) -> Vec<String> {
     notes
         .iter()
         .map(|(n, c)| {
             let c = *c as i64;
-            match n {
-                ImportNote::PageSkipped => crate::t!("import-note-skipped", count = c),
-                ImportNote::HiddenSlide => crate::t!("import-note-hidden", count = c),
-                ImportNote::Chart => crate::t!("import-note-chart", count = c),
-                ImportNote::SmartArt => crate::t!("import-note-smartart", count = c),
-                ImportNote::Table => crate::t!("import-note-table", count = c),
-                ImportNote::Equation => crate::t!("import-note-equation", count = c),
-                ImportNote::Media => crate::t!("import-note-media", count = c),
-                ImportNote::AsPicture => crate::t!("import-note-as-picture", count = c),
-                ImportNote::Shape => crate::t!("import-note-shape", count = c),
-                ImportNote::Metafile => crate::t!("import-note-metafile", count = c),
-                ImportNote::Picture => crate::t!("import-note-picture", count = c),
-                ImportNote::Flip => crate::t!("import-note-flip", count = c),
-                ImportNote::Gradient => crate::t!("import-note-gradient", count = c),
-                ImportNote::Other => crate::t!("import-note-other", count = c),
+            let named = slides.get(n).filter(|s| !s.is_empty()).map(|s| {
+                let (groups, more) = zebra_core::import::slide_groups(s);
+                let list = groups.join(", ");
+                if more > 0 { crate::t!("import-note-slides-more", list = list, more = (more as i64)) } else { list }
+            });
+            match (n, named) {
+                (ImportNote::PageSkipped, Some(s)) => crate::t!("import-note-skipped-slides", count = c, slides = s),
+                (ImportNote::TextCut, s) => crate::t!("import-note-text-cut", count = c, slides = s.unwrap_or_default()),
+                (ImportNote::Simplified, s) => crate::t!("import-note-simplified", count = c, slides = s.unwrap_or_default()),
+                (ImportNote::Design, _) => crate::t!("import-note-design"),
+                (ImportNote::PageSkipped, None) => crate::t!("import-note-skipped", count = c),
+                (ImportNote::HiddenSlide, _) => crate::t!("import-note-hidden", count = c),
+                (ImportNote::Chart, _) => crate::t!("import-note-chart", count = c),
+                (ImportNote::SmartArt, _) => crate::t!("import-note-smartart", count = c),
+                (ImportNote::Table, _) => crate::t!("import-note-table", count = c),
+                (ImportNote::Equation, _) => crate::t!("import-note-equation", count = c),
+                (ImportNote::Media, _) => crate::t!("import-note-media", count = c),
+                (ImportNote::AsPicture, _) => crate::t!("import-note-as-picture", count = c),
+                (ImportNote::Shape, _) => crate::t!("import-note-shape", count = c),
+                (ImportNote::Metafile, _) => crate::t!("import-note-metafile", count = c),
+                (ImportNote::Picture, _) => crate::t!("import-note-picture", count = c),
+                (ImportNote::Flip, _) => crate::t!("import-note-flip", count = c),
+                (ImportNote::Gradient, _) => crate::t!("import-note-gradient", count = c),
+                (ImportNote::Other, _) => crate::t!("import-note-other", count = c),
             }
         })
         .collect()
@@ -126,7 +137,7 @@ pub fn finish(app: &mut ZebraApp, path: &Path, deck: ImportedDeck) {
     let frames: Vec<String> = out.created.iter().filter(|id| app.editor.doc.get(id).is_some_and(|e| e.is_frame())).cloned().collect();
     app.select(frames);
     app.view_cmd(ViewCommand::ZoomToSelection);
-    let lines = note_lines(&deck.notes);
+    let lines = note_lines(&deck.notes, &deck.slides);
     if !lines.is_empty() {
         crate::sheets::request(
             app,
@@ -348,5 +359,35 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
                 run(app, path, reader, first.min(last), last);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// All of an import's notes go in one summary; skipped slides, cut
+    /// text and simplified formatting name their slides.
+    #[test]
+    fn the_summary_names_slides() {
+        let notes = BTreeMap::from([(ImportNote::PageSkipped, 3), (ImportNote::Chart, 1), (ImportNote::TextCut, 1), (ImportNote::Simplified, 2), (ImportNote::Design, 2)]);
+        let slides = BTreeMap::from([(ImportNote::PageSkipped, vec![2, 5, 6]), (ImportNote::TextCut, vec![4]), (ImportNote::Simplified, vec![1, 3])]);
+        assert_eq!(
+            note_lines(&notes, &slides),
+            [
+                "Slides 2, 5\u{2013}6 couldn't be read and were left out.",
+                "1 chart was left out.",
+                "Text on slide 4 was cut to 100,000 characters.",
+                "Some formatting on slides 1, 3 was simplified.",
+                "Some slide designs couldn't be read.",
+            ]
+        );
+        // Many: 8 groups, then how many more.
+        let many: Vec<usize> = (1..=20).map(|i| i * 2).collect();
+        let lines = note_lines(&BTreeMap::from([(ImportNote::PageSkipped, 20)]), &BTreeMap::from([(ImportNote::PageSkipped, many)]));
+        assert_eq!(lines, ["Slides 2, 4, 6, 8, 10, 12, 14, 16 and 12 more couldn't be read and were left out."]);
+        // A PDF's pages are counted, not named.
+        let lines = note_lines(&BTreeMap::from([(ImportNote::PageSkipped, 2)]), &BTreeMap::new());
+        assert_eq!(lines, ["2 pages couldn't be read and were left out."]);
     }
 }

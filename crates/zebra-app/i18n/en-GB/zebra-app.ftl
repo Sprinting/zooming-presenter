@@ -1662,6 +1662,21 @@ import-note-other = { $count ->
     [one] 1 other object was left out.
    *[other] { $count } other objects were left out.
 }
+# $slides: slide numbers, as "2, 5–9, 12" (import-note-slides-more after 8 groups).
+import-note-skipped-slides = { $count ->
+    [one] Slide { $slides } couldn't be read and was left out.
+   *[other] Slides { $slides } couldn't be read and were left out.
+}
+import-note-text-cut = { $count ->
+    [one] Text on slide { $slides } was cut to 100,000 characters.
+   *[other] Text on slides { $slides } was cut to 100,000 characters.
+}
+import-note-simplified = { $count ->
+    [one] Some formatting on slide { $slides } was simplified.
+   *[other] Some formatting on slides { $slides } was simplified.
+}
+import-note-design = Some slide designs couldn't be read.
+import-note-slides-more = { $list } and { $more } more
 import-failed-title = “{ $name }” can't be imported
 import-error-unsupported = Zebra can import PDF and PowerPoint (.pptx) files.
 import-error-damaged = The file is damaged or isn't a PDF.

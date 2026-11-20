@@ -162,3 +162,27 @@ fn picture_pages_are_their_own_steps_inside_one_frame_that_carries_them() {
     assert!(e.is_page());
     assert_eq!(e.fit_margin(), 0.0);
 }
+
+/// Notes that name slides list them as ranges, at most 8 groups, then
+/// "and N more"; each slide is counted once.
+#[test]
+fn notes_name_their_slides() {
+    use zebra_core::import::{slide_groups, ImportNote};
+    assert_eq!(slide_groups(&[]), (vec![], 0));
+    assert_eq!(slide_groups(&[2, 5, 6, 7, 8, 9, 12]), (vec!["2".to_string(), "5\u{2013}9".into(), "12".into()], 0));
+    let many: Vec<usize> = (1..=40).map(|i| i * 3).collect();
+    let (groups, more) = slide_groups(&many);
+    assert_eq!(groups.len(), 8);
+    assert_eq!(more, 32);
+    let (groups, more) = slide_groups(&(2..=9999).collect::<Vec<_>>());
+    assert_eq!((groups, more), (vec!["2\u{2013}9999".to_string()], 0));
+    let mut d = ImportedDeck::default();
+    for s in [7, 3, 7, 3, 12] {
+        d.note_slide(ImportNote::TextCut, s);
+    }
+    assert_eq!(d.slides[&ImportNote::TextCut], [3, 7, 12]);
+    assert_eq!(d.notes[&ImportNote::TextCut], 3);
+    assert_eq!(ImportNote::PageSkipped.english_with(2, &[2, 5]), "2 unreadable slides left out (2, 5)");
+    assert_eq!(ImportNote::PageSkipped.english_with(2, &[]), "2 unreadable pages left out");
+    assert_eq!(ImportNote::TextCut.english_with(1, &[4]), "1 slide with text cut to 100,000 characters (4)");
+}

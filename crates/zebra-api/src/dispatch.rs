@@ -784,7 +784,18 @@ impl Dispatcher {
         let out = editor.import_deck(&deck, format!("Import {}", done.name), done.origin.clone())?;
         self.seen.insert(key, editor.revision);
         let frames: Vec<String> = out.created.iter().filter(|id| editor.doc.get(id).is_some_and(|e| e.is_frame())).cloned().collect();
-        let notes: Vec<Value> = deck.notes.iter().map(|(n, c)| json!({ "note": n, "count": c, "text": n.english(*c) })).collect();
+        let notes: Vec<Value> = deck
+            .notes
+            .iter()
+            .map(|(n, c)| {
+                let slides = deck.slides.get(n).map(Vec::as_slice).unwrap_or_default();
+                let mut v = json!({ "note": n, "count": c, "text": n.english_with(*c, slides) });
+                if !slides.is_empty() {
+                    v["slides"] = json!(slides);
+                }
+                v
+            })
+            .collect();
         let mut v = to_value(out);
         if let Value::Object(o) = &mut v {
             o.insert("pages".into(), json!(deck.pages.len()));
