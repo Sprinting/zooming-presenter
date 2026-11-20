@@ -37,6 +37,8 @@ pub enum SheetKind {
     /// The last launch quit while opening this untitled document's
     /// autosave (`name` as its window would have been titled).
     CrashedOpening { path: std::path::PathBuf, name: String },
+    /// Offer to turn on beta features, where a person reaches one.
+    BetaOffer(zebra_core::beta::BetaFeature),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -88,6 +90,10 @@ fn spec(app: &ZebraApp, k: &SheetKind) -> Spec {
             buttons: vec![(crate::t!("sheet-revert"), Role::Default), (crate::t!("sheet-cancel"), Role::Cancel)],
             warning: true,
         },
+        SheetKind::BetaOffer(f) => {
+            let (title, message) = crate::beta_ui::words(*f);
+            Spec { title, message, buttons: vec![(crate::t!("beta-offer-turn-on"), Role::Default), (crate::t!("sheet-cancel"), Role::Cancel)], warning: false }
+        }
         SheetKind::RaisePermission => Spec {
             title: crate::t!("sheet-full-control-title"),
             message: crate::t!("sheet-full-control-message"),
@@ -174,6 +180,7 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
             // Keep for Later: left as it is, marker and all, so the next
             // launch asks again.
         }
+        SheetKind::BetaOffer(_) => crate::beta_ui::answered(app, label == crate::t!("beta-offer-turn-on")),
         SheetKind::RaisePermission => {
             if label == crate::t!("sheet-allow-full-control") {
                 let _ = app.editor.view(zebra_core::ViewCommand::SetAgentPermission { permission: Permission::Full }, H);

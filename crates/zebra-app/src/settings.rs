@@ -199,6 +199,14 @@ fn general(app: &mut ZebraApp, ui: &mut Ui) {
     srow(ui, &crate::t!("settings-appearance"), |ui| {
         w::caption(ui, crate::t!("settings-appearance-caption"));
     });
+    // Only the person turns this on or off; agents can only read it.
+    srow(ui, &crate::t!("settings-beta"), |ui| {
+        let mut on = app.editor.view.beta_features;
+        if w::checkbox(ui, &mut on, &crate::t!("settings-beta-switch")).changed() {
+            crate::beta_ui::set(app, on);
+        }
+        w::caption(ui, crate::t!("settings-beta-caption"));
+    });
 }
 
 fn canvas(app: &mut ZebraApp, ui: &mut Ui) {

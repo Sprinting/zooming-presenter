@@ -40,6 +40,7 @@ struct Shared {
     key_message: Option<String>,
     permission: zebra_core::view::Permission,
     paused: bool,
+    beta: bool,
 }
 
 impl Shared {
@@ -65,6 +66,7 @@ impl Shared {
             key_message: w.key_message.clone(),
             permission: w.editor.view.agent_permission,
             paused: w.editor.view.agent_paused,
+            beta: w.editor.view.beta_features,
         }
     }
 
@@ -89,6 +91,8 @@ impl Shared {
         w.key_message = self.key_message.clone();
         w.editor.view.agent_permission = self.permission;
         w.editor.view.agent_paused = self.paused;
+        // Through the setter, so agents on every window hear of it.
+        w.editor.set_beta_features(self.beta);
     }
 
     fn same(&self, o: &Self) -> bool {
@@ -117,6 +121,7 @@ impl Shared {
             && self.key_message == o.key_message
             && self.permission == o.permission
             && self.paused == o.paused
+            && self.beta == o.beta
     }
 }
 

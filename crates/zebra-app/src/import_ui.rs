@@ -74,6 +74,10 @@ fn failed(app: &mut ZebraApp, path: &Path, e: ImportError) {
         ImportError::NoEngine(_) => crate::t!("import-error-no-engine"),
         ImportError::Read(_) => crate::t!("import-error-read"),
         ImportError::Cancelled => return,
+        ImportError::BetaOff => {
+            crate::beta_ui::offer(app, zebra_core::beta::BetaFeature::PptxImport, crate::beta_ui::Pending::Import(path.to_path_buf()));
+            return;
+        }
     };
     crate::sheets::request(app, crate::sheets::SheetKind::Alert { title: crate::t!("import-failed-title", name = file_name(path)), message });
 }
@@ -139,6 +143,12 @@ fn poll(app: &mut ZebraApp) {
             Ok(Ok(reader)) => {
                 let pages = reader.page_count();
                 let slides = reader.kind() == "PowerPoint";
+                // Importing PowerPoint is a beta feature: offered, and
+                // started again from the file on Turn On.
+                if slides && app.editor.check_beta(zebra_core::beta::BetaFeature::PptxImport).is_err() {
+                    crate::beta_ui::offer(app, zebra_core::beta::BetaFeature::PptxImport, crate::beta_ui::Pending::Import(path));
+                    return;
+                }
                 Some(Flow::Choose { path, reader, pages, all: true, from: 1.0, to: pages as f64, slides })
             }
             Ok(Err(e)) => {
