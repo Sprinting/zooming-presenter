@@ -62,9 +62,6 @@ pub struct Toast {
     pub until: f64,
 }
 
-/// Picture types Insert › Image… offers.
-pub const IMAGE_TYPES: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];
-
 pub struct ZebraApp {
     pub editor: Editor,
     /// This document's id for agents ("d1", "d2", ...).
@@ -170,9 +167,9 @@ pub struct ZebraApp {
     /// The native sheet on screen, waiting for its answer (macOS).
     #[cfg(target_os = "macos")]
     pub open_sheet: Option<crate::sheets::OpenSheet>,
-    /// Insert › Image… asked for, at this place: the picker goes up as a
-    /// sheet on this window once the frame is drawn (see `sheets`).
-    pub want_image_picker: Option<Vec2>,
+    /// An open or save panel asked for: it goes up as a sheet on this
+    /// window once the frame is drawn (see `pickers`).
+    pub want_pick: Option<crate::pickers::Pick>,
     #[cfg(target_os = "macos")]
     pub open_picker: Option<crate::sheets::OpenPicker>,
     pub show_settings: bool,
@@ -402,7 +399,7 @@ impl ZebraApp {
             native_dialogs: cfg!(target_os = "macos") && has_window,
             #[cfg(target_os = "macos")]
             open_sheet: None,
-            want_image_picker: None,
+            want_pick: None,
             #[cfg(target_os = "macos")]
             open_picker: None,
             show_settings: false,
@@ -694,11 +691,7 @@ impl ZebraApp {
                 self.editor.load(doc, None);
                 self.after_load();
             }
-            Open => {
-                if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-zebra"), &["zebra"]).pick_file() {
-                    self.perform_inner(ctx, OpenPath(p));
-                }
-            }
+            Open => crate::pickers::ask(self, crate::pickers::Pick::Open),
             OpenPath(p) => self.open_path(&p),
             Save => {
                 self.save(false);
@@ -807,14 +800,7 @@ impl ZebraApp {
             }
             InsertImage => {
                 let c = self.canvas_center_world();
-                if self.native_dialogs && cfg!(target_os = "macos") {
-                    // A sheet on this window, put up right after this frame
-                    // (a modal panel run from inside the frame came up late).
-                    self.want_image_picker = Some(c);
-                    ctx.request_repaint();
-                } else if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), IMAGE_TYPES).pick_file() {
-                    self.insert_image_file(&p, c);
-                }
+                crate::pickers::ask(self, crate::pickers::Pick::InsertImage(c));
             }
             WrapInFrame => {
                 let ids = self.selection();

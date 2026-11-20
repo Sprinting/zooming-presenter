@@ -10,14 +10,18 @@ pub fn short(s: &str, n: usize) -> String {
 }
 
 pub fn export_pdf(app: &mut ZebraApp) {
-    let name = format!("{}.pdf", crate::app::sanitize(&app.editor.doc.title));
-    let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-pdf"), &["pdf"]).set_file_name(name).save_file() else { return };
+    crate::pickers::ask(app, crate::pickers::Pick::ExportPdf);
+}
+
+pub fn export_pdf_to(app: &mut ZebraApp, p: std::path::PathBuf) {
     export_in_background(app, p, |r, ed| r.export_pdf(ed));
 }
 
 pub fn export_png(app: &mut ZebraApp) {
-    let name = format!("{}.png", crate::app::sanitize(&app.editor.doc.title));
-    let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-png"), &["png"]).set_file_name(name).save_file() else { return };
+    crate::pickers::ask(app, crate::pickers::Pick::ExportPng);
+}
+
+pub fn export_png_to(app: &mut ZebraApp, p: std::path::PathBuf) {
     let vp = app.editor.view.viewport;
     let (w, h) = (((vp.x * 2.0) as u32).max(1), ((vp.y * 2.0) as u32).max(1));
     export_in_background(app, p, move |r, ed| r.capture(ed, &zebra_render::CaptureTarget::Viewport, w, h));
@@ -41,8 +45,10 @@ pub fn web_labels() -> zebra_web::export::Labels {
 /// browser (a folder when its video and audio are big). Written on a
 /// worker; a sheet then offers to open it in the default browser.
 pub fn export_html(app: &mut ZebraApp) {
-    let name = format!("{}.html", crate::app::sanitize(&app.editor.doc.title));
-    let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-html"), &["html"]).set_file_name(name).save_file() else { return };
+    crate::pickers::ask(app, crate::pickers::Pick::ExportHtml);
+}
+
+pub fn export_html_to(app: &mut ZebraApp, p: std::path::PathBuf) {
     let mut snap = zebra_core::Editor::new(app.editor.doc.clone());
     snap.view = app.editor.view.clone();
     snap.measure = app.renderer.measure();

@@ -43,8 +43,7 @@ pub fn choose_file(app: &mut ZebraApp) {
     if app.import.is_some() {
         return;
     }
-    let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-import"), zebra_import::EXTENSIONS).pick_file() else { return };
-    start(app, p);
+    crate::pickers::ask(app, crate::pickers::Pick::Import);
 }
 
 /// Start importing `path`: count its pages off the UI thread.
