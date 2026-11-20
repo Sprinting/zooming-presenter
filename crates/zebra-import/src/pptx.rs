@@ -15,7 +15,10 @@
 //!   prototype did) and keeps its size on the slide through its scale;
 //!   sizes within a box become relative spans;
 //! - pictures (PNG, JPEG, GIF, SVG) and the basic shapes Zebra has, with
-//!   their fill, line and text; groups stay groups.
+//!   their fill, line and text; groups stay groups;
+//! - videos as Zebra videos (their pictures as posters); sounds as the
+//!   slide's voice-over, or the document's music when they play across
+//!   slides.
 //!
 //! What has no Zebra match comes in as the picture the file keeps of it,
 //! when it keeps one, or is left out; either way it is counted in the
@@ -27,10 +30,12 @@ use pptx_parse::{
     Bullet, GraphicFrameData, ParagraphProperties, Picture, PictureCrop, Placeholder, PptxPackage, Relationship, RunProperties, Shape, ShapeNode, ShapeTransform, Slide,
     SlideLayout, SlideMaster, SourceShape, TargetMode, TextAutofit, TextBody, TextCaps,
 };
-use zebra_core::import::{asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox};
-use zebra_core::{Align, Crop, Dash, Element, ElementKind, ImageData, ImageMask, ListKind, ParaFormat, ShapeData, ShapeKind, Size, SpanFormat, TextData, TextSpan, TextStyle, Transform};
+use zebra_core::import::{asset_from, av_asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox};
+use zebra_core::{
+    Align, Crop, Dash, Element, ElementKind, ImageData, ImageMask, ListKind, MediaKind, ParaFormat, ShapeData, ShapeKind, Size, Soundtrack, SpanFormat, TextData, TextSpan, TextStyle, Transform, VideoData,
+};
 
-use crate::pptx_xml::{part_info, PartInfo, ShapeInfo, StyleKind, TextStrike};
+use crate::pptx_xml::{part_info, MediaRef, PartInfo, ShapeInfo, StyleKind, TextStrike};
 use crate::{Control, ImportError, Options, Reader};
 
 /// Long side of a slide on the canvas, world units (the same as a PDF's
@@ -118,12 +123,13 @@ impl Reader for PptxReader {
                 }
             }
             let mut r = SlideReader::new(pkg, slide, k, (sw, sh), &mut deck, &mut media, &mut counted, &infos);
+            r.has_soundtrack = opts.has_soundtrack;
             r.read();
-            let SlideReader { items, pending: texts, .. } = r;
+            let SlideReader { items, pending: texts, voiceover, .. } = r;
             let page = deck.pages.len();
             pending.extend(texts.into_iter().map(|t| (page, t)));
             let name = slide_title(slide).unwrap_or_else(|| (opts.slide_name)(i + 1));
-            deck.pages.push(ImportedPage { w: sw as f64 * k, h: sh as f64 * k, name, items, notes: slide.notes.trim().to_string(), slide: true });
+            deck.pages.push(ImportedPage { w: sw as f64 * k, h: sh as f64 * k, name, items, notes: slide.notes.trim().to_string(), slide: true, voiceover });
             ctl.page_done();
         }
         if ctl.cancelled() {
@@ -301,6 +307,10 @@ struct SlideReader<'a> {
     quiet: bool,
     /// What the parser's model leaves out of each part, by part path.
     infos: &'a BTreeMap<String, PartInfo>,
+    /// The document has background music already.
+    has_soundtrack: bool,
+    /// The slide's sound, for its step's voice-over.
+    voiceover: Option<String>,
 }
 
 impl<'a> SlideReader<'a> {
@@ -323,7 +333,7 @@ impl<'a> SlideReader<'a> {
             .or_else(|| pkg.themes.first())
             .map(|t| t.format_scheme.clone())
             .unwrap_or_default();
-        SlideReader { pkg, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos }
+        SlideReader { pkg, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos, has_soundtrack: false, voiceover: None }
     }
 
     fn note(&mut self, n: ImportNote) {
@@ -429,7 +439,16 @@ impl<'a> SlideReader<'a> {
                     if p.base.hidden || (role == Role::Inherited && p.base.placeholder.is_some()) {
                         continue;
                     }
-                    if src.is_some_and(|s| s.media.is_some()) {
+                    // A video or sound: a Zebra video, the slide's voice-over
+                    // or the document's music; else (not in the file, or a
+                    // format a Mac won't play) its poster picture, noted.
+                    let media = self.shape_info(self.part, p.base.id).and_then(|i| i.media.as_ref());
+                    if let Some(m) = media {
+                        if self.media_node(p, m, parents, group) {
+                            continue;
+                        }
+                    }
+                    if media.is_some() || src.is_some_and(|s| s.media.is_some()) {
                         self.note(ImportNote::Media);
                     }
                     // A chart (or other object) the file keeps a picture of
@@ -639,20 +658,8 @@ impl<'a> SlideReader<'a> {
 
     /// The picture at media part `path` over `at`. True when it came in.
     fn picture(&mut self, path: &str, crop: &PictureCrop, geometry: &str, mut at: Placed, alt: String, group: Option<&str>) -> bool {
-        let key = match self.media.get(path) {
-            Some(k) => k.clone(),
-            None => {
-                let key = self.media_asset(path);
-                self.media.insert(path.to_string(), key.clone());
-                key
-            }
-        };
-        let Some(key) = key else { return false };
-        if at.flip_h && at.flip_v {
-            at.rot = (at.rot + 180.0).rem_euclid(360.0);
-        } else if at.flip_h || at.flip_v {
-            self.note(ImportNote::Flip);
-        }
+        let Some(key) = self.picture_asset(path) else { return false };
+        self.unflip_picture(&mut at);
         let f = |v: i32| v.max(0) as f64 / 100_000.0;
         let (l, t, r, b) = (f(crop.left), f(crop.top), f(crop.right), f(crop.bottom));
         let crop = (l + r < 0.99 && t + b < 0.99 && (l + t + r + b) > 0.0).then(|| Crop { x: l, y: t, w: 1.0 - l - r, h: 1.0 - t - b }.clamped());
@@ -675,6 +682,97 @@ impl<'a> SlideReader<'a> {
             },
             fit: None,
         });
+        true
+    }
+
+    /// The picture asset for media part `path` (read once per import), or
+    /// None (noted the first time) when Zebra can't show it.
+    fn picture_asset(&mut self, path: &str) -> Option<String> {
+        match self.media.get(path) {
+            Some(k) => k.clone(),
+            None => {
+                let key = self.media_asset(path);
+                self.media.insert(path.to_string(), key.clone());
+                key
+            }
+        }
+    }
+
+    /// Pictures can't flip: flipped both ways is turned half round; one
+    /// way is shown unflipped (noted).
+    fn unflip_picture(&mut self, at: &mut Placed) {
+        if at.flip_h && at.flip_v {
+            at.rot = (at.rot + 180.0).rem_euclid(360.0);
+        } else if at.flip_h || at.flip_v {
+            self.note(ImportNote::Flip);
+        }
+    }
+
+    /// The video or sound picture `p` plays, taken out of the file: a
+    /// video at the picture's place with the picture as its poster; a
+    /// sound playing across slides as the document's music, one on its
+    /// slide as the slide's voice-over. False when it can't come in (the
+    /// file links to it, it is in a format a Mac won't play, or the music
+    /// or voice-over is taken).
+    fn media_node(&mut self, p: &Picture, m: &MediaRef, parents: &[&ShapeTransform], group: Option<&str>) -> bool {
+        let rels: &[Relationship] = self.pkg.relationships.get(self.part).map(Vec::as_slice).unwrap_or_default();
+        let found = m.rels.iter().filter_map(|id| rels.iter().find(|r| &r.id == id)).filter_map(|r| r.resolved_target.as_deref()).find_map(|t| self.pkg.media.iter().find(|x| x.part_path == t));
+        let Some(part) = found else { return false };
+        let Ok((key, asset, info)) = av_asset_from(part.bytes.clone()) else { return false };
+        let timing = self.infos.get(self.part).and_then(|i| i.timing.get(&p.base.id)).cloned().unwrap_or_default();
+        match info.kind {
+            MediaKind::Video => {
+                let poster = p.media_part_path.clone().and_then(|path| self.picture_asset(&path));
+                let mut at = place(&p.base.transform, parents);
+                self.unflip_picture(&mut at);
+                let start = m.trim.0 / 1000.0;
+                let end = (m.trim.1 > 0.0 && info.duration > 0.0).then(|| info.duration - m.trim.1 / 1000.0).filter(|e| *e > start);
+                let k = self.k;
+                self.items.push(ImportedItem {
+                    element: Element {
+                        id: String::new(),
+                        transform: Transform { x: at.cx * k, y: at.cy * k, scale: 1.0, rotation: at.rot },
+                        size: Size { w: (at.w * k).max(0.5), h: (at.h * k).max(0.5) },
+                        locked: false,
+                        name: String::new(),
+                        placeholder: false,
+                        group: group.map(str::to_string),
+                        kind: ElementKind::Video(VideoData {
+                            asset: key.clone(),
+                            poster,
+                            autoplay: timing.auto,
+                            looping: timing.looping,
+                            muted: timing.mute,
+                            start: if start < info.duration || info.duration == 0.0 { start } else { 0.0 },
+                            end,
+                            duration: info.duration,
+                            alt: p.base.description.clone().unwrap_or_default(),
+                        }),
+                    },
+                    fit: None,
+                });
+            }
+            MediaKind::Audio if timing.across => {
+                if self.has_soundtrack || self.deck.soundtrack.is_some() {
+                    return false;
+                }
+                let name = &p.base.name;
+                let name = match name.rsplit_once('.') {
+                    Some((stem, ext)) if (1..=4).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric()) => stem,
+                    _ => name.as_str(),
+                };
+                // ECMA-376's default volume is half.
+                self.deck.soundtrack = Some(Soundtrack { asset: key.clone(), looping: timing.looping, volume: timing.volume.unwrap_or(0.5), name: name.trim().to_string() });
+            }
+            MediaKind::Audio => {
+                if self.voiceover.is_some() {
+                    return false;
+                }
+                self.voiceover = Some(key.clone());
+            }
+            _ => return false,
+        }
+        self.deck.assets.entry(key).or_insert(asset);
         true
     }
 

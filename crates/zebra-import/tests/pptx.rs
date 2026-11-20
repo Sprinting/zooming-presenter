@@ -188,9 +188,10 @@ fn a_4_by_3_deck_brings_pictures_kept_for_a_chart_and_a_video() {
     // and the summary says so.
     assert_eq!(kinds(&deck, 0), count(&[("shape:Rectangle", 1), ("text", 1), ("image", 1)]));
     assert_eq!(deck.notes.get(&ImportNote::AsPicture), Some(&1));
-    // The video: its poster.
-    assert_eq!(kinds(&deck, 1), count(&[("shape:Rectangle", 1), ("image", 1)]));
-    assert_eq!(deck.notes, BTreeMap::from([(ImportNote::Media, 1), (ImportNote::AsPicture, 1)]));
+    // The video: a Zebra video (python-pptx's stand-in bytes have an MP4
+    // header), its poster the picture PowerPoint shows.
+    assert_eq!(kinds(&deck, 1), count(&[("shape:Rectangle", 1), ("video", 1)]));
+    assert_eq!(deck.notes, BTreeMap::from([(ImportNote::AsPicture, 1)]));
     assert_eq!(deck.pages[2].name, "Four by three");
 }
 
@@ -220,6 +221,64 @@ fn strike_through_comes_in() {
     let t = text(&deck, 0, "struck ");
     assert_eq!(struck(t), [(0, 7)]);
     assert!(text(&deck, 0, "Extras 1").spans.iter().all(|s| s.format.strike.is_none()));
+}
+
+#[test]
+fn videos_and_sounds_come_out_of_the_file() {
+    let mut ed = editor();
+    let deck = read("extras.pptx", &ed);
+    // A video a Mac plays: a Zebra video where its picture was, the
+    // picture its poster; it starts by itself, loops, is muted and trimmed.
+    let (e, v) = deck.pages[3]
+        .items
+        .iter()
+        .find_map(|i| match &i.element.kind {
+            ElementKind::Video(v) => Some((&i.element, v)),
+            _ => None,
+        })
+        .expect("a video");
+    assert_eq!(deck.assets[&v.asset].ext, "mp4");
+    assert_eq!(deck.assets[v.poster.as_ref().unwrap()].ext, "png");
+    assert!(v.autoplay && v.looping && v.muted, "{v:?}");
+    assert!((v.start - 0.25).abs() < 1e-9 && v.end.is_none(), "{v:?}");
+    assert!((v.duration - 1.0).abs() < 0.05, "{}", v.duration);
+    assert_eq!(v.alt, "Blue");
+    // 4 x 2.25 inches at (1, 1) on a 10-inch slide 1000 units wide.
+    assert!((e.size.w - 400.0).abs() < 0.01 && (e.size.h - 225.0).abs() < 0.01, "{:?}", e.size);
+    assert!((e.transform.x - 300.0).abs() < 0.01 && (e.transform.y - 212.5).abs() < 0.01, "{:?}", e.transform);
+    // Windows Media won't play on a Mac: its poster, noted.
+    assert_eq!(kinds(&deck, 3), count(&[("shape:Rectangle", 2), ("video", 1), ("image", 1)]));
+    assert_eq!(deck.notes.get(&ImportNote::Media), Some(&1));
+    // The sound on its slide is the slide's voice-over; the music across
+    // the slides the document's. Their speaker pictures stay out.
+    let voice = deck.pages[4].voiceover.clone().expect("a voice-over");
+    assert_eq!(deck.assets[&voice].ext, "wav");
+    let music = deck.soundtrack.clone().expect("music");
+    assert_eq!(deck.assets[&music.asset].ext, "m4a");
+    assert!(music.looping && (music.volume - 0.4).abs() < 1e-9 && music.name == "Theme tune", "{music:?}");
+    assert_eq!(kinds(&deck, 4), count(&[("shape:Rectangle", 2)]));
+
+    // On the canvas, in the one undo step.
+    ed.import_deck(&deck, "Import".into(), Origin::Human).unwrap();
+    assert_eq!(ed.doc.path[4].voiceover.as_deref(), Some(voice.as_str()));
+    assert!(ed.doc.path.iter().enumerate().all(|(i, s)| i == 4 || s.voiceover.is_none()));
+    let t = ed.doc.soundtrack.clone().expect("the document's music");
+    assert_eq!((t.asset.as_str(), t.looping, t.name.as_str()), (music.asset.as_str(), true, "Theme tune"));
+    assert!((t.volume - 0.4).abs() < 1e-9);
+    let video = ed.doc.elements.values().find(|e| matches!(e.kind, ElementKind::Video(_))).unwrap();
+    assert!(matches!(&video.kind, ElementKind::Video(d) if d.asset == v.asset && ed.doc.assets[&d.asset].ext == "mp4"));
+    ed.undo(Origin::Human).unwrap();
+    assert!(ed.doc.soundtrack.is_none() && ed.doc.path.is_empty() && ed.doc.elements.is_empty());
+
+    // A document with music keeps it: the file's stays a picture, noted.
+    let r = zebra_import::open_bytes(fixture("extras.pptx"), "x".into()).unwrap();
+    let mut o = Options::all(ed.theme());
+    o.has_soundtrack = true;
+    let deck = r.read(&o, &Control::default()).unwrap();
+    assert!(deck.soundtrack.is_none());
+    assert_eq!(deck.notes.get(&ImportNote::Media), Some(&2));
+    assert_eq!(kinds(&deck, 4), count(&[("shape:Rectangle", 2), ("image", 1)]));
+    assert!(deck.pages[4].voiceover.is_some());
 }
 
 #[test]
@@ -399,7 +458,7 @@ fn damaged_and_other_files_give_an_error_never_a_panic() {
 fn broken_parts_give_an_error_or_a_partial_deck_never_a_panic() {
     use std::io::{Read, Write};
     let ed = editor();
-    for name in ["deck16x9.pptx", "deck4x3.pptx"] {
+    for name in ["deck16x9.pptx", "deck4x3.pptx", "extras.pptx"] {
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(fixture(name))).unwrap();
         let mut parts = vec![];
         for i in 0..z.len() {

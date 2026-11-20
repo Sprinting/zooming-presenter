@@ -3,13 +3,18 @@
 
     python3 gen_pptx.py OUT_DIR
 
-Needs python-pptx (1.0.2) and Pillow. Writes deck16x9.pptx, deck4x3.pptx and
+Needs python-pptx (1.0.2), Pillow, and ffmpeg (with libx264 and aac) for
+the tiny playable video and music. Writes deck16x9.pptx, deck4x3.pptx and
 extras.pptx to OUT_DIR; copy them next to this script. Run it from a scratch directory,
 not from here, so nothing else lands in the fixtures folder.
 """
 import copy
 import io
+import subprocess
 import sys
+import tempfile
+import wave
+import zipfile
 from pathlib import Path
 
 from lxml import etree
@@ -21,6 +26,7 @@ from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.dml import MSO_THEME_COLOR
 from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
 from pptx.enum.text import PP_ALIGN
+from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
@@ -253,6 +259,122 @@ def strike(s):
             r.font._rPr.set("strike", how)
 
 
+def ffmpeg(args, ext):
+    """A tiny media file made by ffmpeg, as bytes."""
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / f"out.{ext}"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", *args, "-map_metadata", "-1", "-fflags", "+bitexact", str(path)], check=True)
+        return path.read_bytes()
+
+
+def wav(secs):
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(1)
+        w.setframerate(8000)
+        w.writeframes(bytes([128]) * int(8000 * secs))
+    return out.getvalue()
+
+
+def media_timing(s, xml):
+    """Replace the slide's p:timing (python-pptx's says only "on click")."""
+    old = s._element.find(qn("p:timing"))
+    if old is not None:
+        s._element.remove(old)
+    s._element.append(etree.fromstring(f'<p:timing xmlns:p="{P}">{xml}</p:timing>'))
+
+
+def as_audio(pic):
+    """python-pptx adds videos only: make one a sound, as PowerPoint saves
+    one (a:audioFile; p:audio in the timing; the relationship and file
+    name are fixed by `audio_parts` after saving)."""
+    nv = pic._element.find(qn("p:nvPicPr")).find(qn("p:nvPr"))
+    nv.find(qn("a:videoFile")).tag = qn("a:audioFile")
+
+
+def audio_parts(path):
+    """Raw zip edits python-pptx can't make: sounds it saved as
+    ppt/media/mediaN.vid get their own extension (.wav, .m4a), and
+    a:audioFile's relationship the audio type."""
+    with zipfile.ZipFile(path) as z:
+        parts = {i.filename: z.read(i.filename) for i in z.infolist()}
+    renames = {}
+    for name, data in parts.items():
+        if name.startswith("ppt/media/") and name.endswith(".vid"):
+            ext = "wav" if data[:4] == b"RIFF" else "m4a"
+            renames[name] = name[:-3] + ext
+    out = {}
+    for name, data in parts.items():
+        if name.endswith(".rels"):
+            root = etree.fromstring(data)
+            for rel in root:
+                target = rel.get("Target", "")
+                for old, new in renames.items():
+                    if target.endswith(old.rsplit("/", 1)[1]):
+                        rel.set("Target", target[: -len(old.rsplit("/", 1)[1])] + new.rsplit("/", 1)[1])
+                        if rel.get("Type") == RT.VIDEO:
+                            rel.set("Type", RT.AUDIO)
+            data = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+        elif name == "[Content_Types].xml":
+            root = etree.fromstring(data)
+            ct = "http://schemas.openxmlformats.org/package/2006/content-types"
+            for o in root.findall(f"{{{ct}}}Override"):
+                if o.get("PartName", "").endswith(".vid"):
+                    root.remove(o)
+            for ext, mime in [("wav", "audio/wav"), ("m4a", "audio/mp4")]:
+                d = etree.SubElement(root, f"{{{ct}}}Default")
+                d.set("Extension", ext)
+                d.set("ContentType", mime)
+            data = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+        out[renames.get(name, name)] = data
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in out.items():
+            z.writestr(name, data)
+
+
+def media(prs):
+    """Videos and sounds: one that plays on a Mac and starts by itself,
+    looping and trimmed; one that won't play (WMV); a sound on its slide
+    and music across the slides."""
+    s = blank(prs)
+    mp4 = ffmpeg(["-f", "lavfi", "-i", "color=c=0x2878c8:s=32x18:d=1:r=10", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                  "-preset", "veryfast", "-movflags", "+faststart"], "mp4")
+    v = s.shapes.add_movie(io.BytesIO(mp4), Inches(1), Inches(1), Inches(4), Inches(2.25),
+                           poster_frame_image=png(32, 18, (40, 120, 200)), mime_type="video/mp4")
+    v._element.find(qn("p:nvPicPr")).find(qn("p:cNvPr")).set("descr", "Blue")
+    p14 = v._element.find(".//{http://schemas.microsoft.com/office/powerpoint/2010/main}media")
+    etree.SubElement(p14, "{http://schemas.microsoft.com/office/powerpoint/2010/main}trim").set("st", "250")
+    # An ASF header: Windows Media, which a Mac won't play.
+    wmv = bytes.fromhex("3026b2758e66cf11a6d900aa0062ce6c") + bytes(32)
+    s.shapes.add_movie(io.BytesIO(wmv), Inches(6), Inches(1), Inches(3), Inches(2),
+                       poster_frame_image=png(30, 20, (200, 40, 40)), mime_type="video/x-ms-wmv")
+    media_timing(s, f'''<p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>
+<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>
+<p:par><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond></p:stCondLst><p:childTnLst>
+<p:par><p:cTn id="4" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>
+<p:par><p:cTn id="5" presetID="1" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>
+<p:cmd type="call" cmd="playFrom(0.0)"><p:cBhvr><p:cTn id="6" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{v.shape_id}"/></p:tgtEl></p:cBhvr></p:cmd>
+</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>
+</p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>
+<p:video><p:cMediaNode vol="80000" mute="1"><p:cTn id="7" repeatCount="indefinite" fill="hold" display="0"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{v.shape_id}"/></p:tgtEl></p:cMediaNode></p:video>
+</p:childTnLst></p:cTn></p:par></p:tnLst>''')
+
+    s = blank(prs)
+    voice = s.shapes.add_movie(io.BytesIO(wav(0.2)), Inches(1), Inches(1), Inches(0.5), Inches(0.5),
+                               poster_frame_image=png(16, 16, (90, 90, 90)), mime_type="audio/wav")
+    as_audio(voice)
+    m4a = ffmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=0.5", "-c:a", "aac", "-b:a", "24k"], "m4a")
+    music = s.shapes.add_movie(io.BytesIO(m4a), Inches(2), Inches(1), Inches(0.5), Inches(0.5),
+                               poster_frame_image=png(16, 16, (90, 90, 90)), mime_type="audio/mp4")
+    music.name = "Theme tune.m4a"
+    as_audio(music)
+    media_timing(s, f'''<p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>
+<p:audio><p:cMediaNode vol="70000"><p:cTn id="2" fill="hold" display="0"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{voice.shape_id}"/></p:tgtEl></p:cMediaNode></p:audio>
+<p:audio><p:cMediaNode vol="40000" numSld="999" showWhenStopped="0"><p:cTn id="3" repeatCount="indefinite" fill="hold" display="0"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{music.shape_id}"/></p:tgtEl></p:cMediaNode></p:audio>
+</p:childTnLst></p:cTn></p:par></p:tnLst>''')
+
+
 def extras(out):
     """What the follow-ups to the first import cover (spec 17b)."""
     prs = Presentation()
@@ -272,7 +394,10 @@ def extras(out):
         tb.text_frame.text = f"Extras {n + 1}"
         if n == 0:
             strike(s)
+    # 4-5. Videos and sounds.
+    media(prs)
     prs.save(out)
+    audio_parts(out)
 
 
 if __name__ == "__main__":

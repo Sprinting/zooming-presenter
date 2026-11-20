@@ -1,6 +1,7 @@
 //! What BetterOffice's model of a slide part leaves out, read from the
 //! part's own XML: runs' strike-through and the text styles it inherits
-//! from, and what a shape read from an `mc:Fallback` stands in for.
+//! from, what a shape read from an `mc:Fallback` stands in for, and the
+//! video or sound a picture plays and how (`p:timing`).
 //!
 //! Shapes are found by their `cNvPr/@id` (unique within a part), walking
 //! the shape tree the way the parser does: of an `mc:AlternateContent`,
@@ -21,6 +22,31 @@ pub(crate) struct PartInfo {
     /// (with its `defPPr` in `default`).
     pub styles: [[Option<bool>; 9]; 3],
     pub default: Option<bool>,
+    /// How each video or sound plays, by its picture's id.
+    pub timing: BTreeMap<u32, MediaTiming>,
+}
+
+/// The video or sound a picture plays.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct MediaRef {
+    /// The part's relationships to the media, best first: the embedded
+    /// file (`p14:media`), then what `a:videoFile`/`a:audioFile` name.
+    pub rels: Vec<String>,
+    /// `p14:trim`: milliseconds cut from the start and from the end.
+    pub trim: (f64, f64),
+}
+
+/// How a video or sound plays (`p:timing`).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct MediaTiming {
+    /// 0..1.
+    pub volume: Option<f64>,
+    pub mute: bool,
+    /// Plays on across the slides after its own (`numSld`).
+    pub across: bool,
+    pub looping: bool,
+    /// Starts by itself when its slide shows.
+    pub auto: bool,
 }
 
 #[derive(Debug, Default)]
@@ -28,6 +54,8 @@ pub(crate) struct ShapeInfo {
     pub text: Option<TextStrike>,
     /// What the shape stands in for, when it is an `mc:Fallback`'s.
     pub stands_in: Option<StandIn>,
+    /// A picture's video or sound.
+    pub media: Option<MediaRef>,
 }
 
 /// What an `mc:AlternateContent`'s choice the parser can't read holds,
@@ -66,7 +94,8 @@ pub(crate) enum StyleKind {
 pub(crate) fn part_info(pkg: &PptxPackage, part: &str) -> PartInfo {
     let mut info = PartInfo::default();
     let Some(bytes) = pkg.part_bytes(part) else { return info };
-    if !(contains(bytes, b"strike=") || contains(bytes, b"AlternateContent")) {
+    const SAYS: [&[u8]; 7] = [b"strike=", b"AlternateContent", b"videoFile", b"audioFile", b"AudioFile", b"quickTimeFile", b"audioCd"];
+    if !SAYS.iter().any(|n| contains(bytes, n)) {
         return info;
     }
     let Some(root) = parse(bytes) else { return info };
@@ -79,6 +108,9 @@ pub(crate) fn part_info(pkg: &PptxPackage, part: &str) -> PartInfo {
                 info.styles[i] = levels(s);
             }
         }
+    }
+    if let Some(t) = root.child("timing") {
+        timing(t, &mut info.timing);
     }
     if let Some(s) = root.child("defaultTextStyle") {
         info.styles[StyleKind::Other as usize] = levels(s);
@@ -110,7 +142,8 @@ fn walk(tree: &Elem, info: &mut PartInfo, stands_in: Option<StandIn>) {
                     .and_then(|c| c.attr("id"))
                     .and_then(|id| id.parse::<u32>().ok());
                 if let Some(id) = id {
-                    let shape = ShapeInfo { text: child.child("txBody").map(text_strike), stands_in };
+                    let media = (child.local() == "pic").then(|| child.child("nvPicPr").and_then(|n| n.child("nvPr")).and_then(media_ref)).flatten();
+                    let shape = ShapeInfo { text: child.child("txBody").map(text_strike), stands_in, media };
                     info.shapes.entry(id).or_insert(shape);
                 }
                 if child.local() == "grpSp" {
@@ -136,6 +169,60 @@ fn branch(alt: &Elem) -> Option<&Elem> {
             })
     };
     alt.children.iter().find(|c| c.local() == "Choice" && supported(c)).or_else(|| alt.children.iter().find(|c| c.local() == "Fallback"))
+}
+
+/// The media a picture's `p:nvPr` names, if it names any.
+fn media_ref(nv: &Elem) -> Option<MediaRef> {
+    let mut out = MediaRef::default();
+    let mut found = false;
+    let rel = |e: &Elem| e.attrs.iter().find(|(k, _)| k.ends_with(":embed") || k.ends_with(":link")).map(|(_, v)| v.clone()).filter(|v| !v.is_empty());
+    for e in nv.descendants() {
+        match e.local() {
+            "media" => {
+                found = true;
+                // The embedded file first: it is what PowerPoint plays.
+                if let Some(r) = rel(e) {
+                    out.rels.insert(0, r);
+                }
+                if let Some(t) = e.child("trim") {
+                    let ms = |k: &str| t.attr(k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
+                    out.trim = (ms("st"), ms("end"));
+                }
+            }
+            "videoFile" | "quickTimeFile" | "audioFile" | "wavAudioFile" | "audioCd" => {
+                found = true;
+                out.rels.extend(rel(e));
+            }
+            _ => {}
+        }
+    }
+    found.then_some(out)
+}
+
+/// How the slide's videos and sounds play: `p:cMediaNode`s, and which
+/// the main sequence starts by itself (a media "play" effect in its first
+/// group that doesn't wait for a click).
+fn timing(t: &Elem, out: &mut BTreeMap<u32, MediaTiming>) {
+    let spid = |e: &Elem| e.descendants().into_iter().find(|d| d.local() == "spTgt").and_then(|d| d.attr("spid")).and_then(|v| v.parse::<u32>().ok());
+    let all = t.descendants();
+    for node in all.iter().filter(|e| e.local() == "cMediaNode") {
+        let Some(id) = node.child("tgtEl").and_then(spid) else { continue };
+        let m = out.entry(id).or_default();
+        m.volume = node.attr("vol").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()).map(|v| (v / 100_000.0).clamp(0.0, 1.0));
+        m.mute = matches!(node.attr("mute"), Some("1" | "true"));
+        m.across = node.attr("numSld").and_then(|v| v.parse::<u32>().ok()).is_some_and(|n| n > 1);
+        m.looping = node.child("cTn").and_then(|c| c.attr("repeatCount")) == Some("indefinite");
+    }
+    let main = all.iter().find(|e| e.local() == "cTn" && e.attr("nodeType") == Some("mainSeq"));
+    let first = main.and_then(|m| m.child("childTnLst")).and_then(|l| l.child("par"));
+    for effect in first.map(Elem::descendants).unwrap_or_default() {
+        let play = effect.local() == "cTn" && effect.attr("presetClass") == Some("mediacall") && matches!(effect.attr("presetID"), None | Some("1"));
+        if play && effect.attr("nodeType") != Some("clickEffect") {
+            if let Some(id) = spid(effect) {
+                out.entry(id).or_default().auto = true;
+            }
+        }
+    }
 }
 
 /// What a choice the parser can't read holds, when it is something the
@@ -200,6 +287,16 @@ impl Elem {
     /// The first child element with this local name.
     pub fn child(&self, local: &str) -> Option<&Elem> {
         self.children.iter().find(|c| c.local() == local)
+    }
+    /// Every element inside this one, in document order.
+    pub fn descendants(&self) -> Vec<&Elem> {
+        let mut out = vec![];
+        let mut stack: Vec<&Elem> = self.children.iter().rev().collect();
+        while let Some(e) = stack.pop() {
+            out.push(e);
+            stack.extend(e.children.iter().rev());
+        }
+        out
     }
 }
 
