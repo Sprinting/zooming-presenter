@@ -333,6 +333,17 @@ pub struct OpenPicker {
 #[cfg(target_os = "macos")]
 fn run_picker(app: &mut ZebraApp, frame: Option<&eframe::Frame>) -> bool {
     if app.open_picker.is_none() {
+        if app.want_pick.is_none() {
+            return false;
+        }
+        // Like a native app, let the menu that asked close first: macOS
+        // takes ~0.3 s (more on the first open) to put the panel up, and
+        // starting it in the click's frame left our menu frozen on screen
+        // for that long. Wait until a frame without it has been drawn.
+        if app.ctx.cumulative_pass_nr() < app.want_pick_pass + 2 {
+            app.ctx.request_repaint();
+            return false;
+        }
         let Some(pick) = app.want_pick.take() else { return false };
         let panel = pick.panel(app);
         let dialog = rfd::AsyncFileDialog::new().add_filter(panel.filter, panel.types);

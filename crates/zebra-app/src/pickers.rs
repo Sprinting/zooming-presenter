@@ -62,6 +62,7 @@ impl Pick {
 pub fn ask(app: &mut ZebraApp, pick: Pick) {
     if app.native_dialogs && cfg!(target_os = "macos") {
         app.want_pick = Some(pick);
+        app.want_pick_pass = app.ctx.cumulative_pass_nr();
         app.ctx.request_repaint();
         return;
     }
