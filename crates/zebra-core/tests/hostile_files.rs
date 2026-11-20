@@ -186,3 +186,24 @@ fn a_huge_picture_is_refused_before_it_is_copied() {
     assert!(t.elapsed().as_millis() < 2000);
     assert_eq!(std::fs::read_dir(&spill).map(|d| d.count()).unwrap_or(0), 0);
 }
+
+#[test]
+fn the_wrong_kind_of_file_is_refused_before_it_is_copied() {
+    let spill = root("kind-spill");
+    media::set_spill_dir(Some(spill.clone()));
+    let dir = root("kind");
+    // A 1 GB (sparse) video given where a picture is asked for.
+    let p = dir.join("clip.mp4");
+    let f = std::fs::File::create(&p).unwrap();
+    (&f).write_all(&media::fixtures::tiny_mp4(640, 360, 5, true)).unwrap();
+    f.set_len(1 << 30).unwrap();
+    let mut ed = Editor::default();
+    let t = std::time::Instant::now();
+    assert!(ed.apply(cmd(json!({"op":"add_image","path":p,"x":0,"y":0})), Origin::Human).is_err());
+    // And a picture where a sound is asked for.
+    let pic = dir.join("pic.png");
+    std::fs::write(&pic, png(8, 8)).unwrap();
+    assert!(ed.apply(cmd(json!({"op":"set_soundtrack","path":pic})), Origin::Human).is_err());
+    assert!(t.elapsed().as_millis() < 500, "{:?}", t.elapsed());
+    assert_eq!(std::fs::read_dir(&spill).map(|d| d.count()).unwrap_or(0), 0);
+}

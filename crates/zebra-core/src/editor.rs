@@ -2545,6 +2545,13 @@ impl Editor {
             let unknown = || ZError::invalid("unrecognised media format").hint("use PNG, JPEG, WebP, GIF, MP4, MOV, MP3, M4A, AAC or WAV");
             let kind = crate::media::sniff_kind(&head).ok_or_else(unknown)?;
             let too_big = |n: u64| ZError::new("too_big", format!("this picture is {} MB; the largest Zebra takes is {} MB", n >> 20, crate::media::MAX_PICTURE >> 20));
+            // A picture where a video or sound was asked for (or the other
+            // way round) is turned away before the copy. Video and audio
+            // can't always be told apart from the head (an .mp4 with only
+            // sound), so that is checked after.
+            if (kind == MediaKind::Image) != (want == MediaKind::Image) || kind == MediaKind::Document {
+                check(&crate::media::MediaInfo { ext: String::new(), kind, width: 0, height: 0, duration: 0.0 })?;
+            }
             if kind == MediaKind::Image && meta.len() > crate::media::MAX_PICTURE {
                 return Err(too_big(meta.len()));
             }
