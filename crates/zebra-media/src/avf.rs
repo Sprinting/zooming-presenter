@@ -42,7 +42,7 @@ use objc2_core_video::{
 };
 use objc2_foundation::{NSDictionary, NSError, NSNumber, NSString, NSURL};
 
-use crate::{AudioPlayer, Backend, Frame, VideoPlayer, encode_png, fit};
+use crate::{AudioPlayer, Backend, Frame, Readiness, VideoPlayer, encode_png, fit};
 
 /// CMTime timescale for times made from seconds (600 divides evenly by
 /// 24, 25, 30 and 60 fps).
@@ -69,6 +69,13 @@ impl Backend for AvFoundation {
     }
     fn poster_png(&self, path: &Path, at: f64, max_dim: u32) -> Result<Vec<u8>, String> {
         poster(path, at, max_dim).map(|f| encode_png(&f))
+    }
+    fn open_video_url(&self, url: &str) -> Result<Box<dyn VideoPlayer>, String> {
+        Ok(Box::new(Video::open_url(url)?))
+    }
+    fn poster_png_url(&self, url: &str, at: f64, max_dim: u32) -> Result<Vec<u8>, String> {
+        let asset = web_asset(url)?;
+        poster_of(&asset, url, at, max_dim).map(|f| encode_png(&f))
     }
 }
 
@@ -116,6 +123,25 @@ fn open_asset(path: &Path) -> Result<Retained<AVURLAsset>, String> {
     }
 }
 
+/// A web video's asset. Nothing is loaded yet (no synchronous property
+/// reads here: they would wait on the network). It sends no cookies: the
+/// asset gets an empty cookie list instead of the app's own.
+fn web_asset(url: &str) -> Result<Retained<AVURLAsset>, String> {
+    if !zebra_core::weblink::is_https_link(url) {
+        return Err(format!("{url}: not an https link"));
+    }
+    let u = NSURL::URLWithString(&NSString::from_str(url.trim())).ok_or_else(|| format!("{url}: not a link"))?;
+    let none = objc2_foundation::NSArray::<AnyObject>::new();
+    let none: &AnyObject = &none;
+    // SAFETY: AVURLAssetHTTPCookiesKey is a constant NSString exported by
+    // AVFoundation; the option takes an NSArray of NSHTTPCookie (empty).
+    // The constructor only records the URL; loading starts later.
+    unsafe {
+        let opts = NSDictionary::<NSString, AnyObject>::from_slices(&[objc2_av_foundation::AVURLAssetHTTPCookiesKey], &[none]);
+        Ok(AVURLAsset::URLAssetWithURL_options(&u, Some(&opts)))
+    }
+}
+
 /// Quarter turns clockwise needed to show the first video track upright
 /// (phone footage is stored sideways with a rotation in the track header).
 /// Err when the asset has no video track.
@@ -156,8 +182,10 @@ struct Video {
     host_clock: CFRetained<CMClock>,
     /// From the asset at open, for when the item does not know yet.
     asset_duration: Option<f64>,
-    /// Quarter turns clockwise to apply to decoded frames.
-    turns: u8,
+    /// Quarter turns clockwise to apply to decoded frames. A web video's
+    /// are read once it is ready (its tracks aren't known before).
+    turns: Cell<Option<u8>>,
+    asset: Retained<AVURLAsset>,
     /// Target and start of a seek that may still be in flight. AVPlayer
     /// seeks asynchronously and reports the old time until it lands, so
     /// `position` answers with the target meanwhile; otherwise a caller
@@ -179,7 +207,21 @@ impl Video {
         };
         let asset = open_asset(path)?;
         let turns = video_quarter_turns(&asset).map_err(|e| format!("{}: {e}", path.display()))?;
+        // SAFETY: a local file's header is read synchronously (quick).
+        let duration = seconds(unsafe { asset.duration() }).filter(|d| *d > 0.0);
+        Self::with_asset(asset, Some(turns), duration, mtm)
+    }
 
+    /// A web video: loading starts now, in the background.
+    fn open_url(url: &str) -> Result<Video, String> {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return Err("video players must be opened on the main thread".into());
+        };
+        let asset = web_asset(url)?;
+        Self::with_asset(asset, None, None, mtm)
+    }
+
+    fn with_asset(asset: Retained<AVURLAsset>, turns: Option<u8>, asset_duration: Option<f64>, mtm: MainThreadMarker) -> Result<Video, String> {
         // Ask the output for BGRA buffers (the cheapest format to turn
         // into RGBA).
         let format = NSNumber::numberWithUnsignedInt(kCVPixelFormatType_32BGRA);
@@ -198,7 +240,6 @@ impl Video {
         // The attributes dictionary has the NSString -> NSNumber shape the
         // output expects.
         unsafe {
-            let asset_duration = seconds(asset.duration()).filter(|d| *d > 0.0);
             let output = AVPlayerItemVideoOutput::initWithPixelBufferAttributes(
                 AVPlayerItemVideoOutput::alloc(),
                 Some(&attrs),
@@ -215,7 +256,8 @@ impl Video {
                 output,
                 host_clock: CMClock::host_time_clock(),
                 asset_duration,
-                turns,
+                turns: Cell::new(turns),
+                asset,
                 seeking: Cell::new(None),
             })
         }
@@ -324,13 +366,39 @@ impl VideoPlayer for Video {
             self.output
                 .copyPixelBufferForItemTime_itemTimeForDisplay(t, std::ptr::null_mut())?
         };
-        convert(&buffer, max_dim, self.turns)
+        let turns = match self.turns.get() {
+            Some(t) => t,
+            None => {
+                // Ready by now (it has a frame): its tracks are loaded. A
+                // stream has no track list; its frames come upright.
+                let t = video_quarter_turns(&self.asset).unwrap_or(0);
+                self.turns.set(Some(t));
+                t
+            }
+        };
+        convert(&buffer, max_dim, turns)
     }
     fn ended(&self) -> bool {
         match self.duration() {
             Some(d) => self.position() >= d - VIDEO_END_SLACK,
             None => false,
         }
+    }
+    fn readiness(&self) -> Readiness {
+        use objc2_av_foundation::AVPlayerItemStatus as S;
+        // SAFETY: property reads on the main thread.
+        unsafe {
+            match self.item.status() {
+                S::ReadyToPlay => Readiness::Ready,
+                S::Failed => Readiness::Failed(self.item.error().map(|e| describe(&e)).unwrap_or_default()),
+                _ => Readiness::Loading,
+            }
+        }
+    }
+    fn is_live(&self) -> bool {
+        // A live stream's duration is "indefinite" once it is ready.
+        // SAFETY: property read on the main thread.
+        self.readiness() == Readiness::Ready && seconds(unsafe { self.item.duration() }).is_none()
     }
 }
 
@@ -543,7 +611,11 @@ impl AudioPlayer for Audio {
 
 fn poster(path: &Path, at: f64, max_dim: u32) -> Result<Frame, String> {
     let asset = open_asset(path)?;
-    let fail = |what: &str| format!("{}: {what}", path.display());
+    poster_of(&asset, &path.display().to_string(), at, max_dim)
+}
+
+fn poster_of(asset: &AVURLAsset, name: &str, at: f64, max_dim: u32) -> Result<Frame, String> {
+    let fail = |what: &str| format!("{name}: {what}");
 
     // SAFETY: plain AVFoundation calls with live arguments; the generator
     // may be used from any thread. `copyCGImageAtTime` is the synchronous
@@ -552,7 +624,7 @@ fn poster(path: &Path, at: f64, max_dim: u32) -> Result<Frame, String> {
     // exported by CoreMedia.
     #[allow(deprecated)]
     let image = unsafe {
-        let generator = AVAssetImageGenerator::assetImageGeneratorWithAsset(&asset);
+        let generator = AVAssetImageGenerator::assetImageGeneratorWithAsset(asset);
         generator.setAppliesPreferredTrackTransform(true);
         if max_dim > 0 {
             // The generator keeps the aspect ratio inside this box.
