@@ -234,3 +234,57 @@ fn a_border_of_none_leaves_its_edges_bare() {
     let (rules, strokes) = lines(&r.build_display_list(&ed, &cam, [720.0, 400.0], 1.0, &opts));
     assert!(rules == 0 && strokes > 0, "{rules} rules under {strokes} border strokes");
 }
+
+/// B2: tables at Numbers' sizes. 100,000 and 1,000,000 rows (four
+/// columns, a SUM in the footer): made, edited, drawn close up and whole,
+/// saved and opened again. Times are written to table_sizes.txt; the
+/// window must stay usable (each frame and edit well under a second in a
+/// release build; debug builds are about ten times slower).
+#[test]
+fn numbers_sized_tables_stay_usable() {
+    let r = Renderer::new();
+    let mut report = String::new();
+    for rows in [100_000usize, 1_000_000] {
+        let mut ed = editor(&r, "classic");
+        let t0 = Instant::now();
+        big(&mut ed, rows, 4);
+        report += &format!("{rows} rows: made in {:?}\n", t0.elapsed());
+        let e = ed.doc.get("b1").unwrap().clone();
+        let ElementKind::Table(t) = &e.kind else { panic!() };
+        assert_eq!(t.n_rows(), rows);
+        let vp = [1280.0, 800.0];
+        let opts = SceneOptions::default();
+        // Close up, top left; then the middle; then the whole table.
+        let cam = camera_on(&ed, 1.0, 640.0, 400.0);
+        let t0 = Instant::now();
+        let list = r.build_display_list(&ed, &cam, vp, 2.0, &opts);
+        report += &format!("  close up: {} items in {:?}\n", list.items.len(), t0.elapsed());
+        let t0 = Instant::now();
+        r.build_display_list(&ed, &cam, vp, 2.0, &opts);
+        report += &format!("  next frame: {:?}\n", t0.elapsed());
+        let (w, h) = e.world_size();
+        let cam = Camera { cx: e.transform.x, cy: e.transform.y, zoom: 700.0 / h, rotation: 0.0 };
+        let t0 = Instant::now();
+        let list = r.build_display_list(&ed, &cam, vp, 1.0, &opts);
+        report += &format!("  whole table: {} items in {:?}\n", list.items.len(), t0.elapsed());
+        let cam = Camera { cx: e.transform.x - w / 2.0 + 640.0, cy: e.transform.y, zoom: 1.0, rotation: 0.0 };
+        let t0 = Instant::now();
+        let list = r.build_display_list(&ed, &cam, vp, 2.0, &opts);
+        assert!(!texts(&list).is_empty());
+        report += &format!("  middle: {:?}\n", t0.elapsed());
+        // An edit near the top: the footer's SUM is worked out again.
+        let t0 = Instant::now();
+        run(&mut ed, json!({"op": "set_cells", "id": "b1", "at": "B2", "values": [[5000]]}));
+        report += &format!("  one cell edited (with the SUM): {:?}\n", t0.elapsed());
+        let t0 = Instant::now();
+        let bytes = io::save_bytes(&ed.doc).unwrap();
+        let saved = t0.elapsed();
+        let t0 = Instant::now();
+        let back = io::load_bytes(&bytes).unwrap();
+        report += &format!("  saved ({} MB) in {saved:?}, opened in {:?}\n", bytes.len() >> 20, t0.elapsed());
+        let ElementKind::Table(b) = &back.get("b1").unwrap().kind else { panic!() };
+        assert_eq!(b.n_rows(), rows, "every row reopens");
+    }
+    std::fs::write(out_dir().join("table_sizes.txt"), &report).unwrap();
+    eprintln!("{report}");
+}

@@ -317,14 +317,19 @@ fn over_the_limits_is_refused_with_a_message_and_changes_nothing() {
     let formula = format!("={}", "1+".repeat(4100)) + "1";
     let e = run(&mut ed, json!({"op": "set_cells", "id": "b1", "at": "A2", "values": [[formula]]})).unwrap_err();
     assert!(e.message.contains("formula"), "{}", e.message);
-    let e = run(&mut ed, json!({"op": "set_cells", "id": "b1", "at": "A100000", "values": [[1]]})).unwrap_err();
+    // Numbers' limits: 1,000,000 rows and 1,000 columns.
+    let e = run(&mut ed, json!({"op": "set_cells", "id": "b1", "at": "A1000001", "values": [[1]]})).unwrap_err();
     assert_eq!(e.code, "too_big");
-    let e = run(&mut ed, json!({"op": "insert_columns", "id": "b1", "index": 0, "count": 300})).unwrap_err();
+    let e = run(&mut ed, json!({"op": "insert_columns", "id": "b1", "index": 0, "count": 1000})).unwrap_err();
     assert_eq!(e.code, "too_big");
     let e = run(&mut ed, json!({"op": "insert_rows", "id": "b1", "index": 0, "count": usize::MAX})).unwrap_err();
     assert_eq!(e.code, "too_big");
-    let e = run(&mut ed, json!({"op": "add_table", "rows": 1000, "columns": 101})).unwrap_err();
-    assert!(e.message.contains("100000 cells"), "{}", e.message);
+    // Cells: as many as fit in memory (half the Mac's), refused before
+    // any is made.
+    let rows = table::max_cells() / 1000 + 1;
+    assert!(rows <= table::MAX_ROWS, "this machine's memory sets the cells before the rows");
+    let e = run(&mut ed, json!({"op": "add_table", "rows": rows, "columns": 1000})).unwrap_err();
+    assert!(e.message.contains("memory"), "{}", e.message);
     let e = run(&mut ed, json!({"op": "delete_rows", "id": "b1", "index": usize::MAX, "count": 2})).unwrap_err();
     assert_eq!(e.code, "invalid_params");
     assert_eq!(ed.doc, before);
@@ -333,21 +338,20 @@ fn over_the_limits_is_refused_with_a_message_and_changes_nothing() {
 #[test]
 fn huge_pastes_are_refused_before_they_become_a_grid() {
     use table::{parse_delimited, Limit};
-    // Over the byte limit: refused without reading.
-    let huge = "a\t".repeat(table::MAX_PASTE_BYTES / 2 + 1);
-    let t0 = std::time::Instant::now();
-    assert_eq!(parse_delimited(&huge), Err(Limit::Bytes));
-    assert!(t0.elapsed().as_millis() < 50);
-    // Under it but too many cells: stops at the first cell over.
-    let many = "1\t".repeat(200_000);
+    // No size limit on the text (as in Numbers): 30 MB of cells read.
+    let big = "12345678\t".repeat(999).to_string() + "1\n";
+    let big = big.repeat(3_000);
+    assert!(big.len() > 25 << 20);
+    let grid = parse_delimited(&big).unwrap();
+    assert_eq!((grid.len(), grid[0].len()), (3_000, 1_000));
+    // Past Numbers' row and column limits: stops at the first one over.
+    let many = "1\t".repeat(2_000);
     assert_eq!(parse_delimited(&many), Err(Limit::Columns));
-    let tall = "1\n".repeat(20_000);
+    let tall = "1\n".repeat(1_000_001);
     assert_eq!(parse_delimited(&tall), Err(Limit::Rows));
-    let wide_rows = "1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11\n".repeat(9_500);
-    assert_eq!(parse_delimited(&wide_rows), Err(Limit::Cells));
-    // Ragged: one long row makes every row that wide.
-    let ragged = format!("{}\n{}", "x\t".repeat(200), "y\n".repeat(600));
-    assert_eq!(parse_delimited(&ragged), Err(Limit::Cells));
+    // Ragged: one long row makes every row that wide, and the grid must
+    // fit in memory.
+    assert_eq!(Limit::of_size(table::max_cells() / 1000 + 1, 1000), Some(Limit::Cells));
     let long_field = format!("a\t{}", "z".repeat(table::MAX_INPUT + 2));
     assert_eq!(parse_delimited(&long_field), Err(Limit::Input));
     assert_eq!(parse_delimited("").unwrap(), Vec::<Vec<String>>::new());
@@ -431,16 +435,33 @@ fn hostile_table_files_load_repaired_or_are_refused() {
 }
 
 #[test]
-fn a_file_with_millions_of_cells_keeps_the_first_hundred_thousand() {
-    // 2,000 x 1,000 = 2,000,000 cells, ragged.
+fn a_file_with_millions_of_cells_keeps_every_one() {
+    // 2,000 x 1,000 = 2,000,000 cells, ragged, and a row and a cell past
+    // Numbers' limits and Excel's cell length: nothing is cut (B2).
     let row: Vec<&str> = vec![""; 1000];
     let mut cells: Vec<Vec<&str>> = vec![row; 2000];
     cells[3] = vec!["x"; 5];
+    let wide: Vec<&str> = vec!["w"; 1200];
+    cells[4] = wide;
+    let long = "z".repeat(table::MAX_INPUT + 10);
+    cells[5][0] = &long;
     let json = file_with_table(json!({"type": "table", "cells": cells, "columns": [], "rows": []}));
     let doc = io::from_json(&json).unwrap();
     let ElementKind::Table(t) = &doc.elements["b1"].kind else { panic!() };
-    assert!(t.n_rows() * t.n_cols() <= table::MAX_CELLS);
-    assert!(t.check().is_ok());
+    assert_eq!((t.n_rows(), t.n_cols()), (2000, 1200));
+    assert_eq!(t.cells[4][1199].input, "w");
+    assert_eq!(t.cells[5][0].input.len(), table::MAX_INPUT + 10);
+    // Saved and opened again, still whole.
+    let back = io::load_bytes(&io::save_bytes(&doc).unwrap()).unwrap();
+    let ElementKind::Table(b) = &back.elements["b1"].kind else { panic!() };
+    assert_eq!((b.n_rows(), b.n_cols()), (2000, 1200));
+    // Still editable: typing in it works, making it wider is refused.
+    let mut ed = Editor::new(back);
+    run(&mut ed, json!({"op": "set_cells", "id": "b1", "at": "A1", "values": [["hi"]]})).unwrap();
+    assert_eq!(table(&ed, "b1").cells[0][0].input, "hi");
+    run(&mut ed, json!({"op": "delete_rows", "id": "b1", "index": 0, "count": 10})).unwrap();
+    assert!(run(&mut ed, json!({"op": "insert_columns", "id": "b1", "index": 0})).is_err());
+    assert_eq!(table(&ed, "b1").n_cols(), 1200);
 }
 
 /// A tiny deterministic random source (no dependency).

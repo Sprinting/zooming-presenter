@@ -191,52 +191,44 @@ pub fn repair_json(v: &mut serde_json::Value) {
 }
 
 /// A table as read from a file, made readable: anything that isn't what
-/// a table holds is replaced by a default or dropped, and the grid is cut
-/// to the limits before it becomes cells (a file with ten million cells
-/// keeps the first 100,000). [`repair`] then makes it rectangular.
+/// a table holds is replaced by a default or dropped. Nothing is cut,
+/// whatever its size (its memory was checked as the file was read).
+/// [`repair`] then makes it rectangular.
 fn repair_table_json(k: &mut serde_json::Value) {
-    use crate::table::{Cell, CellRange, Column, Gridlines, RangeFormat, Row, TableStyle, MAX_CELLS, MAX_COLUMNS, MAX_ROWS};
+    use crate::table::{Cell, CellRange, Column, Gridlines, RangeFormat, Row, TableStyle};
     use serde::Deserialize;
     use serde_json::{json, Value};
     let Some(o) = k.as_object_mut() else { return };
     let ok = |v: &Value, f: fn(&Value) -> bool| f(v);
-    // Cells: rows of cells, at most the limits.
+    // Cells: rows of cells.
     let mut cells = match o.remove("cells") {
         Some(Value::Array(rows)) => rows,
         _ => vec![],
     };
-    cells.truncate(MAX_ROWS);
-    let mut count = 0usize;
-    let mut keep = cells.len();
-    for (i, row) in cells.iter_mut().enumerate() {
+    for row in cells.iter_mut() {
         if !row.is_array() {
             *row = json!([]);
         }
-        let r = row.as_array_mut().map(std::mem::take).unwrap_or_default();
-        let mut r: Vec<Value> = r.into_iter().take(MAX_COLUMNS).collect();
-        for c in r.iter_mut() {
-            if Cell::deserialize(&*c).is_err() {
-                // A cell with a value or format that doesn't read keeps its input.
-                let input = c.get("input").and_then(|x| x.as_str()).map(str::to_string);
-                *c = json!(input.unwrap_or_default());
+        if let Some(r) = row.as_array_mut() {
+            for c in r.iter_mut() {
+                if Cell::deserialize(&*c).is_err() {
+                    // A cell with a value or format that doesn't read keeps its input.
+                    let input = c.get("input").and_then(|x| x.as_str()).map(str::to_string);
+                    *c = json!(input.unwrap_or_default());
+                }
             }
         }
-        count += r.len().max(1);
-        *row = Value::Array(r);
-        if count > MAX_CELLS {
-            keep = i;
-            break;
-        }
     }
-    cells.truncate(keep.max(1).min(cells.len()));
+    if cells.is_empty() {
+        cells.push(json!([]));
+    }
     o.insert("cells".into(), Value::Array(cells));
     // Columns and rows: each readable, or a default ([`repair`] sizes them).
-    let list = |o: &mut serde_json::Map<String, Value>, key: &str, max: usize, good: fn(&Value) -> bool, default: Value| {
+    let list = |o: &mut serde_json::Map<String, Value>, key: &str, good: fn(&Value) -> bool, default: Value| {
         let mut v = match o.remove(key) {
             Some(Value::Array(v)) => v,
             _ => vec![],
         };
-        v.truncate(max);
         for x in v.iter_mut() {
             if !good(x) {
                 *x = default.clone();
@@ -244,8 +236,8 @@ fn repair_table_json(k: &mut serde_json::Value) {
         }
         o.insert(key.into(), Value::Array(v));
     };
-    list(o, "columns", MAX_COLUMNS, |x| Column::deserialize(x).is_ok(), json!({"width": 100}));
-    list(o, "rows", MAX_ROWS, |x| Row::deserialize(x).is_ok(), json!({"height": 48}));
+    list(o, "columns", |x| Column::deserialize(x).is_ok(), json!({"width": 100}));
+    list(o, "rows", |x| Row::deserialize(x).is_ok(), json!({"height": 48}));
     // Lists whose bad entries go.
     for (key, good) in [("merges", (|x: &Value| CellRange::deserialize(x).is_ok()) as fn(&Value) -> bool), ("cell_formats", |x: &Value| RangeFormat::deserialize(x).is_ok())] {
         if let Some(v) = o.get_mut(key) {

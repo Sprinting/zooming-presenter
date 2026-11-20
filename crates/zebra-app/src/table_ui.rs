@@ -190,13 +190,9 @@ pub fn limit_message(l: Limit) -> String {
     match l {
         Limit::Rows => crate::t!("table-limit-rows", count = table::MAX_ROWS),
         Limit::Columns => crate::t!("table-limit-columns", count = table::MAX_COLUMNS),
-        Limit::Cells => crate::t!("table-limit-cells", count = table::MAX_CELLS),
+        Limit::Cells => crate::t!("table-limit-cells"),
         Limit::Input => crate::t!("table-limit-input", count = table::MAX_INPUT),
         Limit::Formula => crate::t!("table-limit-formula", count = table::MAX_FORMULA),
-        Limit::Bytes => {
-            let mb = table::MAX_PASTE_BYTES >> 20;
-            crate::t!("table-limit-paste", mb = mb)
-        }
     }
 }
 
@@ -744,7 +740,10 @@ pub fn paste_cells(app: &mut ZebraApp, s: &TableSel, text: &str) {
     let Some((_, t)) = table(app, &s.id) else { return };
     let rows = (r.r0 + grid.len()).max(t.n_rows());
     let cols = (r.c0 + grid.iter().map(|g| g.len()).max().unwrap_or(0)).max(t.n_cols());
-    if let Some(l) = Limit::of_size(rows, cols) {
+    // Only a paste that makes the table bigger can go over (one opened
+    // bigger than the limits takes pastes inside it).
+    let grows = rows > t.n_rows() || cols > t.n_cols();
+    if let Some(l) = Limit::of_size(rows, cols).filter(|_| grows) {
         app.note(limit_message(l));
         return;
     }

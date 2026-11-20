@@ -735,6 +735,17 @@ impl Editor {
             }
             if let Some(e) = self.doc.elements.get(id) {
                 crate::check::element(e)?;
+                // A table a command made or grew is within the limits; one
+                // a file brought in bigger stays editable.
+                if let ElementKind::Table(t) = &e.kind {
+                    let grew = match j.before(id).map(|b| &b.kind) {
+                        Some(ElementKind::Table(b)) => t.n_rows() > b.n_rows() || t.n_cols() > b.n_cols(),
+                        _ => true,
+                    };
+                    if grew {
+                        t.check_size().map_err(|m| ZError::new("too_big", format!("'{id}': {m}")).about(crate::error::About::Table))?;
+                    }
+                }
             }
         }
         // Connectors moved by `refresh`, and anything a command touched
