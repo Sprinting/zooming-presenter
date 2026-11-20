@@ -43,7 +43,6 @@ pub mod discovery;
 pub mod library;
 mod dispatch;
 mod headless;
-pub mod mcp;
 pub mod protocol;
 pub mod relay;
 mod server;

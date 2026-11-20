@@ -3,7 +3,7 @@
 Zebra is a placeholder name. Built in a Linux cloud container; the target is macOS only.
 
 ## Works and verified here (Linux, software GPU)
-- Full workspace builds; every test passes (`cargo test --workspace`): core model/undo/present logic, renderer pixel checks, API end-to-end over the real Unix socket, `zebractl` + MCP over stdio, and egui_kittest UI tests (double-click to write, drag = one undo step, present keys, tools, path edit).
+- Full workspace builds; every test passes (`cargo test --workspace`): core model/undo/present logic, renderer pixel checks, API end-to-end over the real Unix socket, `zebractl`, and egui_kittest UI tests (double-click to write, drag = one undo step, present keys, tools, path edit).
 - The GUI ran under Xvfb with software Vulkan (lavapipe); screenshots in `out/app/`.
 - Agent driving the live window with `zebractl` while the window stayed usable (violet agent cursor, dashed agent selection, status bar).
 - Headless: `zebra --headless`, built a 3-step deck with `zebractl apply`, captured steps, exported PDF (`out/integration/`).
@@ -22,7 +22,7 @@ Zebra is a placeholder name. Built in a Linux cloud container; the target is mac
 
 ## Known gaps
 - `.app` bundling script exists but is untested; no notarization, icon, or real bundle/team ids yet.
-- AI setup doesn't auto-detect installed agents or write their config files (a sandboxed app can't write other apps' settings); it offers a copyable prompt and an MCP snippet instead. The API-key option is skipped for now, as agreed.
+- AI setup doesn't auto-detect installed agents or write their config files (a sandboxed app can't write other apps' settings); it offers a copyable prompt instead. The API-key option is skipped for now, as agreed.
 - Not done: minimap, group/ungroup, speaker-notes editor, presenter view, App Nap prevention, system Reduce Motion (it is a View menu toggle), 3D parallax backgrounds, templates gallery, PDF/video import.
 - Known bugs: the text edit box is upright on rotated text; restoring an autosave doesn't mark the doc edited.
 - Capture and PDF export run on the UI thread (a big capture briefly stalls the window).

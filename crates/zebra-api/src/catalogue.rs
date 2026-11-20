@@ -1,7 +1,7 @@
 //! The command catalogue: every Command / ViewCommand / Query variant with
 //! its JSON schema (from schemars) and a one-line example. The same data
-//! feeds the `commands` method, MCP tool schemas and `zebractl commands
-//! --markdown`, so docs can't drift from the code.
+//! feeds the `commands` method and `zebractl commands --markdown`, so docs
+//! can't drift from the code.
 use std::sync::OnceLock;
 
 use serde_json::{Map, Value, json};
@@ -310,43 +310,13 @@ pub fn capture_target_schema() -> Value {
     })
 }
 
-/// A JSON schema (with `$defs` inlined at the root) for "one value of `kind`",
-/// suitable for embedding as e.g. MCP tool input property under `#/$defs/<Name>`.
-/// Returns (root_defs, name) so callers can reference `#/$defs/<name>`.
-pub fn defs_with_root(kinds: &[Kind]) -> Map<String, Value> {
-    let mut defs = Map::new();
-    for &kind in kinds {
-        let mut root = schema_of(kind).clone();
-        if let Some(d) = root.as_object_mut().and_then(|o| o.remove("$defs")) {
-            if let Some(d) = d.as_object() {
-                for (k, v) in d {
-                    defs.insert(k.clone(), v.clone());
-                }
-            }
-        }
-        if let Some(o) = root.as_object_mut() {
-            o.remove("$schema");
-        }
-        defs.insert(root_name(kind).into(), root);
-    }
-    defs
-}
-
-pub fn root_name(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Command => "Command",
-        Kind::View => "ViewCommand",
-        Kind::Query => "Query",
-    }
-}
-
-/// Compact text catalogue (for LLMs: `list_commands`).
+/// Compact text catalogue (for LLMs: `zebractl commands`).
 pub fn catalogue_text() -> String {
     let mut out = String::new();
     for (kind, title) in [
-        (Kind::Command, "Document commands (apply / batch / MCP apply_commands; undoable)"),
-        (Kind::View, "View commands (view / MCP view; not undoable)"),
-        (Kind::Query, "Queries (query / MCP query; read-only)"),
+        (Kind::Command, "Document commands (apply / batch; undoable)"),
+        (Kind::View, "View commands (view; not undoable)"),
+        (Kind::Query, "Queries (query; read-only)"),
     ] {
         out.push_str(&format!("## {title}\n"));
         for (name, schema) in variants(kind) {

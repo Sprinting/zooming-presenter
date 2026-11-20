@@ -1,5 +1,5 @@
-//! A small blocking client for the Zebra socket (used by `zebractl`, the MCP
-//! bridge and tests).
+//! A small blocking client for the Zebra socket (used by `zebractl` and
+//! tests).
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;

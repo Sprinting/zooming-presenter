@@ -1,5 +1,5 @@
 //! Unknown fields are refused, never ignored: one test per command family,
-//! over the real socket and through the MCP bridge.
+//! over the real socket.
 use std::path::PathBuf;
 use std::sync::Once;
 
@@ -92,39 +92,6 @@ fn every_family_refuses_unknown_fields() {
     let doc = c.call("documents", json!({})).unwrap()["documents"][0]["id"].clone();
     c.call("describe", json!({ "document": doc })).unwrap();
     c.call("query", json!({"query":{"q":"elements","within":"f1"}})).unwrap();
-    h.stop().unwrap();
-}
-
-#[test]
-fn mcp_tools_refuse_unknown_arguments() {
-    let h = start();
-    let (sock, tok) = (h.socket.clone(), h.token.clone());
-    let mut mcp = zebra_api::mcp::McpServer::new(move || Ok(Client::connect_hello(&sock, "mcp-strict", &tok)?));
-    let call = |id: i64, name: &str, args: Value| json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":args}});
-    let input = [
-        call(1, "apply_commands", json!({"commands":[{"op":"set_title","title":"A"}],"labl":"x"})),
-        call(2, "apply_commands", json!({"commands":[{"op":"add_ink","points":[[0,0],[1,1]],"colour":"#000000"}]})),
-        call(3, "capture", json!({"target":"overview","format":"jpeg"})),
-        call(4, "view", json!({"command":{"op":"fit_all","padding":10}})),
-        call(5, "query", json!({"query":{"q":"path","all":true}})),
-        call(6, "apply_commands", json!({"commands":[{"op":"set_title","title":"Fine"}],"label":"Rename"})),
-    ];
-    let text: String = input.iter().map(|v| v.to_string() + "\n").collect();
-    let mut out = Vec::new();
-    mcp.serve(std::io::Cursor::new(text), &mut out).unwrap();
-    let resps: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-    let text_of = |id: i64| -> (bool, String) {
-        let r = resps.iter().find(|r| r["id"] == id).unwrap();
-        (r["result"]["isError"] == true, r["result"]["content"][0]["text"].as_str().unwrap_or("").to_string())
-    };
-    for (id, field, what) in [(1, "labl", "tool `apply_commands`"), (2, "colour", "command `add_ink`"), (3, "format", "tool `capture`"), (4, "padding", "view command `fit_all`"), (5, "all", "query `path`")] {
-        let (err, t) = text_of(id);
-        assert!(err, "{id}: {t}");
-        assert!(t.contains(&format!("unknown field `{field}`")) && t.contains(what), "{id}: {t}");
-    }
-    assert!(text_of(1).1.contains("label"), "lists accepted arguments: {}", text_of(1).1);
-    let (err, t) = text_of(6);
-    assert!(!err, "{t}");
     h.stop().unwrap();
 }
 

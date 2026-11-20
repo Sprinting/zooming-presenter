@@ -1,9 +1,6 @@
-//! zebractl: drive a running Zebra from the command line, or bridge it to
-//! an MCP client (`zebractl mcp`).
-use std::io::{BufRead, BufReader, Write};
+//! zebractl: drive a running Zebra from the command line.
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command as Proc, Stdio};
-use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
@@ -17,8 +14,7 @@ Zebra must be open, and the person using it must have switched on \"Allow AI con
 NAME YOURSELF: pass --agent <your name> on every command (or set ZEBRA_AGENT_NAME once). Without it you share the name \"zebractl\" with every other unnamed agent.\n\n\
 READ BEFORE YOU CHANGE: if the person or another agent changed the document since you last read it (`describe`, `query`), edits fail with stale_revision. Read again, then retry.\n\n\
 HOW ZEBRA WORKS:\n  One infinite canvas. Elements (frames, text, shapes, images) have a centre x,y in world units (y points down), a scale and a rotation in degrees.\n  Frames (bracket, circle, rectangle, invisible) group whatever lies inside them and are the usual path stops.\n  The path is the ordered list of camera stops used when presenting; the camera flies, zooms and rotates between them.\n  Ids are short and stable (f1, t2, s3); read them with `describe` first.\n\n\
-START HERE:\n  zebractl describe                     outline of the canvas, ids and path\n  zebractl add frame --x 0 --y 0 --name Intro --path\n  zebractl add text \"Hello\" --inside f1 --style title\n  zebractl apply '[{\"op\":\"auto_path\"},{\"op\":\"set_theme\",\"theme\":\"night\"}]'\n  zebractl screenshot --step 0 -o step0.png   check your work (doesn't move the person's view)\n  zebractl commands                     every command with its JSON schema\n\n\
-MCP clients can use `zebractl mcp` as a stdio server instead.")]
+START HERE:\n  zebractl describe                     outline of the canvas, ids and path\n  zebractl add frame --x 0 --y 0 --name Intro --path\n  zebractl add text \"Hello\" --inside f1 --style title\n  zebractl apply '[{\"op\":\"auto_path\"},{\"op\":\"set_theme\",\"theme\":\"night\"}]'\n  zebractl screenshot --step 0 -o step0.png   check your work (doesn't move the person's view)\n  zebractl commands                     every command with its JSON schema")]
 struct Cli {
     #[command(flatten)]
     conn: Conn,
@@ -199,18 +195,6 @@ enum Cmd {
         /// Full JSON (schemas and examples).
         #[arg(long)]
         json: bool,
-    },
-    /// Run an MCP stdio server bridged to Zebra.
-    Mcp {
-        /// Start a private headless Zebra for this session instead of attaching to a running one.
-        #[arg(long)]
-        spawn_headless: bool,
-        /// With --spawn-headless: open this file.
-        #[arg(long)]
-        file: Option<PathBuf>,
-        /// With --spawn-headless: path of the `zebra` binary.
-        #[arg(long)]
-        zebra_bin: Option<PathBuf>,
     },
     /// List running instances.
     Instances,
@@ -458,7 +442,6 @@ fn run(cli: Cli) -> Result<()> {
             let token = cli.conn.token.clone().unwrap_or_default();
             return zebra_api::relay::run(zebra_socket, &token, &cli.conn.name(), relay_socket);
         }
-        Cmd::Mcp { spawn_headless, file, zebra_bin } => return mcp(&cli.conn, *spawn_headless, file.clone(), zebra_bin.clone()),
         _ => {}
     }
     if cli.conn.agent.as_deref().is_none_or(|a| a.trim().is_empty()) {
@@ -654,7 +637,7 @@ fn run(cli: Cli) -> Result<()> {
             let r = c.raw(v).map_err(|e| anyhow!("{e}"))?;
             print(&r);
         }
-        Cmd::Commands { .. } | Cmd::Instances | Cmd::Mcp { .. } | Cmd::Relay { .. } => unreachable!(),
+        Cmd::Commands { .. } | Cmd::Instances | Cmd::Relay { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -709,127 +692,6 @@ mod path_tests {
         absolutize_paths_in(&mut v, Path::new("/work/deck"));
         let got: Vec<&str> = v.as_array().unwrap().iter().map(|c| c["path"].as_str().unwrap()).collect();
         assert_eq!(got, ["/work/deck/a.png", "/work/deck/clips/b.mov", "/work/deck/c.png", "/work/deck/d.png", "/work/deck/e.mp3", "/abs/f.m4a", "not a file"]);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// MCP
-
-struct Headless {
-    child: Child,
-    socket: PathBuf,
-    token: String,
-}
-
-impl Drop for Headless {
-    fn drop(&mut self) {
-        // SIGTERM lets it remove its discovery file; then reap.
-        unsafe_term(self.child.id());
-        for _ in 0..50 {
-            if let Ok(Some(_)) = self.child.try_wait() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn unsafe_term(pid: u32) {
-    // SAFETY: sending SIGTERM to our own child process.
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGTERM);
-    }
-}
-
-fn find_zebra_bin(explicit: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(p) = explicit {
-        return Ok(p);
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let cand = dir.join("zebra");
-            if cand.exists() {
-                return Ok(cand);
-            }
-            // macOS app bundle: Zebra.app/Contents/MacOS/zebra next to zebractl.
-            let cand = dir.join("Zebra.app/Contents/MacOS/zebra");
-            if cand.exists() {
-                return Ok(cand);
-            }
-        }
-    }
-    if let Some(path) = std::env::var_os("PATH") {
-        for d in std::env::split_paths(&path) {
-            let cand = d.join("zebra");
-            if cand.is_file() {
-                return Ok(cand);
-            }
-        }
-    }
-    bail!("cannot find the `zebra` binary next to zebractl or on PATH (use --zebra-bin)")
-}
-
-fn spawn_headless(bin: &Path, file: Option<&Path>) -> Result<Headless> {
-    let mut cmd = Proc::new(bin);
-    // Permission is the person's saved choice (the AI button); no flag
-    // raises it.
-    cmd.args(["--headless", "--api"]);
-    if let Some(f) = file {
-        cmd.arg(abs(f)?);
-    }
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit()) // goes to the MCP client's log, never our stdout
-        .spawn()
-        .with_context(|| format!("starting {}", bin.display()))?;
-    let stdout = child.stdout.take().unwrap();
-    let mut lines = BufReader::new(stdout).lines();
-    let ready = loop {
-        match lines.next() {
-            Some(Ok(l)) => {
-                if let Some(rest) = l.strip_prefix("ZEBRA_API_READY ") {
-                    break parse_json(rest, "ready line")?;
-                }
-            }
-            _ => {
-                let _ = child.kill();
-                bail!("{} exited before its API was ready", bin.display());
-            }
-        }
-    };
-    // Keep draining its stdout so it never blocks on a full pipe.
-    std::thread::spawn(move || for _ in lines {});
-    Ok(Headless {
-        child,
-        socket: PathBuf::from(ready["socket"].as_str().unwrap_or_default()),
-        token: ready["token"].as_str().unwrap_or_default().to_string(),
-    })
-}
-
-fn mcp(conn: &Conn, spawn: bool, file: Option<PathBuf>, bin: Option<PathBuf>) -> Result<()> {
-    let name = conn.agent.clone().filter(|a| !a.trim().is_empty()).unwrap_or_else(|| "Claude".to_string());
-    let stdin = std::io::stdin().lock();
-    let stdout = std::io::stdout().lock();
-    if spawn {
-        let bin = find_zebra_bin(bin)?;
-        let mut headless: Option<Headless> = None;
-        let mut server = zebra_api::mcp::McpServer::new(move || -> Result<Client> {
-            let alive = headless.as_mut().is_some_and(|h| matches!(h.child.try_wait(), Ok(None)));
-            if !alive {
-                headless = Some(spawn_headless(&bin, file.as_deref())?);
-            }
-            let h = headless.as_ref().unwrap();
-            Client::connect_hello(&h.socket, &name, &h.token).map_err(|e| anyhow!("{e}"))
-        });
-        server.serve(stdin, stdout)
-    } else {
-        let conn = conn.clone();
-        let mut server =
-            zebra_api::mcp::McpServer::new(move || Client::discover(conn.instance, conn.socket.as_deref(), conn.token.as_deref(), &name));
-        server.serve(stdin, stdout)
     }
 }
 

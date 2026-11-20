@@ -489,13 +489,6 @@ fn ai_panel(app: &mut ZebraApp, ui: &mut Ui, on: bool, connected: bool, paused: 
                 }
             }
         }
-        let mcp = w::push_button(ui, &crate::t!("ai-mcp-setup"));
-        egui::Popup::menu(&mcp).width(330.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-            egui::Frame::new().inner_margin(8).show(ui, |ui| {
-                w::caption(ui, &crate::t!("ai-mcp-caption"));
-                copy_box(ui, &crate::cli::mcp_config(&ctl), "mcp-json");
-            });
-        });
     });
 
     w::separator(ui);

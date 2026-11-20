@@ -1,6 +1,5 @@
 //! Runs the real `zebractl` binary against an in-process headless instance.
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use serde_json::Value;
 use zebra_api::{ApiOptions, HeadlessHandle, Permission};
@@ -72,27 +71,5 @@ fn zebractl_end_to_end() {
     let (ok, out, _) = ctl(&h, &data, &["commands", "--markdown"]);
     assert!(ok && out.contains("| `add_text` |"));
 
-    // MCP over the real binary's stdio.
-    let mut child = Command::new(env!("CARGO_BIN_EXE_zebractl"))
-        .args(["mcp", "--socket"])
-        .arg(&h.socket)
-        .env("ZEBRA_TOKEN", &h.token)
-        .env("ZEBRA_DATA_DIR", &data)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    {
-        let mut i = child.stdin.take().unwrap();
-        writeln!(i, r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-06-18"}}}}"#).unwrap();
-        writeln!(i, r#"{{"jsonrpc":"2.0","method":"notifications/initialized"}}"#).unwrap();
-        writeln!(i, r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"get_state","arguments":{{}}}}}}"#).unwrap();
-    }
-    let out = child.wait_with_output().unwrap();
-    let text = String::from_utf8(out.stdout).unwrap();
-    let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-    assert_eq!(lines.len(), 2, "{text}");
-    assert_eq!(lines[1]["result"]["isError"], false, "{text}");
-    assert!(lines[1]["result"]["content"][0]["text"].as_str().unwrap().contains("revision"));
     h.stop().unwrap();
 }
