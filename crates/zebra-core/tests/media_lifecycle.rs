@@ -101,6 +101,21 @@ fn media_lifecycle() {
         std::fs::write(cache.join(n), b"x").unwrap();
     }
     media::sweep_cache(|p| p == std::process::id());
-    assert_eq!(files(&cache), vec![live]);
+    assert_eq!(files(&cache), vec![live.clone()]);
+
+    // Web video downloads: a run that died mid-download leaves its part
+    // file (or a finished one it never took in); the next launch sweeps
+    // them, never a running Zebra's.
+    let downloads = cache.join("downloads");
+    std::fs::create_dir_all(&downloads).unwrap();
+    let mine = [format!("{}-17.mp4.part", std::process::id()), format!("{}-3.mov", std::process::id())];
+    for n in ["999999999-17.mp4.part", "999999999-2.mp4", "talk.mp4", "x.part", mine[0].as_str(), mine[1].as_str()] {
+        std::fs::write(downloads.join(n), b"x").unwrap();
+    }
+    media::sweep_cache(|p| p == std::process::id());
+    let mut want = mine.to_vec();
+    want.sort();
+    assert_eq!(files(&downloads), want);
+    assert_eq!(files(&cache), vec![live, "downloads".to_string()]);
     std::fs::remove_dir_all(&root).unwrap();
 }
