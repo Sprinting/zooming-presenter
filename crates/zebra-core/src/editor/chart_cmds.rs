@@ -143,8 +143,12 @@ impl Editor {
                 if nr == 0 || nc == 0 {
                     return Err(ZError::invalid("a chart's data keeps at least one row and one column"));
                 }
-                if let Some(l) = chart::over_limit(nr, nc) {
-                    return Err(too_big(l));
+                // Only growing past the limits is refused: data a file
+                // brought in bigger stays editable (B2).
+                if nr > t.n_rows() || nc > t.n_cols() {
+                    if let Some(l) = chart::over_limit(nr, nc) {
+                        return Err(too_big(l));
+                    }
                 }
                 if let Some((true, g)) = &given {
                     let mut fresh = TableData::new(nr, nc, t.columns.first().map_or(24.0, |c| c.width / crate::table::COLUMN_EMS));

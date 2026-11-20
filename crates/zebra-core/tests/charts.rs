@@ -465,13 +465,13 @@ fn hostile_chart_files_load_repaired() {
         let _ = c.plot(&ed.doc);
         let _ = describe::describe(&ed);
     }
-    // A million cells in a chart's data: cut to a table's limit.
+    // A million cells in a chart's data: kept whole, as a table's are (B2).
     let row: Vec<&str> = vec!["1"; 1000];
     let cells: Vec<Vec<&str>> = vec![row; 1000];
     let json = file_with_chart(json!({"type": "chart", "data": {"cells": cells, "columns": [], "rows": []}}));
     let doc = io::from_json(&json).unwrap();
     let ElementKind::Chart(c) = &doc.elements["h1"].kind else { panic!() };
-    assert!(c.data.n_rows() * c.data.n_cols() <= zebra_core::table::MAX_CELLS);
+    assert_eq!((c.data.n_rows(), c.data.n_cols()), (1000, 1000));
     assert!(c.check().is_ok());
 }
 
