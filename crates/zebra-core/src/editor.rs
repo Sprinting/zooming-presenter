@@ -1902,7 +1902,17 @@ impl Editor {
             }
             Command::SetTheme { theme } => {
                 if !Theme::ids_in(&self.doc).contains(&theme) {
-                    return Err(ZError::invalid(format!("unknown theme '{theme}'")).values(Theme::ids_in(&self.doc)));
+                    // A theme from My Themes: copied in, pictures and fonts too
+                    // (as the theme menu does).
+                    let Some((from, mut t)) = crate::library::theme(&theme) else {
+                        let mut ids = Theme::ids_in(&self.doc);
+                        ids.extend(crate::library::get().map(|l| l.themes()).unwrap_or_default().into_iter().map(|(_, t)| t.id));
+                        return Err(ZError::invalid(format!("unknown theme '{theme}'")).values(ids));
+                    };
+                    self.import_assets(&from, t.asset_keys());
+                    self.validate_theme(&t)?;
+                    self.embed_fonts(&mut t);
+                    self.doc.themes.push(t);
                 }
                 self.set_theme_id(theme);
             }
@@ -1915,7 +1925,7 @@ impl Editor {
                     self.doc.play.looping = l;
                 }
             }
-            Command::SaveTheme { mut theme, apply } => {
+            Command::SaveTheme { mut theme, apply, to_library: _ } => {
                 self.validate_theme(&theme)?;
                 self.embed_fonts(&mut theme);
                 let id = theme.id.clone();
@@ -1948,21 +1958,35 @@ impl Editor {
                 out.assets.push(key);
             }
             Command::ApplyTemplate { template, replace } => {
+                let lib = crate::library::get();
+                if let Some(name) = template.strip_prefix(crate::library::SAVED_PREFIX) {
+                    // My Templates (File > Save as Template).
+                    let Some(t) = lib.as_ref().and_then(|l| l.template(name)) else {
+                        let saved = lib.map(|l| l.templates()).unwrap_or_default();
+                        return Err(ZError::invalid(format!("no saved template '{name}'"))
+                            .values(saved.into_iter().map(|n| format!("{}{n}", crate::library::SAVED_PREFIX)).collect()));
+                    };
+                    self.clear_for_template(replace, out)?;
+                    self.insert_template_doc(t, out);
+                    return Ok(());
+                }
+                if template == crate::library::SAMPLE {
+                    if let Some(cmds) = lib.and_then(|l| l.sample()) {
+                        // File > New from Sample: the same commands, here.
+                        self.clear_for_template(replace, out)?;
+                        for c in cmds {
+                            self.apply_inner(c, out)?;
+                            self.index.sync(&self.doc);
+                        }
+                        return Ok(());
+                    }
+                }
                 let Some(t) = crate::templates::template(&template) else {
                     return Err(ZError::invalid(format!("unknown template '{template}'"))
-                        .values(crate::templates::TEMPLATES.iter().map(|t| t.id.to_string()).collect()));
+                        .values(crate::templates::TEMPLATES.iter().map(|t| t.id.to_string()).collect())
+                        .hint("the `templates` query lists them, and the person's saved ones (`saved:<name>`)"));
                 };
-                if !self.doc.elements.is_empty() || !self.doc.path.is_empty() {
-                    if !replace {
-                        return Err(ZError::new("not_empty", "the canvas isn't empty")
-                            .hint("pass \"replace\": true to clear it, or use add_layout to add to it"));
-                    }
-                    out.deleted.extend(self.doc.elements.keys().cloned());
-                    self.note_all();
-                    self.doc.elements.clear();
-                    self.z_mut().clear();
-                    self.path_mut().clear();
-                }
+                self.clear_for_template(replace, out)?;
                 if self.doc.theme != t.theme {
                     self.set_theme_id(t.theme.into());
                 }
@@ -1993,6 +2017,49 @@ impl Editor {
             }
         }
         Ok(())
+    }
+
+    /// A template needs an empty canvas, or `replace` to clear it.
+    fn clear_for_template(&mut self, replace: bool, out: &mut Outcome) -> ZResult<()> {
+        if !self.doc.elements.is_empty() || !self.doc.path.is_empty() {
+            if !replace {
+                return Err(ZError::new("not_empty", "the canvas isn't empty")
+                    .hint("pass \"replace\": true to clear it, or use add_layout to add to it"));
+            }
+            out.deleted.extend(self.doc.elements.keys().cloned());
+            self.note_all();
+            self.doc.elements.clear();
+            self.z_mut().clear();
+            self.path_mut().clear();
+        }
+        Ok(())
+    }
+
+    /// A saved template's content on the (empty) canvas: its elements with
+    /// their ids, its path, its themes and the theme it uses, with the
+    /// pictures, fonts and media they need.
+    fn insert_template_doc(&mut self, t: Document, out: &mut Outcome) {
+        for a in t.assets.keys() {
+            if let Some(v) = t.assets.get(a) {
+                self.doc.assets.entry(a.clone()).or_insert_with(|| v.clone());
+            }
+        }
+        for th in &t.themes {
+            if !Theme::is_builtin(&th.id) && !self.doc.themes.iter().any(|c| c.id == th.id) {
+                self.doc.themes.push(th.clone());
+            }
+        }
+        for id in &t.z_order {
+            let Some(e) = t.elements.get(id) else { continue };
+            self.note(id);
+            self.doc.elements.insert(id.clone(), e.clone());
+            self.z_mut().push(id.clone());
+            out.created.push(id.clone());
+        }
+        self.path_mut().extend(t.path);
+        self.doc.next_id = self.doc.next_id.max(t.next_id);
+        // Remeasure every text box for this machine's fonts.
+        self.set_theme_id(if Theme::ids_in(&self.doc).contains(&t.theme) { t.theme } else { self.doc.theme.clone() });
     }
 
     fn set_theme_id(&mut self, id: String) {

@@ -7,7 +7,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 use zebra_core::editor::Event;
 use zebra_core::view::Permission;
-use zebra_core::{Editor, Mode, Origin, Query, ZError};
+use zebra_core::{Command, Editor, Mode, Origin, Query, ZError};
 use zebra_render::CaptureTarget;
 
 use crate::protocol::{self, Call, CaptureReq, ExportFormat, RpcError, WaitUntil};
@@ -466,16 +466,20 @@ impl Dispatcher {
         let perm = editor.view.agent_permission;
         let limited = perm != Permission::Full;
         Ok(match call {
-            Call::Apply { command, if_revision } => {
+            Call::Apply { mut command, if_revision } => {
                 check_rev(editor, if_revision)?;
-                to_value(editor.apply(command, origin.clone())?)
+                let lib = prepare(std::slice::from_mut(&mut command), editor)?;
+                let out = to_value(editor.apply(command, origin.clone())?);
+                to_library(out, editor, &lib)?
             }
-            Call::Batch { commands, label, if_revision } => {
+            Call::Batch { mut commands, label, if_revision } => {
                 check_rev(editor, if_revision)?;
                 if commands.is_empty() {
                     return Err(RpcError::invalid("`commands` is empty"));
                 }
-                to_value(editor.apply_batch(commands, label, origin.clone())?)
+                let lib = prepare(&mut commands, editor)?;
+                let out = to_value(editor.apply_batch(commands, label, origin.clone())?);
+                to_library(out, editor, &lib)?
             }
             Call::Begin { label } => {
                 if let Some(&owner) = self.tx_owner.get(doc) {
@@ -522,6 +526,14 @@ impl Dispatcher {
                 let doc = zebra_core::io::load(&path)?;
                 editor.load(doc, Some(path.clone()));
                 json!({ "ok": true, "path": path, "revision": editor.revision })
+            }
+            Call::SaveTemplate { name } => {
+                need_full(perm, "save_template")?;
+                let dir = crate::library::templates_dir().ok_or_else(|| RpcError::app("io", "the templates folder can't be made"))?;
+                let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| editor.doc.title.clone());
+                let path = crate::library::save_template(&editor.doc, &name, &dir, "Untitled")?;
+                let saved = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(name);
+                json!({ "ok": true, "path": path, "template": format!("{}{saved}", zebra_core::library::SAVED_PREFIX) })
             }
             Call::Save { path } => {
                 // (Saves are run by `run`, on a worker; this is the direct
@@ -813,6 +825,41 @@ fn check_read(editor: &Editor, seen: Option<u64>) -> Result<(), RpcError> {
     let by = if who.is_empty() { String::new() } else { format!(" by {}", who.join(", ")) };
     Err(RpcError::app("stale_revision", format!("the document changed{by} since you last read it (you read revision {seen}; it is now at {now})"))
         .hint("read it again (`describe`, or `query` for the parts you are changing), then retry"))
+}
+
+/// Before commands run: `save_theme` with `to_library` is checked (it
+/// writes into the person's own files, like `save`). Returns the ids of
+/// the themes to save to the library once the commands succeed.
+fn prepare(cmds: &mut [Command], editor: &Editor) -> Result<Vec<String>, RpcError> {
+    let mut lib = vec![];
+    for c in cmds {
+        match c {
+            Command::SaveTheme { theme, to_library: true, .. } => {
+                need_full(editor.view.agent_permission, "save_theme with to_library")?;
+                lib.push(theme.id.clone());
+            }
+            _ => {}
+        }
+    }
+    Ok(lib)
+}
+
+/// After the commands succeeded: save the themes `prepare` found to My
+/// Themes, and say where in the reply.
+fn to_library(mut out: Value, editor: &Editor, ids: &[String]) -> Result<Value, RpcError> {
+    if ids.is_empty() {
+        return Ok(out);
+    }
+    let dir = crate::library::themes_dir().ok_or_else(|| RpcError::app("io", "the themes folder can't be made"))?;
+    let mut files = vec![];
+    for id in ids {
+        let Some(t) = editor.doc.themes.iter().find(|t| t.id == *id) else { continue };
+        files.push(crate::library::save_theme(&editor.doc, t, &dir, "Untitled")?);
+    }
+    if let Value::Object(o) = &mut out {
+        o.insert("library".into(), json!(files));
+    }
+    Ok(out)
 }
 
 /// Where `save` writes: the path given, else the document's own file.

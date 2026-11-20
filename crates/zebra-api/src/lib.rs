@@ -227,6 +227,8 @@ impl Dispatcher {
         self.saves.clear();
     }
     pub fn new(renderer: Arc<zebra_render::Renderer>) -> Self {
+        // Agents see the person's own themes and templates.
+        library::install_default();
         Dispatcher {
             renderer,
             web_labels: Default::default(),

@@ -51,6 +51,7 @@ pub const METHOD_PARAMS: &[(&str, &[&str])] = &[
     ("wait", &["until", "timeout_ms"]),
     ("open", &["path", "force"]),
     ("save", &["path"]),
+    ("save_template", &["name"]),
     ("export", &["format", "path", "target", "width", "height"]),
     ("disconnect", &[]),
     ("quit", &[]),

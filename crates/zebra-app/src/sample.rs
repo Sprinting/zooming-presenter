@@ -27,6 +27,17 @@ pub fn build(renderer: &zebra_render::Renderer) -> Document {
 }
 
 pub fn build_with(measure: Box<dyn zebra_core::TextMeasure>) -> Document {
+    let mut ed = Editor::default();
+    ed.measure = measure;
+    for c in commands() {
+        ed.apply(c, H).expect("sample command");
+    }
+    ed.doc
+}
+
+/// The sample's commands, in the person's language (agents get them with
+/// `apply_template {"template": "sample"}`).
+pub fn commands() -> Vec<Command> {
     #[derive(serde::Deserialize)]
     struct File {
         commands: Vec<Command>,
@@ -34,12 +45,7 @@ pub fn build_with(measure: Box<dyn zebra_core::TextMeasure>) -> Document {
     let mut v: serde_json::Value = serde_json::from_str(include_str!("../data/sample.json")).expect("data/sample.json is valid");
     fill_words(&mut v);
     let f: File = serde_json::from_value(v).expect("data/sample.json is valid");
-    let mut ed = Editor::default();
-    ed.measure = measure;
-    for c in f.commands {
-        ed.apply(c, H).expect("sample command");
-    }
-    ed.doc
+    f.commands
 }
 
 /// Debug demo states for screenshots: sample, pathedit, present, agent, text.
@@ -341,7 +347,7 @@ fn demo_parallax(app: &mut ZebraApp) {
         zebra_core::BackgroundLayer { asset: a, depth: 0.1, opacity: 1.0 },
         zebra_core::BackgroundLayer { asset: b, depth: 0.45, opacity: 1.0 },
     ];
-    let _ = app.editor.apply(Command::SaveTheme { theme: t, apply: true }, H);
+    let _ = app.editor.apply(Command::SaveTheme { theme: t, apply: true, to_library: false }, H);
 }
 
 // ----------------------------------------------------------------------

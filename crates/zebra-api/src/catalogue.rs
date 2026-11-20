@@ -82,6 +82,7 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::Command, r#"{"op":"delete_theme","id":"my-theme"}"#),
     (Kind::Command, r#"{"op":"add_asset","data_base64":"iVBORw0KGgo..."}"#),
     (Kind::Command, r#"{"op":"apply_template","template":"big_picture"}"#),
+    (Kind::Command, r#"{"op":"apply_template","template":"saved:Quarterly review","replace":true}"#),
     (Kind::Command, r#"{"op":"add_layout","layout":"two_columns","x":4000,"y":0,"width":1600}"#),
     (Kind::Command, r#"{"op":"add_symbol","set":"noto","name":"rocket","x":300,"y":0,"width":200}"#),
     (Kind::Command, r#"{"op":"add_symbol","set":"ph","name":"lightbulb-duotone","x":600,"y":0,"color":"theme:accent","sticker":true}"#),

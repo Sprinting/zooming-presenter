@@ -4,10 +4,14 @@
 //! `~/Library/Application Support` on macOS; `ZEBRA_DATA_DIR` (dev builds
 //! only) moves it, as it does the discovery files.
 //!
-//! The app's theme menu, theme editor and File menu use these.
+//! The app's theme menu, theme editor and File menu use these; agents reach
+//! them through [`FileLibrary`], which the host installs into core
+//! ([`zebra_core::library`]) so `themes`, `templates`, `set_theme` and
+//! `apply_template` see the person's own.
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use zebra_core::{io, Document, Theme, ZError, ZResult};
+use zebra_core::{io, Command, Document, Theme, ZError, ZResult};
 
 fn root() -> Option<PathBuf> {
     match crate::discovery::dev_env("ZEBRA_DATA_DIR") {
@@ -144,6 +148,40 @@ fn zebra_files(d: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(d)
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|e| e == "zebra")).collect())
         .unwrap_or_default()
+}
+
+/// The library as core asks for it, plus the sample presentation when the
+/// host can make it (its words are in the app's language files).
+pub struct FileLibrary {
+    pub sample: Option<fn() -> Vec<Command>>,
+}
+
+impl zebra_core::library::Library for FileLibrary {
+    fn themes(&self) -> Vec<(Document, Theme)> {
+        list_themes().into_iter().map(|(_, d, t)| (d, t)).collect()
+    }
+    fn templates(&self) -> Vec<String> {
+        list_templates().into_iter().map(|(_, n)| n).collect()
+    }
+    fn template(&self, name: &str) -> Option<Document> {
+        let (p, _) = list_templates().into_iter().find(|(_, n)| n == name)?;
+        io::load(&p).ok()
+    }
+    fn sample(&self) -> Option<Vec<Command>> {
+        self.sample.map(|f| f())
+    }
+}
+
+/// Install the file library into core, with the sample if the host has one.
+pub fn install(sample: Option<fn() -> Vec<Command>>) {
+    zebra_core::library::set(Arc::new(FileLibrary { sample }));
+}
+
+/// Install the file library unless the host already installed one.
+pub(crate) fn install_default() {
+    if zebra_core::library::get().is_none() {
+        install(None);
+    }
 }
 
 #[cfg(test)]

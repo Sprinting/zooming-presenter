@@ -167,6 +167,9 @@ enum Cmd {
     },
     /// Save (needs 'full' permission).
     Save { path: Option<PathBuf> },
+    /// File › Save as Template: into the person's My Templates (needs
+    /// 'full' permission). Default name: the document's title.
+    SaveTemplate { name: Option<String> },
     /// Print events as JSON lines.
     Events {
         /// Keep printing forever.
@@ -608,6 +611,7 @@ fn run(cli: Cli) -> Result<()> {
             let p = path.map(|p| abs(&p)).transpose()?;
             print(&call(c, "save", json!({ "path": p }))?);
         }
+        Cmd::SaveTemplate { name } => print(&call(c, "save_template", json!({ "name": name }))?),
         Cmd::Events { follow, count, filter } => {
             let p = if filter.is_empty() { json!({}) } else { json!({ "events": filter }) };
             call(c, "subscribe", p)?;

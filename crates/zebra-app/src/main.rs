@@ -50,6 +50,8 @@ struct Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     zebra_app::keymap::load();
+    // My Themes, My Templates and the sample, for agents too.
+    zebra_api::library::install(Some(zebra_app::sample::commands));
     // Only a person raises permission (the AI button): the flag can only
     // lower it. `ApiOptions::permission` is the most the flag allows; the
     // app takes the lower of it and the person's saved choice.

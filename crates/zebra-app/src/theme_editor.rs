@@ -140,7 +140,7 @@ fn apply_draft(app: &mut ZebraApp, te: &mut ThemeEditor, now: f64) {
     if !app.editor.in_transaction() {
         let _ = app.editor.begin(crate::t!("theme-editor-undo-edit"), H);
     }
-    let r = app.editor.apply(Command::SaveTheme { theme: te.draft.clone(), apply: true }, H);
+    let r = app.editor.apply(Command::SaveTheme { theme: te.draft.clone(), apply: true, to_library: false }, H);
     if app.report(r).is_some() {
         // Embedded fonts were filled in by the editor: keep the draft in step.
         if let Some(t) = app.editor.doc.themes.iter().find(|t| t.id == te.draft.id) {
@@ -329,7 +329,7 @@ fn pick_image(app: &mut ZebraApp) -> Option<String> {
 /// "My Themes" entries for the theme menu: apply a saved theme file.
 pub fn apply_library_theme(app: &mut ZebraApp, from: &zebra_core::Document, t: &Theme) {
     app.editor.import_assets(from, t.asset_keys());
-    app.apply(Command::SaveTheme { theme: t.clone(), apply: true });
+    app.apply(Command::SaveTheme { theme: t.clone(), apply: true, to_library: false });
 }
 
 #[cfg(test)]

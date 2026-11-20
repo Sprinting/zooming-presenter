@@ -398,6 +398,9 @@ pub enum Command {
     },
 
     // ---- document ----
+    /// A built-in theme, one of this document's, or one from the person's
+    /// My Themes (see the `themes` query), copied in with its pictures and
+    /// fonts.
     SetTheme { theme: String },
     SetTitle { title: String },
     /// Autoplay and loop for the whole presentation. Only given fields change.
@@ -416,6 +419,10 @@ pub enum Command {
         /// Also make it the presentation's theme.
         #[serde(default)]
         apply: bool,
+        /// Also save it in the person's My Themes (Save as Theme in the
+        /// theme editor), with its pictures and fonts. Needs 'full'.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        to_library: bool,
     },
     /// Remove a custom theme. If it's in use, its base built-in (or classic) takes over.
     DeleteTheme { id: String },
@@ -423,7 +430,9 @@ pub enum Command {
     /// The new asset key is returned in `assets`.
     AddAsset { data_base64: String },
     /// Start from a template (see the `templates` query): frames, placeholder
-    /// text, a path and a theme. Needs an empty canvas unless `replace`.
+    /// text, a path and a theme. `saved:<name>` is one the person saved (File
+    /// > Save as Template); `sample` is File > New from Sample. Needs an
+    /// empty canvas unless `replace`.
     ApplyTemplate {
         template: String,
         /// Clear the current canvas and path first.
@@ -813,6 +822,9 @@ pub enum Query {
     /// Topmost element at a screen point of the human's window.
     HitTestScreen { x: f64, y: f64 },
     Path,
+    /// Built-in themes, this document's own (`custom`) and the person's My
+    /// Themes (`library`; `set_theme` copies one in with its pictures and
+    /// fonts).
     Themes,
     /// Search the icon library by name or keyword (e.g. "idea", "arrow
     /// right"). Empty query lists names only.
@@ -840,7 +852,8 @@ pub enum Query {
     History,
     /// Layout lint: overlaps, text unreadable at its step, empty steps...
     Lint,
-    /// Templates and layouts that `apply_template` / `add_layout` accept.
+    /// Templates and layouts that `apply_template` / `add_layout` accept,
+    /// the person's saved templates (`saved`) and whether `sample` is there.
     Templates,
     /// Font families installed on this machine (any can be used in a theme).
     Fonts,
