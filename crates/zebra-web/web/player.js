@@ -211,7 +211,7 @@ function webSource(info) {
 }
 // A link that can't play in the page: the poster stays, a click opens it.
 function openLink(info) {
-  if (info.link && /^https:\/\//i.test(info.link)) window.open(info.link, '_blank', 'noopener');
+  if (info.link && /^https:\/\//i.test(info.link) && safeLink(info.link)) window.open(info.link, '_blank', 'noopener');
 }
 function videoFor(id) {
   if (videos[id]) return videos[id];
