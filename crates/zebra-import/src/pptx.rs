@@ -37,7 +37,7 @@ use pptx_parse::{
     SlideLayout, SlideMaster, SourceShape, TargetMode, TextAutofit, TextBody, TextCaps,
 };
 use crate::pptx_media::MediaSource;
-use crate::pptx_package::{Package, Read};
+use crate::pptx_package::{Package, Read, Skip};
 use zebra_core::import::{asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox, MAX_IMPORT_SPANS};
 use zebra_core::rich::MAX_INSERT_CHARS;
 use zebra_core::{
@@ -127,16 +127,18 @@ impl Reader for PptxReader {
         // the same in every batch).
         let mut k_size: Option<(f64, (i64, i64))> = None;
         let mut cancelled = false;
-        let mut skipped = 0usize;
+        // Slides left out, and how many of them for being too big.
+        let (mut skipped, mut too_big) = (0usize, 0usize);
         self.package.read(crate::page_range(opts, self.package.slide_count()), |batch| {
             if ctl.cancelled() {
                 cancelled = true;
                 return false;
             }
             let (pkg, slides) = match batch {
-                Read::Skipped(i) => {
+                Read::Skipped(i, why) => {
                     deck.note_slide(ImportNote::PageSkipped, i + 1);
                     skipped += 1;
+                    too_big += usize::from(why == Skip::TooBig);
                     ctl.page_done();
                     return true;
                 }
@@ -192,8 +194,13 @@ impl Reader for PptxReader {
             deck.notes.insert(ImportNote::Design, designs);
         }
         if deck.pages.is_empty() {
-            // Nothing could be read, or everything chosen is hidden.
-            return Err(if skipped > 0 { ImportError::Damaged("PowerPoint") } else { ImportError::AllHidden });
+            // Nothing could be read (every slide too big, or some broken),
+            // or everything chosen is hidden.
+            return Err(match (skipped, too_big) {
+                (0, _) => ImportError::AllHidden,
+                (s, t) if s == t => ImportError::TooBig,
+                _ => ImportError::Damaged("PowerPoint"),
+            });
         }
         rank_text(&mut deck, &pending, opts, k_size.map_or(1.0, |k| k.0));
         Ok(deck)

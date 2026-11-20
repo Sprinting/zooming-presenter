@@ -79,8 +79,10 @@ impl Rel {
 enum Checked {
     /// Well formed, this many bytes unpacked.
     Ok(u64),
-    /// Missing, broken or too big.
+    /// Missing or broken.
     Bad,
+    /// Over its size cap.
+    TooBig,
 }
 
 /// What a batch made of its slides, in slide order.
@@ -88,8 +90,18 @@ pub enum Read {
     /// The parsed slides: indices (0-based, into the deck's slide list) of
     /// `pkg.slides`, one for one.
     Parsed(Box<PptxPackage>, Vec<usize>),
-    /// A slide that can't be read.
-    Skipped(usize),
+    /// A slide that can't be read, and why.
+    Skipped(usize, Skip),
+}
+
+/// Why a slide was left out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Skip {
+    /// Missing or broken.
+    Broken,
+    /// Over a limit: more XML than [`MAX_SLIDE_XML`], or more shapes or
+    /// XML than the parser reads.
+    TooBig,
 }
 
 pub struct Package {
@@ -164,18 +176,19 @@ impl Package {
     fn read_batch(&self, slides: &[usize], each: &mut impl FnMut(Read) -> bool) -> bool {
         let mut ok = vec![];
         for &i in slides {
-            let good = self.slides.get(i).cloned().flatten().is_some_and(|p| matches!(self.check(&p, MAX_SLIDE_XML), Checked::Ok(_)));
-            if good {
+            let checked = self.slides.get(i).cloned().flatten().map_or(Checked::Bad, |p| self.check(&p, MAX_SLIDE_XML));
+            let why = if checked == Checked::TooBig { Skip::TooBig } else { Skip::Broken };
+            if matches!(checked, Checked::Ok(_)) {
                 ok.push(i);
             } else if !ok.is_empty() {
                 // Keep slide order: what came before goes first.
                 if !self.parse_or_halve(&std::mem::take(&mut ok), each) {
                     return false;
                 }
-                if !each(Read::Skipped(i)) {
+                if !each(Read::Skipped(i, why)) {
                     return false;
                 }
-            } else if !each(Read::Skipped(i)) {
+            } else if !each(Read::Skipped(i, why)) {
                 return false;
             }
         }
@@ -184,10 +197,18 @@ impl Package {
 
     fn parse_or_halve(&self, slides: &[usize], each: &mut impl FnMut(Read) -> bool) -> bool {
         let built = self.build(slides);
+        // Why the parser refused it (a slide on its own over its limits
+        // is too big, not broken).
+        let mut why = Skip::Broken;
         let parsed = match &built {
-            Some(b) if slides.len() == 1 || (b.xml <= BATCH_XML && b.parts <= BATCH_PARTS) => {
-                pptx_parse::parse_pptx(&b.zip).ok().filter(|p| p.slides.len() == slides.len())
-            }
+            Some(b) if slides.len() == 1 || (b.xml <= BATCH_XML && b.parts <= BATCH_PARTS) => match pptx_parse::parse_pptx(&b.zip) {
+                Ok(p) => Some(p).filter(|p| p.slides.len() == slides.len()),
+                Err(pptx_parse::PptxError::ResourceLimit { .. }) => {
+                    why = Skip::TooBig;
+                    None
+                }
+                Err(_) => None,
+            },
             _ => None,
         };
         drop(built);
@@ -197,7 +218,7 @@ impl Package {
                 let (a, b) = slides.split_at(slides.len() / 2);
                 self.parse_or_halve(a, each) && self.parse_or_halve(b, each)
             }
-            None => each(Read::Skipped(slides[0])),
+            None => each(Read::Skipped(slides[0], why)),
         }
     }
 
@@ -208,6 +229,8 @@ impl Package {
         }
         let c = match self.src.read_part(path, cap) {
             Some(b) if check(&b) => Checked::Ok(b.len() as u64),
+            // Says it is bigger than its cap (or turned out so).
+            None if self.src.size(path).is_some_and(|n| n > cap) => Checked::TooBig,
             _ => Checked::Bad,
         };
         self.checked.lock().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), c);
@@ -266,7 +289,7 @@ impl Package {
                         parts.insert(to.clone(), Kind::Xml);
                         queue.push(to.clone());
                     }
-                    Checked::Bad => {
+                    Checked::Bad | Checked::TooBig => {
                         if design {
                             self.broken_design.lock().unwrap_or_else(|e| e.into_inner()).insert(to.clone());
                         }

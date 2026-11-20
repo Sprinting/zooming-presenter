@@ -315,6 +315,27 @@ fn a_tightly_packed_slide_comes_in() {
     assert_eq!(texts(&d)[0].text.chars().count(), 40_000);
 }
 
+/// From the cloud pass: a slide over a limit (shapes100000.pptx) said the
+/// file was damaged. Left out with the others, it is named like any slide
+/// left out; when nothing else comes in, the error says it is too big.
+#[test]
+fn a_slide_over_a_limit_is_too_big_not_damaged() {
+    let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let ok = |t: &str| s(slide(&words(2, t)));
+    // Over 8 MB of XML.
+    let huge = || s(slide(&format!("<!-- {} -->", "x".repeat(9 << 20))));
+    // Under 8 MB but more shapes than the parser reads (100,000).
+    let crowded = || s(slide(&"<p:sp/>".repeat(100_001)));
+    for (name, big) in [("XML", huge as fn() -> S), ("shapes", crowded)] {
+        assert_eq!(read(deck(&[big()], &[], &[])).err(), Some(ImportError::TooBig), "{name}");
+        let d = read(deck(&[ok("A"), big(), ok("C")], &[], &[])).unwrap();
+        assert_eq!(d.slides[&ImportNote::PageSkipped], [2], "{name}");
+        assert_eq!(texts(&d).len(), 2, "{name}");
+    }
+    // Too big and broken together: damaged.
+    assert_eq!(read(deck(&[huge(), s(b"<oops".to_vec())], &[], &[])).err(), Some(ImportError::Damaged("PowerPoint")));
+}
+
 /// T-W3: 10,000 slides were "damaged" (BetterOffice reads at most 5000
 /// zip entries, and its budgets were the whole deck's). They come in, a
 /// batch at a time, the heap not growing with the deck.

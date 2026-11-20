@@ -59,6 +59,13 @@ impl MediaSource {
         Ok(MediaSource { zip: Mutex::new(zip), entries, av: Mutex::new(HashMap::new()) })
     }
 
+    /// The size part `path` says it unpacks to.
+    pub fn size(&self, path: &str) -> Option<u64> {
+        let i = *self.entries.get(path)?;
+        let mut zip = self.zip.lock().unwrap_or_else(|e| e.into_inner());
+        zip.by_index_raw(i).ok().map(|f| f.size())
+    }
+
     /// Is there a part at `path`?
     pub fn has(&self, path: &str) -> bool {
         self.entries.contains_key(path)

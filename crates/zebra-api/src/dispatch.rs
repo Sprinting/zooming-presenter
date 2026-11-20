@@ -749,6 +749,7 @@ fn import_error(e: zebra_import::ImportError) -> RpcError {
         E::Encrypted => "encrypted",
         E::OldPowerPoint => "unsupported",
         E::AllHidden => "empty",
+        E::TooBig => "too_big",
         E::NoEngine(_) => "no_engine",
         E::Read(_) => "io",
         E::Cancelled => "cancelled",
@@ -759,6 +760,7 @@ fn import_error(e: zebra_import::ImportError) -> RpcError {
         E::NotSupported => r.hint(format!("Zebra imports: {}", zebra_import::EXTENSIONS.join(", "))),
         E::OldPowerPoint => r.hint("open it in PowerPoint or Keynote and save it as .pptx, then import that"),
         E::AllHidden => r.hint("choose slides that are shown, or show the hidden ones in PowerPoint first"),
+        E::TooBig => r.hint("a slide can hold up to 8 MB of XML and 100,000 shapes; split it in PowerPoint first"),
         E::BetaOff => match zebra_core::beta::BetaFeature::PptxImport.error().hint {
             Some(h) => r.hint(h),
             None => r,
