@@ -2077,7 +2077,12 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     let mut tb_pos = resp.rect.left_top() - egui::vec2(4.0, 44.0);
     // A text that starts left of the canvas (the view followed the caret):
     // the toolbar stays on the canvas, not over the sidebar.
+    // Its right edge stays on the canvas too, not over the inspector
+    // (last frame's width; the bar's width hardly changes).
     if app.canvas.rect_valid {
+        if let Some(r) = ctx.memory(|m| m.area_rect(app.uid("zebra-text-toolbar"))) {
+            tb_pos.x = tb_pos.x.min(app.canvas.rect.right() - 4.0 - r.width());
+        }
         tb_pos.x = tb_pos.x.max(app.canvas.rect.left() + 4.0);
     }
     let p = style::Palette::of(ctx);
