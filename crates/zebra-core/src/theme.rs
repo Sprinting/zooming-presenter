@@ -34,6 +34,13 @@ fn four_to_six<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[String; 6], D:
     Ok(out)
 }
 
+/// Shape colours as saved: the fifth and sixth only when set, so a theme
+/// without them still opens in builds that know four.
+fn six_trimmed<S: serde::Serializer>(v: &[String; 6], s: S) -> Result<S::Ok, S::Error> {
+    let n = v.iter().rposition(|c| !c.is_empty()).map_or(4, |i| (i + 1).max(4));
+    v[..n].serialize(s)
+}
+
 fn d_weight() -> u16 {
     REGULAR
 }
@@ -110,7 +117,7 @@ pub struct Theme {
     /// from before shape5 and shape6 have four: the missing two are empty
     /// here and resolve to the base theme's (or Classic's), see
     /// [`Theme::shape`].
-    #[serde(deserialize_with = "four_to_six")]
+    #[serde(deserialize_with = "four_to_six", serialize_with = "six_trimmed")]
     #[schemars(with = "Vec<String>", length(min = 4, max = 6))]
     pub shapes: [String; 6],
     /// A picture behind everything, fixed to the screen (asset key).
