@@ -57,7 +57,8 @@ pub fn export_html_to(app: &mut ZebraApp, p: std::path::PathBuf) {
     let ctx = app.ctx.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("zebra-export".into()).spawn(move || {
-        let _ = tx.send(zebra_web::export::export(&renderer, &snap, &labels, &p).map_err(|e| e.message));
+        let r = caught(|| zebra_web::export::export(&renderer, &snap, &labels, &p).map_err(|e| e.message)).unwrap_or_else(|| Err(crate::t!("export-error-unexpected")));
+        let _ = tx.send(r);
         ctx.request_repaint();
     });
     match spawned {
@@ -67,6 +68,13 @@ pub fn export_html_to(app: &mut ZebraApp, p: std::path::PathBuf) {
         }
         Err(e) => app.toast(crate::t!("export-toast-failed", error = e.to_string())),
     }
+}
+
+/// `work`, or None if it panicked: a worker thread reports a bug in a
+/// library (krilla panics on some fonts, audit of 20 Nov W1) as a failure
+/// instead of dying with its job never finishing.
+pub fn caught<T>(work: impl FnOnce() -> T) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).ok()
 }
 
 /// Open an exported page in the default web browser (never inside Zebra).
@@ -93,12 +101,13 @@ pub fn export_in_background(
     let ctx = app.ctx.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("zebra-export".into()).spawn(move || {
-        let msg = match render(&renderer, &snap) {
-            Ok(bytes) => match std::fs::write(&path, bytes) {
+        let msg = match caught(|| render(&renderer, &snap)) {
+            Some(Ok(bytes)) => match std::fs::write(&path, bytes) {
                 Ok(()) => crate::t!("export-toast-exported", path = path.display().to_string()),
                 Err(e) => crate::t!("export-toast-failed", error = e.to_string()),
             },
-            Err(e) => crate::t!("export-toast-failed", error = e.message.as_str()),
+            Some(Err(e)) => crate::t!("export-toast-failed", error = e.message.as_str()),
+            None => crate::t!("export-toast-failed", error = crate::t!("export-error-unexpected")),
         };
         let _ = tx.send(msg);
         ctx.request_repaint();

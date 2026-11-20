@@ -266,7 +266,11 @@ pub fn tick(app: &mut ZebraApp) {
             false
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => true,
-        Err(_) => false,
+        // The worker died without a word: say so, not nothing.
+        Err(_) => {
+            msgs.push(crate::t!("export-toast-failed", error = crate::t!("export-error-unexpected")));
+            false
+        }
     });
     for m in msgs {
         app.toast(m);
@@ -278,7 +282,10 @@ pub fn tick(app: &mut ZebraApp) {
             false
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => true,
-        Err(_) => false,
+        Err(_) => {
+            pages.push(Err(crate::t!("export-error-unexpected")));
+            false
+        }
     });
     for r in pages {
         match r {

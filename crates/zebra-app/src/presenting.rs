@@ -739,7 +739,11 @@ impl Slides {
                         Some(i) => zebra_render::CaptureTarget::Step { index: i, build: Some(key.2) },
                         None => zebra_render::CaptureTarget::Overview,
                     };
-                    let img = renderer.capture(e, &target, SLIDE_W, SLIDE_H).ok().and_then(|png| {
+                    // A render that panics leaves this slide blank, not
+                    // the presenter view without slides for the rest of
+                    // the show.
+                    let png = crate::files::caught(|| renderer.capture(e, &target, SLIDE_W, SLIDE_H).ok()).flatten();
+                    let img = png.and_then(|png| {
                         let im = image::load_from_memory(&png).ok()?.to_rgba8();
                         Some(ColorImage::from_rgba_unmultiplied([im.width() as usize, im.height() as usize], im.as_raw()))
                     });

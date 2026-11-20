@@ -384,6 +384,9 @@ sheet-toast-nothing-to-revert = { $name } has no changes to revert.
 export-toast-exporting = Exporting…
 export-toast-exported = Exported { $path }
 export-toast-failed = Couldn't export: { $error }
+# The export stopped on a bug (in Zebra or a library it uses), not on
+# anything the person can fix. Fills { $error } above.
+export-error-unexpected = an unexpected error
 # A web page exported from a deck set in SF Pro, SF Mono, New York...
 export-toast-apple-ui-font = { $family } is licensed by Apple only for interface mock-ups, so its text went into the page as pictures. Consider Inter.
 app-file-filter-html = Web page
