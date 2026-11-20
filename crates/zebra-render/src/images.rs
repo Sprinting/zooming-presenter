@@ -643,12 +643,17 @@ pub const MAX_DECODE_ALLOC: u64 = 256 << 20;
 /// the time a GIF takes. 1920x1080 keeps 517 frames.
 pub const GIF_WORK: u64 = 1 << 30;
 
+/// Most bytes a JPEG or WebP decode may allocate: they decode whole, and a
+/// 100-megapixel camera JPEG (11648x8736 RGB) is 305 MB. This is image's
+/// own default; [`DECODE_BYTES`] lets only one such decode run at a time.
+pub const MAX_WHOLE_DECODE_ALLOC: u64 = 512 << 20;
+
 /// The limits every `image` decoder runs under.
 pub fn decode_limits() -> image::Limits {
     let mut l = image::Limits::default();
     l.max_image_width = Some(MAX_DECODE_DIM);
     l.max_image_height = Some(MAX_DECODE_DIM);
-    l.max_alloc = Some(MAX_DECODE_ALLOC);
+    l.max_alloc = Some(MAX_WHOLE_DECODE_ALLOC);
     l
 }
 
@@ -980,6 +985,13 @@ mod tests {
         assert!(Arc::ptr_eq(f, &a.frames[1]));
         assert!((next - 0.15).abs() < 1e-9);
         assert!(Arc::ptr_eq(a.frame_at(0.65).0, &a.frames[0]));
+    }
+
+    #[test]
+    fn camera_sized_jpeg_fits_the_limits() {
+        let l = decode_limits();
+        assert!(l.max_alloc.unwrap() >= 11648 * 8736 * 3, "a 100 MP JPEG must decode");
+        assert_eq!(l.max_image_width, Some(MAX_DECODE_DIM));
     }
 
     #[test]
