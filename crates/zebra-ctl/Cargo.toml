@@ -19,3 +19,6 @@ libc.workspace = true
 [dev-dependencies]
 zebra-api.workspace = true
 serde_json.workspace = true
+zebra-core.workspace = true
+# The stand-in host for web video links (tests/web_video_cli.rs).
+zebra-media.workspace = true

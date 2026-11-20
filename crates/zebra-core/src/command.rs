@@ -176,11 +176,12 @@ pub enum Command {
     /// link becomes a video card that opens the site's own player. The deck
     /// keeps only the link and a poster, never the video. Zebra checks the
     /// link first (up to 10 seconds, no cookies or sign-in) and takes the
-    /// poster from the video's first frame, or a card's from the site's
-    /// thumbnail. A link that doesn't play is refused with the Insert Web
-    /// Video sheet's message: "Use an https link.", "This link isn't a
-    /// video.", "This video needs a sign-in.", "Nothing found at this
-    /// link." or "Couldn't reach this link. Check your connection."
+    /// poster from the frame at 1 second (the first, for a shorter clip),
+    /// or a card's from the site's thumbnail. A link that doesn't play is
+    /// refused with the Insert Web Video sheet's message: "Use an https
+    /// link.", "Links with a password in them can't be used.", "This link
+    /// isn't a video.", "This video needs a sign-in.", "Nothing found at
+    /// this link." or "Couldn't reach this link. Check your connection."
     AddWebVideo {
         url: String,
         #[serde(default)]
@@ -192,7 +193,8 @@ pub enum Command {
         width: Option<f64>,
         #[serde(default)]
         alt: String,
-        /// A poster picture (PNG/JPEG) instead of the one Zebra takes.
+        /// A poster picture (PNG/JPEG, at most 8 MB and 8192 pixels a
+        /// side) instead of the one Zebra takes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         poster_base64: Option<String>,
         /// Play by itself when its step is reached while presenting (not

@@ -59,7 +59,16 @@ pub struct Checker {
     /// Free bytes on the disk holding a path (tests stand in a full disk).
     #[doc(hidden)]
     pub free_space: fn(&Path) -> Option<u64>,
+    /// Tests only: a local `http://127.0.0.1:port` server that answers for
+    /// the made-up host `https://zebra-test.invalid` (`STAND_IN`), so
+    /// whole-app tests use https links that never leave the machine.
+    #[doc(hidden)]
+    pub stand_in: Option<String>,
 }
+
+/// The host a test server answers for (`.invalid` never resolves).
+#[doc(hidden)]
+pub const STAND_IN: &str = "https://zebra-test.invalid";
 
 impl Default for Checker {
     fn default() -> Self {
@@ -71,24 +80,25 @@ impl Default for Checker {
             allow_http: false,
             idle: DOWNLOAD_IDLE,
             free_space,
+            stand_in: None,
         }
     }
 }
 
 impl Checker {
     /// The real web. Debug builds only: `ZEBRA_TEST_WEB` (a local
-    /// `http://127.0.0.1:port`) stands in for YouTube's and Vimeo's
-    /// lookups (`/oembed/youtube`, `/oembed/vimeo`, `/yt/`) and lets http
-    /// links through, and `ZEBRA_TEST_WEB_TIMEOUT_MS` shortens the wait,
-    /// so tests never touch the internet.
+    /// `http://127.0.0.1:port`) answers for `https://zebra-test.invalid`
+    /// and stands in for YouTube's and Vimeo's lookups (`/oembed/youtube`,
+    /// `/oembed/vimeo`, `/yt/`), and `ZEBRA_TEST_WEB_TIMEOUT_MS` shortens
+    /// the wait, so tests never touch the internet. Links stay https.
     pub fn from_env() -> Checker {
         let mut c = Checker::default();
         #[cfg(debug_assertions)]
         if let Some(base) = std::env::var("ZEBRA_TEST_WEB").ok().filter(|b| b.starts_with("http://127.0.0.1:")) {
-            c.youtube_oembed = format!("{base}/oembed/youtube");
-            c.vimeo_oembed = format!("{base}/oembed/vimeo");
-            c.youtube_thumbs = format!("{base}/yt/");
-            c.allow_http = true;
+            c.youtube_oembed = format!("{STAND_IN}/oembed/youtube");
+            c.vimeo_oembed = format!("{STAND_IN}/oembed/vimeo");
+            c.youtube_thumbs = format!("{STAND_IN}/yt/");
+            c.stand_in = Some(base.trim_end_matches('/').to_string());
             if let Some(ms) = std::env::var("ZEBRA_TEST_WEB_TIMEOUT_MS").ok().and_then(|m| m.parse().ok()) {
                 c.timeout = Duration::from_millis(ms);
                 c.idle = Duration::from_millis(ms);
@@ -206,6 +216,18 @@ impl Checker {
     fn open(&self, url: &str, range: Option<u64>, limits: Limits) -> Result<Opened, LinkError> {
         if !(weblink::is_https_link(url) || self.allow_http) {
             return Err(LinkError::Http);
+        }
+        if let Some(base) = &self.stand_in {
+            if let Some(rest) = url.trim().strip_prefix(STAND_IN).filter(|r| r.is_empty() || r.starts_with(['/', '?'])) {
+                let mut o = ureq_open(&format!("{base}{rest}"), range, limits, true)?;
+                if let Some(r) = o.head.final_url.strip_prefix(base.as_str()) {
+                    o.head.final_url = format!("{STAND_IN}{r}");
+                }
+                if downgraded(url, &o.head.final_url) {
+                    return Err(LinkError::Http);
+                }
+                return Ok(o);
+            }
         }
         #[cfg(target_os = "macos")]
         let o = if self.allow_http { ureq_open(url, range, limits, true)? } else { crate::mac_net::open(url, range, limits)? };

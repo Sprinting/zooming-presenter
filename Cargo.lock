@@ -6869,6 +6869,7 @@ dependencies = [
  "base64 0.22.1",
  "core-foundation 0.10.1",
  "dirs",
+ "image",
  "libc",
  "rand",
  "schemars",
@@ -6950,6 +6951,8 @@ dependencies = [
  "libc",
  "serde_json",
  "zebra-api",
+ "zebra-core",
+ "zebra-media",
 ]
 
 [[package]]
