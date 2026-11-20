@@ -52,6 +52,9 @@ pub struct ImageLevel {
     /// For vello_cpu, made on first CPU render only (captures), so the
     /// windowed app doesn't hold every picture twice.
     pixmap: OnceLock<Arc<vello_cpu::Pixmap>>,
+    /// A frame of a moving picture (GIF, video): the next frame is the same
+    /// picture, not a new one (see `GpuRenderer::needs_another_frame`).
+    pub moving: bool,
 }
 
 impl std::fmt::Debug for ImageLevel {
@@ -79,7 +82,12 @@ impl ImageLevel {
         use vello_cpu::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
         debug_assert_eq!(px.len(), (width * height * 4) as usize);
         let data = ImageData { data: Blob::from(px), format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::AlphaPremultiplied, width, height };
-        ImageLevel { asset: asset.to_string(), width, height, data, pixmap: OnceLock::new() }
+        ImageLevel { asset: asset.to_string(), width, height, data, pixmap: OnceLock::new(), moving: false }
+    }
+
+    /// Marked as a frame of a moving picture ([`ImageLevel::moving`]).
+    pub fn as_moving(self) -> ImageLevel {
+        ImageLevel { moving: true, ..self }
     }
 
     pub fn pixmap(&self) -> Arc<vello_cpu::Pixmap> {
@@ -869,7 +877,7 @@ fn decode_gif(asset: &str, bytes: &[u8], level: u8) -> Option<Decoded> {
         for row in canvas.chunks_exact(cw * 4) {
             s.push(row, 4);
         }
-        frames.push(Arc::new(s.finish(asset)));
+        frames.push(Arc::new(s.finish(asset).as_moving()));
         match dispose {
             gif::DisposalMethod::Background => {
                 for y in y0..y1 {

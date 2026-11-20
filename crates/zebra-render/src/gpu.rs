@@ -142,8 +142,8 @@ pub struct GpuRenderer {
     /// Milliseconds of the last render: (scene encode, vello submit, error
     /// scope wait). For the `perf` query.
     pub last_ms: [f32; 3],
-    /// Pictures drawn in the last frame (blob ids).
-    last_images: std::collections::HashSet<u64>,
+    /// Pictures drawn in the last frame.
+    last_images: std::collections::HashSet<Shown>,
     /// Frames still to draw so pictures that didn't fit show (see
     /// [`GpuRenderer::needs_another_frame`]).
     settle: u8,
@@ -156,6 +156,39 @@ const SHRINK_AFTER_COST: usize = 200_000;
 /// Pictures in a frame above this many pixels might not fit next to the
 /// last frames' in vello's atlas (8192² = 67M).
 const SETTLE_ABOVE_PX: u64 = 8_000_000;
+
+/// A picture as [`GpuRenderer::needs_another_frame`] tells them apart: a
+/// still by its pixels (blob id), a moving one (GIF, video) by what it is
+/// and its size, so its next frame is not a new picture.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Shown {
+    Still(u64),
+    Moving(String, u32, u32),
+}
+
+/// The pictures in `list`, and their pixels.
+fn shown_images(list: &DisplayList) -> (std::collections::HashSet<Shown>, u64) {
+    let mut shown = std::collections::HashSet::new();
+    let mut px = 0u64;
+    for it in &list.items {
+        if let Item::Image { image, .. } = it {
+            let key = if image.moving { Shown::Moving(image.asset.clone(), image.width, image.height) } else { Shown::Still(image.data.data.id()) };
+            if shown.insert(key) {
+                px += image.width as u64 * image.height as u64;
+            }
+        }
+    }
+    (shown, px)
+}
+
+/// Frames still to draw after one showing `now`: two more when a new
+/// picture came in and the set is big enough to fill the atlas (small sets
+/// can't; don't spend frames on them). A big GIF's next frame is not new,
+/// so it no longer keeps the window redrawing (20 Nov audit, W9).
+fn settle_after(settle: u8, last: &std::collections::HashSet<Shown>, now: &std::collections::HashSet<Shown>, px: u64) -> u8 {
+    let new = now.iter().any(|s| !last.contains(s));
+    if new && px > SETTLE_ABOVE_PX { 2 } else { settle.saturating_sub(1) }
+}
 
 fn renderer_options() -> RendererOptions {
     RendererOptions { antialiasing_support: AaSupport::area_only(), ..Default::default() }
@@ -228,19 +261,9 @@ impl GpuRenderer {
     }
 
     fn note_images(&mut self, list: &DisplayList) {
-        let mut ids = std::collections::HashSet::new();
-        let mut px = 0u64;
-        for it in &list.items {
-            if let Item::Image { image, .. } = it {
-                if ids.insert(image.data.data.id()) {
-                    px += image.width as u64 * image.height as u64;
-                }
-            }
-        }
-        let new = ids.iter().any(|id| !self.last_images.contains(id));
-        // Small sets can't fill the atlas; don't spend frames on them.
-        self.settle = if new && px > SETTLE_ABOVE_PX { 2 } else { self.settle.saturating_sub(1) };
-        self.last_images = ids;
+        let (shown, px) = shown_images(list);
+        self.settle = settle_after(self.settle, &self.last_images, &shown, px);
+        self.last_images = shown;
     }
 
     /// Render off-screen and read back straight RGBA8 rows (for tests and
@@ -399,5 +422,52 @@ impl VelloCanvas {
             rs.renderer.write().free_texture(&id);
         }
         self.target = None;
+    }
+}
+
+#[cfg(test)]
+mod settle_tests {
+    use super::*;
+    use crate::display::ImageLevel;
+    use std::sync::Arc;
+
+    fn list(images: Vec<Arc<ImageLevel>>) -> DisplayList {
+        DisplayList {
+            items: images.into_iter().map(|image| Item::Image { image, transform: Default::default() }).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn big(asset: &str, moving: bool) -> Arc<ImageLevel> {
+        // 3000² = 9M px, over the 8M a frame may hold without settling.
+        let l = ImageLevel::from_premultiplied(asset, 3000, 3000, vec![0; 3000 * 3000 * 4]);
+        Arc::new(if moving { l.as_moving() } else { l })
+    }
+
+    /// Run frames of `lists` and count those that asked for another.
+    fn settling(lists: &[DisplayList]) -> Vec<u8> {
+        let (mut last, mut settle) = (Default::default(), 0);
+        lists
+            .iter()
+            .map(|l| {
+                let (shown, px) = shown_images(l);
+                settle = settle_after(settle, &last, &shown, px);
+                last = shown;
+                settle
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_big_gif_settles_once_not_every_frame() {
+        let frames: Vec<DisplayList> = (0..8).map(|_| list(vec![big("gif", true)])).collect();
+        assert_eq!(settling(&frames), [2, 1, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn new_stills_still_settle() {
+        let a = big("page", false);
+        let frames = [list(vec![a.clone()]), list(vec![a.clone()]), list(vec![a]), list(vec![big("page", false)])];
+        assert_eq!(settling(&frames), [2, 1, 0, 2]);
     }
 }
