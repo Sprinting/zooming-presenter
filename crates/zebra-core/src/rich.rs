@@ -339,6 +339,33 @@ pub fn para(t: &TextData, i: usize) -> (ListKind, u8, Align) {
 // ----------------------------------------------------------------------
 // Moving words: drag text out of a box, or to another place in it.
 
+/// `start..end` (characters) widened to whole graphemes, so "e" plus a
+/// combining accent, a flag or a ZWJ family emoji is never cut in two.
+/// A backwards range comes back as it was.
+pub fn whole_graphemes(text: &str, start: usize, end: usize) -> (usize, usize) {
+    use unicode_segmentation::UnicodeSegmentation;
+    if start >= end {
+        return (start, end);
+    }
+    let (mut a, mut b) = (start, end);
+    let mut at = 0;
+    for g in text.graphemes(true) {
+        let next = at + g.chars().count();
+        if at < start && start < next {
+            a = at;
+        }
+        if at < end && end < next {
+            b = next;
+            break;
+        }
+        if next >= end {
+            break;
+        }
+        at = next;
+    }
+    (a, b)
+}
+
 /// The characters `start..end` of `t` as a text of their own, the way a
 /// dragged selection becomes a new box: the box's own settings (style,
 /// colour, alignment, bold, italic, bullets, width mode), the characters'
@@ -346,6 +373,7 @@ pub fn para(t: &TextData, i: usize) -> (ListKind, u8, Align) {
 /// each paragraph wholly inside the range. A part of a paragraph comes out
 /// as a plain paragraph. Spaces and line breaks at either end are dropped.
 pub fn slice(t: &TextData, start: usize, end: usize) -> TextData {
+    let (start, end) = whole_graphemes(&t.text, start, end);
     let chars: Vec<char> = t.text.chars().collect();
     let a = start.min(chars.len());
     // A backwards range is empty, not a panic.
@@ -542,6 +570,10 @@ pub fn cut(t: &mut TextData, start: usize, end: usize) -> Vec<(usize, usize)> {
 pub fn move_within(t: &mut TextData, start: usize, end: usize, to: usize, copy: bool) -> Option<(usize, usize)> {
     let n = char_len(&t.text);
     let (start, end, to) = (start.min(n), end.min(n), to.min(n));
+    // Whole graphemes, as `slice` takes them; a drop point inside one goes
+    // to its start.
+    let (start, end) = whole_graphemes(&t.text, start, end);
+    let to = if to < n { whole_graphemes(&t.text, to, to + 1).0 } else { to };
     if start >= end || (start..=end).contains(&to) {
         return None;
     }

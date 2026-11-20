@@ -1567,6 +1567,9 @@ impl Editor {
                 if !(start < end && end <= n) {
                     return Err(ZError::invalid(format!("start..end ({start}..{end}) must be a range of the text's {n} characters")).hint("count in characters, end not included"));
                 }
+                // Whole graphemes: the new box and the cut agree, and an
+                // accent or emoji is never split between two boxes.
+                let (start, end) = crate::rich::whole_graphemes(&t.text, start, end);
                 let piece = crate::rich::slice(t, start, end);
                 if piece.text.is_empty() {
                     return Err(ZError::invalid(format!("characters {start}..{end} of {id} are only spaces")));

@@ -6758,6 +6758,7 @@ dependencies = [
  "serde_json",
  "similar",
  "thiserror 2.0.21",
+ "unicode-segmentation",
  "zip 9.6.1",
 ]
 
