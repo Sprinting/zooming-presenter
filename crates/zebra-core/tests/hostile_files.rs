@@ -12,6 +12,12 @@ fn heap() -> Option<u64> {
     line.split_whitespace().nth(1)?.parse::<u64>().ok().map(|kb| kb * 1024)
 }
 
+/// The spill folder is process-wide: tests that set it run one at a time.
+static SPILL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn spill_lock() -> std::sync::MutexGuard<'static, ()> {
+    SPILL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn cmd(v: serde_json::Value) -> Command {
     serde_json::from_value(v).unwrap()
 }
@@ -57,6 +63,7 @@ fn real_json() -> String {
 
 #[test]
 fn zip_bombs_are_refused_without_the_memory() {
+    let _spill = spill_lock();
     let _ = std::fs::create_dir_all(root("bomb"));
     media::set_spill_dir(Some(root("bomb-spill")));
 
@@ -112,6 +119,7 @@ fn zip_bombs_are_refused_without_the_memory() {
 
 #[test]
 fn a_document_rewritten_underneath_still_reads_and_saves() {
+    let _spill = spill_lock();
     let dir = root("rewrite");
     media::set_spill_dir(Some(root("rewrite-spill")));
     let src = dir.join("pic.png");
@@ -138,6 +146,7 @@ fn a_document_rewritten_underneath_still_reads_and_saves() {
 
 #[test]
 fn paths_that_never_end_are_refused() {
+    let _spill = spill_lock();
     media::set_spill_dir(Some(root("endless-spill")));
     let dir = root("endless");
     let fifo = dir.join("pipe.png");
@@ -162,6 +171,7 @@ fn paths_that_never_end_are_refused() {
 
 #[test]
 fn a_huge_picture_is_refused_before_it_is_copied() {
+    let _spill = spill_lock();
     let spill = root("huge-spill");
     media::set_spill_dir(Some(spill.clone()));
     let dir = root("huge");
@@ -189,6 +199,7 @@ fn a_huge_picture_is_refused_before_it_is_copied() {
 
 #[test]
 fn the_wrong_kind_of_file_is_refused_before_it_is_copied() {
+    let _spill = spill_lock();
     let spill = root("kind-spill");
     media::set_spill_dir(Some(spill.clone()));
     let dir = root("kind");
