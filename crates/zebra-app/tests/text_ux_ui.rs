@@ -1,4 +1,4 @@
-//! Spec 14: Prezi's text width handle, and Tab / Backspace in lists and
+//! Spec 14: the text width handle, and Tab / Backspace in lists and
 //! indented paragraphs as in TextEdit and Pages.
 use egui::{Event, Key, Modifiers, PointerButton, Pos2};
 use egui_kittest::Harness;

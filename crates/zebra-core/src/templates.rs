@@ -1,6 +1,6 @@
 //! Templates (whole starting presentations) and layouts (frame
-//! arrangements with placeholder text), in the spirit of Prezi Classic's
-//! template chooser and "Insert › Layout".
+//! arrangements with placeholder text), for the template chooser and
+//! "Insert › Layout".
 //!
 //! Both are data: one JSON file each in `zebra-core/templates/layouts` and
 //! `zebra-core/templates/decks`, built into the app. They are described in

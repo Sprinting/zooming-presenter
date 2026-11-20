@@ -1,4 +1,4 @@
-//! The theme editor (Prezi Classic's "Customize current theme"): colours,
+//! The theme editor ("Customise current theme"): colours,
 //! fonts (any installed font, embedded in the file), a background picture
 //! and a 3D background of up to three layers. Changes show live on the
 //! canvas; each burst of edits is one undo step.

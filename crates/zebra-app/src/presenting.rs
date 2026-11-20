@@ -18,7 +18,7 @@ use crate::widgets as w;
 
 const H: Origin = Origin::Human;
 
-/// Autoplay choices offered in the UI, seconds (Prezi Classic offered 4, 10, 20).
+/// Autoplay choices offered in the UI, seconds.
 pub const AUTOPLAY_CHOICES: [f64; 3] = [4.0, 10.0, 20.0];
 
 /// App-level presenting state (settings persist across launches).

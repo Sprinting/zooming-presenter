@@ -26,7 +26,7 @@ pub enum ScrollMode {
     /// Trackpad scroll pans, pinch zooms; a mouse wheel zooms.
     #[default]
     Auto,
-    /// Scrolling always zooms (classic Prezi).
+    /// Scrolling always zooms.
     Zoom,
     /// Scrolling always pans; ⌘-scroll or pinch zooms.
     Pan,
@@ -1125,7 +1125,7 @@ impl ZebraApp {
         }
     }
 
-    /// Classic Prezi "Add current view": an invisible frame around the view.
+    /// "Add current view": an invisible frame around the view.
     pub fn add_current_view(&mut self) {
         let cam = self.editor.view.target_camera();
         let vr = cam.view_rect(self.editor.view.viewport);

@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use zebra_api::client::{Client, ClientError};
 
 #[derive(Parser)]
-#[command(name = "zebractl", version, about = "Control Zebra, a zooming presentation app (like classic Prezi), from the command line",
-    long_about = "Control Zebra, a zooming presentation app (like classic Prezi), from the command line.\n\n\
+#[command(name = "zebractl", version, about = "Control Zebra, a zooming presentation app, from the command line",
+    long_about = "Control Zebra, a zooming presentation app, from the command line.\n\n\
 Zebra must be open, and the person using it must have switched on \"Allow AI control\" (the AI button in Zebra's toolbar). Agents cannot switch it on; `zebractl disconnect` switches it off. If you have to start Zebra yourself, start it without taking the person's focus: `open -g -a Zebra --args --background`. Everything you do shows up live in the person's window with your --agent name, and each change can be undone by them.\n\n\
 NAME YOURSELF: pass --agent <your name> on every command (or set ZEBRA_AGENT_NAME once). Without it you share the name \"zebractl\" with every other unnamed agent.\n\n\
 READ BEFORE YOU CHANGE: if the person or another agent changed the document since you last read it (`describe`, `query`), edits fail with stale_revision. Read again, then retry.\n\n\
