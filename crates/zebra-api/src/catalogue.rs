@@ -46,6 +46,7 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::Command, r#"{"op":"replace_image","id":"i1","path":"/Users/me/new-logo.png"}"#),
     (Kind::Command, r#"{"op":"replace_video","id":"v1","path":"/Users/me/new-clip.mp4"}"#),
     (Kind::Command, r#"{"op":"set_poster","id":"v1","path":"/Users/me/poster.jpg"}"#),
+    (Kind::Command, r#"{"op":"set_poster","id":"v1","at":2.5}"#),
     (Kind::Command, r#"{"op":"set_soundtrack","path":"/Users/me/music.m4a","volume":0.4,"loop":true}"#),
     (Kind::Command, r#"{"op":"remove_soundtrack"}"#),
     (Kind::Command, r#"{"op":"set_voiceover","index":0,"path":"/Users/me/step1.m4a"}"#),

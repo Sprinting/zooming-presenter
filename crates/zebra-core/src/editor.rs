@@ -1324,7 +1324,11 @@ impl Editor {
                 e.transform.scale = world_w / nw;
                 out.changed.push(id);
             }
-            Command::SetPoster { id, data_base64, path } => {
+            Command::SetPoster { id, data_base64, path, at } => {
+                if at.is_some() {
+                    // The host grabs the frame and passes it as data.
+                    return Err(ZError::new("unsupported", "this Zebra can't grab a frame of a video").hint("pass data_base64 or path with a picture"));
+                }
                 let poster = if data_base64.trim().is_empty() && path.is_none() {
                     None
                 } else {

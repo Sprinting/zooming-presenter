@@ -192,13 +192,18 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         poster_base64: Option<String>,
     },
-    /// Set a video's poster picture. No data and no path clears it.
+    /// Set a video's poster picture. No data, path or `at` clears it.
     SetPoster {
         id: ElementId,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         data_base64: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
+        /// A frame of the video itself, this many seconds from the start of
+        /// its file (the inspector's "Use current frame"). Needs a platform
+        /// that decodes video (macOS).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<f64>,
     },
     /// Background music for the presentation. With data or a path the track
     /// is replaced; without, only the given settings change.

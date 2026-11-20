@@ -827,7 +827,8 @@ fn check_read(editor: &Editor, seen: Option<u64>) -> Result<(), RpcError> {
         .hint("read it again (`describe`, or `query` for the parts you are changing), then retry"))
 }
 
-/// Before commands run: `save_theme` with `to_library` is checked (it
+/// Before commands run: a poster `at` a time in the video becomes that
+/// frame's picture, and `save_theme` with `to_library` is checked (it
 /// writes into the person's own files, like `save`). Returns the ids of
 /// the themes to save to the library once the commands succeed.
 fn prepare(cmds: &mut [Command], editor: &Editor) -> Result<Vec<String>, RpcError> {
@@ -837,6 +838,25 @@ fn prepare(cmds: &mut [Command], editor: &Editor) -> Result<Vec<String>, RpcErro
             Command::SaveTheme { theme, to_library: true, .. } => {
                 need_full(editor.view.agent_permission, "save_theme with to_library")?;
                 lib.push(theme.id.clone());
+            }
+            Command::SetPoster { id, data_base64, path, at } if at.is_some() => {
+                need_edit(editor.view.agent_permission, "set_poster")?;
+                let secs = at.take().unwrap_or_default();
+                if !secs.is_finite() || secs < 0.0 {
+                    return Err(RpcError::invalid("`at` is seconds from the start of the video, 0 or more"));
+                }
+                if !data_base64.is_empty() || path.is_some() {
+                    return Err(RpcError::invalid("give `at`, or data_base64 or path, not both"));
+                }
+                let Some(zebra_core::ElementKind::Video(v)) = editor.doc.get(id).map(|e| &e.kind) else {
+                    return Err(RpcError::app("not_found", format!("no video '{id}'")).hint("`query` {\"q\":\"elements\",\"kind\":\"video\"} lists them"));
+                };
+                let a = editor.doc.assets.get(&v.asset).ok_or_else(|| RpcError::app("bad_file", format!("the video '{id}' has no data")))?;
+                let file = zebra_core::media::materialize(&v.asset, &a.ext, &a.bytes).map_err(|e| RpcError::app("io", e.to_string()))?;
+                let png = zebra_media::platform().poster_png(&file, secs, 1280).map_err(|e| {
+                    RpcError::app("unsupported", format!("cannot grab a frame of the video here: {e}")).hint("pass data_base64 or path with a picture instead")
+                })?;
+                *data_base64 = base64::engine::general_purpose::STANDARD.encode(png);
             }
             _ => {}
         }

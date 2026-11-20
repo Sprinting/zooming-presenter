@@ -6625,6 +6625,7 @@ dependencies = [
  "sha2 0.10.9",
  "zebra-core",
  "zebra-import",
+ "zebra-media",
  "zebra-render",
  "zebra-web",
 ]

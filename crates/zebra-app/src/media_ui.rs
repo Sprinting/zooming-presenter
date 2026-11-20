@@ -1023,16 +1023,16 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
         if let Some(f) = frame {
             if ui.button(crate::t!("media-poster-use-frame")).on_hover_text(crate::t!("media-poster-use-frame-tip")).clicked() {
                 let png = zebra_media::encode_png(&zebra_media::Frame { width: f.width, height: f.height, rgba: f.data.data.data().to_vec() });
-                app.apply(Command::SetPoster { id: id.to_string(), data_base64: base64::engine::general_purpose::STANDARD.encode(png), path: None });
+                app.apply(Command::SetPoster { id: id.to_string(), data_base64: base64::engine::general_purpose::STANDARD.encode(png), path: None, at: None });
             }
         }
         if ui.button(crate::t!("media-poster-choose")).clicked() {
             if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), &["png", "jpg", "jpeg", "webp"]).pick_file() {
-                app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: Some(p.to_string_lossy().to_string()) });
+                app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: Some(p.to_string_lossy().to_string()), at: None });
             }
         }
         if v.poster.is_some() && ui.small_button(crate::t!("media-clear-button")).on_hover_text(crate::t!("media-poster-remove-tip")).clicked() {
-            app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: None });
+            app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: None, at: None });
         }
     });
     (patch, dragging)

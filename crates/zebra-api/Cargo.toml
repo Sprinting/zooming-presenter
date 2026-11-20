@@ -18,6 +18,8 @@ zebra-render = { path = "../zebra-render", default-features = false }
 zebra-web = { path = "../zebra-web" }
 # The `import` method (PDF pages as frames).
 zebra-import = { path = "../zebra-import" }
+# `set_poster` with `at` grabs a video frame; `play` asks whether video plays.
+zebra-media.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
