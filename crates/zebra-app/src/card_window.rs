@@ -90,7 +90,8 @@ pub enum Nav {
 
 /// The play window's navigation rule. The page itself (the main frame)
 /// is only ever our own string; its player frame only the embed hosts.
-/// Any https or http link elsewhere opens in the browser when clicked.
+/// Any https or http link elsewhere opens in the browser, only when the
+/// person clicked it.
 pub fn navigation(url: &str, main_frame: bool, clicked: bool) -> Nav {
     let u = url.trim();
     if u == "about:blank" || u == "about:srcdoc" {
@@ -102,7 +103,10 @@ pub fn navigation(url: &str, main_frame: bool, clicked: bool) -> Nav {
         if p.scheme == "https" && format!("https://{}", p.host) == ORIGIN.to_ascii_lowercase() {
             return Nav::Allow;
         }
-        return if web { Nav::Browser } else { Nav::Block };
+        // Anything else in the main frame: only a link the person clicked
+        // goes to the browser. A page or player trying to move the window
+        // somewhere by itself goes nowhere.
+        return if web && clicked { Nav::Browser } else { Nav::Block };
     }
     if p.scheme == "https" && EMBED_HOSTS.contains(&p.host.as_str()) {
         return Nav::Allow;
@@ -602,6 +606,9 @@ mod tests {
         assert_eq!(navigation("https://player.vimeo.com/video/1", false, false), Nav::Allow);
         // "Watch on YouTube" and other links: the browser, never here.
         assert_eq!(navigation("https://www.youtube.com/watch?v=abc", true, true), Nav::Browser);
+        // The embed moving the whole window by itself (top navigation): nowhere.
+        assert_eq!(navigation("https://evil.example.com/", true, false), Nav::Block);
+        assert_eq!(navigation("http://example.com/", true, false), Nav::Block);
         assert_eq!(navigation("https://example.com/", false, true), Nav::Browser);
         // Not clicked (a script or redirect): nowhere.
         assert_eq!(navigation("https://tracker.example.com/", false, false), Nav::Block);
