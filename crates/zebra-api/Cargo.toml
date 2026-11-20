@@ -26,3 +26,11 @@ base64.workspace = true
 dirs.workspace = true
 rand.workspace = true
 libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The AI control switch lives in the login keychain, readable only by
+# Zebra's own code signature (see discovery::AiSwitch).
+security-framework = "3"
+security-framework-sys = "2"
+core-foundation = "0.10"
+sha2 = "0.10"

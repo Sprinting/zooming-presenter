@@ -27,6 +27,9 @@ fn launch_flag_needs_a_person_to_switch_ai_control_on_first() {
     // SAFETY: the only test in this binary.
     unsafe { std::env::set_var("ZEBRA_DATA_DIR", &dir) };
     assert!(!zebra_api::discovery::human_has_granted());
+    // An agent switching it off before any grant doesn't make one.
+    zebra_api::discovery::record_ai_switch(false).unwrap();
+    assert!(!zebra_api::discovery::human_has_granted());
 
     // 1. `--api` on a fresh install: AI control stays off.
     {
@@ -45,9 +48,24 @@ fn launch_flag_needs_a_person_to_switch_ai_control_on_first() {
         h.run_steps(3);
         assert!(h.state().ai_enabled && h.state().ai_saved && h.state().api.is_some());
         assert!(zebra_api::discovery::human_has_granted(), "the person's click records the grant");
+        assert_eq!(zebra_api::discovery::ai_switch().on, Some(true));
+    }
+
+    // 2b. The kept switch (not the app's settings file) brings it back on.
+    {
+        let mut h = harness(false, &dir);
+        assert!(h.state().ai_enabled && h.state().ai_saved, "the person's choice is kept with the grant");
+        let switch = || egui::accesskit::Role::Switch;
+        h.get_by_label("AI").click();
+        h.run_steps(3);
         h.get_by_role_and_label(switch(), "Let AI agents control Zebra").click();
         h.run_steps(3);
         assert!(!h.state().ai_enabled && !h.state().ai_saved && h.state().api.is_none());
+        assert_eq!(zebra_api::discovery::ai_switch(), zebra_api::discovery::AiSwitch { granted: true, on: Some(false) });
+    }
+    {
+        let h = harness(false, &dir);
+        assert!(!h.state().ai_enabled, "switched off stays off");
     }
 
     // 3. From then on the flag works, and it is not saved as the person's choice.
