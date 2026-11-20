@@ -8,10 +8,21 @@ DIR="${ZEBRA_TEST_MEDIA:-$HOME/Downloads/zebra-test-media}"
 cd "$(dirname "$0")/.."
 case "${1:-make}" in
   clean)
+    # Only a folder this script made: it carries the marker.
+    if [ ! -f "$DIR/.zebra-test-media" ]; then
+      echo "Not removing $DIR: it wasn't made by this script." >&2
+      exit 1
+    fi
     rm -rf "$DIR"
     echo "Removed $DIR"
     ;;
   make)
+    if [ -e "$DIR" ] && [ ! -f "$DIR/.zebra-test-media" ]; then
+      echo "$DIR exists and wasn't made by this script; pick another folder with ZEBRA_TEST_MEDIA." >&2
+      exit 1
+    fi
+    mkdir -p "$DIR"
+    touch "$DIR/.zebra-test-media"
     cargo run --release -q -p zebra-import --example test_media -- "$DIR" "${ZEBRA_BIG_MB:-2048}"
     rm -f "$DIR/hostile/pipe.png"
     mkfifo "$DIR/hostile/pipe.png"
