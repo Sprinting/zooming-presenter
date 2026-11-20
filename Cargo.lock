@@ -6963,6 +6963,7 @@ dependencies = [
  "libc",
  "serde_json",
  "zebra-api",
+ "zebra-core",
 ]
 
 [[package]]
