@@ -265,6 +265,11 @@ impl Dispatcher {
 
 /// `zebra --headless`: no window, same API. Blocks until killed or `quit`.
 pub fn run_headless(opts: ApiOptions, open: Option<PathBuf>) -> anyhow::Result<()> {
+    // Only while the person's AI control switch is on (a person switched it
+    // on once, and nobody switched it off since).
+    if let Some(why) = discovery::ai_switch().flag_refusal() {
+        anyhow::bail!("{why}");
+    }
     headless::run(opts, open)
 }
 
