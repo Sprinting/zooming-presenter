@@ -568,7 +568,9 @@ fn decode_job_inner(job: &Job) -> Vec<(u8, Decoded)> {
 ///
 /// * a PNG streams row by row into the levels; an interlaced one over
 ///   [`MAX_WHOLE_PIXELS`] streams its first pass (every 8th pixel);
-/// * a big JPEG decodes straight at 1/2, 1/4 or 1/8 of its size;
+/// * on the Mac, a big JPEG, and anything else Zebra can't stream or
+///   decode whole (a huge progressive JPEG or WebP), is drawn by ImageIO
+///   at the level's size, as Keynote draws pictures;
 /// * the rest decode whole under [`decode_limits`] and shrink from their
 ///   own pixel format, with no RGBA copy and no clone of level 0.
 ///
@@ -596,10 +598,21 @@ fn decode_still(asset: &str, bytes: &[u8], want: u8) -> Vec<(u8, Decoded)> {
     if head.format == PictureFormat::Png {
         let _permit = DecodeBytes::acquire(out_bytes + iw as u64 * 16);
         done = stream_png(bytes, &shrinks, pixels > MAX_WHOLE_PIXELS);
-    } else if head.format == PictureFormat::Jpeg && (pixels > SCALED_JPEG_FROM || iw.max(ih) > WHOLE_JPEG_SIDE) {
-        done = scaled_jpeg(bytes, &head, (lw, lh), out_bytes, &shrinks);
-        if done.is_none() {
-            return vec![];
+    } else if head.format == PictureFormat::Jpeg && (pixels > SCALED_JPEG_FROM || iw.max(ih) > WHOLE_JPEG_SIDE) || !head.streams_or_decodes_whole() {
+        // On the Mac, ImageIO draws it at the level's size, as Keynote
+        // does (a JPEG straight from its DCT at a smaller size). Elsewhere
+        // (development builds) it decodes whole if it can.
+        #[cfg(target_os = "macos")]
+        {
+            let _permit = DecodeBytes::acquire(out_bytes * 2);
+            let Some((w, h, px)) = crate::imageio::thumbnail(bytes, lw.max(lh), MAX_WHOLE_DECODE_ALLOC) else { return vec![] };
+            let mut out = shrinks(w, h);
+            for row in px.chunks_exact(w as usize * 4) {
+                for s in out.iter_mut() {
+                    s.push(row, 4);
+                }
+            }
+            done = Some(out);
         }
     }
     let shrinks = match done {
@@ -642,10 +655,11 @@ fn decode_still(asset: &str, bytes: &[u8], want: u8) -> Vec<(u8, Decoded)> {
 
 /// Largest picture decoded whole (pixels); see `zebra_core::media`.
 pub use zebra_core::media::MAX_WHOLE_PIXELS;
-/// JPEGs over this many pixels decode scaled ([`scaled_jpeg`]); smaller
-/// ones decode whole, which is faster. 64 MP is 192 MB as RGB.
+/// JPEGs over this many pixels are drawn by ImageIO at the level's size
+/// on the Mac; smaller ones decode whole, which is faster. 64 MP is 192 MB
+/// as RGB.
 pub const SCALED_JPEG_FROM: u64 = 64 << 20;
-/// JPEGs wider or taller than this decode scaled too.
+/// JPEGs wider or taller than this go to ImageIO too.
 pub const WHOLE_JPEG_SIDE: u32 = 16384;
 
 /// Feed a PNG's rows to the shrinks `make` gives for the size streamed.
@@ -706,73 +720,6 @@ fn stream_png(bytes: &[u8], make: &dyn Fn(u32, u32) -> Vec<Shrink>, first_pass_o
     Some(shrinks)
 }
 
-/// Decode a big JPEG straight at 1/2, 1/4 or 1/8 of its size (the DCT
-/// does the scaling), the largest that is at least the level's size and
-/// fits [`MAX_WHOLE_DECODE_ALLOC`], and feed its rows to the shrinks. A
-/// baseline JPEG never exists at full size; a progressive one keeps its
-/// coefficients (bounded by `MAX_PROGRESSIVE_PIXELS`). None if unreadable.
-fn scaled_jpeg(bytes: &[u8], head: &zebra_core::media::PictureHeader, (lw, lh): (u32, u32), out_bytes: u64, make: &dyn Fn(u32, u32) -> Vec<Shrink>) -> Option<Vec<Shrink>> {
-    let mut d = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
-    d.read_info().ok()?;
-    let info = d.info()?;
-    let (iw, ih) = (info.width as u32, info.height as u32);
-    if (iw, ih) != (head.width, head.height) {
-        return None;
-    }
-    let comps: u64 = match info.pixel_format {
-        jpeg_decoder::PixelFormat::L8 => 1,
-        jpeg_decoder::PixelFormat::RGB24 => 3,
-        jpeg_decoder::PixelFormat::CMYK32 => 4,
-        _ => return None,
-    };
-    let at = |k: u32| (iw.div_ceil(k), ih.div_ceil(k));
-    // The component planes and the output: two copies at the scaled size.
-    let cost = |k: u32| {
-        let (w, h) = at(k);
-        w as u64 * h as u64 * comps * 2
-    };
-    let mut k = 1;
-    while k < 8 && at(k * 2).0 >= lw && at(k * 2).1 >= lh {
-        k *= 2;
-    }
-    while k < 8 && cost(k) > MAX_WHOLE_DECODE_ALLOC {
-        k *= 2;
-    }
-    if cost(k) > MAX_WHOLE_DECODE_ALLOC {
-        return None;
-    }
-    let (rw, rh) = at(k);
-    let (ow, oh) = d.scale(rw.min(u16::MAX as u32) as u16, rh.min(u16::MAX as u32) as u16).ok()?;
-    let (ow, oh) = (ow as u32, oh as u32);
-    let coefficients = if head.interlaced { iw as u64 * ih as u64 * comps * 2 } else { 0 };
-    let _permit = DecodeBytes::acquire(out_bytes + cost(k) + coefficients);
-    d.set_max_decoding_buffer_size(MAX_WHOLE_DECODE_ALLOC as usize);
-    let px = d.decode().ok()?;
-    let stride = ow as usize * comps as usize;
-    if ow == 0 || oh == 0 || px.len() < stride * oh as usize {
-        return None;
-    }
-    let mut shrinks = make(ow, oh);
-    let mut rgb = vec![];
-    for row in px.chunks_exact(stride).take(oh as usize) {
-        let (row, channels) = if comps == 4 {
-            // jpeg-decoder gives ink amounts (Adobe's inversion undone);
-            // the same conversion as image's.
-            rgb.clear();
-            for p in row.chunks_exact(4) {
-                let k = 255 - p[3] as u32;
-                rgb.extend(p[..3].iter().map(|&c| (((255 - c as u32) * k + 127) / 255) as u8));
-            }
-            (&rgb[..], 3)
-        } else {
-            (row, comps as usize)
-        };
-        for s in shrinks.iter_mut() {
-            s.push(row, channels);
-        }
-    }
-    Some(shrinks)
-}
 
 /// Most bytes all decodes in flight may be estimated to need at once
 /// (header size times the pixel formats, plus the levels made). One

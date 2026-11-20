@@ -519,13 +519,14 @@ const HEAD: u64 = 256 << 10;
 //   up to `MAX_STREAM_WIDTH` (a row and the column table stay small).
 //   Interlaced (Adam7) PNGs over the whole-decode budget are drawn from
 //   their first pass, which is every 8th pixel each way.
-// * JPEG: decoded straight at 1/2, 1/4 or 1/8 of its size (DCT scaling),
-//   up to the format's own 65,535 a side. Progressive JPEGs must keep
-//   every coefficient while their scans arrive (2 bytes per sample), so
-//   they are bounded by `MAX_PROGRESSIVE_PIXELS`.
-// * WebP and GIF have no streaming decoder: they decode whole, so they are
-//   bounded by the whole-decode budgets (`MAX_WHOLE_PIXELS`, and
-//   `MAX_GIF_PIXELS` for a GIF's screen).
+// * JPEG and WebP on the Mac: drawn by ImageIO at the size shown, as
+//   Keynote draws them (a JPEG straight from its DCT at a smaller size),
+//   up to the formats' own most (65,535 a side for JPEG, 16,383 for WebP).
+//   Elsewhere (development builds) they decode whole, so they are bounded
+//   by `MAX_WHOLE_PIXELS`, and a progressive JPEG, which keeps every
+//   coefficient while its scans arrive, by `MAX_PROGRESSIVE_PIXELS`.
+// * GIF has no streaming decoder: its frames are composited at full
+//   screen size, so its screen is bounded by `MAX_GIF_PIXELS`.
 //
 // Pictures within these come in whatever their file size; the renderer
 // keeps to the same numbers (zebra_render::images).
@@ -569,9 +570,18 @@ impl PictureHeader {
         if self.width == 0 || self.height == 0 {
             return false;
         }
+        if cfg!(target_os = "macos") && matches!(self.format, PictureFormat::Jpeg | PictureFormat::WebP) {
+            return true;
+        }
+        self.streams_or_decodes_whole()
+    }
+    /// Whether Zebra's own decoders can scale it down within the budgets
+    /// (streaming a PNG, or decoding the rest whole). What can't is left
+    /// to ImageIO on the Mac.
+    pub fn streams_or_decodes_whole(&self) -> bool {
         match self.format {
             PictureFormat::Png => self.width as u64 <= MAX_STREAM_WIDTH,
-            PictureFormat::Jpeg => !self.interlaced || self.pixels() <= MAX_PROGRESSIVE_PIXELS,
+            PictureFormat::Jpeg => self.pixels() <= MAX_WHOLE_PIXELS && (!self.interlaced || self.pixels() <= MAX_PROGRESSIVE_PIXELS),
             PictureFormat::WebP => self.pixels() <= MAX_WHOLE_PIXELS,
             PictureFormat::Gif => self.pixels() <= MAX_GIF_PIXELS,
         }

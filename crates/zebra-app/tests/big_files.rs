@@ -238,7 +238,6 @@ fn lying_jpeg(w: u16, h: u16) -> Vec<u8> {
     v.extend([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
     v.extend([0xFF, 0xD9]);
     v
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A15 (cloud pass): a .zebra over the document size limit said "isn't a

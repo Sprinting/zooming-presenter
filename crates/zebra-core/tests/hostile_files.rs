@@ -271,10 +271,12 @@ fn a_huge_picture_comes_in_and_only_unscalable_ones_are_refused() {
     std::fs::write(&ok, lying_png(150_000, 150_000, false)).unwrap();
     ed.apply(cmd(json!({"op":"add_image","path":ok,"x":0,"y":0})), Origin::Human).unwrap();
     let base = std::fs::read_dir(&spill).map(|d| d.count()).unwrap_or(0);
-    for (name, bytes) in [
-        ("wide.png", lying_png(u32::MAX / 2, 10, false)),
-        ("progressive.jpg", lying_jpeg(60_000, 60_000, true)),
-    ] {
+    // (On the Mac ImageIO draws any JPEG scaled, progressive or not.)
+    let mut refused = vec![("wide.png", lying_png(u32::MAX / 2, 10, false))];
+    if !cfg!(target_os = "macos") {
+        refused.push(("progressive.jpg", lying_jpeg(60_000, 60_000, true)));
+    }
+    for (name, bytes) in refused {
         let p = dir.join(name);
         std::fs::write(&p, bytes).unwrap();
         let e = ed.apply(cmd(json!({"op":"add_image","path":p,"x":0,"y":0})), Origin::Human).unwrap_err();
@@ -284,10 +286,15 @@ fn a_huge_picture_comes_in_and_only_unscalable_ones_are_refused() {
     assert_eq!(std::fs::read_dir(&spill).map(|d| d.count()).unwrap_or(0), base, "nothing copied");
     // The header rules themselves.
     let h = |b: &[u8]| media::picture_header(b).unwrap();
-    assert!(h(&lying_jpeg(65_000, 65_000, false)).fits(), "a baseline JPEG is read scaled at any size");
-    assert!(!h(&lying_jpeg(65_000, 65_000, true)).fits());
+    // On the Mac ImageIO reads a JPEG scaled at any size; elsewhere only
+    // what Zebra's own decoder can hold whole.
+    assert_eq!(h(&lying_jpeg(65_000, 65_000, false)).fits(), cfg!(target_os = "macos"), "a baseline JPEG is read scaled at any size on the Mac");
+    assert_eq!(h(&lying_jpeg(65_000, 65_000, true)).fits(), cfg!(target_os = "macos"));
     assert!(h(&lying_png(70_000, 70_000, true)).fits(), "interlaced: drawn from its first pass");
     assert_eq!(h(&lying_png(3, 4, true)), media::PictureHeader { format: media::PictureFormat::Png, width: 3, height: 4, interlaced: true });
+    // (A shadowed editor lives to the end of the scope: its copy of the
+    // 150,000-pixel picture would still be spilled.)
+    drop(ed);
     let mut ed = Editor::default();
 
     // A disk image named .png: turned away from its first bytes.

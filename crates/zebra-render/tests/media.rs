@@ -210,5 +210,5 @@ fn a_huge_png_exports_to_pdf_at_the_size_shown() {
     assert!(pdf.starts_with(b"%PDF"));
     let text = String::from_utf8_lossy(&pdf);
     assert!(!text.contains("/Width 12000"), "the original went in whole");
-    assert!(text.contains("/Subtype /Image"), "a picture went in");
+    assert!(text.contains("/Subtype/Image"), "a picture went in");
 }

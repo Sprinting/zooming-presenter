@@ -194,10 +194,11 @@ fn levels_from_odd_buffers() {
     assert!(l.moving);
 }
 
-/// Kartik's decision (21 Nov): no size cap on pictures. A JPEG too big to
-/// decode whole (here wider than 16,384) decodes straight at 1/4 of its
-/// size, never at full size.
+/// Kartik's decision (21 Nov): no size cap on pictures. On the Mac a JPEG
+/// too big to decode whole (here wider than 16,384) is drawn by ImageIO
+/// at the level's size, as Keynote does, never at full size in Zebra.
 #[test]
+#[cfg(target_os = "macos")]
 fn a_big_jpeg_decodes_scaled() {
     let (w, h) = (20000u32, 1200u32);
     let bytes: zebra_core::AssetBytes = quietly(|| {

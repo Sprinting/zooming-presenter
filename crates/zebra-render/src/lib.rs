@@ -80,6 +80,8 @@ pub mod text;
 pub mod cpu;
 mod pdf;
 pub use pdf::PDF_DECODE_BUDGET;
+#[cfg(target_os = "macos")]
+mod imageio;
 pub mod shapes;
 #[cfg(feature = "gpu")]
 pub mod gpu;
