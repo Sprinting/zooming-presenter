@@ -116,11 +116,24 @@ pub struct Renderer {
     page_raster: std::sync::RwLock<Option<pages::PageRaster>>,
     /// How formula results in each table column show (see `table_draw`).
     pub(crate) table_looks: std::sync::Mutex<display::LookCache>,
+    /// Charts laid out (see `chart_draw`).
+    pub(crate) charts: std::sync::Mutex<display::ChartCache>,
 }
 
 impl Renderer {
+    /// Charts laid out since this renderer was made (a layout is reused
+    /// until the chart, its table or its size changes).
+    pub fn chart_layouts(&self) -> u64 {
+        self.charts.lock().map(|c| c.layouts).unwrap_or(0)
+    }
+
+    /// Charts whose layout is held.
+    pub fn charts_cached(&self) -> usize {
+        self.charts.lock().map(|c| c.len()).unwrap_or(0)
+    }
+
     pub fn new() -> Self {
-        Renderer { fonts: text::Fonts::new(), images: images::ImageCache::default(), page_raster: Default::default(), table_looks: Default::default() }
+        Renderer { fonts: text::Fonts::new(), images: images::ImageCache::default(), page_raster: Default::default(), table_looks: Default::default(), charts: Default::default() }
     }
 
     /// Give the renderer a way to draw PDF pages (the app draws them in

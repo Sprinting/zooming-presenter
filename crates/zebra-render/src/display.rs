@@ -18,6 +18,9 @@ use crate::images::{level_for, Decoded};
 use crate::text::{wrap_for, TextLayout};
 use crate::{Renderer, SceneOptions};
 
+#[path = "chart_draw.rs"]
+mod chart_draw;
+pub(crate) use chart_draw::ChartCache;
 #[path = "table_draw.rs"]
 mod table_draw;
 pub(crate) use table_draw::LookCache;
@@ -877,6 +880,7 @@ impl Ctx<'_> {
                 }
             }
             ElementKind::Table(t) => self.table(e, t, a, items),
+            ElementKind::Chart(c) => self.chart(e, c, a, items),
             ElementKind::Ink(ink) => {
                 if ink.points.is_empty() {
                     return;

@@ -24,6 +24,11 @@ image.workspace = true
 gif.workspace = true
 png.workspace = true
 resvg.workspace = true
+# Chart layout (axes, ticks, bars, slices, legends) from BetterOffice's
+# DrawingML geometry (Apache-2.0), drawn as display-list items. The app
+# already links it for PowerPoint import.
+betteroffice-drawingml = { version = "=0.5.1", features = ["chart"] }
+unicode-segmentation = "1.13"
 vello = { workspace = true, optional = true }
 eframe = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
