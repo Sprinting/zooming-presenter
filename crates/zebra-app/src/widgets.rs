@@ -1196,7 +1196,25 @@ pub fn button_grid(ui: &mut Ui, labels: &[(&str, &str, bool)], cols: usize) -> O
 }
 
 // ----------------------------------------------------------------------
-// HUD bezel (the only transient message style; no web toasts)
+// Transient messages: the HUD bezel, and a note under the toolbar about
+// what just happened on the canvas. No web toasts.
+
+/// A short note centred just under the top of `rect` (the canvas, so just
+/// under the toolbar), in the style of the info bars there: one line in a
+/// floating panel. `alpha` fades it out.
+pub fn note_bar(ctx: &egui::Context, rect: Rect, text: &str, alpha: f32) {
+    if alpha <= 0.0 {
+        return;
+    }
+    let p = Palette::of(ctx);
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("zebra-note-bar")));
+    let galley = painter.layout(text.to_string(), style::ui_font(13.0), p.text.gamma_multiply(alpha), (rect.width() - 64.0).max(120.0));
+    let size = galley.size() + Vec2::new(24.0, 16.0);
+    let r = Rect::from_min_size(Pos2::new(rect.center().x - size.x / 2.0, rect.top() + 12.0), size);
+    painter.rect_filled(r.translate(Vec2::new(0.0, 2.0)), CornerRadius::same(6), Color32::from_black_alpha(((if p.dark { 90.0 } else { 30.0 }) * alpha) as u8));
+    painter.rect(r, CornerRadius::same(6), p.float.gamma_multiply(alpha), Stroke::new(1.0, p.border.gamma_multiply(alpha)), StrokeKind::Inside);
+    painter.galley(r.min + Vec2::new(12.0, 8.0), galley, p.text);
+}
 
 /// The volume-bezel idiom: centred, rounded, dark and opaque in this style,
 /// over `rect`. `alpha` fades it out.

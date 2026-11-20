@@ -927,6 +927,27 @@ impl Editor {
         out
     }
 
+    /// The frame selected on its own (Option-click, Select Frame Only),
+    /// while the human selection is just that frame.
+    pub fn frame_only(&self) -> Option<&ElementId> {
+        self.view.frame_only.as_ref().filter(|id| self.view.selection.len() == 1 && self.view.selection[0] == **id && self.doc.get(id).is_some_and(|e| e.is_frame()))
+    }
+
+    /// What moving, resizing or turning `ids` moves: `ids`, the text typed
+    /// on shapes among them, and everything their frames hold
+    /// ([`crate::model::frame_holds`]), less anything locked. A drag works
+    /// this out once, when it starts, and moves that (`with_contents:
+    /// false`), so a frame doesn't pick things up or drop them on the way.
+    pub fn carried(&self, ids: &[ElementId]) -> Vec<ElementId> {
+        self.expand(ids, true).into_iter().filter(|id| self.doc.get(id).is_some_and(|e| !e.locked)).collect()
+    }
+
+    /// What a move, resize or turn of `ids` moves: [`Editor::carried`]
+    /// with their contents, else `ids` and the text on shapes among them.
+    fn moved(&self, ids: &[ElementId], with_contents: bool) -> Vec<ElementId> {
+        if with_contents { self.carried(ids) } else { self.expand(ids, false) }
+    }
+
     /// Text typed on a shape (`add_text` with `on`, or double-clicking
     /// it): grouped with the shape and centred on it. It goes where the
     /// shape goes.
@@ -967,7 +988,7 @@ impl Editor {
         measure_text(&*self.measure, &self.theme(), &mut e);
         // Frames go behind the lowest element they enclose, so drawing a frame
         // around content keeps the content visible (Prezi behaviour).
-        let pos = if e.is_frame() { self.frame_insert_pos(&e.bounds()) } else { self.doc.z_order.len() };
+        let pos = if e.is_frame() { self.frame_insert_pos(&e) } else { self.doc.z_order.len() };
         self.note(&id);
         self.z_mut().insert(pos, id.clone());
         self.doc.elements.insert(id.clone(), e);
@@ -1601,7 +1622,7 @@ impl Editor {
                 if !(dx.is_finite() && dy.is_finite()) {
                     return Err(ZError::invalid("dx and dy must be finite"));
                 }
-                for id in self.expand(&ids, with_contents) {
+                for id in self.moved(&ids, with_contents) {
                     let e = self.el_mut(&id);
                     e.transform.x += dx;
                     e.transform.y += dy;
@@ -1615,7 +1636,7 @@ impl Editor {
                     return Err(ZError::invalid("factor must be > 0"));
                 }
                 let about = about.map(|a| Vec2::new(a[0], a[1])).unwrap_or_else(|| self.bounds_of(&ids).center());
-                for id in self.expand(&ids, with_contents) {
+                for id in self.moved(&ids, with_contents) {
                     let e = self.el_mut(&id);
                     let p = about + (e.transform.center() - about) * factor;
                     e.transform.x = p.x;
@@ -1675,7 +1696,7 @@ impl Editor {
                     return Err(ZError::invalid("degrees must be finite"));
                 }
                 let about = about.map(|a| Vec2::new(a[0], a[1])).unwrap_or_else(|| self.bounds_of(&ids).center());
-                for id in self.expand(&ids, with_contents) {
+                for id in self.moved(&ids, with_contents) {
                     let e = self.el_mut(&id);
                     let p = about + (e.transform.center() - about).rotate_deg(degrees);
                     e.transform.x = p.x;
@@ -2689,11 +2710,25 @@ impl Editor {
                 let c = Camera::fit_rect(&self.bounds_of(&sel.clone()), vp, 0.1);
                 cam_set!(c, true)
             }
-            ViewCommand::Select { ids } | ViewCommand::AddToSelection { ids } if ids.iter().any(|i| !self.doc.elements.contains_key(i)) => {
+            ViewCommand::Select { ids, .. } | ViewCommand::AddToSelection { ids } if ids.iter().any(|i| !self.doc.elements.contains_key(i)) => {
                 let bad = ids.iter().find(|i| !self.doc.elements.contains_key(*i)).unwrap();
                 return Err(ZError::not_found(bad, self.doc.elements.keys().cloned()));
             }
-            ViewCommand::Select { ids } => self.set_selection(ids, agent_limited),
+            ViewCommand::Select { ids, frame_only: false } => self.set_selection(ids, agent_limited),
+            ViewCommand::Select { ids, frame_only: true } => {
+                let [id] = ids.as_slice() else {
+                    return Err(ZError::invalid(format!("frame_only selects one frame; got {} ids", ids.len())));
+                };
+                if !self.doc.elements[id].is_frame() {
+                    return Err(ZError::invalid(format!("frame_only selects a frame; '{id}' is a {}", self.doc.elements[id].kind.type_name())));
+                }
+                if agent_limited {
+                    return Err(ZError::new("permission", "frame_only sets the person's selection, which needs 'full' agent permission")
+                        .hint("to move, scale or rotate a frame without its contents, give with_contents: false"));
+                }
+                self.set_selection(ids.clone(), false);
+                self.view.frame_only = Some(id.clone());
+            }
             ViewCommand::AddToSelection { ids } => {
                 let mut s = if agent_limited { self.view.agent_selection.clone() } else { self.view.selection.clone() };
                 for i in ids {
@@ -2820,6 +2855,9 @@ impl Editor {
 
     fn set_selection(&mut self, ids: Vec<ElementId>, agent: bool) {
         let ids = self.doc.expand_groups(&ids);
+        if !agent {
+            self.view.frame_only = None;
+        }
         if agent {
             self.view.agent_selection = ids;
         } else if self.view.selection != ids {

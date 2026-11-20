@@ -1006,25 +1006,24 @@ impl Document {
     pub fn bounds(&self) -> Option<Rect> {
         self.ordered().map(|e| e.bounds()).reduce(|a, b| a.union(&b))
     }
-    /// Everything a frame carries when the person drags it: every element
-    /// it holds ([`frame_holds`]), nested frames and their contents
-    /// included, back to front.
+    /// Everything a frame holds ([`frame_holds`]), nested frames and their
+    /// contents included, back to front: what it carries when the person
+    /// drags it, less anything locked ([`crate::Editor::carried`]).
     pub fn frame_contents(&self, frame_id: &str) -> Vec<ElementId> {
         let Some(f) = self.elements.get(frame_id) else { return vec![] };
-        let fb = f.visual_bounds();
-        self.ordered().filter(|e| e.id != f.id && frame_holds(&fb, &e.bounds())).map(|e| e.id.clone()).collect()
+        let groups = self.group_members();
+        self.ordered().filter(|e| frame_holds_with(f, e, |g| groups.get(g).into_iter().flatten().copied())).map(|e| e.id.clone()).collect()
     }
     /// The frame an element belongs to: the smallest frame that holds it
-    /// ([`frame_holds`]), then the lowest in the draw order. Dragging that
-    /// frame (or any other that holds it) moves the element. Brute force;
-    /// [`crate::Editor::parent_frame`] answers the same from its index.
+    /// ([`frame_holds`], [`Element::drawn_area`]), then the lowest in the
+    /// draw order. Dragging that frame (or any other that holds it) moves
+    /// the element. Brute force; [`crate::Editor::parent_frame`] answers
+    /// the same from its index.
     pub fn parent_frame(&self, id: &str) -> Option<ElementId> {
         let e = self.elements.get(id)?;
-        let b = e.bounds();
         self.ordered()
-            .filter(|f| f.is_frame() && f.id != id)
-            .filter(|f| frame_holds(&f.visual_bounds(), &b))
-            .min_by(|a, b| a.visual_bounds().area().total_cmp(&b.visual_bounds().area()))
+            .filter(|f| frame_holds(self, f, e))
+            .min_by(|a, b| a.drawn_area().total_cmp(&b.drawn_area()))
             .map(|f| f.id.clone())
     }
     /// Topmost element under a world point.
@@ -1117,19 +1116,122 @@ impl Document {
 
 
 /// How far (as a fraction of the frame's width plus height) an element may
-/// poke past a frame's edge and still be held by it: rounding when an
+/// poke past a frame's outline and still be held by it: rounding when an
 /// element is snapped to the edge of a rotated or scaled frame.
 pub const FRAME_EDGE_TOLERANCE: f64 = 1e-9;
 
-/// THE frame-ownership rule, the one every part of Zebra uses (moving a
-/// frame, describe, the elements query, builds, the spatial index):
-/// a frame with visual bounds `frame` (see [`Element::visual_bounds`])
-/// holds an element with bounds `b` when `b` lies inside `frame` (an
-/// element exactly on the edge is inside) and is smaller in area. Both are
-/// axis-aligned bounding boxes, so a rotated frame holds what lies in the
-/// box around it. An element that straddles a frame's edge is not held by
-/// it and doesn't move with it.
-pub fn frame_holds(frame: &Rect, b: &Rect) -> bool {
-    let eps = FRAME_EDGE_TOLERANCE * (frame.width() + frame.height());
-    b.area() < frame.area() && b.x0 >= frame.x0 - eps && b.x1 <= frame.x1 + eps && b.y0 >= frame.y0 - eps && b.y1 <= frame.y1 + eps
+impl Element {
+    /// The points [`frame_holds`] judges, in world space: a line or arrow
+    /// by its end and bend points (a curve's bend is its middle); a frame
+    /// by the box it draws (a circle frame: the square around its circle);
+    /// anything else by the four corners of its own turned box (text: its
+    /// box, as its selection outline shows it).
+    pub fn held_points(&self) -> Vec<Vec2> {
+        match &self.kind {
+            ElementKind::Connector(c) => {
+                let r = crate::connector::local_route(c);
+                let local = match &r {
+                    crate::connector::RoutePath::Poly(p) => p.clone(),
+                    crate::connector::RoutePath::Cubic([a, .., d]) => vec![*a, r.midpoint(), *d],
+                };
+                local.into_iter().map(|p| self.transform.apply(p)).collect()
+            }
+            ElementKind::Shape(s) if s.shape.is_line() => {
+                let hw = self.size.w / 2.0;
+                vec![self.transform.apply(Vec2::new(-hw, 0.0)), self.transform.apply(Vec2::new(hw, 0.0))]
+            }
+            ElementKind::Frame(_) => {
+                let (hw, hh) = { let (w, h) = self.visual_size(); (w / 2.0, h / 2.0) };
+                [Vec2::new(-hw, -hh), Vec2::new(hw, -hh), Vec2::new(hw, hh), Vec2::new(-hw, hh)].map(|p| self.transform.apply(p)).to_vec()
+            }
+            _ => self.corners().to_vec(),
+        }
+    }
+
+    /// Whether the world point `p` lies inside the outline this frame
+    /// draws, give or take `slack` world units: the circle of a circle
+    /// frame, the turned rectangle of any other.
+    pub fn outline_contains(&self, p: Vec2, slack: f64) -> bool {
+        let l = self.transform.inverse(p);
+        let tol = slack / self.transform.scale;
+        let (w, h) = self.visual_size();
+        if self.is_circle_frame() {
+            l.x.hypot(l.y) <= w / 2.0 + tol
+        } else {
+            l.x.abs() <= w / 2.0 + tol && l.y.abs() <= h / 2.0 + tol
+        }
+    }
+
+    /// The area of what a frame draws, in world units: its circle, or its
+    /// box. Which of two frames is smaller.
+    pub fn drawn_area(&self) -> f64 {
+        let (w, h) = self.visual_world_size();
+        if self.is_circle_frame() {
+            std::f64::consts::FRAC_PI_4 * w * h
+        } else {
+            w * h
+        }
+    }
+}
+
+impl Document {
+    /// Every group's members, for [`frame_holds_with`] over many elements.
+    pub fn group_members(&self) -> std::collections::HashMap<&str, Vec<&Element>> {
+        let mut m: std::collections::HashMap<&str, Vec<&Element>> = std::collections::HashMap::new();
+        for e in self.elements.values() {
+            if let Some(g) = e.group.as_deref() {
+                m.entry(g).or_default().push(e);
+            }
+        }
+        m
+    }
+}
+
+/// THE frame-ownership rule, the one every part of Zebra uses (what a
+/// dragged or turned frame carries, the path, describe, the elements
+/// query, import, the spatial index): `frame` holds `e` when every point
+/// of `e` ([`Element::held_points`]: the corners of its own turned box, a
+/// line's end and bend points) lies inside the outline `frame` draws (its
+/// turned rectangle, or its circle) and, for a frame, it is smaller (two
+/// frames the same size don't hold each other). Anything else exactly the
+/// size of its frame, such as a page picture or a slide's background, is
+/// held. A point exactly on the outline is inside ([`FRAME_EDGE_TOLERANCE`]).
+/// A group counts as a whole: one member outside and the frame holds none
+/// of it. Something that crosses the outline is not held and doesn't move
+/// with the frame. Locked objects may be held, but never move
+/// ([`crate::Editor::carried`]).
+pub fn frame_holds(doc: &Document, frame: &Element, e: &Element) -> bool {
+    frame_holds_with(frame, e, |g| doc.elements.values().filter(move |m| m.group.as_deref() == Some(g)))
+}
+
+/// [`frame_holds`], with the members of `e`'s group from `members` (called
+/// only for a grouped element), e.g. from [`Document::group_members`].
+pub fn frame_holds_with<'a, I: IntoIterator<Item = &'a Element>>(frame: &Element, e: &'a Element, members: impl FnOnce(&'a str) -> I) -> bool {
+    if !frame.is_frame() || frame.id == e.id {
+        return false;
+    }
+    match e.group.as_deref() {
+        Some(g) => {
+            let mut any = false;
+            for m in members(g) {
+                if m.id == frame.id || !holds_alone(frame, m) {
+                    return false;
+                }
+                any = true;
+            }
+            // `members` left `e` out: judge it alone.
+            any || holds_alone(frame, e)
+        }
+        None => holds_alone(frame, e),
+    }
+}
+
+/// [`frame_holds`] for one element, its group aside.
+fn holds_alone(frame: &Element, e: &Element) -> bool {
+    if e.is_frame() && e.drawn_area() >= frame.drawn_area() {
+        return false;
+    }
+    let (fw, fh) = frame.visual_world_size();
+    let slack = FRAME_EDGE_TOLERANCE * (fw + fh);
+    e.held_points().into_iter().all(|p| frame.outline_contains(p, slack))
 }

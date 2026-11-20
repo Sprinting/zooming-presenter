@@ -228,7 +228,7 @@ fn d5_abort_drops_the_selection_of_what_it_removed() {
     let mut ed = Editor::default();
     ed.begin("Draw", H).unwrap();
     rect(&mut ed, "a", 0.0);
-    ed.view(ViewCommand::Select { ids: vec!["a".into()] }, H).unwrap();
+    ed.view(ViewCommand::Select { ids: vec!["a".into()], frame_only: false }, H).unwrap();
     ed.abort();
     assert!(ed.view.selection.is_empty());
 }

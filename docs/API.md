@@ -158,7 +158,7 @@ than one document open, events carry the `document` id they come from.
 * An explicitly labelled `apply`, `batch` or transaction is always its own undo step. Single `apply` calls from the same agent that arrive less than 2 s apart are grouped into one step.
 * An agent that disconnects while its transaction is open has that transaction aborted.
 * **Sizes.** An element's own `w` and `h` are at scale 1; on the canvas it is that times its `transform.scale`. `bounds` (in `query element`) and the sizes `describe` prints are world units, scale included. So a box that should be 900 wide at scale 1.5 needs `w` 600. Or use `resize`, which takes the size on the canvas.
-* **Frames.** An element belongs to a frame only while it sits wholly inside it (`parent_frame`, the frame's `contents`). One that crosses the edge belongs to no frame and doesn't move with it. Deleting a frame deletes only the frame: what was inside stays where it is. To remove both, delete the frame's `contents` too.
+* **Frames.** An element belongs to a frame only while it sits wholly inside the outline the frame draws (`parent_frame`, the frame's `contents`): every corner of its own turned box inside the frame's turned rectangle, or its circle for a circle frame. Lines and arrows count by their end and bend points; a group counts as a whole (one member outside and none of it belongs); something exactly the size of its frame, such as a page picture, belongs to it. Nested frames: the smallest frame that holds it. One that crosses the outline belongs to no frame and doesn't move with it. `move`, `scale` and `rotate` carry what a frame holds, except locked elements; `with_contents: false` moves a frame alone. Deleting a frame deletes only the frame: what was inside stays where it is. To remove both, delete the frame's `contents` too.
 
 ### View: camera, selection, presenting (not undoable)
 
@@ -277,6 +277,7 @@ zebractl add text "Note" --x 100 --y -50
 zebractl add image ./logo.png --x 0 --y 400 --width 300
 zebractl add shape arrow --x 500 --y 0 --w 300 --h 60
 zebractl move f1 --dx 200 --dy 0 | delete t3 s1 | select t1 | set-text t1 "New"
+zebractl move f1 --dx 200 --frame-only | select f1 --frame-only   # a frame without its contents
 zebractl undo | redo
 zebractl present [step] | next | prev | stop   # or present --step N
 zebractl screenshot --step 2 -o step2.png   # the person's window shape; or --width/--height; --build K; --element f1 | --overview | --viewport
@@ -368,10 +369,10 @@ Send with `apply {"command": ...}` or inside `batch {"commands": [...]}`. Undoab
 | `format_text` | end?: integer, find?: string, format: SpanFormat, id: string, start?: integer | Format part of a text box: bold, italic, underline, strike, colour, link or relative size on characters `start..end` (counted in characters), or on every occurrence of `find`. With neither, the whole text. Unset fields in `format` are left as they are; `false` or `""` turns a property off (`bold: false` in a Semibold or heavier theme style makes the words Regular, as Bold does in Keynote). | `{"op":"format_text","id":"t1","find":"zebras","format":{"bold":true,"color":"theme:accent"}}` |
 | `format_paragraphs` | align?: Align, first?: integer, id: string, indent?: integer, indent_by?: integer, last?: integer, list?: ListKind | Paragraph formatting in a text box: list kind (none, bullet, number), indent level (0-8, or `indent_by` +1/-1) and alignment. `first`..=`last` are paragraph indices (0-based; default all). | `{"op":"format_paragraphs","id":"t1","first":1,"last":3,"list":"bullet","indent_by":1}` |
 | `split_text` | copy?: boolean, end: integer, id: string, start: integer, x?: number, y?: number | Take characters `start..end` (counted in characters) out of a text box into a new box of their own, as dragging selected words out of a box onto the canvas does. The new box has the same style, scale and rotation; the words keep their formatting; whole paragraphs keep bullets, numbering and indent, a part of a paragraph becomes a plain paragraph; it wraps at the old box's width if that was fixed, else grows with its words. The old box is tidied (no double or leading space left) and deleted if nothing but spaces is left. `x`,`y`: the new box's centre; without them it goes just below the old box. `copy` leaves the old box as it was. Returns the new box's id. | `{"op":"split_text","id":"t1","start":12,"end":27,"x":0,"y":400}` |
-| `move` | dx: number, dy: number, ids: string[], with_contents?: boolean | Move elements by a world delta. Frames carry their contents. | `{"op":"move","ids":["f1"],"dx":200,"dy":0}` |
-| `scale` | about?: array, factor: number, ids: string[], with_contents?: boolean | Scale elements about a world point (default: their common centre). | `{"op":"scale","ids":["t1"],"factor":0.5}` |
+| `move` | dx: number, dy: number, ids: string[], with_contents?: boolean | Move elements by a world delta. Frames carry what they hold, except anything locked; `with_contents: false` moves a frame alone. | `{"op":"move","ids":["f1"],"dx":200,"dy":0}` |
+| `scale` | about?: array, factor: number, ids: string[], with_contents?: boolean | Scale elements about a world point (default: their common centre). Frames carry what they hold, as `move` does. | `{"op":"scale","ids":["t1"],"factor":0.5}` |
 | `resize` | height?: number, id: string, width?: number | Set an element's size on the canvas (world units, scale included), keeping its centre. Pictures, videos, icons and drawings keep their shape: give `width` or `height`, or both to fit inside that box. Text takes a `width` (its wrap width); its height follows its words. | `{"op":"resize","id":"i1","width":600}` |
-| `rotate` | about?: array, degrees: number, ids: string[], with_contents?: boolean | Rotate elements by degrees (clockwise) about a point. | `{"op":"rotate","ids":["f2"],"degrees":-15}` |
+| `rotate` | about?: array, degrees: number, ids: string[], with_contents?: boolean | Rotate elements by degrees (clockwise) about a point. Frames carry what they hold, as `move` does. | `{"op":"rotate","ids":["f2"],"degrees":-15}` |
 | `delete` | ids: string[] |  | `{"op":"delete","ids":["s3"]}` |
 | `duplicate` | dx?: number, dy?: number, ids: string[] | Copy elements (frames bring their contents). New ids are returned. | `{"op":"duplicate","ids":["f1"],"dx":1000,"dy":0}` |
 | `z_order` | ids: string[], order: ZOrderOp |  | `{"op":"z_order","ids":["i1"],"order":"back"}` |
@@ -409,7 +410,7 @@ Send with `view {"command": ...}`. Session state, not undoable.
 | `zoom_to` | animate?: boolean, id: string | Fly to fit an element (frames: match their rotation). | `{"op":"zoom_to","id":"f1"}` |
 | `fit_all` | animate?: boolean |  | `{"op":"fit_all"}` |
 | `zoom_to_selection` |  |  | `{"op":"zoom_to_selection"}` |
-| `select` | ids: string[] |  | `{"op":"select","ids":["t1","t2"]}` |
+| `select` | frame_only?: boolean, ids: string[] | Select elements. `frame_only`: select one frame on its own, as Option-clicking it does, so that moving, resizing or turning it in Zebra leaves its contents where they are (the person's selection: needs 'full' permission). | `{"op":"select","ids":["t1","t2"]}` |
 | `add_to_selection` | ids: string[] |  | `{"op":"add_to_selection","ids":["s1"]}` |
 | `clear_selection` |  |  | `{"op":"clear_selection"}` |
 | `select_all` |  |  | `{"op":"select_all"}` |

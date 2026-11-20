@@ -86,6 +86,12 @@ pub struct ViewState {
     pub flight: Option<CameraFlight>,
     /// Human selection (accent colour).
     pub selection: Vec<ElementId>,
+    /// The human selection is this one frame on its own (Option-click,
+    /// Select Frame Only): moving, resizing or turning it leaves what it
+    /// holds where it is. Only while the selection is just that frame (see
+    /// [`crate::Editor::frame_only`]); any other selection clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_only: Option<ElementId>,
     /// Agent selection (violet, dashed). Never touches the human's.
     pub agent_selection: Vec<ElementId>,
     /// The agent's private camera, used for its captures unless it has Full.
@@ -131,6 +137,7 @@ impl Default for ViewState {
             viewport: Vec2::new(1280.0, 800.0),
             flight: None,
             selection: vec![],
+            frame_only: None,
             agent_selection: vec![],
             agent_camera: Camera::default(),
             mode: Mode::Edit,

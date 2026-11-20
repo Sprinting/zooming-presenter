@@ -281,7 +281,7 @@ fn insert(app: &mut ZebraApp, win: &mut Window, lib: &Library, r: SymbolRef) {
     let out = app.apply(Command::AddSymbol { set, name, x, y, width: Some(140.0 / zoom), color: None, color2: None, sticker: false, id: None });
     if let Some(o) = out {
         win.inserted += 1;
-        app.view_cmd(ViewCommand::Select { ids: o.created });
+        app.view_cmd(ViewCommand::Select { ids: o.created, frame_only: false });
     }
 }
 

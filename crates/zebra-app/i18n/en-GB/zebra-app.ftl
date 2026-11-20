@@ -460,6 +460,10 @@ inspector-frame-contains = { $count ->
     [one] Contains { $count } object.
    *[other] Contains { $count } objects.
 }
+inspector-frame-only = { $count ->
+    [one] Selected without its { $count } object.
+   *[other] Selected without its { $count } objects.
+}
 inspector-section-colour = Colour
 inspector-section-shape = Shape
 inspector-section-fill = Fill
@@ -747,6 +751,7 @@ action-paste = Paste
 action-duplicate = Duplicate
 action-delete = Delete
 action-select-all = Select All
+action-select-frame-only = Select Frame Only
 action-deselect = Deselect All
 action-frame-tool = Frame Tool
 action-insert-frame = Frame
@@ -898,6 +903,10 @@ canvas-undo-edit-text = Edit Text
 canvas-undo-text-width = Change Text Width
 # $step is the 1-based step number.
 canvas-toast-step-retargeted = Step { $step } now zooms here
+canvas-note-frame-released = { $count ->
+    [one] { $count } object no longer moves with this frame.
+   *[other] { $count } objects no longer move with this frame.
+}
 canvas-toast-framed-objects = { $count ->
     [one] Framed { $count } object
    *[other] Framed { $count } objects

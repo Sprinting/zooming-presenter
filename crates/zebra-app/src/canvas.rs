@@ -186,6 +186,10 @@ pub struct CanvasState {
     pub refit_until: Option<(f64, Option<usize>)>,
     /// Where the canvas context menu was opened (screen point).
     pub menu_at: Option<Pos2>,
+    /// Option was down when the primary button went down: a click or drag
+    /// on a frame then takes the frame on its own, without what it holds.
+    /// Read at the press, so letting Option go mid-drag changes nothing.
+    pub alt_press: bool,
 }
 
 impl Default for CanvasState {
@@ -208,6 +212,7 @@ impl Default for CanvasState {
             window_size: egui::Vec2::ZERO,
             text_menu: None,
             refit_until: None,
+            alt_press: false,
         }
     }
 }
@@ -648,6 +653,9 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     }
 
     // ---- press / drag
+    if ctx.input(|i| i.pointer.primary_pressed()) {
+        app.canvas.alt_press = mods.alt;
+    }
     let middle = resp.dragged_by(PointerButton::Middle) || resp.dragged_by(PointerButton::Secondary);
     if middle {
         let d = resp.drag_delta();
@@ -690,11 +698,13 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
                 // Chip: › zooms in; the name selects (double-click renames).
                 if app.canvas.chip_chevron.is_some_and(|c| c.contains(p)) {
                     let _ = app.editor.view(ViewCommand::ZoomTo { id, animate: true }, H);
+                } else if app.canvas.alt_press {
+                    select_frame_only(app, id);
                 } else {
-                    let _ = app.editor.view(ViewCommand::Select { ids: vec![id] }, H);
+                    let _ = app.editor.view(ViewCommand::Select { ids: vec![id], frame_only: false }, H);
                 }
             } else {
-                click(app, p, mods.shift);
+                click(app, p, mods.shift, app.canvas.alt_press);
             }
         }
     }
@@ -882,6 +892,9 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
                 return;
             }
             Some(Handle::Body) if hit(app, start, false).is_none_or(|h| sel.contains(&h)) => {
+                if let Some(id) = hit(app, start, false).filter(|_| app.canvas.alt_press) {
+                    option_frame(app, &id);
+                }
                 begin_move(app, world);
                 return;
             }
@@ -890,7 +903,9 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
     }
     match hit(app, start, false) {
         Some(id) => {
-            if !sel.contains(&id) {
+            if app.canvas.alt_press && option_frame(app, &id) {
+                // Option-drag on a frame: the frame on its own.
+            } else if !sel.contains(&id) {
                 if shift {
                     let _ = app.editor.view(ViewCommand::AddToSelection { ids: vec![id] }, H);
                 } else {
@@ -903,10 +918,33 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
     }
 }
 
-/// The fixed set of elements a drag moves: the selection plus frame contents
-/// computed once at drag start (so a frame doesn't scoop things up mid-drag).
+/// The fixed set of elements a drag moves, worked out once when it starts
+/// (so a frame doesn't pick things up or drop them on the way): the
+/// selection and what its frames hold, not anything locked; a frame
+/// selected on its own moves alone.
 fn moving_ids(app: &ZebraApp, ids: &[ElementId]) -> Vec<ElementId> {
-    app.editor.expand(ids, true).into_iter().filter(|id| app.editor.doc.get(id).is_some_and(|e| !e.locked)).collect()
+    if app.editor.frame_only().is_some_and(|f| ids == std::slice::from_ref(f)) {
+        return ids.to_vec();
+    }
+    app.editor.carried(ids)
+}
+
+/// Select frame `id` on its own (Option-click, Select Frame Only): moving,
+/// resizing or turning it leaves what it holds where it is.
+pub fn select_frame_only(app: &mut ZebraApp, id: ElementId) {
+    app.view_cmd(ViewCommand::Select { ids: vec![id], frame_only: true });
+}
+
+/// An Option-click or Option-drag on `id`: a frame is taken on its own.
+/// False (nothing done) for anything else.
+fn option_frame(app: &mut ZebraApp, id: &ElementId) -> bool {
+    if !app.editor.doc.get(id).is_some_and(|e| e.is_frame()) {
+        return false;
+    }
+    if app.editor.frame_only() != Some(id) {
+        select_frame_only(app, id.clone());
+    }
+    true
 }
 
 fn begin_move(app: &mut ZebraApp, origin: Vec2) {
@@ -1235,7 +1273,7 @@ fn pick_click(app: &mut ZebraApp, p: Pos2) -> bool {
     }
 }
 
-fn click(app: &mut ZebraApp, p: Pos2, shift: bool) {
+fn click(app: &mut ZebraApp, p: Pos2, shift: bool, alt: bool) {
     let mode = app.editor.view.mode;
     let tool = app.editor.view.tool;
     if mode == Mode::PathEdit {
@@ -1270,6 +1308,7 @@ fn click(app: &mut ZebraApp, p: Pos2, shift: bool) {
         _ => {}
     }
     match hit(app, p, false) {
+        Some(id) if alt && option_frame(app, &id) => {}
         Some(id) if shift => {
             let mut s = app.selection();
             if s.contains(&id) {
@@ -2952,6 +2991,10 @@ fn context_menu(app: &mut ZebraApp, resp: &egui::Response) {
         }
         // Object-specific actions first.
         match one.as_ref().map(|e| &e.kind) {
+            Some(ElementKind::Frame(_)) => {
+                item(ui, app, Action::SelectFrameOnly);
+                w::menu_separator(ui);
+            }
             Some(ElementKind::Shape(s)) if !s.shape.is_line() => {
                 let label = if one.as_ref().and_then(|e| shape_label(app, e)).is_some() { crate::t!("canvas-menu-edit-text") } else { crate::t!("canvas-menu-add-text") };
                 if w::menu_item(ui, &label, None).clicked() {

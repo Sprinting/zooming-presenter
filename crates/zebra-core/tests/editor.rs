@@ -80,7 +80,7 @@ fn agents_cannot_touch_human_view_or_edit_while_paused() {
     let cam = ed.view.camera;
     ed.view(ViewCommand::Zoom { factor: 2.0, anchor: None }, Origin::agent("a")).unwrap();
     assert_eq!(ed.view.camera, cam);
-    ed.view(ViewCommand::Select { ids: vec!["f1".into()] }, Origin::agent("a")).unwrap();
+    ed.view(ViewCommand::Select { ids: vec!["f1".into()], frame_only: false }, Origin::agent("a")).unwrap();
     assert!(ed.view.selection.is_empty());
     assert_eq!(ed.view.agent_selection, vec!["f1".to_string()]);
     assert!(ed.view(ViewCommand::Present { step: None }, Origin::agent("a")).is_err());
@@ -345,7 +345,7 @@ fn groups_select_move_duplicate_and_ungroup_together() {
     let g = out.group.clone().expect("group id returned");
     assert_eq!(ed.doc.get("a").unwrap().group.as_deref(), Some(g.as_str()));
     // Selecting one member selects the group.
-    ed.view(zebra_core::ViewCommand::Select { ids: vec!["b".into()] }, h.clone()).unwrap();
+    ed.view(zebra_core::ViewCommand::Select { ids: vec!["b".into()], frame_only: false }, h.clone()).unwrap();
     assert_eq!(ed.view.selection, vec!["b".to_string(), "a".to_string()]);
     assert!(zebra_core::describe::describe(&ed).contains(&format!("group={g}")));
     // Grouping a member with c folds the old group into the new one.

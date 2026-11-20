@@ -161,6 +161,9 @@ pub struct ZebraApp {
     pub paste_count: u32,
     pub recent: Vec<PathBuf>,
     pub toast: Option<Toast>,
+    /// A short note under the toolbar about what just happened on the
+    /// canvas ("2 objects no longer move with this frame.").
+    pub note: Option<Toast>,
     /// The sheet waiting for an answer (save changes, errors, confirmations).
     pub sheet: Option<crate::sheets::SheetKind>,
     /// File › Import… under way (its sheet is up).
@@ -406,6 +409,7 @@ impl ZebraApp {
             paste_count: 0,
             recent,
             toast: None,
+            note: None,
             sheet: None,
             import: None,
             native_dialogs: cfg!(target_os = "macos") && has_window,
@@ -516,6 +520,12 @@ impl ZebraApp {
         self.toast = Some(Toast { text: text.into(), until });
     }
 
+    /// Show a short note under the toolbar for a few seconds.
+    pub fn note(&mut self, text: impl Into<String>) {
+        let until = self.now() + 4.0;
+        self.note = Some(Toast { text: text.into(), until });
+    }
+
     /// Switch "Allow AI control" on or off. Only the human UI
     /// calls this with `true`; agents can only reach the `false` side (the
     /// `disconnect` API method). Off closes the socket, disconnects every
@@ -585,7 +595,7 @@ impl ZebraApp {
     }
 
     pub fn select(&mut self, ids: Vec<ElementId>) {
-        self.view_cmd(ViewCommand::Select { ids });
+        self.view_cmd(ViewCommand::Select { ids, frame_only: false });
     }
 
     pub fn selection(&self) -> Vec<ElementId> {
@@ -781,6 +791,11 @@ impl ZebraApp {
             }
             SelectAll if crate::sidebar::list_focused(self) => crate::sidebar::select_all_steps(self),
             SelectAll => self.view_cmd(ViewCommand::SelectAll),
+            SelectFrameOnly => {
+                if let [id] = self.selection().as_slice() {
+                    crate::canvas::select_frame_only(self, id.clone());
+                }
+            }
             Deselect if self.step_pick.is_some() => crate::sidebar::cancel_pick(self),
             Deselect if crate::sidebar::list_focused(self) => self.path_focus = false,
             Deselect => {
@@ -1588,10 +1603,11 @@ impl ZebraApp {
             ctx.request_repaint();
         }
         // Idle at rest (F26): wake only when something is due, never poll.
-        if let Some(t) = &self.toast {
+        for slot in [&mut self.toast, &mut self.note] {
+            let Some(t) = slot else { continue };
             let left = t.until - now;
             if left <= 0.0 {
-                self.toast = None;
+                *slot = None;
             } else if left > 0.3 {
                 // Sleep until the fade-out starts, then animate it.
                 ctx.request_repaint_after(std::time::Duration::from_secs_f64(left - 0.3));
@@ -1713,7 +1729,9 @@ impl ZebraApp {
         // A run of nudges of the same objects is one undo step, like a drag.
         let (n, now) = (self.editor.history().len(), self.editor.view.now);
         let run = self.editor.history().last().is_some_and(|h| h.origin == H && h.label == label && h.ids == ids && now - h.time < 1.0);
-        let r = self.editor.apply_batch(vec![Command::Move { ids, dx: w.x, dy: w.y, with_contents: true }], Some(label), H);
+        // A frame selected on its own moves alone.
+        let with_contents = self.editor.frame_only().is_none();
+        let r = self.editor.apply_batch(vec![Command::Move { ids, dx: w.x, dy: w.y, with_contents }], Some(label), H);
         if r.is_ok() && run && self.editor.history().len() == n + 1 {
             self.editor.merge_last_two_steps();
         }

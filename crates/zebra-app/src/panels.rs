@@ -731,6 +731,12 @@ fn floating(app: &mut ZebraApp, ctx: &egui::Context, rect: Rect, p: &Palette) {
         w::hud(ctx, rect, &t.text, a);
     }
 
+    // What just happened on the canvas, under the toolbar.
+    if let Some(t) = app.note.clone() {
+        let a = ((t.until - app.now()) / 0.3).clamp(0.0, 1.0) as f32;
+        w::note_bar(ctx, rect, &t.text, a);
+    }
+
     // Autosave recovery: an opaque info bar under the toolbar.
     if let Some(rp) = app.recovered.clone() {
         egui::Area::new(app.uid("recover"))
