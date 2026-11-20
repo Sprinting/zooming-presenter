@@ -967,8 +967,13 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
     let mut dragging = false;
     let playing = app.media.is_playing(id);
     ui.horizontal_wrapped(|ui| {
-        let label = if playing { crate::t!("media-pause") } else { crate::t!("media-play") };
-        if crate::widgets::push_button(ui, &label).on_hover_text(crate::t!("media-play-tip")).clicked() {
+        let (play, pause) = (crate::t!("media-play"), crate::t!("media-pause"));
+        let label = if playing { &pause } else { &play };
+        // As wide as the longer of Play and Pause, so nothing after it
+        // moves when the label changes.
+        let font = crate::style::ui_font(13.0);
+        let widest = [&play, &pause].iter().map(|t| ui.painter().layout_no_wrap(t.to_string(), font.clone(), egui::Color32::PLACEHOLDER).size().x).fold(0.0, f32::max);
+        if crate::widgets::push_button_ext(ui, label, crate::widgets::Size::Regular, true, Some((widest + 24.0).max(60.0))).on_hover_text(crate::t!("media-play-tip")).clicked() {
             toggle(app, id);
         }
         let pos = app.media.videos.get(id).map(|l| l.player.position()).unwrap_or(v.start);
@@ -1025,19 +1030,25 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
             patch = Some(ElementPatch { end: Some(-1.0), ..Default::default() });
         }
     });
+    // Choose… on the Poster row, Use This Frame under it. It is always
+    // there (dimmed until a frame is showing), so starting playback no
+    // longer adds a button and widens the row past the inspector.
+    let frame = app.media.videos.get(id).and_then(|l| l.frame.clone());
     crate::widgets::row(ui, &crate::t!("media-poster"), |ui| {
-        let frame = app.media.videos.get(id).and_then(|l| l.frame.clone());
-        if let Some(f) = frame {
-            if crate::widgets::push_button(ui, &crate::t!("media-poster-use-frame")).on_hover_text(crate::t!("media-poster-use-frame-tip")).clicked() {
-                let png = zebra_media::encode_png(&zebra_media::Frame { width: f.width, height: f.height, rgba: f.data.data.data().to_vec() });
-                app.apply(Command::SetPoster { id: id.to_string(), data_base64: base64::engine::general_purpose::STANDARD.encode(png), path: None, at: None });
-            }
-        }
         if crate::widgets::push_button(ui, &crate::t!("media-poster-choose")).clicked() {
             crate::pickers::ask(app, crate::pickers::Pick::Poster(id.to_string()));
         }
         if v.poster.is_some() && crate::widgets::push_button_ext(ui, &crate::t!("media-clear-button"), crate::widgets::Size::Small, true, None).on_hover_text(crate::t!("media-poster-remove-tip")).clicked() {
             app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: None, at: None });
+        }
+    });
+    crate::widgets::row(ui, "", |ui| {
+        let r = crate::widgets::push_button_ext(ui, &crate::t!("media-poster-use-frame"), crate::widgets::Size::Regular, frame.is_some(), None);
+        if r.on_hover_text(crate::t!("media-poster-use-frame-tip")).clicked() {
+            if let Some(f) = frame {
+                let png = zebra_media::encode_png(&zebra_media::Frame { width: f.width, height: f.height, rgba: f.data.data.data().to_vec() });
+                app.apply(Command::SetPoster { id: id.to_string(), data_base64: base64::engine::general_purpose::STANDARD.encode(png), path: None, at: None });
+            }
         }
     });
     (patch, dragging)

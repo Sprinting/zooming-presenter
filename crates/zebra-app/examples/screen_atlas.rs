@@ -729,6 +729,17 @@ fn main() {
             }
             settle(h, 3);
         });
+        a.run("Sidebar and inspector widened by their edges (320 and 380)", false, false, |h| {
+            h.state_mut().sidebar_w = 320.0;
+            h.state_mut().inspector_w = 380.0;
+            select(h, &["box"]);
+            settle(h, 4);
+        });
+        a.run("Sidebar and inspector at their narrowest (180 and 260)", false, false, |h| {
+            h.state_mut().sidebar_w = 180.0;
+            select(h, &["title"]);
+            settle(h, 4);
+        });
         a.run("Symbols & Shapes: Icons tab", false, false, |h| {
             perform(h, Action::ShapeLibrary);
             h.state_mut().library.tab = zebra_app::shape_library::Tab::Icons;

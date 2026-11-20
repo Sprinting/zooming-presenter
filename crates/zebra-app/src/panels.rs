@@ -28,8 +28,87 @@ pub const TITLE_ROW: f32 = if cfg!(target_os = "macos") { 28.0 } else { 0.0 };
 pub const TOOLBAR_ROW: f32 = 50.0;
 /// Status bar at the bottom while AI control is on (Finder-style).
 pub const STATUS_ROW: f32 = 22.0;
-/// Path sidebar width.
+/// Path sidebar width: the default, and the range dragging its edge allows.
 pub const SIDEBAR_W: f32 = 220.0;
+pub const SIDEBAR_MIN: f32 = 180.0;
+pub const SIDEBAR_MAX: f32 = 400.0;
+/// Inspector widths dragging its edge allows (its default is
+/// `inspector::WIDTH`, which is also the narrowest its rows are laid out for).
+pub const INSPECTOR_MAX: f32 = 420.0;
+/// Dragging this far past the minimum collapses the pane, as in Keynote.
+const COLLAPSE_PAST: f32 = 60.0;
+
+pub fn clamp_sidebar(w: f32) -> f32 {
+    w.clamp(SIDEBAR_MIN, SIDEBAR_MAX)
+}
+pub fn clamp_inspector(w: f32) -> f32 {
+    w.clamp(crate::inspector::WIDTH, INSPECTOR_MAX)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Pane {
+    Sidebar,
+    Inspector,
+}
+
+/// The draggable edge between a pane and the canvas: a 7 pt strip over
+/// the divider line with the resize cursor. Dragging sets the width within
+/// the pane's range; dragging well past the minimum hides the pane (View ›
+/// Show brings it back at its last width). Drawn in the foreground so the
+/// canvas under it doesn't take the pointer (but below menus and pop-ups).
+fn pane_divider(app: &mut ZebraApp, ctx: &egui::Context, pane: Pane, pane_rect: egui::Rect) {
+    let x = match pane {
+        Pane::Sidebar => pane_rect.right(),
+        Pane::Inspector => pane_rect.left(),
+    };
+    let strip = egui::Rect::from_x_y_ranges(x - 3.5..=x + 3.5, pane_rect.y_range());
+    let id = app.uid(if pane == Pane::Sidebar { "pane-divider-sidebar" } else { "pane-divider-inspector" });
+    egui::Area::new(id).order(egui::Order::Middle).fixed_pos(strip.min).interactable(true).show(ctx, |ui| {
+        let (rect, resp) = ui.allocate_exact_size(strip.size(), Sense::drag());
+        let _ = rect;
+        let (min, start) = match pane {
+            Pane::Sidebar => (SIDEBAR_MIN, app.sidebar_w),
+            Pane::Inspector => (crate::inspector::WIDTH, app.inspector_w),
+        };
+        if resp.hovered() || resp.dragged() {
+            let at_min = start <= min + 0.5;
+            let at_max = match pane {
+                Pane::Sidebar => start >= SIDEBAR_MAX - 0.5,
+                Pane::Inspector => start >= INSPECTOR_MAX - 0.5,
+            };
+            // AppKit shows a one-way arrow at either end of the range.
+            let icon = match (pane, at_min, at_max) {
+                (Pane::Sidebar, true, _) | (Pane::Inspector, _, true) => egui::CursorIcon::ResizeEast,
+                (Pane::Sidebar, _, true) | (Pane::Inspector, true, _) => egui::CursorIcon::ResizeWest,
+                _ => egui::CursorIcon::ResizeHorizontal,
+            };
+            ui.ctx().set_cursor_icon(icon);
+        }
+        // The width when the drag began: a pane dragged shut reopens at it.
+        let began = id.with("began");
+        if resp.drag_started() {
+            ui.ctx().data_mut(|d| d.insert_temp(began, start));
+        }
+        if let (true, Some(pos)) = (resp.dragged(), resp.interact_pointer_pos()) {
+            let want = match pane {
+                Pane::Sidebar => pos.x - pane_rect.left(),
+                Pane::Inspector => pane_rect.right() - pos.x,
+            };
+            if want < min - COLLAPSE_PAST {
+                let back = ui.ctx().data(|d| d.get_temp::<f32>(began)).unwrap_or(start);
+                match pane {
+                    Pane::Sidebar => (app.show_sidebar, app.sidebar_w) = (false, back),
+                    Pane::Inspector => (app.show_props, app.inspector_w) = (false, back),
+                }
+            } else {
+                match pane {
+                    Pane::Sidebar => app.sidebar_w = clamp_sidebar(want),
+                    Pane::Inspector => app.inspector_w = clamp_inspector(want),
+                }
+            }
+        }
+    });
+}
 
 pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
@@ -59,8 +138,8 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     }
 
     if app.show_sidebar {
-        egui::Panel::left("path")
-            .exact_size(SIDEBAR_W)
+        let r = egui::Panel::left("path")
+            .exact_size(app.sidebar_w)
             .resizable(false)
             .frame(egui::Frame::new().fill(p.sidebar).inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 0 }).stroke(Stroke::new(1.0, p.border)))
             .show(ui, |ui| {
@@ -68,18 +147,29 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
                 crate::sidebar::ui(app, ui, &p);
                 app.editor.perf.record_part("sidebar", t.elapsed().as_secs_f32() * 1000.0);
             });
+        pane_divider(app, &ctx, Pane::Sidebar, r.response.rect);
     }
 
     if app.show_props {
-        egui::Panel::right("inspector")
-            .exact_size(crate::inspector::WIDTH)
+        let r = egui::Panel::right("inspector")
+            .exact_size(app.inspector_w)
             .resizable(false)
             .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin { left: 16, right: 12, top: 0, bottom: 0 }).stroke(Stroke::new(1.0, p.border)))
             .show(ui, |ui| {
                 let t = std::time::Instant::now();
-                crate::inspector::ui(app, ui);
+                // The inspector never grows: content too wide for it is
+                // clipped at its edge instead of widening the panel (a
+                // row that gained a button pushed the whole panel, and the
+                // canvas with it, sideways). Lay it out in a child the panel
+                // doesn't measure, then take exactly the panel's room.
+                let rect = ui.available_rect_before_wrap();
+                let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+                inner.set_clip_rect(rect.expand2(egui::vec2(4.0, 0.0)).intersect(ui.clip_rect()));
+                crate::inspector::ui(app, &mut inner);
+                ui.advance_cursor_after_rect(rect);
                 app.editor.perf.record_part("inspector", t.elapsed().as_secs_f32() * 1000.0);
             });
+        pane_divider(app, &ctx, Pane::Inspector, r.response.rect);
     }
     if app.show_activity {
         egui::Panel::right("activity")
