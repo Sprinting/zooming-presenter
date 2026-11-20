@@ -38,6 +38,7 @@ pub fn web_labels() -> zebra_web::export::Labels {
         play: crate::t!("web-play"),
         pause: crate::t!("web-pause"),
         unsupported: crate::t!("web-unsupported"),
+        close: crate::t!("web-video-close"),
     }
 }
 

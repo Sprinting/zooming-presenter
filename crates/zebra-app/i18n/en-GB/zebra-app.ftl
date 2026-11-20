@@ -128,6 +128,7 @@ toolbar-media-tip =
     Or drop files on the canvas
 toolbar-media-image = Image…
 toolbar-media-video = Video…
+toolbar-media-web-video = Web Video…
 toolbar-media-audio = Background Music…
 toolbar-theme-my-themes = My Themes
 toolbar-theme-customize = Customise Theme…
@@ -773,6 +774,7 @@ action-crop-image = Crop Image
 action-play-pause-video = Play/Pause Video
 action-wrap-in-frame = Frame Selection
 action-insert-video = Video…
+action-insert-web-video = Web Video…
 action-bold = Bold
 action-italic = Italic
 action-underline = Underline
@@ -1059,6 +1061,44 @@ present-hud-next-step = Next Step
 ## ---- end present.rs ----
 
 
+## ---- web_video_ui.rs: Insert › Web Video…, web video playback, video cards ----
+web-video-sheet-title = Insert Web Video
+web-video-link = Link
+web-video-link-hint = https://…/video.mp4
+web-video-kinds = MP4, MOV or HLS stream links.
+web-video-insert = Insert
+web-video-checking = Checking…
+web-video-error-not-link = This isn't a link. Give an https link to a video.
+web-video-error-password = Links with a password in them can't be used.
+web-video-error-http = Use an https link.
+web-video-error-not-video = This link isn't a video.
+web-video-error-sign-in = This video needs a sign-in.
+web-video-error-not-found = Nothing found at this link.
+web-video-error-unreachable = Couldn't reach this link. Check your connection.
+web-video-copy-link = Copy Link
+web-video-copy-link-tip = Copy the video's link
+web-video-link-copied = Link copied
+web-video-download = Download
+web-video-download-tip = Keep the video in the presentation, so it plays without the link
+web-video-download-stream-tip = A stream can't be downloaded
+# $percent is 0 to 100.
+web-video-downloading = Downloading… { $percent }%
+# $size is an amount such as "12.5 MB".
+web-video-downloading-size = Downloading… { $size }
+web-video-download-done = Video downloaded
+web-video-download-no-space = There isn't enough space on the disk for this video.
+web-video-download-disk = Couldn't save the video.
+web-video-download-failed = Couldn't download the video. { $reason }
+web-video-live = Live stream: Start, End and Loop don't apply.
+web-video-card-note = Plays in { $site }'s own player.
+web-video-loading = Loading video…
+web-video-failed = Video couldn't play
+# $site is YouTube or Vimeo.
+web-video-card-playing = { $site } video playing
+web-video-close = Close
+## ---- end web_video_ui.rs ----
+
+
 ## ---- media_ui.rs ----
 media-toast-video-macos-only = Videos play only on macOS. Zebra shows the poster frame instead.
 # $error is the reason from the media player.
@@ -1229,6 +1269,7 @@ history-add-connector = Add Connector
 history-insert-video = Insert Video
 history-replace-image = Replace Image
 history-replace-video = Replace Video
+history-download-video = Download Video
 history-set-poster = Set Poster Frame
 history-add-soundtrack = Add Background Music
 history-change-soundtrack = Change Background Music

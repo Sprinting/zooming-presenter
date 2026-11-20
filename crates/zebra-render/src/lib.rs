@@ -60,6 +60,10 @@ pub struct SceneOptions {
     /// An image in crop mode: its whole picture is drawn faintly behind the
     /// crop, so the person sees what they can uncrop.
     pub ghost: Option<ElementId>,
+    /// Video cards (YouTube, Vimeo) with a resume point, 0..1 of the way
+    /// through: a thin line along the card's bottom shows it. Session
+    /// state, never saved.
+    pub card_progress: std::collections::HashMap<ElementId, f32>,
 }
 
 pub mod display;

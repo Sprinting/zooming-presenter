@@ -497,6 +497,13 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
         let painter = ui.painter().clone();
         let blank = app.editor.view.present.blank;
         draw_slide(&painter, cur, app.stage.slides.get(step, build), blank, "");
+        // Web videos on this step: said here, never on the audience screen.
+        if let Some(msg) = crate::web_video_ui::presenter_status(app) {
+            let g = painter.layout_no_wrap(msg, FontId::proportional(14.0), fg);
+            let r = Rect::from_min_size(egui::pos2(cur.left() + 10.0, cur.bottom() - g.size().y - 22.0), g.size() + EVec2::new(20.0, 12.0));
+            painter.rect_filled(r, 6.0, Color32::from_black_alpha(190));
+            painter.galley(r.min + EVec2::new(10.0, 6.0), g, fg);
+        }
         let next_label = match next {
             Some((s, b)) if b > 0 && Some(s) == step => crate::t!("present-next-build", build = b, count = app.editor.doc.path.get(s).map_or(0, |st| st.builds.len())),
             Some((s, _)) => crate::t!("present-next-step", step = ((s + 1) as u64)),

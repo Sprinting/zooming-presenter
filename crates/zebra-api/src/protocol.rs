@@ -520,7 +520,7 @@ pub fn parse_command(mut v: Value) -> Result<Command, RpcError> {
     // Media commands read their file in the app (videos are copied, not
     // loaded); the path must be absolute because the agent's working
     // directory isn't the app's.
-    if matches!(o.get("op").and_then(|x| x.as_str()), Some("add_video" | "replace_image" | "set_poster" | "set_soundtrack" | "set_voiceover")) {
+    if matches!(o.get("op").and_then(|x| x.as_str()), Some("add_video" | "replace_image" | "set_poster" | "set_soundtrack" | "set_voiceover" | "download_video")) {
         let op = o.get("op").and_then(|x| x.as_str()).unwrap_or_default().to_string();
         if let Some(p) = abs_path(o.get("path"), &op)? {
             o.insert("path".into(), Value::String(p.to_string_lossy().into_owned()));

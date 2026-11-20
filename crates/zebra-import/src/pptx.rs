@@ -933,6 +933,7 @@ impl<'a> SlideReader<'a> {
                         group: group.map(str::to_string),
                         kind: ElementKind::Video(VideoData {
                             asset: key.clone(),
+                            link: None,
                             poster,
                             autoplay: timing.auto,
                             looping: timing.looping,

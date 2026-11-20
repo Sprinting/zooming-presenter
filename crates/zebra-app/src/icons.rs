@@ -69,6 +69,8 @@ pub enum Icon {
     Pause,
     Warning,
     Keyboard,
+    /// A chain link: a web video's mark on the canvas.
+    Link,
 }
 
 /// Every icon, for review (`zebra --demo icons`).
@@ -79,6 +81,7 @@ pub const ALL: &[Icon] = &[
     Icon::Sparkles, Icon::Format, Icon::SidebarLeft, Icon::ChevronDown, Icon::ChevronRight, Icon::ChevronLeft, Icon::UpDown, Icon::Check, Icon::Close,
     Icon::Gear, Icon::Lock, Icon::Unlock, Icon::Trash, Icon::Note, Icon::Video, Icon::Path, Icon::AlignLeft, Icon::AlignCenter,
     Icon::AlignRight, Icon::List, Icon::Bold, Icon::Italic, Icon::Underline, Icon::Group, Icon::Activity, Icon::Pause, Icon::Warning, Icon::Keyboard,
+    Icon::Link,
 ];
 
 pub fn debug_sheet(ui: &mut egui::Ui) {
@@ -332,6 +335,25 @@ pub fn paint_icon(painter: &Painter, r: Rect, icon: Icon, c: Color32) {
         Icon::Video => {
             painter.add(rr(-9.0, -5.5, 3.5, 5.5, 1.8));
             painter.add(closed(&[(3.5, -1.5), (9.0, -5.0), (9.0, 5.0), (3.5, 1.5)]));
+        }
+        Icon::Link => {
+            // Two capsules end to end along the diagonal, overlapping like
+            // chain links.
+            let capsule = |cx: f32, cy: f32| -> Vec<Pos2> {
+                let (half, rad, turn) = (2.6f32, 3.1f32, -std::f32::consts::FRAC_PI_4);
+                let (c, sn) = (turn.cos(), turn.sin());
+                let mut v = vec![];
+                for (ex, a0) in [(half, -FRAC_PI_2), (-half, FRAC_PI_2)] {
+                    for i in 0..=8 {
+                        let a = a0 + PI * i as f32 / 8.0;
+                        let (x, y) = (ex + rad * a.cos(), rad * a.sin());
+                        v.push(p(cx + x * c - y * sn, cy + x * sn + y * c));
+                    }
+                }
+                v
+            };
+            painter.add(Shape::closed_line(capsule(-2.6, 2.6), s));
+            painter.add(Shape::closed_line(capsule(2.6, -2.6), s));
         }
         Icon::Path => {
             painter.circle_stroke(p(-6.0, 5.5), 2.2 * u, s);

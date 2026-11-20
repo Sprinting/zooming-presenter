@@ -55,6 +55,7 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
                 Sep,
                 A(InsertImage),
                 A(InsertVideo),
+                A(InsertWebVideo),
                 A(InsertMusic),
                 A(InsertLayout),
                 A(InsertDiagram),

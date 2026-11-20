@@ -32,7 +32,16 @@ struct Live {
     player: Box<dyn VideoPlayer>,
     frame: Option<Arc<ImageLevel>>,
     last_seen: f64,
+    /// What it plays: the asset key, or a web video's link.
     asset: String,
+}
+
+/// What a video plays: its asset, or its link (a web video).
+fn source(v: &zebra_core::VideoData) -> &str {
+    match &v.link {
+        Some(l) => &l.url,
+        None => &v.asset,
+    }
 }
 
 /// A file being copied out of the document for the player.
@@ -67,6 +76,17 @@ pub struct Media {
     /// copy in the media cache goes when its entry does (another file
     /// opens, the window closes, the app quits).
     files: Arc<std::sync::Mutex<HashMap<String, Arc<zebra_core::media::PlayFile>>>>,
+    /// Web videos being downloaded into the deck.
+    pub downloads: HashMap<ElementId, crate::web_video_ui::Download>,
+    /// A video card's open play window.
+    pub card: Option<crate::card_window::CardPlayer>,
+    /// Where each card was left (in memory while the deck is open).
+    pub card_resume: HashMap<ElementId, crate::card_window::Resume>,
+    /// Web videos opened ahead of their step while presenting: kept open
+    /// off screen, paused, until their step comes or goes.
+    preload: HashSet<ElementId>,
+    /// Web videos whose link didn't play this session.
+    failed: HashSet<ElementId>,
 }
 
 enum Inserted {
@@ -102,6 +122,11 @@ impl Default for Media {
             background: vec![],
             web_exports: vec![],
             files: Default::default(),
+            downloads: HashMap::new(),
+            card: None,
+            card_resume: HashMap::new(),
+            preload: HashSet::new(),
+            failed: HashSet::new(),
         }
     }
 }
@@ -126,7 +151,22 @@ impl Media {
     }
 
     pub fn is_playing(&self, id: &str) -> bool {
-        self.videos.get(id).is_some_and(|l| l.player.is_playing()) || self.opening.get(id).is_some_and(|o| o.play)
+        self.videos.get(id).is_some_and(|l| l.player.is_playing()) || self.opening.get(id).is_some_and(|o| o.play) || self.card.as_ref().is_some_and(|c| c.id == id)
+    }
+
+    /// A web video whose link didn't play.
+    pub fn web_failed(&self, id: &str) -> bool {
+        self.failed.contains(id)
+    }
+
+    /// A web video open but not yet able to play.
+    pub fn web_loading(&self, id: &str) -> bool {
+        self.videos.get(id).is_some_and(|l| l.player.readiness() == zebra_media::Readiness::Loading)
+    }
+
+    /// A live stream (known once its player is ready).
+    pub fn is_live(&self, id: &str) -> bool {
+        self.videos.get(id).is_some_and(|l| l.player.is_live())
     }
 
     /// Close every player (leaving present mode, opening another file).
@@ -141,6 +181,15 @@ impl Media {
         self.autoplayed.clear();
         self.crop = None;
         self.files.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        // Another deck: its cards start over, its downloads stop.
+        self.card = None;
+        self.card_resume.clear();
+        for d in self.downloads.values() {
+            d.cancel();
+        }
+        self.downloads.clear();
+        self.preload.clear();
+        self.failed.clear();
     }
 
     /// For the `perf` numbers: (open players, converted frame bytes).
@@ -205,15 +254,27 @@ pub fn toggle(app: &mut ZebraApp, id: &str) {
 }
 
 pub fn play(app: &mut ZebraApp, id: &str) {
+    let Some(ElementKind::Video(v)) = app.editor.doc.get(id).map(|e| e.kind.clone()) else { return };
+    if v.is_card() {
+        // The site's own player, in its play window.
+        crate::card_window::open(app, id);
+        return;
+    }
     if !app.media.backend.can_play() {
         report_once(app, "no-video", crate::t!("media-toast-video-macos-only"));
         return;
     }
+    app.media.preload.remove(id);
     if app.media.videos.contains_key(id) {
         start_live(app, id);
         return;
     }
-    let Some(ElementKind::Video(v)) = app.editor.doc.get(id).map(|e| e.kind.clone()) else { return };
+    if v.link.is_some() {
+        open_web(app, id, &v);
+        start_live(app, id);
+        app.ctx.request_repaint();
+        return;
+    }
     if let Some(rx) = materialize_async(app, &v.asset) {
         app.media.opening.insert(id.to_string(), Opening { rx, play: true });
     }
@@ -225,6 +286,52 @@ pub fn pause(app: &mut ZebraApp, id: &str) {
         l.player.pause();
     }
     app.media.opening.remove(id);
+    if app.media.card.as_ref().is_some_and(|c| c.id == id) {
+        crate::card_window::close(app);
+    }
+}
+
+/// Open a web video's player (it starts loading from its link now).
+fn open_web(app: &mut ZebraApp, id: &str, v: &zebra_core::VideoData) {
+    let Some(link) = v.link.as_ref().filter(|l| !l.kind.is_card()) else { return };
+    if app.media.videos.contains_key(id) {
+        return;
+    }
+    app.media.failed.remove(id);
+    match app.media.backend.open_video_url(&link.url) {
+        Ok(player) => {
+            let now = app.editor.view.now;
+            app.media.videos.insert(id.to_string(), Live { player, frame: None, last_seen: now, asset: link.url.clone() });
+        }
+        Err(e) => web_failed(app, id, e),
+    }
+}
+
+/// A web video's link didn't play: noted for the presenter view; a note
+/// in edit mode, nothing on the audience screen.
+fn web_failed(app: &mut ZebraApp, id: &str, e: String) {
+    eprintln!("zebra: web video {id}: {e}");
+    app.media.failed.insert(id.to_string());
+    if app.editor.view.mode != Mode::Present {
+        report_once(app, &format!("open-{id}"), crate::t!("media-error-play-video", error = e));
+    }
+}
+
+/// Start loading a web video ahead of its step (presenting): paused, off
+/// screen, showing its poster until it can play.
+fn preload(app: &mut ZebraApp, id: &str) {
+    let Some(ElementKind::Video(v)) = app.editor.doc.get(id).map(|e| e.kind.clone()) else { return };
+    if v.link.as_ref().is_none_or(|l| l.kind.is_card()) || app.media.videos.contains_key(id) || app.media.failed.contains(id) || !app.media.backend.can_play() {
+        return;
+    }
+    open_web(app, id, &v);
+    if let Some(l) = app.media.videos.get_mut(id) {
+        l.player.set_muted(true);
+        if !l.player.is_live() && v.start > 0.0 {
+            l.player.seek(v.start);
+        }
+        app.media.preload.insert(id.to_string());
+    }
 }
 
 /// (Re)start a live player at its trim start when it is at the end or
@@ -234,7 +341,8 @@ fn start_live(app: &mut ZebraApp, id: &str) {
     let Some(l) = app.media.videos.get_mut(id) else { return };
     let pos = l.player.position();
     let end = v.end.or(l.player.duration()).unwrap_or(f64::INFINITY);
-    if pos < v.start || pos >= end - 0.05 || l.player.ended() {
+    // A live stream plays from now: no seeking.
+    if !l.player.is_live() && (pos < v.start || pos >= end - 0.05 || l.player.ended()) {
         l.player.seek(v.start);
     }
     l.player.set_muted(v.muted);
@@ -315,6 +423,8 @@ pub fn tick(app: &mut ZebraApp) {
             Inserted::Picture(png, at) => app.insert_image_bytes(png, at, crate::t!("media-pasted-image")),
         }
     }
+    crate::web_video_ui::poll_downloads(app);
+    crate::card_window::tick(app);
 
     // Copies that finished: open the player.
     let ready: Vec<(ElementId, std::io::Result<PathBuf>, bool)> = app
@@ -346,6 +456,7 @@ pub fn tick(app: &mut ZebraApp) {
     let zoom = app.editor.view.camera.zoom;
     let hidden = if presenting { app.editor.hidden_builds() } else { HashSet::new() };
     let mut close = vec![];
+    let mut failed: Vec<(ElementId, String)> = vec![];
     let mut any_playing = false;
     let mut loud_video = false;
     for (id, l) in app.media.videos.iter_mut() {
@@ -357,14 +468,21 @@ pub fn tick(app: &mut ZebraApp) {
             close.push(id.clone());
             continue;
         };
-        if v.asset != l.asset {
+        if source(v) != l.asset {
             close.push(id.clone());
             continue;
         }
+        if let zebra_media::Readiness::Failed(why) = l.player.readiness() {
+            failed.push((id.clone(), why));
+            continue;
+        }
         let visible = e.bounds().intersects(&view) && !hidden.contains(id);
-        if visible {
+        // Opened ahead of its step: it waits off screen.
+        let waiting = presenting && app.media.preload.contains(id);
+        if visible || waiting {
             l.last_seen = now;
-        } else {
+        }
+        if !visible {
             if l.player.is_playing() {
                 l.player.pause();
             }
@@ -401,8 +519,15 @@ pub fn tick(app: &mut ZebraApp) {
     }
     for id in close {
         app.media.videos.remove(&id);
+        app.media.preload.remove(&id);
     }
-    if any_playing || !app.media.opening.is_empty() || !app.media.inserting.is_empty() {
+    for (id, why) in failed {
+        app.media.videos.remove(&id);
+        app.media.preload.remove(&id);
+        web_failed(app, &id, why);
+    }
+    let web_loading = app.media.videos.values().any(|l| l.player.readiness() == zebra_media::Readiness::Loading);
+    if any_playing || web_loading || !app.media.opening.is_empty() || !app.media.inserting.is_empty() {
         // Frames arrive at the video's rate; poll at display rate.
         app.ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
@@ -420,12 +545,17 @@ pub fn tick(app: &mut ZebraApp) {
         for l in app.media.videos.values_mut() {
             l.player.pause();
         }
+        // Web videos opened ahead of their step close with the show.
+        for id in std::mem::take(&mut app.media.preload) {
+            app.media.videos.remove(&id);
+        }
+        crate::card_window::close(app);
     }
 }
 
 /// Videos "on" a step: the step's element, everything inside it, and for
 /// view steps everything fully in view.
-fn videos_on_step(app: &ZebraApp, step: usize) -> Vec<ElementId> {
+pub fn videos_on_step(app: &ZebraApp, step: usize) -> Vec<ElementId> {
     let d = &app.editor.doc;
     let Some(s) = d.path.get(step) else { return vec![] };
     let ids: Vec<ElementId> = match &s.target {
@@ -485,6 +615,23 @@ fn present_tick(app: &mut ZebraApp, loud_video: bool) {
         app.media.autoplayed.clear();
         app.media.voice = None;
         app.media.voice_opening = None;
+        crate::card_window::close(app);
+        // Web videos load a step ahead: this step's (in case it was
+        // jumped to) and the next one's. Others opened ahead close.
+        let next = crate::presenting::next_position(&app.editor).map(|(s, _)| s);
+        let mut ahead: Vec<ElementId> = vec![];
+        for s in [st.0, next].into_iter().flatten() {
+            ahead.extend(videos_on_step(app, s));
+        }
+        let ahead = crate::web_video_ui::web_ids(app, &ahead);
+        let stale: Vec<ElementId> = app.media.preload.iter().filter(|id| !ahead.contains(id)).cloned().collect();
+        for id in stale {
+            app.media.preload.remove(&id);
+            app.media.videos.remove(&id);
+        }
+        for id in &ahead {
+            preload(app, id);
+        }
         if let Some(step) = st.0 {
             if let Some(key) = app.editor.doc.path.get(step).and_then(|s| s.voiceover.clone()) {
                 if app.media.backend.can_play() {
@@ -1099,45 +1246,59 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
             replace_video_dialog(app, id);
         }
     });
-    if !app.media.backend.can_play() {
+    if !app.media.backend.can_play() && !v.is_card() {
         ui.label(egui::RichText::new(crate::t!("media-video-macos-only")).size(11.0).color(ui.visuals().weak_text_color()));
     }
-    let mut auto = v.autoplay;
-    if crate::widgets::checkbox(ui, &mut auto, &crate::t!("media-autoplay-on-step")).changed() {
-        patch = Some(ElementPatch { autoplay: Some(auto), ..Default::default() });
-    }
+    // A web video: its site and link, and Download.
+    crate::web_video_ui::inspector_rows(app, ui, id, v);
+    // A card plays in its site's player, which decides these; a live
+    // stream has no start, end or loop (dimmed, as Keynote does).
+    let card = v.is_card();
+    let live = v.is_live() || app.media.is_live(id);
+    ui.add_enabled_ui(!card, |ui| {
+        let mut auto = v.autoplay;
+        if crate::widgets::checkbox(ui, &mut auto, &crate::t!("media-autoplay-on-step")).changed() {
+            patch = Some(ElementPatch { autoplay: Some(auto), ..Default::default() });
+        }
+    });
     ui.horizontal_wrapped(|ui| {
-        let mut lp = v.looping;
-        if crate::widgets::checkbox(ui, &mut lp, &crate::t!("media-loop")).changed() {
-            patch = Some(ElementPatch { looping: Some(lp), ..Default::default() });
-        }
-        let mut m = v.muted;
-        if crate::widgets::checkbox(ui, &mut m, &crate::t!("media-mute")).changed() {
-            patch = Some(ElementPatch { muted: Some(m), ..Default::default() });
-        }
+        ui.add_enabled_ui(!card && !live, |ui| {
+            let mut lp = v.looping;
+            if crate::widgets::checkbox(ui, &mut lp, &crate::t!("media-loop")).changed() {
+                patch = Some(ElementPatch { looping: Some(lp), ..Default::default() });
+            }
+        });
+        ui.add_enabled_ui(!card, |ui| {
+            let mut m = v.muted;
+            if crate::widgets::checkbox(ui, &mut m, &crate::t!("media-mute")).changed() {
+                patch = Some(ElementPatch { muted: Some(m), ..Default::default() });
+            }
+        });
     });
     let max = if v.duration > 0.0 { v.duration } else { 3600.0 };
     // Trim and poster as inspector rows (label column, then controls), like
     // every other inspector section; they were a loose grid of egui drag
     // values and buttons.
-    crate::widgets::row(ui, &crate::t!("media-trim-start"), |ui| {
-        let mut s = v.start;
-        let r = crate::widgets::number_field(ui, &mut s, crate::widgets::Num::secs().range(0.0, max).step(0.1).width(84.0));
-        dragging |= r.dragged() || r.has_focus();
-        if r.changed() && v.end.is_none_or(|e| s < e) {
-            patch = Some(ElementPatch { start: Some(s), ..Default::default() });
-        }
-    });
-    crate::widgets::row(ui, &crate::t!("media-trim-end"), |ui| {
-        let mut e = v.end.unwrap_or(max);
-        let r = crate::widgets::number_field(ui, &mut e, crate::widgets::Num::secs().range(0.0, max).step(0.1).width(84.0));
-        dragging |= r.dragged() || r.has_focus();
-        if r.changed() && e > v.start {
-            patch = Some(ElementPatch { end: Some(e), ..Default::default() });
-        }
-        if v.end.is_some() && crate::widgets::push_button_ext(ui, &crate::t!("media-clear-button"), crate::widgets::Size::Small, true, None).on_hover_text(crate::t!("media-trim-clear-end-tip")).clicked() {
-            patch = Some(ElementPatch { end: Some(-1.0), ..Default::default() });
-        }
+    ui.add_enabled_ui(!live, |ui| {
+        crate::widgets::row(ui, &crate::t!("media-trim-start"), |ui| {
+            let mut s = v.start;
+            let r = crate::widgets::number_field(ui, &mut s, crate::widgets::Num::secs().range(0.0, max).step(0.1).width(84.0));
+            dragging |= r.dragged() || r.has_focus();
+            if r.changed() && v.end.is_none_or(|e| s < e) {
+                patch = Some(ElementPatch { start: Some(s), ..Default::default() });
+            }
+        });
+        crate::widgets::row(ui, &crate::t!("media-trim-end"), |ui| {
+            let mut e = v.end.unwrap_or(max);
+            let r = crate::widgets::number_field(ui, &mut e, crate::widgets::Num::secs().range(0.0, max).step(0.1).width(84.0));
+            dragging |= r.dragged() || r.has_focus();
+            if r.changed() && e > v.start {
+                patch = Some(ElementPatch { end: Some(e), ..Default::default() });
+            }
+            if v.end.is_some() && crate::widgets::push_button_ext(ui, &crate::t!("media-clear-button"), crate::widgets::Size::Small, true, None).on_hover_text(crate::t!("media-trim-clear-end-tip")).clicked() {
+                patch = Some(ElementPatch { end: Some(-1.0), ..Default::default() });
+            }
+        });
     });
     // Choose… on the Poster row, Use This Frame under it. It is always
     // there (dimmed until a frame is showing), so starting playback no
@@ -1152,7 +1313,7 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
         }
     });
     crate::widgets::row(ui, "", |ui| {
-        let r = crate::widgets::push_button_ext(ui, &crate::t!("media-poster-use-frame"), crate::widgets::Size::Regular, frame.is_some(), None);
+        let r = crate::widgets::push_button_ext(ui, &crate::t!("media-poster-use-frame"), crate::widgets::Size::Regular, frame.is_some() && !card, None);
         if r.on_hover_text(crate::t!("media-poster-use-frame-tip")).clicked() {
             if let Some(f) = frame {
                 let png = zebra_media::encode_png(&zebra_media::Frame { width: f.width, height: f.height, rgba: f.data.data.data().to_vec() });

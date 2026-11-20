@@ -385,6 +385,7 @@ pub fn paint_content(app: &mut ZebraApp, ui: &mut Ui, rect: ERect, presenting: b
     opts.time = Some(ed.view.now);
     opts.async_images = true;
     app.media.scene(&mut opts);
+    opts.card_progress = crate::card_window::progress(app);
     let ppp = ui.ctx().pixels_per_point() as f64;
     let vp = [rect.width() as f64, rect.height() as f64];
     if let (Some(canvas), Some(rs), true) = (&mut app.gpu_canvas, &app.wgpu, app.render_ok) {
@@ -2534,7 +2535,7 @@ fn outline_screen(app: &ZebraApp, e: &zebra_core::Element) -> Vec<Pos2> {
     quad_screen(app, e.corners())
 }
 
-fn quad_screen(app: &ZebraApp, corners: [Vec2; 4]) -> Vec<Pos2> {
+pub fn quad_screen(app: &ZebraApp, corners: [Vec2; 4]) -> Vec<Pos2> {
     corners.iter().map(|c| app.canvas.w2s(&app.editor, *c)).collect()
 }
 
@@ -2636,6 +2637,8 @@ fn draw_overlays(app: &mut ZebraApp, painter: &Painter, path_mode: bool, zoom: f
             }
         }
     }
+    // Web videos: a chain-link mark in the corner (edit mode only).
+    crate::web_video_ui::paint_link_marks(app, painter);
     // Hover outline + frame chip.
     app.canvas.frame_chip = None;
     app.canvas.chip_chevron = None;

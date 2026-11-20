@@ -638,11 +638,17 @@ pub fn materialize(key: &str, ext: &str, bytes: &AssetBytes) -> std::io::Result<
 /// Players' copies a run left behind: those of processes that aren't
 /// running (it crashed, or quit without tidying up) and every file of
 /// builds before copies were tidied up (`<key>.<ext>`, the sample clip).
+/// The same goes for web video downloads in `downloads/`
+/// (`<pid>-<n>.<ext>` and its `.part`), which a run that dies
+/// mid-download leaves behind.
 pub fn sweep_cache(alive: impl Fn(u32) -> bool) {
-    for e in std::fs::read_dir(cache_dir()).into_iter().flatten().flatten() {
-        let name = e.file_name().to_string_lossy().to_string();
-        if !file_owner(&name).is_some_and(&alive) && e.path().is_file() {
-            let _ = std::fs::remove_file(e.path());
+    let dir = cache_dir();
+    for d in [dir.clone(), dir.join("downloads")] {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !file_owner(&name).is_some_and(&alive) && e.path().is_file() {
+                let _ = std::fs::remove_file(e.path());
+            }
         }
     }
 }

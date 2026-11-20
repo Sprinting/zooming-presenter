@@ -193,6 +193,7 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     crate::sheets::ui(app, &ctx);
     crate::opening::ui(app, &ctx);
     crate::import_ui::ui(app, &ctx);
+    crate::web_video_ui::ui(app, &ctx);
     crate::shape_library::ui(app, &ctx, &p);
     dialogs(app, &ctx, &p);
 }
@@ -411,6 +412,9 @@ fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         }
         if menu_icon_row(ui, Icon::Video, &crate::t!("toolbar-media-video"), false).clicked() {
             app.queued.push(Action::InsertVideo);
+        }
+        if menu_icon_row(ui, Icon::Link, &crate::t!("toolbar-media-web-video"), false).clicked() {
+            app.queued.push(Action::InsertWebVideo);
         }
         if menu_icon_row(ui, Icon::Note, &crate::t!("toolbar-media-audio"), false).clicked() {
             app.queued.push(Action::InsertMusic);

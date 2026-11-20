@@ -10,7 +10,24 @@ use crate::model::{Asset, AssetBytes, Document};
 pub const EXTENSION: &str = "zebra";
 
 pub fn to_json(doc: &Document) -> String {
-    serde_json::to_string_pretty(doc).expect("document serialises")
+    let json = serde_json::to_string_pretty(doc).expect("document serialises");
+    // The file says the lowest format that can read it, so a deck without
+    // newer features still opens in older builds.
+    let need = required_version(doc);
+    let head = format!("{{\n  \"format_version\": {}", doc.format_version);
+    match json.strip_prefix(&head) {
+        Some(rest) if need != doc.format_version => format!("{{\n  \"format_version\": {need}{rest}"),
+        _ => json,
+    }
+}
+
+/// The lowest file format that holds everything in `doc`: 2 when it has a
+/// web video (a video with a `link`), else 1. A build that knows only an
+/// older format refuses the file as newer instead of dropping what it
+/// can't read, which a later save would lose.
+pub fn required_version(doc: &Document) -> u32 {
+    let web = doc.elements.values().any(|e| matches!(&e.kind, crate::model::ElementKind::Video(v) if v.link.is_some()));
+    if web { 2 } else { 1 }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -258,3 +258,36 @@ fn the_page_script_checks_the_scheme_before_opening() {
         assert!(line.contains("safeLink("), "every window.open is behind safeLink: {line}");
     }
 }
+
+/// Web videos in a web page: the link (never the video) for the page's
+/// own player, the site's embed for a card, and the poster drawn by the
+/// player until it plays.
+#[test]
+fn web_videos_carry_their_link_and_cards_their_embed() {
+    let r = Renderer::new();
+    let mut ed = deck(&r);
+    let mut png = vec![];
+    image::RgbaImage::from_pixel(32, 18, image::Rgba([200, 30, 30, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    use base64::Engine;
+    let poster = base64::engine::general_purpose::STANDARD.encode(&png);
+    for (id, url) in [("w1", "https://cdn.example.com/talk.mp4"), ("w2", "https://youtu.be/dQw4w9WgXcQ?t=30"), ("w3", "https://cdn.example.com/live/index.m3u8")] {
+        let c = serde_json::json!({"op":"add_web_video","url":url,"x":0,"y":0,"width":320,"poster_base64":poster,"id":id});
+        ed.apply(serde_json::from_value(c).unwrap(), H).unwrap();
+    }
+    let page = export::build(&r, &ed, &Labels::default(), export::INLINE_LIMIT).unwrap();
+    let html = &page.html;
+    let start = html.find("id=\"zw-manifest\">").unwrap() + "id=\"zw-manifest\">".len();
+    let end = start + html[start..].find("</script>").unwrap();
+    let m: serde_json::Value = serde_json::from_str(&html[start..end]).unwrap();
+    let v = &m["videos"];
+    assert_eq!(v["w1"]["link"], "https://cdn.example.com/talk.mp4");
+    assert_eq!(v["w1"]["kind"], "file");
+    assert!(v["w1"]["embed"].is_null());
+    assert_eq!(v["w2"]["kind"], "youtube");
+    let embed = v["w2"]["embed"].as_str().unwrap();
+    assert!(embed.starts_with("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?") && embed.contains("start=30"), "{embed}");
+    assert_eq!(v["w3"]["kind"], "stream");
+    // Only the posters go in the page: no video was ever fetched.
+    assert!(m["assets"].as_array().unwrap().iter().all(|a| a["kind"] == "image"), "{}", m["assets"]);
+    assert!(page.media.is_empty());
+}

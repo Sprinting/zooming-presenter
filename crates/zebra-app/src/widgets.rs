@@ -128,6 +128,12 @@ pub fn default_button_w(ui: &mut Ui, text: &str, min_w: f32) -> Response {
     button_impl(ui, text, None, Size::Regular, true, true, Some(min_w))
 }
 
+/// The default button, dimmed when `enabled` is false (a sheet's Insert
+/// until its field holds something it can take).
+pub fn default_button_ext(ui: &mut Ui, text: &str, enabled: bool, min_w: Option<f32>) -> Response {
+    button_impl(ui, text, None, Size::Regular, true, enabled, min_w)
+}
+
 /// Push button with a leading icon.
 pub fn icon_text_button(ui: &mut Ui, icon: Icon, text: &str, enabled: bool) -> Response {
     button_impl(ui, text, Some(icon), Size::Regular, false, enabled, None)

@@ -46,8 +46,12 @@ muda.workspace = true
 # colour, Reduce Motion, App Nap, screens). Never controls inside the egui UI.
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSGeometry", "NSRange", "NSNotification", "NSURL", "NSUserDefaults", "NSFileManager", "NSError"] }
-objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSApplication", "NSResponder", "NSRunningApplication", "NSSpellChecker", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSApplication", "NSResponder", "NSRunningApplication", "NSSpellChecker", "NSWorkspace", "NSEvent", "NSWindow", "NSView", "NSButton", "NSButtonCell", "NSControl", "NSColor", "NSGraphics", "NSActionCell", "NSCell", "block2"] }
 raw-window-handle = "0.6"
+# The YouTube and Vimeo play window (card_window.rs) only: the site's own
+# embed player, nowhere else.
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKNavigationDelegate", "WKNavigationAction", "WKNavigation", "WKUIDelegate", "WKWindowFeatures", "WKFrameInfo", "WKPreferences", "WKUserContentController", "objc2-app-kit", "objc2-core-foundation", "block2"] }
+block2 = "0.6"
 # Only to keep a background launch from activating the app (--background).
 winit = "0.30"
 

@@ -21,6 +21,18 @@ use std::time::Instant;
 
 #[cfg(target_os = "macos")]
 mod avf;
+pub mod link;
+#[cfg(target_os = "macos")]
+mod mac_net;
+
+/// Whether a player can play yet. Players of local files are ready at
+/// once; a web video loads first, and can fail.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Readiness {
+    Loading,
+    Ready,
+    Failed(String),
+}
 
 /// One video frame: premultiplied RGBA8 rows, `width * height * 4` bytes.
 #[derive(Clone)]
@@ -56,6 +68,14 @@ pub trait VideoPlayer: Send {
     fn next_frame(&mut self, max_dim: u32) -> Option<Frame>;
     /// True when playback reached the end of the file.
     fn ended(&self) -> bool;
+    /// Loading, ready or failed (a web video loads first).
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+    /// A live stream: it has no end, so no start, end or loop either.
+    fn is_live(&self) -> bool {
+        false
+    }
 }
 
 /// A playing (or paused) sound.
@@ -84,6 +104,15 @@ pub trait Backend: Send + Sync {
     /// A still from the video at `at` seconds, at most `max_dim` pixels on
     /// its longer side, encoded as PNG (ready to store as a poster asset).
     fn poster_png(&self, path: &Path, at: f64, max_dim: u32) -> Result<Vec<u8>, String>;
+    /// Open a web video (an https link to a file or an HLS stream). It
+    /// starts loading at once, in the background; `readiness` says when it
+    /// can play. Nothing is fetched before this is called.
+    fn open_video_url(&self, url: &str) -> Result<Box<dyn VideoPlayer>, String>;
+    /// A still from a web video file, as [`Backend::poster_png`]. Blocks
+    /// while it loads, never longer than `timeout` (then the request is
+    /// cancelled): call it off the main thread. Streams have none (their
+    /// first frame comes from a player).
+    fn poster_png_url(&self, url: &str, at: f64, max_dim: u32, timeout: std::time::Duration) -> Result<Vec<u8>, String>;
 }
 
 /// The backend for this platform (`ZEBRA_FAKE_MEDIA=1` forces the fake one).
@@ -120,6 +149,12 @@ impl Backend for Null {
     fn poster_png(&self, _: &Path, _: f64, _: u32) -> Result<Vec<u8>, String> {
         Err("poster frames need macOS".into())
     }
+    fn open_video_url(&self, _: &str) -> Result<Box<dyn VideoPlayer>, String> {
+        Err("video plays on macOS only".into())
+    }
+    fn poster_png_url(&self, _: &str, _: f64, _: u32, _: std::time::Duration) -> Result<Vec<u8>, String> {
+        Err("poster frames need macOS".into())
+    }
 }
 
 /// Synthetic media for tests: frames are a colour that cycles with the
@@ -144,6 +179,29 @@ impl Backend for Fake {
     fn poster_png(&self, path: &Path, at: f64, max_dim: u32) -> Result<Vec<u8>, String> {
         let (w, h, _) = header(path)?;
         let (w, h) = fit(w.max(16), h.max(16), max_dim);
+        Ok(encode_png(&fake_frame(w, h, at)))
+    }
+    /// Web videos: 1280x720, 20 s, ready after 0.3 s. A link with `fail`
+    /// in it fails, one with `slow` never loads, one with `live` is live.
+    fn open_video_url(&self, url: &str) -> Result<Box<dyn VideoPlayer>, String> {
+        let mut p = FakePlayer::new(1280, 720, 20.0);
+        p.loading = Some((Instant::now(), if url.contains("slow") { 3600.0 } else { 0.3 }, url.contains("fail")));
+        if url.contains("live") {
+            p.duration = f64::INFINITY;
+            p.live = true;
+        }
+        Ok(Box::new(p))
+    }
+    fn poster_png_url(&self, url: &str, at: f64, max_dim: u32, timeout: std::time::Duration) -> Result<Vec<u8>, String> {
+        if url.contains("slow") {
+            // A server that never sends a frame: given up at the deadline.
+            std::thread::sleep(timeout);
+            return Err("timed out".into());
+        }
+        if url.contains("fail") || url.ends_with(".m3u8") {
+            return Err("no poster".into());
+        }
+        let (w, h) = fit(1280, 720, max_dim);
         Ok(encode_png(&fake_frame(w, h, at)))
     }
 }
@@ -308,11 +366,21 @@ pub struct FakePlayer {
     base: f64,
     started: Option<Instant>,
     last_frame_at: Option<f64>,
+    /// Web videos: (opened, seconds to load, then fail).
+    loading: Option<(Instant, f64, bool)>,
+    live: bool,
 }
 
 impl FakePlayer {
     fn new(w: u32, h: u32, duration: f64) -> Self {
-        FakePlayer { w, h, duration, base: 0.0, started: None, last_frame_at: None }
+        FakePlayer { w, h, duration, base: 0.0, started: None, last_frame_at: None, loading: None, live: false }
+    }
+    fn fake_readiness(&self) -> Readiness {
+        match self.loading {
+            Some((t, secs, _)) if t.elapsed().as_secs_f64() < secs => Readiness::Loading,
+            Some((_, _, true)) => Readiness::Failed("the server refused the video".into()),
+            _ => Readiness::Ready,
+        }
     }
     fn pos(&self) -> f64 {
         let p = self.base + self.started.map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0);
@@ -360,11 +428,14 @@ impl VideoPlayer for FakePlayer {
         self.pos()
     }
     fn duration(&self) -> Option<f64> {
-        Some(self.duration)
+        self.duration.is_finite().then_some(self.duration)
     }
     fn set_muted(&mut self, _: bool) {}
     fn set_volume(&mut self, _: f32) {}
     fn next_frame(&mut self, max_dim: u32) -> Option<Frame> {
+        if self.fake_readiness() != Readiness::Ready {
+            return None;
+        }
         // 30 fps.
         let p = (self.pos() * 30.0).floor() / 30.0;
         if self.last_frame_at == Some(p) {
@@ -376,6 +447,12 @@ impl VideoPlayer for FakePlayer {
     }
     fn ended(&self) -> bool {
         self.pos() >= self.duration
+    }
+    fn readiness(&self) -> Readiness {
+        self.fake_readiness()
+    }
+    fn is_live(&self) -> bool {
+        self.live
     }
 }
 

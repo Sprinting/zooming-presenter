@@ -9,6 +9,8 @@ pub mod files;
 pub mod i18n;
 pub mod icons;
 pub mod import_ui;
+pub mod web_video_ui;
+pub mod card_window;
 pub mod inspector;
 pub mod keep_awake;
 pub mod keymap;
