@@ -6,7 +6,9 @@
 //! the UI thread: they report pages done and stop when asked
 //! ([`Control`]).
 //!
-//! A PDF's pages come in as pictures drawn from the PDF (see [`pdf`]).
+//! A PDF's pages come in as pictures drawn from the PDF (see [`pdf`]); a
+//! PowerPoint file's slides come in as Zebra's own text, shapes and
+//! pictures (see [`pptx`]).
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -15,9 +17,10 @@ pub use zebra_core::import::{ImportNote, ImportedDeck};
 use zebra_core::Theme;
 
 pub mod pdf;
+pub mod pptx;
 
 /// The file types File › Import… offers (lower case, no dot).
-pub const EXTENSIONS: &[&str] = &["pdf"];
+pub const EXTENSIONS: &[&str] = &["pdf", "pptx"];
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ImportError {
@@ -29,6 +32,12 @@ pub enum ImportError {
     Damaged(&'static str),
     #[error("the file is protected with a password")]
     Encrypted,
+    /// A PowerPoint 97–2003 file (.ppt), which Zebra can't read.
+    #[error("this is an old PowerPoint file (.ppt): save it as .pptx in PowerPoint or Keynote first")]
+    OldPowerPoint,
+    /// Every slide asked for is hidden.
+    #[error("every slide chosen is hidden")]
+    AllHidden,
     /// The PDF engine is missing from the app (a broken install).
     #[error("the PDF reader is missing from Zebra ({0})")]
     NoEngine(String),
@@ -73,11 +82,13 @@ pub struct Options {
     pub theme: Theme,
     /// The frame name for page `n` (1-based), in the person's language.
     pub page_name: Arc<dyn Fn(usize) -> String + Send + Sync>,
+    /// The frame name for slide `n` (1-based) when it has no title.
+    pub slide_name: Arc<dyn Fn(usize) -> String + Send + Sync>,
 }
 
 impl Options {
     pub fn all(theme: Theme) -> Options {
-        Options { first: 1, last: usize::MAX, theme, page_name: Arc::new(|n| format!("Page {n}")) }
+        Options { first: 1, last: usize::MAX, theme, page_name: Arc::new(|n| format!("Page {n}")), slide_name: Arc::new(|n| format!("Slide {n}")) }
     }
 }
 
@@ -102,7 +113,12 @@ pub fn open_bytes(bytes: Vec<u8>, title: String) -> Result<Box<dyn Reader>, Impo
     if zebra_core::import::is_pdf(&bytes) {
         return Ok(Box::new(pdf::PdfReader::new(bytes, title)?));
     }
-    Err(ImportError::NotSupported)
+    if pptx::is_pptx(&bytes) {
+        return Ok(Box::new(pptx::PptxReader::new(&bytes, title)?));
+    }
+    // Old PowerPoint files and password-protected .pptx files are both
+    // OLE compound files.
+    Err(pptx::compound_file_error(&bytes).unwrap_or(ImportError::NotSupported))
 }
 
 /// The pages `opts` asks for, as 0-based indices into `count` pages.

@@ -1,5 +1,6 @@
-//! File › Import…: pick a PDF, choose the pages on a sheet, watch it come
-//! in (with Cancel), and read what came in as pictures afterwards.
+//! File › Import…: pick a PDF or PowerPoint file, choose the pages or
+//! slides on a sheet, watch it come in (with Cancel), and read what came in
+//! differently afterwards.
 //!
 //! The file is opened and read on a worker thread; the window keeps
 //! drawing. The pages land in one undo step through
@@ -20,10 +21,10 @@ use crate::widgets as w;
 pub enum Flow {
     /// Opening the file to count its pages.
     Reading { path: PathBuf, rx: Receiver<Result<Box<dyn Reader>, ImportError>> },
-    /// Which pages?
-    Choose { path: PathBuf, reader: Box<dyn Reader>, pages: usize, all: bool, from: f64, to: f64 },
+    /// Which pages? (`slides`: a PowerPoint file, counted in slides.)
+    Choose { path: PathBuf, reader: Box<dyn Reader>, pages: usize, all: bool, from: f64, to: f64, slides: bool },
     /// Reading the pages.
-    Running { path: PathBuf, rx: Receiver<Result<ImportedDeck, ImportError>>, ctl: Control, total: usize },
+    Running { path: PathBuf, rx: Receiver<Result<ImportedDeck, ImportError>>, ctl: Control, total: usize, slides: bool },
 }
 
 impl Flow {
@@ -65,8 +66,11 @@ fn failed(app: &mut ZebraApp, path: &Path, e: ImportError) {
     eprintln!("zebra: import {}: {e}", path.display());
     let message = match e {
         ImportError::NotSupported => crate::t!("import-error-unsupported"),
+        ImportError::Damaged("PowerPoint") => crate::t!("import-error-damaged-pptx"),
         ImportError::Damaged(_) => crate::t!("import-error-damaged"),
         ImportError::Encrypted => crate::t!("import-error-encrypted"),
+        ImportError::OldPowerPoint => crate::t!("import-error-old-ppt"),
+        ImportError::AllHidden => crate::t!("import-error-all-hidden"),
         ImportError::NoEngine(_) => crate::t!("import-error-no-engine"),
         ImportError::Read(_) => crate::t!("import-error-read"),
         ImportError::Cancelled => return,
@@ -82,9 +86,32 @@ pub fn note_lines(notes: &std::collections::BTreeMap<ImportNote, usize>) -> Vec<
             let c = *c as i64;
             match n {
                 ImportNote::PageSkipped => crate::t!("import-note-skipped", count = c),
+                ImportNote::HiddenSlide => crate::t!("import-note-hidden", count = c),
+                ImportNote::Chart => crate::t!("import-note-chart", count = c),
+                ImportNote::SmartArt => crate::t!("import-note-smartart", count = c),
+                ImportNote::Table => crate::t!("import-note-table", count = c),
+                ImportNote::Equation => crate::t!("import-note-equation", count = c),
+                ImportNote::Media => crate::t!("import-note-media", count = c),
+                ImportNote::AsPicture => crate::t!("import-note-as-picture", count = c),
+                ImportNote::Shape => crate::t!("import-note-shape", count = c),
+                ImportNote::Metafile => crate::t!("import-note-metafile", count = c),
+                ImportNote::Picture => crate::t!("import-note-picture", count = c),
+                ImportNote::Flip => crate::t!("import-note-flip", count = c),
+                ImportNote::Gradient => crate::t!("import-note-gradient", count = c),
+                ImportNote::Other => crate::t!("import-note-other", count = c),
             }
         })
         .collect()
+}
+
+/// "Imported 3 pages" / "Imported 3 slides".
+pub fn done_title(deck: &ImportedDeck) -> String {
+    let count = deck.pages.len() as i64;
+    if deck.pages.first().is_some_and(|p| p.slide) {
+        crate::t!("import-done-title-slides", count = count)
+    } else {
+        crate::t!("import-done-title", count = count)
+    }
 }
 
 /// Put a read deck on the canvas (one undo step) and show what came in.
@@ -99,7 +126,7 @@ pub fn finish(app: &mut ZebraApp, path: &Path, deck: ImportedDeck) {
     if !lines.is_empty() {
         crate::sheets::request(
             app,
-            crate::sheets::SheetKind::ImportNotes { title: crate::t!("import-done-title", count = (deck.pages.len() as i64)), message: lines.join("\n") },
+            crate::sheets::SheetKind::ImportNotes { title: done_title(&deck), message: lines.join("\n") },
         );
     }
 }
@@ -111,7 +138,8 @@ fn poll(app: &mut ZebraApp) {
         Flow::Reading { path, rx } => match rx.try_recv() {
             Ok(Ok(reader)) => {
                 let pages = reader.page_count();
-                Some(Flow::Choose { path, reader, pages, all: true, from: 1.0, to: pages as f64 })
+                let slides = reader.kind() == "PowerPoint";
+                Some(Flow::Choose { path, reader, pages, all: true, from: 1.0, to: pages as f64, slides })
             }
             Ok(Err(e)) => {
                 failed(app, &path, e);
@@ -123,7 +151,7 @@ fn poll(app: &mut ZebraApp) {
                 None
             }
         },
-        Flow::Running { path, rx, ctl, total } => match rx.try_recv() {
+        Flow::Running { path, rx, ctl, total, slides } => match rx.try_recv() {
             Ok(Ok(deck)) => {
                 finish(app, &path, deck);
                 None
@@ -132,7 +160,7 @@ fn poll(app: &mut ZebraApp) {
                 failed(app, &path, e);
                 None
             }
-            Err(TryRecvError::Empty) => Some(Flow::Running { path, rx, ctl, total }),
+            Err(TryRecvError::Empty) => Some(Flow::Running { path, rx, ctl, total, slides }),
             Err(TryRecvError::Disconnected) => {
                 failed(app, &path, ImportError::Read("worker stopped".into()));
                 None
@@ -144,10 +172,12 @@ fn poll(app: &mut ZebraApp) {
 
 /// Read the chosen pages on a worker.
 fn run(app: &mut ZebraApp, path: PathBuf, reader: Box<dyn Reader>, first: usize, last: usize) {
+    let slides = reader.kind() == "PowerPoint";
     let mut opts = zebra_import::Options::all(app.editor.theme());
     opts.first = first;
     opts.last = last;
     opts.page_name = std::sync::Arc::new(|n| crate::t!("import-page-name", n = (n as i64)));
+    opts.slide_name = std::sync::Arc::new(|n| crate::t!("import-slide-name", n = (n as i64)));
     let ctl = Control::default();
     let (tx, rx) = std::sync::mpsc::channel();
     let (c, ctx) = (ctl.clone(), app.ctx.clone());
@@ -157,7 +187,7 @@ fn run(app: &mut ZebraApp, path: PathBuf, reader: Box<dyn Reader>, first: usize,
         ctx.request_repaint();
     });
     match spawned {
-        Ok(_) => app.import = Some(Flow::Running { path, rx, ctl, total }),
+        Ok(_) => app.import = Some(Flow::Running { path, rx, ctl, total, slides }),
         Err(e) => failed(app, &path, ImportError::Read(e.to_string())),
     }
 }
@@ -216,12 +246,18 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
                                 ui.add(egui::Label::new(RichText::new(crate::t!("import-reading")).font(style::ui_font(11.0)).color(p.weak)));
                             });
                         }
-                        Flow::Choose { pages, all, from, to, .. } => {
+                        Flow::Choose { pages, all, from, to, slides, .. } => {
+                            let n = *pages as i64;
+                            let (count, every) = if *slides {
+                                (crate::t!("import-slide-count", count = n), crate::t!("import-slides-all"))
+                            } else {
+                                (crate::t!("import-page-count", count = n), crate::t!("import-pages-all"))
+                            };
                             ui.vertical_centered(|ui| {
-                                ui.add(egui::Label::new(RichText::new(crate::t!("import-page-count", count = (*pages as i64))).font(style::ui_font(11.0)).color(p.text)));
+                                ui.add(egui::Label::new(RichText::new(count).font(style::ui_font(11.0)).color(p.text)));
                             });
                             ui.add_space(10.0);
-                            if w::radio(ui, *all, &crate::t!("import-pages-all")).clicked() {
+                            if w::radio(ui, *all, &every).clicked() {
                                 *all = true;
                             }
                             ui.add_space(2.0);
@@ -242,7 +278,7 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
                                 }
                             });
                         }
-                        Flow::Running { ctl, total, .. } => {
+                        Flow::Running { ctl, total, slides, .. } => {
                             let done = ctl.done().min(*total);
                             ui.add_space(6.0);
                             let (r, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 6.0), egui::Sense::hover());
@@ -251,7 +287,11 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
                             ui.painter().rect_filled(egui::Rect::from_min_size(r.min, Vec2::new(r.width() * f, r.height())), 3.0, style::accent());
                             ui.add_space(4.0);
                             ui.vertical_centered(|ui| {
-                                ui.add(egui::Label::new(RichText::new(crate::t!("import-progress", done = (done as i64), total = (*total as i64))).font(style::ui_font(11.0)).color(p.weak)));
+                                ui.add(egui::Label::new(RichText::new(if *slides {
+                                    crate::t!("import-progress-slides", done = (done as i64), total = (*total as i64))
+                                } else {
+                                    crate::t!("import-progress", done = (done as i64), total = (*total as i64))
+                                }).font(style::ui_font(11.0)).color(p.weak)));
                             });
                             ctx.request_repaint_after(std::time::Duration::from_millis(100));
                         }
@@ -292,7 +332,7 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
             app.import = None;
         }
         Do::Import => {
-            if let Some(Flow::Choose { path, reader, pages, all, from, to }) = app.import.take() {
+            if let Some(Flow::Choose { path, reader, pages, all, from, to, .. }) = app.import.take() {
                 let (first, last) = if all { (1, pages) } else { (from.round().max(1.0) as usize, (to.round() as usize).clamp(1, pages)) };
                 run(app, path, reader, first.min(last), last);
             }

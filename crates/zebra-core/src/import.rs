@@ -83,15 +83,71 @@ pub enum BoxAnchor {
 pub enum ImportNote {
     /// Pages that could not be read were left out.
     PageSkipped,
+    /// Hidden slides were left out.
+    HiddenSlide,
+    /// Charts with no picture of them in the file were left out.
+    Chart,
+    /// SmartArt graphics were left out.
+    SmartArt,
+    /// Tables were left out.
+    Table,
+    /// Equations were left out.
+    Equation,
+    /// Videos and sounds came in as their poster pictures.
+    Media,
+    /// Embedded objects came in as the picture the file keeps of them.
+    AsPicture,
+    /// Shapes Zebra has no match for (custom shapes, curved connectors…)
+    /// were left out; their text came in.
+    Shape,
+    /// EMF and WMF pictures with no other picture beside them were left out.
+    Metafile,
+    /// Pictures in other formats (TIFF, BMP…) or that could not be read
+    /// were left out.
+    Picture,
+    /// Flipped objects Zebra can't flip are shown unflipped.
+    Flip,
+    /// Gradients came in as their first colour.
+    Gradient,
+    /// Other objects (ink, add-in content…) were left out.
+    Other,
 }
 
 impl ImportNote {
-    pub const ALL: [ImportNote; 1] = [ImportNote::PageSkipped];
+    pub const ALL: [ImportNote; 14] = [
+        ImportNote::PageSkipped,
+        ImportNote::HiddenSlide,
+        ImportNote::Chart,
+        ImportNote::SmartArt,
+        ImportNote::Table,
+        ImportNote::Equation,
+        ImportNote::Media,
+        ImportNote::AsPicture,
+        ImportNote::Shape,
+        ImportNote::Metafile,
+        ImportNote::Picture,
+        ImportNote::Flip,
+        ImportNote::Gradient,
+        ImportNote::Other,
+    ];
 
     /// English, for the API and the undo history of agents.
     pub fn english(self, n: usize) -> String {
         let (one, many) = match self {
             ImportNote::PageSkipped => ("unreadable page left out", "unreadable pages left out"),
+            ImportNote::HiddenSlide => ("hidden slide left out", "hidden slides left out"),
+            ImportNote::Chart => ("chart left out", "charts left out"),
+            ImportNote::SmartArt => ("SmartArt graphic left out", "SmartArt graphics left out"),
+            ImportNote::Table => ("table left out", "tables left out"),
+            ImportNote::Equation => ("equation left out", "equations left out"),
+            ImportNote::Media => ("video or sound imported as its poster picture", "videos and sounds imported as their poster pictures"),
+            ImportNote::AsPicture => ("embedded object imported as a picture", "embedded objects imported as pictures"),
+            ImportNote::Shape => ("unsupported shape left out (its text kept)", "unsupported shapes left out (their text kept)"),
+            ImportNote::Metafile => ("EMF or WMF picture left out", "EMF or WMF pictures left out"),
+            ImportNote::Picture => ("picture in an unsupported format left out", "pictures in unsupported formats left out"),
+            ImportNote::Flip => ("flipped object shown unflipped", "flipped objects shown unflipped"),
+            ImportNote::Gradient => ("gradient made a solid colour", "gradients made solid colours"),
+            ImportNote::Other => ("other object left out", "other objects left out"),
         };
         format!("{n} {}", if n == 1 { one } else { many })
     }
