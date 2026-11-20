@@ -129,6 +129,10 @@ pub struct ZebraApp {
     pub thumbs: Thumbs,
     pub show_sidebar: bool,
     pub show_props: bool,
+    /// Path sidebar and inspector widths, set by dragging their edges;
+    /// remembered between launches.
+    pub sidebar_w: f32,
+    pub inspector_w: f32,
     /// The inspector tab last chosen (kept across selections when it fits).
     pub inspector_tab: crate::inspector::Tab,
     pub show_activity: bool,
@@ -385,6 +389,8 @@ impl ZebraApp {
             symbols: Default::default(),
             show_sidebar: true,
             show_props: true,
+            sidebar_w: storage.and_then(|s| eframe::get_value::<f32>(s, "sidebar_width")).map_or(crate::panels::SIDEBAR_W, crate::panels::clamp_sidebar),
+            inspector_w: storage.and_then(|s| eframe::get_value::<f32>(s, "inspector_width")).map_or(crate::inspector::WIDTH, crate::panels::clamp_inspector),
             inspector_tab: crate::inspector::Tab::default(),
             show_activity: false,
             palette: None,
@@ -1869,6 +1875,8 @@ impl eframe::App for ZebraApp {
         eframe::set_value(storage, "scroll_mode", &self.scroll_mode);
         eframe::set_value(storage, "motion_override", &self.motion_override);
         eframe::set_value(storage, "snapping", &self.snapping);
+        eframe::set_value(storage, "sidebar_width", &self.sidebar_w);
+        eframe::set_value(storage, "inspector_width", &self.inspector_w);
         eframe::set_value(storage, "default_theme", &self.default_theme);
         eframe::set_value(storage, "settings_pane", &self.settings_pane);
         eframe::set_value(storage, "ai_enabled", &self.ai_saved);

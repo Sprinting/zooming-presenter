@@ -625,3 +625,37 @@ fn web_export_sheet_offers_the_browser() {
         assert!(h.state().sheet.is_none());
     }
 }
+
+#[test]
+fn panes_resize_by_their_edges_and_collapse_past_the_minimum() {
+    let mut h = harness(Some("sample"));
+    let canvas = h.state().canvas.rect;
+    let y = canvas.center().y;
+    let (sw, iw) = (h.state().sidebar_w, h.state().inspector_w);
+    // Sidebar: drag its right edge 60 pt to the right.
+    drag(&mut h, egui::pos2(canvas.left(), y), egui::pos2(canvas.left() + 60.0, y));
+    h.run_steps(2);
+    assert!((h.state().sidebar_w - (sw + 60.0)).abs() < 2.0, "sidebar {} -> {}", sw, h.state().sidebar_w);
+    assert!(h.state().canvas.rect.left() > canvas.left() + 50.0, "the canvas gives up the room");
+    // Inspector: drag its left edge 80 pt to the left; it can't go narrower
+    // than its default.
+    let canvas = h.state().canvas.rect;
+    drag(&mut h, egui::pos2(canvas.right(), y), egui::pos2(canvas.right() - 80.0, y));
+    h.run_steps(2);
+    assert!((h.state().inspector_w - (iw + 80.0)).abs() < 2.0, "inspector {} -> {}", iw, h.state().inspector_w);
+    let canvas = h.state().canvas.rect;
+    drag(&mut h, egui::pos2(canvas.right(), y), egui::pos2(canvas.right() + 100.0, y));
+    h.run_steps(2);
+    assert_eq!(h.state().inspector_w, zebra_app::inspector::WIDTH);
+    assert!(h.state().show_props, "a drag to the minimum keeps it open");
+    // Well past the minimum: the sidebar collapses, and comes back at its
+    // last width.
+    let canvas = h.state().canvas.rect;
+    let kept = h.state().sidebar_w;
+    drag(&mut h, egui::pos2(canvas.left(), y), egui::pos2(canvas.left() - 400.0, y));
+    h.run_steps(2);
+    assert!(!h.state().show_sidebar, "dragged shut");
+    h.state_mut().show_sidebar = true;
+    h.run_steps(2);
+    assert_eq!(h.state().sidebar_w, kept, "reopens at the width it had before the drag");
+}
