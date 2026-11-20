@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use zebra_core::import::ImportedDeck;
+use zebra_core::import::{ImportedDeck, MAX_IMPORT_SPANS};
+use zebra_core::rich::MAX_INSERT_CHARS;
 use zebra_core::{Editor, ElementKind, Origin, TextData};
 use zebra_import::{Control, ImportError, ImportNote, Options};
 
@@ -319,6 +320,37 @@ fn ten_thousand_slides_come_in() {
     assert_eq!(r.read(&Options::all(Editor::default().theme()), &ctl).err(), Some(ImportError::Cancelled));
 }
 
+/// T-C5: a box with more runs than text layout can take (65,536 styles
+/// crashed parley) keeps 60,000 spans and says so; a box longer than paste
+/// allows is cut there and says so. All-bold runs were quadratic to read.
+#[test]
+fn long_text_is_cut_and_its_formatting_simplified() {
+    let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let run = |b: bool, t: &str| format!(r#"<a:r><a:rPr b="{}"/><a:t>{t}</a:t></a:r>"#, b as u8);
+    // Bold, italic, underlined, plain, again: 75,000 spans in 100,000
+    // characters (no neighbours alike to merge).
+    let styles = [r#"b="1""#, r#"i="1""#, r#"u="sng""#, ""];
+    let alternating: String = (0..100_000).map(|i| format!(r#"<a:r><a:rPr {}/><a:t>a</a:t></a:r>"#, styles[i % 4])).collect();
+    let bold: String = (0..150_000).map(|_| run(true, "abc")).collect();
+    assert!(alternating.len() < 8 << 20 && bold.len() < 8 << 20);
+    let slides = [s(slide(&words(3, "First"))), s(slide(&text_box(2, &format!("<a:p>{alternating}</a:p>")))), s(slide(&text_box(2, &format!("<a:p>{bold}</a:p>"))))];
+    let t = Instant::now();
+    let (d, grew) = peak(|| read(deck(&slides, &[], &[])).unwrap());
+    eprintln!("100,000 + 150,000 runs: read in {:.1} s, heap +{} MB", t.elapsed().as_secs_f64(), grew / MB);
+    assert!(t.elapsed() < Duration::from_secs(60), "{:?}", t.elapsed());
+    let tx = texts(&d);
+    assert_eq!(tx[1].spans.len(), MAX_IMPORT_SPANS);
+    assert_eq!(tx[1].text.chars().count(), 100_000);
+    assert_eq!(tx[2].text.chars().count(), MAX_INSERT_CHARS);
+    assert!(tx[2].bold);
+    assert_eq!(d.slides[&ImportNote::Simplified], [2]);
+    assert_eq!(d.slides[&ImportNote::TextCut], [3]);
+    // Laid out on a canvas without a panic.
+    let t = Instant::now();
+    import(&d);
+    eprintln!("on the canvas in {:.1} s", t.elapsed().as_secs_f64());
+}
+
 /// T-M4, T-M5: a SmartArt data part of 1.5M empty points (34 MB) took a
 /// gigabyte; a 300 MB one 600 MB; 500 MB of parts nothing uses 580 MB.
 /// None of them is unpacked now.
@@ -425,4 +457,20 @@ fn notes_are_one_summary() {
     for n in ImportNote::ALL {
         assert!(!n.english(2).is_empty());
     }
+}
+
+/// The biggest slide that is read (just under 8 MB of XML, as many runs as
+/// fit): what one slide can cost.
+#[test]
+fn the_biggest_slide_read_costs_a_bounded_heap() {
+    let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let run = r#"<a:r><a:rPr b="1"/><a:t>ab</a:t></a:r>"#;
+    let n = ((8 << 20) - 4096) / run.len();
+    let big = s(slide(&text_box(2, &format!("<a:p>{}</a:p>", run.repeat(n)))));
+    let bytes = deck(&[big], &[], &[]);
+    let t = Instant::now();
+    let (d, grew) = peak(|| read(bytes).unwrap());
+    eprintln!("one slide of {} KB ({n} runs): read in {:.1} s, heap +{} MB", (n * run.len()) >> 10, t.elapsed().as_secs_f64(), grew / MB);
+    assert_eq!(d.pages.len(), 1);
+    assert!(grew < 512 * MB, "heap +{} MB", grew / MB);
 }

@@ -38,7 +38,8 @@ use pptx_parse::{
 };
 use crate::pptx_media::MediaSource;
 use crate::pptx_package::{Package, Read};
-use zebra_core::import::{asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox};
+use zebra_core::import::{asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox, MAX_IMPORT_SPANS};
+use zebra_core::rich::MAX_INSERT_CHARS;
 use zebra_core::{
     Align, AssetBytes, Crop, Dash, Element, ElementKind, ImageData, ImageMask, InkData, ListKind, MediaKind, ParaFormat, ShapeData, ShapeKind, Size, Soundtrack, SpanFormat, TextData, TextSpan, TextStyle, Transform, VideoData,
 };
@@ -170,6 +171,7 @@ impl Reader for PptxReader {
                 }
                 let mut r = SlideReader::new(pkg, self.package.media(), &index, slide, k, (sw, sh), &mut deck, &mut media, &mut counted, &infos, &opts.theme);
                 r.has_soundtrack = opts.has_soundtrack;
+                r.number = i + 1;
                 r.read();
                 let SlideReader { items, pending: texts, voiceover, .. } = r;
                 let page = deck.pages.len();
@@ -222,6 +224,18 @@ fn slide_parts<'p>(pkg: &'p PptxPackage, slide: &Slide) -> (Option<&'p SlideLayo
     let layout = slide.layout_part_path.as_deref().and_then(|p| pkg.layouts.iter().find(|l| l.part_path == p)).or_else(|| pkg.layouts.first());
     let master = pptx_parse::master_for_layout(pkg, layout).or_else(|| pkg.masters.first());
     (layout, master)
+}
+
+/// A text box's text as [`SlideReader::build_text`] made it.
+struct Built {
+    data: TextData,
+    /// The size most of its characters have, points.
+    base_pt: f64,
+    chars: usize,
+    /// Cut to [`MAX_INSERT_CHARS`].
+    cut: bool,
+    /// Formatting past [`MAX_IMPORT_SPANS`] dropped.
+    simplified: bool,
 }
 
 /// A text box read from a slide, waiting for the deck-wide size ranking.
@@ -371,6 +385,8 @@ struct SlideReader<'a> {
     src: &'a MediaSource,
     /// The batch's relationships and media by id and path.
     index: &'a Index<'a>,
+    /// The slide's number in the deck (1-based), for notes that name it.
+    number: usize,
     /// SmartArt drawings being read, innermost last (a drawing that names
     /// itself, or one inside it, is not read again).
     drawings: Vec<String>,
@@ -419,7 +435,7 @@ impl<'a> SlideReader<'a> {
             .or_else(|| pkg.themes.first())
             .map(|t| t.format_scheme.clone())
             .unwrap_or_default();
-        SlideReader { pkg, src, index, drawings: vec![], slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos, has_soundtrack: false, voiceover: None, zebra }
+        SlideReader { pkg, src, index, number: 0, drawings: vec![], slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos, has_soundtrack: false, voiceover: None, zebra }
     }
 
     fn note(&mut self, n: ImportNote) {
@@ -1124,6 +1140,12 @@ impl<'a> SlideReader<'a> {
             _ => 1.0,
         };
         let Some(built) = self.build_text(&c, scale) else { return };
+        if built.cut {
+            self.deck.note_slide(ImportNote::TextCut, self.number);
+        }
+        if built.simplified {
+            self.deck.note_slide(ImportNote::Simplified, self.number);
+        }
         let k = self.k;
         let (w, h) = ((at.w - il - ir).max(at.w * 0.2), (at.h - it - ib).max(0.0));
         // The text box's centre, moved by uneven insets (turned with it).
@@ -1132,7 +1154,7 @@ impl<'a> SlideReader<'a> {
         let (cx, cy) = (at.cx + ox * a.cos() - oy * a.sin(), at.cy + ox * a.sin() + oy * a.cos());
         let (bw, bh) = (w * k, h * k);
         let fit = SourceBox { x0: cx * k - bw / 2.0, y0: cy * k - bh / 2.0, x1: cx * k + bw / 2.0, y1: cy * k + bh / 2.0, anchor };
-        let (data, base_pt, chars) = built;
+        let Built { data, base_pt, chars, .. } = built;
         let mut data = data;
         data.fixed_width = wraps;
         self.pending.push(PendingText { item: self.items.len(), base_pt, chars, wrap: if wraps { bw } else { 0.0 } });
@@ -1152,11 +1174,16 @@ impl<'a> SlideReader<'a> {
     }
 
     /// The text, its base size in points (the size most characters have)
-    /// and its length, or None when there is nothing to show.
-    fn build_text(&self, c: &Cascade, font_scale: f64) -> Option<(TextData, f64, usize)> {
+    /// and its length, or None when there is nothing to show. A text longer
+    /// than paste allows ([`MAX_INSERT_CHARS`]) is cut there, and formatting
+    /// past [`MAX_IMPORT_SPANS`] changes is dropped (a box with 65,536
+    /// crashed text layout).
+    fn build_text(&self, c: &Cascade, font_scale: f64) -> Option<Built> {
         struct Run {
             start: usize,
             end: usize,
+            /// Has characters other than spaces.
+            visible: bool,
             pt: f64,
             bold: bool,
             italic: bool,
@@ -1217,6 +1244,7 @@ impl<'a> SlideReader<'a> {
                 runs.push(Run {
                     start: n,
                     end: n + len,
+                    visible: t.chars().any(|c| !c.is_whitespace()),
                     pt,
                     bold: rp.bold.unwrap_or(false),
                     italic: rp.italic.unwrap_or(false),
@@ -1227,6 +1255,20 @@ impl<'a> SlideReader<'a> {
                 });
                 text.push_str(&t);
                 n += len;
+            }
+        }
+        // Longer than one paste may be: cut there (laid out on every frame,
+        // a megabyte of text froze the window).
+        let cut = n > MAX_INSERT_CHARS;
+        if cut {
+            if let Some((at, _)) = text.char_indices().nth(MAX_INSERT_CHARS) {
+                text.truncate(at);
+            }
+            n = MAX_INSERT_CHARS;
+            paras.truncate(text.split('\n').count());
+            runs.retain(|r| r.start < n);
+            if let Some(r) = runs.last_mut() {
+                r.end = r.end.min(n);
             }
         }
         // Empty lines at the end take room and show nothing.
@@ -1247,7 +1289,7 @@ impl<'a> SlideReader<'a> {
         };
         let base_pt: f64 = commonest(&|r| format!("{:.1}", r.pt)).parse().unwrap_or(18.0);
         let color = commonest(&|r| r.color.clone());
-        let visible = |r: &&Run| text.chars().skip(r.start).take(r.end - r.start).any(|c| !c.is_whitespace());
+        let visible = |r: &&Run| r.visible;
         let bold = runs.iter().filter(visible).all(|r| r.bold);
         let italic = runs.iter().filter(visible).all(|r| r.italic);
         let mut align_count: BTreeMap<u8, usize> = BTreeMap::new();
@@ -1273,8 +1315,12 @@ impl<'a> SlideReader<'a> {
             .collect();
         let paras = paras.iter().map(|(level, list, align)| ParaFormat { indent: *level, list: Some(*list), align: (*align != box_align).then_some(*align) }).collect();
         let mut data = TextData { text, style: TextStyle::Body, bold, italic, align: box_align, bullets: false, color: Some(color.to_ascii_lowercase()), fixed_width: true, spans, paras };
+        // Neighbouring runs that look the same are one span, then the
+        // spans past the cap go: their characters take the box's style.
         zebra_core::rich::normalize(&mut data);
-        Some((data, base_pt, n))
+        let simplified = data.spans.len() > MAX_IMPORT_SPANS;
+        data.spans.truncate(MAX_IMPORT_SPANS);
+        Some(Built { data, base_pt, chars: n, cut, simplified })
     }
 
     /// The strike-through part `part`'s shape `id` says (None when it
