@@ -356,3 +356,60 @@ fn quit_key_while_typing_asks_first() {
     assert!(!s.windows[0].force_quit);
     assert_eq!(s.windows[0].editor.doc.elements.len(), 1, "the words typed are kept");
 }
+
+/// B4, as Keynote does it: Quit saves a document that has a file in place,
+/// without asking, then quits. Only Untitled documents ask.
+#[test]
+fn quit_saves_a_titled_document_in_place_without_asking() {
+    let dir = std::env::temp_dir().join(format!("zebra-quit-titled-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Talk.zebra");
+    let mut h = harness();
+    add_frame(&mut h.state_mut().windows[0]);
+    let mut doc = h.state().windows[0].editor.doc.clone();
+    zebra_core::io::save(&mut doc, &path).unwrap();
+    h.state_mut().windows[0].editor.mark_saved(Some(path.clone()));
+    add_frame(&mut h.state_mut().windows[0]);
+    assert!(h.state().windows[0].editor.dirty());
+    h.state_mut().windows[0].queued.push(Action::Quit);
+    let mut quit = false;
+    for _ in 0..200 {
+        h.run_steps(1);
+        assert!(!h.state().windows[0].sheet_showing(), "no Save Changes for a document with a file");
+        if h.state().windows[0].force_quit {
+            quit = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(quit, "Zebra quits once the save is written");
+    assert_eq!(zebra_core::io::load(&path).unwrap().elements.len(), 2, "both frames are in the file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same for Close: a titled document is saved in place and its window
+/// closes; Untitled ones ask (above).
+#[test]
+fn close_saves_a_titled_document_in_place_without_asking() {
+    let dir = std::env::temp_dir().join(format!("zebra-close-titled-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Talk.zebra");
+    let mut h = harness();
+    add_frame(&mut h.state_mut().windows[0]);
+    let mut doc = h.state().windows[0].editor.doc.clone();
+    zebra_core::io::save(&mut doc, &path).unwrap();
+    h.state_mut().windows[0].editor.mark_saved(Some(path.clone()));
+    add_frame(&mut h.state_mut().windows[0]);
+    h.state_mut().windows[0].queued.push(Action::Close);
+    for _ in 0..200 {
+        h.run_steps(1);
+        assert!(!h.state().windows[0].sheet_showing(), "no Save Changes for a document with a file");
+        if h.state().empty {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(h.state().empty, "the window closed");
+    assert_eq!(zebra_core::io::load(&path).unwrap().elements.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}

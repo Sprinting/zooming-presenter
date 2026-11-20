@@ -728,6 +728,16 @@ impl ZebraApp {
             New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close | Save | SaveAs if self.editor.saving().is_some() => {
                 self.after_save.push(a);
             }
+            // As in Keynote: a document that has a file is saved in place,
+            // without asking, and the action follows once it's written. Only
+            // an Untitled one asks Save Changes.
+            New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close
+                if self.editor.dirty() && !self.force_quit && self.editor.file_path.is_some() && !self.asking_to_save() =>
+            {
+                if self.save(false) {
+                    self.after_save.push(a);
+                }
+            }
             New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close if self.editor.dirty() && !self.force_quit => {
                 // Already asking (a second Close, from the close button
                 // say): that question stands. It used to fall through and
@@ -1971,7 +1981,14 @@ impl ZebraApp {
         }
         if ctx.input(|i| i.viewport().close_requested()) && !self.force_quit && self.editor.dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(Action::Quit));
+            if self.editor.file_path.is_some() {
+                // Saved in place, as Keynote does; then the window closes.
+                if self.save(false) && !self.after_save.contains(&Action::Quit) {
+                    self.after_save.push(Action::Quit);
+                }
+            } else if !self.asking_to_save() {
+                crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(Action::Quit));
+            }
         }
     }
 

@@ -1000,23 +1000,14 @@ fn paste_with(app: &mut ZebraApp, make: impl FnOnce() -> Option<Vec<u8>> + Send 
     }
 }
 
-/// Longest side of a pasted picture; bigger ones are scaled down to it,
-/// as Keynote does. 8192 px is sharper than any screen shows it.
-pub const MAX_PASTE_SIDE: u32 = 8192;
-
-/// A pasted picture as PNG: None if the pixels don't make a picture (a
-/// size that doesn't match the data, or zero), scaled down to
-/// [`MAX_PASTE_SIDE`] if larger.
+/// A pasted picture as PNG, at its full size: None if the pixels don't
+/// make a picture (a size that doesn't match the data, or zero). It isn't
+/// scaled down: like any picture it comes in whole and shows scaled.
 pub fn pasted_png(w: u32, h: u32, rgba: Vec<u8>) -> Option<Vec<u8>> {
     if w == 0 || h == 0 || (w as u128) * (h as u128) * 4 != rgba.len() as u128 {
         return None;
     }
-    let mut img = image::RgbaImage::from_raw(w, h, rgba)?;
-    if w.max(h) > MAX_PASTE_SIDE {
-        let s = MAX_PASTE_SIDE as f64 / w.max(h) as f64;
-        let (nw, nh) = (((w as f64 * s).round() as u32).max(1), ((h as f64 * s).round() as u32).max(1));
-        img = image::imageops::thumbnail(&img, nw, nh);
-    }
+    let img = image::RgbaImage::from_raw(w, h, rgba)?;
     let mut png = vec![];
     img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
     Some(png)

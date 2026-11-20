@@ -141,19 +141,19 @@ fn dropped_files_are_told_apart_by_their_bytes_not_their_names() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A pasted picture comes in at its full size: nothing is scaled down
+/// (a 10,000-pixel-wide one stays 10,000 wide). Pixels that don't add up
+/// are no picture.
 #[test]
-fn pasted_pictures_are_bounded() {
-    use zebra_app::media_ui::{pasted_png, MAX_PASTE_SIDE};
-    // Pixels that don't match the size, or no pixels: nothing.
+fn pasted_pictures_keep_their_size() {
+    use zebra_app::media_ui::pasted_png;
     assert!(pasted_png(0, 0, vec![]).is_none());
     assert!(pasted_png(100, 100, vec![0; 16]).is_none());
     assert!(pasted_png(u32::MAX, u32::MAX, vec![0; 16]).is_none());
-    // Wider than the limit: scaled down to it, aspect kept.
-    let w = MAX_PASTE_SIDE + 1808;
+    let w = 10_000;
     let png = pasted_png(w, 50, vec![255; w as usize * 50 * 4]).unwrap();
     let (pw, ph) = image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().unwrap().into_dimensions().unwrap();
-    assert_eq!(pw, MAX_PASTE_SIDE);
-    assert_eq!(ph, (50.0 * MAX_PASTE_SIDE as f64 / w as f64).round() as u32);
+    assert_eq!((pw, ph), (w, 50));
 }
 
 /// Cloud pass: pasting a 12000 x 9000 screenshot held the window for 2 s
@@ -201,27 +201,43 @@ fn errors_say_what_they_are_about() {
     use zebra_core::ZError;
     let say = |e: ZError| zebra_app::words::error(&e);
     let picture = say(ZError::new("too_big", "x").about(About::Picture));
-    assert_eq!(picture, zebra_app::t!("app-error-picture-too-big", mb = 256u64));
-    assert!(picture.contains("picture") && picture.contains("256 MB"), "{picture}");
+    assert_eq!(picture, zebra_app::t!("app-error-picture-too-big"));
+    assert!(picture.contains("picture") && !picture.contains("MB"), "{picture}");
     assert!(say(ZError::new("too_big", "x").about(About::Table)).contains("table"));
     for e in [ZError::new("too_big", "x"), ZError::new("too_large", "x"), ZError::new("too_big", "x").about(About::Poster), ZError::new("bad_file", "x").about(About::Document), ZError::new("busy", "x").about(About::Saving)] {
         assert!(!say(e.clone()).contains("table"), "{e:?}: {}", say(e.clone()));
     }
     assert!(!say(ZError::new("busy", "x").about(About::Saving)).contains("agent"));
 
-    // A picture over the limit, dropped: the toast says so.
-    let mut h = harness();
-    let dir = data_dir().join("over-limit");
-    std::fs::create_dir_all(&dir).unwrap();
-    let p = dir.join("picture-over-limit.png");
-    let mut png = vec![];
-    image::RgbaImage::new(2, 2).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    std::fs::write(&p, &png).unwrap();
-    std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(zebra_core::media::MAX_PICTURE + 1).unwrap();
-    let at = h.state().canvas_center_world();
-    zebra_app::media_ui::insert_file(h.state_mut(), &p, at);
-    h.run_steps(1);
-    assert_eq!(h.state().toast.as_ref().map(|t| t.text.clone()), Some(picture.clone()));
+    // A picture whose pixels can't be scaled down here (a progressive
+    // JPEG claiming 60,000 x 60,000), dropped: the toast says so. Any file
+    // size comes in (Kartik, 21 Nov); only this kind is refused. (On the
+    // Mac, ImageIO scales these, as Keynote does.)
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut h = harness();
+        let dir = data_dir().join("over-limit");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("picture-unscalable.jpg");
+        std::fs::write(&p, lying_jpeg(60_000, 60_000)).unwrap();
+        let at = h.state().canvas_center_world();
+        zebra_app::media_ui::insert_file(h.state_mut(), &p, at);
+        h.run_steps(1);
+        assert_eq!(h.state().toast.as_ref().map(|t| t.text.clone()), Some(picture.clone()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A progressive JPEG header claiming `w` x `h`, and no pixels.
+#[cfg(not(target_os = "macos"))]
+fn lying_jpeg(w: u16, h: u16) -> Vec<u8> {
+    let mut v = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 16, b'J', b'F', b'I', b'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0];
+    v.extend([0xFF, 0xC2, 0, 17, 8]);
+    v.extend(h.to_be_bytes());
+    v.extend(w.to_be_bytes());
+    v.extend([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+    v.extend([0xFF, 0xD9]);
+    v
     let _ = std::fs::remove_dir_all(&dir);
 }
 
