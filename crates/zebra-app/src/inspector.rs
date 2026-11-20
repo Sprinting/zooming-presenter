@@ -193,8 +193,19 @@ fn finish(insp: Insp) {
         if gesture && !app.editor.in_transaction() {
             let _ = app.editor.begin(crate::t!("inspector-undo-change-properties"), H);
         }
+        // A new frame style can leave things outside the outline (a
+        // rectangle made a circle): say how many no longer move with it.
+        let held = patch.frame_style.map(|_| app.editor.frame_contents(&el.id));
         let r = app.editor.apply(Command::Update { id: el.id.clone(), patch }, H);
+        let ok = r.is_ok();
         app.report(r);
+        if let (Some(before), true) = (held, ok) {
+            let after = app.editor.frame_contents(&el.id);
+            let released = before.iter().filter(|id| !after.contains(id)).count();
+            if released > 0 {
+                app.note(crate::t!("canvas-note-frame-released", count = released));
+            }
+        }
     }
     // Crop mode (stream 2) keeps its own transaction open.
     if !gesture && app.editor.human_gesture_active() && matches!(app.canvas.gesture, crate::canvas::Gesture::None) && !crate::media_ui::crop_active(app) {

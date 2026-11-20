@@ -903,6 +903,10 @@ canvas-undo-edit-text = Edit Text
 canvas-undo-text-width = Change Text Width
 # $step is the 1-based step number.
 canvas-toast-step-retargeted = Step { $step } now zooms here
+canvas-note-frame-released = { $count ->
+    [one] { $count } object no longer moves with this frame.
+   *[other] { $count } objects no longer move with this frame.
+}
 canvas-toast-framed-objects = { $count ->
     [one] Framed { $count } object
    *[other] Framed { $count } objects

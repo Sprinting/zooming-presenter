@@ -157,6 +157,9 @@ pub struct ZebraApp {
     pub paste_count: u32,
     pub recent: Vec<PathBuf>,
     pub toast: Option<Toast>,
+    /// A short note under the toolbar about what just happened on the
+    /// canvas ("2 objects no longer move with this frame.").
+    pub note: Option<Toast>,
     /// The sheet waiting for an answer (save changes, errors, confirmations).
     pub sheet: Option<crate::sheets::SheetKind>,
     /// File › Import… under way (its sheet is up).
@@ -400,6 +403,7 @@ impl ZebraApp {
             paste_count: 0,
             recent,
             toast: None,
+            note: None,
             sheet: None,
             import: None,
             native_dialogs: cfg!(target_os = "macos") && has_window,
@@ -508,6 +512,12 @@ impl ZebraApp {
     pub fn toast(&mut self, text: impl Into<String>) {
         let until = self.now() + 2.6;
         self.toast = Some(Toast { text: text.into(), until });
+    }
+
+    /// Show a short note under the toolbar for a few seconds.
+    pub fn note(&mut self, text: impl Into<String>) {
+        let until = self.now() + 4.0;
+        self.note = Some(Toast { text: text.into(), until });
     }
 
     /// Switch "Allow AI control" on or off. Only the human UI
@@ -1587,10 +1597,11 @@ impl ZebraApp {
             ctx.request_repaint();
         }
         // Idle at rest (F26): wake only when something is due, never poll.
-        if let Some(t) = &self.toast {
+        for slot in [&mut self.toast, &mut self.note] {
+            let Some(t) = slot else { continue };
             let left = t.until - now;
             if left <= 0.0 {
-                self.toast = None;
+                *slot = None;
             } else if left > 0.3 {
                 // Sleep until the fade-out starts, then animate it.
                 ctx.request_repaint_after(std::time::Duration::from_secs_f64(left - 0.3));
