@@ -6813,6 +6813,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui-wgpu",
+ "gif",
  "image",
  "krilla",
  "kurbo",

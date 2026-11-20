@@ -508,12 +508,12 @@ fn decode_job(job: &Job) -> Vec<(u8, Decoded)> {
         }
         return out;
     }
-    if job.ext == "gif" {
-        if let Some(a) = decode_gif(asset, &job.bytes, (w, h), level) {
-            return vec![(job.key.1, a)];
-        }
+    if job.bytes.starts_with(b"GIF8") {
+        // GIFs go through their own decoder only: image's would allocate
+        // the whole logical screen once per frame.
+        return decode_gif(asset, &job.bytes, level).map(|a| vec![(job.key.1, a)]).unwrap_or_default();
     }
-    let Ok(img) = image::load_from_memory(&job.bytes) else { return vec![] };
+    let Some(img) = decode_limited(&job.bytes) else { return vec![] };
     let rgba = img.to_rgba8();
     drop(img);
     let (iw, ih) = (rgba.width(), rgba.height());
@@ -533,53 +533,241 @@ fn decode_job(job: &Job) -> Vec<(u8, Decoded)> {
     out
 }
 
-fn decode_gif(asset: &str, bytes: &[u8], (w, h): (u32, u32), level: u8) -> Option<Decoded> {
-    use image::AnimationDecoder;
-    let dec = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).ok()?;
-    // Step down levels until all frames fit the per-GIF budget. Frames
-    // are counted lazily, so start from the requested level and check
-    // as frames arrive.
+/// Largest picture side any decoder accepts. Bigger ones are drawn as the
+/// "unreadable picture" placeholder.
+pub const MAX_DECODE_DIM: u32 = 16384;
+/// Most bytes one decoder may allocate for its pixels.
+pub const MAX_DECODE_ALLOC: u64 = 256 << 20;
+/// Most screen pixels a GIF's frames may cover in all (screen area times
+/// frames kept): each frame is composited on a full screen, so this bounds
+/// the time a GIF takes. 1920x1080 keeps 517 frames.
+pub const GIF_WORK: u64 = 1 << 30;
+
+/// The limits every `image` decoder runs under.
+pub fn decode_limits() -> image::Limits {
+    let mut l = image::Limits::default();
+    l.max_image_width = Some(MAX_DECODE_DIM);
+    l.max_image_height = Some(MAX_DECODE_DIM);
+    l.max_alloc = Some(MAX_DECODE_ALLOC);
+    l
+}
+
+/// Decode a still picture under [`decode_limits`]. None if it is
+/// unreadable or too big.
+fn decode_limited(bytes: &[u8]) -> Option<image::DynamicImage> {
+    let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    r.limits(decode_limits());
+    r.decode().ok()
+}
+
+/// Shrinks a picture to `dw`x`dh` one source row at a time (area average,
+/// premultiplied), so the full-size picture never has to exist at once.
+struct Shrink {
+    sw: u32,
+    sh: u32,
+    dw: u32,
+    dh: u32,
+    /// Destination column of each source column.
+    col: Vec<u32>,
+    /// Source columns per destination column.
+    ncol: Vec<u32>,
+    acc: Vec<u64>,
+    /// Source rows summed into `acc`, and the destination row they make.
+    nrow: u32,
+    oy: u32,
+    y: u32,
+    out: Vec<u8>,
+}
+
+impl Shrink {
+    fn new(sw: u32, sh: u32, dw: u32, dh: u32) -> Shrink {
+        let (dw, dh) = (dw.clamp(1, sw.max(1)), dh.clamp(1, sh.max(1)));
+        let col: Vec<u32> = (0..sw).map(|x| (x as u64 * dw as u64 / sw as u64) as u32).collect();
+        let mut ncol = vec![0u32; dw as usize];
+        for &c in &col {
+            ncol[c as usize] += 1;
+        }
+        Shrink { sw, sh, dw, dh, col, ncol, acc: vec![0; dw as usize * 4], nrow: 0, oy: 0, y: 0, out: Vec::with_capacity(dw as usize * dh as usize * 4) }
+    }
+
+    /// The next source row: `channels` bytes per pixel (1 grey, 2 grey and
+    /// alpha, 3 RGB, 4 RGBA), straight alpha.
+    fn push(&mut self, row: &[u8], channels: usize) {
+        if self.y >= self.sh {
+            return;
+        }
+        let oy = (self.y as u64 * self.dh as u64 / self.sh as u64) as u32;
+        if oy != self.oy && self.nrow > 0 {
+            self.flush();
+            self.oy = oy;
+        }
+        let acc = &mut self.acc;
+        for (px, &c) in row.chunks_exact(channels).zip(self.col.iter()) {
+            let (r, g, b, a) = match channels {
+                1 => (px[0], px[0], px[0], 255),
+                2 => (px[0], px[0], px[0], px[1]),
+                3 => (px[0], px[1], px[2], 255),
+                _ => (px[0], px[1], px[2], px[3]),
+            };
+            let i = c as usize * 4;
+            let a32 = a as u32;
+            if a == 255 {
+                acc[i] += r as u64;
+                acc[i + 1] += g as u64;
+                acc[i + 2] += b as u64;
+            } else if a != 0 {
+                acc[i] += ((r as u32 * a32 + 127) / 255) as u64;
+                acc[i + 1] += ((g as u32 * a32 + 127) / 255) as u64;
+                acc[i + 2] += ((b as u32 * a32 + 127) / 255) as u64;
+            }
+            acc[i + 3] += a as u64;
+        }
+        self.nrow += 1;
+        self.y += 1;
+        if self.y == self.sh {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.nrow == 0 {
+            return;
+        }
+        for (x, &n) in self.ncol.iter().enumerate() {
+            let n = (n as u64 * self.nrow as u64).max(1);
+            for c in 0..4 {
+                let v = &mut self.acc[x * 4 + c];
+                self.out.push(((*v + n / 2) / n).min(255) as u8);
+                *v = 0;
+            }
+        }
+        self.nrow = 0;
+    }
+
+    /// Premultiplied RGBA8, `dw`x`dh` (rows never pushed stay clear).
+    fn finish(mut self, asset: &str) -> ImageLevel {
+        self.flush();
+        self.out.resize(self.dw as usize * self.dh as usize * 4, 0);
+        let _ = self.sw;
+        ImageLevel::from_premultiplied(asset, self.dw, self.dh, self.out)
+    }
+}
+
+/// An animated (or still) GIF at `level` of its logical screen, decoded
+/// with the `gif` crate: one screen-sized canvas is reused for every
+/// frame, and the screen size and frame count are checked against the
+/// limits before any pixels are decoded. None if it is unreadable or too
+/// big.
+fn decode_gif(asset: &str, bytes: &[u8], level: u8) -> Option<Decoded> {
+    let options = || {
+        let mut o = gif::DecodeOptions::new();
+        o.set_color_output(gif::ColorOutput::RGBA);
+        o.set_memory_limit(gif::MemoryLimit::Bytes(std::num::NonZeroU64::new(MAX_DECODE_ALLOC).unwrap_or(std::num::NonZeroU64::MIN)));
+        o
+    };
+    // The header: the logical screen everything is drawn on.
+    let mut dec = options().read_info(std::io::Cursor::new(bytes)).ok()?;
+    let (w, h) = (dec.width() as u32, dec.height() as u32);
+    let area = w as u64 * h as u64;
+    if w == 0 || h == 0 || w > MAX_DECODE_DIM || h > MAX_DECODE_DIM || area * 4 > MAX_DECODE_ALLOC {
+        return None;
+    }
+    // Count frames without decoding them (their compressed data is only
+    // copied), so the level is chosen before any pixels exist.
+    let count = {
+        let mut o = options();
+        o.skip_frame_decoding(true);
+        let mut d = o.read_info(std::io::Cursor::new(bytes)).ok()?;
+        let mut n = 0usize;
+        while n < GIF_MAX_FRAMES && matches!(d.read_next_frame(), Ok(Some(_))) {
+            n += 1;
+        }
+        n
+    };
+    let mut keep = count.min((GIF_WORK / area).max(1) as usize);
+    if keep == 0 {
+        return None;
+    }
+    // Step down levels until all frames kept fit the per-GIF budget; at
+    // the smallest level, keep fewer frames instead.
     let last = last_level(w, h);
-    let mut level = level;
-    let mut frames: Vec<image::RgbaImage> = vec![];
+    let mut level = level.min(last);
+    let level_bytes = |l: u8| {
+        let (lw, lh) = level_size(w, h, l);
+        lw as usize * lh as usize * 4
+    };
+    while level < last && keep * level_bytes(level) > GIF_BUDGET {
+        level += 1;
+    }
+    keep = keep.min((GIF_BUDGET / level_bytes(level)).max(1));
+    let (lw, lh) = level_size(w, h, level);
+
+    let (cw, ch) = (w as usize, h as usize);
+    let mut canvas = vec![0u8; cw * ch * 4];
+    let mut saved: Vec<u8> = vec![];
+    let mut frames: Vec<Arc<ImageLevel>> = vec![];
     let mut ends = vec![];
     let mut t = 0.0;
-    for f in dec.into_frames() {
-        let Ok(f) = f else { break };
-        let (num, den) = f.delay().numer_denom_ms();
+    while frames.len() < keep {
+        let f = match dec.read_next_frame() {
+            Ok(Some(f)) => f,
+            _ => break,
+        };
+        // The frame's rectangle, clipped to the screen.
+        let (fx, fy, fw, fh) = (f.left as usize, f.top as usize, f.width as usize, f.height as usize);
+        let x0 = fx.min(cw);
+        let x1 = (fx + fw).min(cw);
+        let y0 = fy.min(ch);
+        let y1 = (fy + fh).min(ch);
+        if f.buffer.len() < fw * fh * 4 {
+            break;
+        }
+        let dispose = f.dispose;
+        if dispose == gif::DisposalMethod::Previous {
+            saved.clear();
+            for y in y0..y1 {
+                saved.extend_from_slice(&canvas[(y * cw + x0) * 4..(y * cw + x1) * 4]);
+            }
+        }
+        for y in y0..y1 {
+            let src = &f.buffer[((y - fy) * fw + (x0 - fx)) * 4..((y - fy) * fw + (x1 - fx)) * 4];
+            let dst = &mut canvas[(y * cw + x0) * 4..(y * cw + x1) * 4];
+            for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+                if s[3] != 0 {
+                    d.copy_from_slice(s);
+                }
+            }
+        }
         // Browsers treat delays under 20 ms as 100 ms.
-        let d = if den == 0 { 0.1 } else { num as f64 / den as f64 / 1000.0 };
+        let d = f.delay as f64 / 100.0;
         t += if d < 0.02 { 0.1 } else { d };
         ends.push(t);
-        let mut buf = f.into_buffer();
-        let (lw, lh) = level_size(w, h, level);
-        if (buf.width(), buf.height()) != (lw, lh) {
-            buf = image::imageops::resize(&buf, lw, lh, image::imageops::FilterType::Triangle);
+        let mut s = Shrink::new(w, h, lw, lh);
+        for row in canvas.chunks_exact(cw * 4) {
+            s.push(row, 4);
         }
-        frames.push(buf);
-        let used: usize = frames.iter().map(|b| b.as_raw().len()).sum();
-        if used > GIF_BUDGET {
-            if level >= last {
-                break;
+        frames.push(Arc::new(s.finish(asset)));
+        match dispose {
+            gif::DisposalMethod::Background => {
+                for y in y0..y1 {
+                    canvas[(y * cw + x0) * 4..(y * cw + x1) * 4].fill(0);
+                }
             }
-            level += 1;
-            let (lw, lh) = level_size(w, h, level);
-            for b in frames.iter_mut() {
-                *b = image::imageops::resize(b, lw, lh, image::imageops::FilterType::Triangle);
+            gif::DisposalMethod::Previous => {
+                let n = (x1 - x0) * 4;
+                for (i, y) in (y0..y1).enumerate() {
+                    canvas[(y * cw + x0) * 4..(y * cw + x1) * 4].copy_from_slice(&saved[i * n..(i + 1) * n]);
+                }
             }
-        }
-        if frames.len() >= GIF_MAX_FRAMES {
-            break;
+            _ => {}
         }
     }
     ends.truncate(frames.len());
+    if frames.len() == 1 {
+        return frames.pop().map(Decoded::Still);
+    }
     if frames.is_empty() {
         return None;
-    }
-    let frames: Vec<Arc<ImageLevel>> =
-        frames.into_iter().map(|b| Arc::new(ImageLevel::from_rgba(asset, b.width(), b.height(), b.into_raw()))).collect();
-    if frames.len() == 1 {
-        return Some(Decoded::Still(frames.into_iter().next().unwrap()));
     }
     Some(Decoded::Animated(Arc::new(Animation { frames, ends })))
 }
