@@ -240,6 +240,20 @@ fn click_at(h: &mut Harness<'static, ZebraApp>, p: Pos2, count: usize) {
     }
 }
 
+/// Frames until the camera has stopped. Its flights run on the wall
+/// clock, so a fixed number of frames could end mid-flight on a busy
+/// machine, and a click aimed at a box then missed it.
+fn settle(h: &mut Harness<'static, ZebraApp>) {
+    let start = std::time::Instant::now();
+    h.run_steps(3);
+    while h.state().editor.view.flight.is_some() {
+        assert!(start.elapsed().as_secs() < 30, "the camera never stopped");
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+}
+
 /// D6: ⌘Z in a text box brought back what was typed in the box edited
 /// before it, and finishing the edit saved that as this box's text.
 #[test]
@@ -252,6 +266,7 @@ fn d6_undo_in_a_text_box_knows_nothing_of_the_last_one() {
     add(&mut h, "Topic 1", 200.0, "b");
     h.state_mut().queued.push(Action::FitAll);
     h.run_steps(40);
+    settle(&mut h);
     let at = |h: &Harness<'static, ZebraApp>, id: &str| {
         let app = h.state();
         app.canvas.w2s(&app.editor, app.editor.doc.get(id).unwrap().transform.center())
@@ -267,6 +282,7 @@ fn d6_undo_in_a_text_box_knows_nothing_of_the_last_one() {
     h.run_steps(3);
     h.key_press(Key::Escape);
     h.run_steps(40);
+    settle(&mut h);
     // Edit the other text: type, then undo twice.
     let p = at(&h, "b");
     click_at(&mut h, p, 2);
