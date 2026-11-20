@@ -181,3 +181,34 @@ fn video_shows_poster_placeholder_or_live_frame() {
     assert!(close(decode_list(&list), [0, 180, 0, 255], 4));
     assert!(r.export_pdf(&ed).unwrap().starts_with(b"%PDF"));
 }
+
+/// Cloud pass: PDF export decoded every PNG whole to embed it, so a
+/// 70,000-pixel one needed 19 GB. Now a picture whose decoded size is
+/// past the export's budget goes in as the pixels drawn for the page (as
+/// Keynote's Reduce File Size scales to the resolution shown), and the
+/// export works. 12,000 x 12,000 (576 MB decoded) is past it.
+#[test]
+fn a_huge_png_exports_to_pdf_at_the_size_shown() {
+    let (w, h) = (12_000u32, 12_000u32);
+    let mut file = vec![];
+    {
+        let mut enc = png::Encoder::new(&mut file, w, h);
+        enc.set_color(png::ColorType::Rgb);
+        let mut wr = enc.write_header().unwrap();
+        let mut sw = wr.stream_writer().unwrap();
+        let row: Vec<u8> = (0..w).flat_map(|x| if x < w / 2 { [230u8, 0, 0] } else { [0, 0, 230] }).collect();
+        for _ in 0..h {
+            std::io::Write::write_all(&mut sw, &row).unwrap();
+        }
+        sw.finish().unwrap();
+    }
+    assert!((w as u64 * h as u64 * 4) > zebra_render::PDF_DECODE_BUDGET);
+    let r = Renderer::new();
+    let mut ed = editor(&r);
+    ed.apply(serde_json::from_value(json!({"op":"add_image","data_base64":b64(&file),"x":0,"y":0,"width":400})).unwrap(), Origin::Human).unwrap();
+    let pdf = r.export_pdf(&ed).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(!text.contains("/Width 12000"), "the original went in whole");
+    assert!(text.contains("/Subtype /Image"), "a picture went in");
+}

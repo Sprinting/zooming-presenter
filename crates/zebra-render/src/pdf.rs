@@ -60,7 +60,17 @@ struct Resources {
     /// Pictures the PDF can't embed as files (SVG symbols...), as pixels:
     /// one per asset and size, however many times they are drawn.
     pixels: HashMap<(String, u32, u32), krilla::image::Image>,
+    /// Bytes the originals embedded so far take decoded (PNG, GIF and
+    /// WebP are decoded to be embedded; JPEG goes in as it is).
+    decoded: u64,
 }
+
+/// Decoded bytes of original PNG, GIF and WebP files one PDF export may
+/// hold. Past it a picture goes in as the pixels drawn for the page: like
+/// Keynote's Reduce File Size, scaled to the resolution the presentation
+/// shows it at, so it looks the same, and a 70,000-pixel PNG never needs
+/// 19 GB to export.
+pub const PDF_DECODE_BUDGET: u64 = crate::images::DECODE_BYTES;
 
 fn fill_of(c: Rgba) -> Fill {
     Fill {
@@ -196,6 +206,17 @@ fn draw_list(s: &mut Surface<'_>, list: &DisplayList, editor: &Editor, res: &mut
                     .entry(image.asset.clone())
                     .or_insert_with(|| {
                         let a = editor.doc.assets.get(&image.asset)?;
+                        if !matches!(a.ext.as_str(), "jpg" | "jpeg") {
+                            // Its size decoded, from the header; unknown or
+                            // over what's left: the drawn pixels instead.
+                            let head = &a.bytes.as_ref()[..a.bytes.as_ref().len().min(256 << 10)];
+                            let px = zebra_core::media::picture_header(head).map(|h| h.pixels())?;
+                            let need = px.saturating_mul(4);
+                            if res.decoded.saturating_add(need) > PDF_DECODE_BUDGET {
+                                return None;
+                            }
+                            res.decoded += need;
+                        }
                         let data = Data::from(std::sync::Arc::new(a.bytes.clone()) as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>);
                         match a.ext.as_str() {
                             "png" => krilla::image::Image::from_png(data, true).ok(),
