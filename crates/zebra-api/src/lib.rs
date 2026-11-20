@@ -40,12 +40,14 @@ pub use zebra_core::view::Permission;
 pub mod catalogue;
 pub mod client;
 pub mod discovery;
+pub mod library;
 mod dispatch;
 mod headless;
 pub mod mcp;
 pub mod protocol;
 pub mod relay;
 mod server;
+pub mod strict;
 
 pub use dispatch::EVENT_NAMES;
 pub use protocol::RpcError;
@@ -55,8 +57,10 @@ pub use zebra_core::editor::Event;
 pub struct ApiOptions {
     /// Socket path; default: per-user temp dir + pid.
     pub socket: Option<PathBuf>,
-    /// Initial agent permission. Applied to `editor.view.agent_permission`
-    /// on the first `pump`; the human can change it later from the UI.
+    /// Agent permission. Headless: what agents get (`zebra` passes the
+    /// person's saved choice). The app's `--api`: the most the launch flag
+    /// allows, never above the person's saved choice. The person changes
+    /// it from the UI.
     pub permission: Permission,
 }
 
@@ -174,6 +178,9 @@ pub fn doc_info(id: &str, editor: &zebra_core::Editor, front: bool) -> DocInfo {
 
 pub struct Dispatcher {
     pub renderer: Arc<zebra_render::Renderer>,
+    /// Words of an exported web page's control bar; the app sets them in
+    /// the person's language.
+    pub web_labels: zebra_web::export::Labels,
     /// Set by [`run_headless`]: enables the `quit` method.
     pub headless: bool,
     /// Set when a client called `quit` (headless only).
@@ -195,6 +202,7 @@ pub struct Dispatcher {
     waits: Vec<dispatch::Wait>,
     deferred: std::collections::VecDeque<dispatch::Pending>,
     jobs: Vec<dispatch::Job>,
+    saves: Vec<dispatch::SaveWait>,
 }
 
 impl Dispatcher {
@@ -214,10 +222,16 @@ impl Dispatcher {
         }
         self.waits.clear();
         self.deferred.clear();
+        // A save already running finishes (the host polls it); nobody is
+        // left to tell.
+        self.saves.clear();
     }
     pub fn new(renderer: Arc<zebra_render::Renderer>) -> Self {
+        // Agents see the person's own themes and templates.
+        library::install_default();
         Dispatcher {
             renderer,
+            web_labels: Default::default(),
             headless: false,
             quit_requested: false,
             disconnect_requested: false,
@@ -228,6 +242,7 @@ impl Dispatcher {
             waits: vec![],
             deferred: Default::default(),
             jobs: vec![],
+            saves: vec![],
         }
     }
     /// Apply all queued requests, push events to subscribers. Returns true if
@@ -255,6 +270,11 @@ impl Dispatcher {
 
 /// `zebra --headless`: no window, same API. Blocks until killed or `quit`.
 pub fn run_headless(opts: ApiOptions, open: Option<PathBuf>) -> anyhow::Result<()> {
+    // Only while the person's AI control switch is on (a person switched it
+    // on once, and nobody switched it off since).
+    if let Some(why) = discovery::ai_switch().flag_refusal() {
+        anyhow::bail!("{why}");
+    }
     headless::run(opts, open)
 }
 

@@ -2,3 +2,4 @@
 *.zebra.tmp
 /out
 /assets/symbols
+/dist

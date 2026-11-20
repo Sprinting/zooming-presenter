@@ -18,6 +18,7 @@ changes is shown on the canvas and can be undone.
 
 ```sh
 # Rust 1.95+ (rustup.rs)
+rustup target add wasm32-unknown-unknown         # for File › Export › Web Page
 cargo run --release -p zebra-app                 # opens an empty presentation
 cargo run --release -p zebra-app -- talk.zebra   # opens a file
 ```
@@ -31,8 +32,17 @@ Developer options (end users never need these; AI control is a switch in the app
 |---|---|
 | `--api` | Switch AI control on at launch, as if you had flipped the switch. |
 | `--api-socket <path>` | Use this socket path instead of the default. |
-| `--agent-permission observe\|edit\|full` | Set what a connected agent may do (default `edit`). You can change it later from the AI button in the toolbar. |
+| `--agent-permission observe\|edit` | Lower what a connected agent may do this run. It never raises it: agents get at most what you chose from the AI button in the toolbar. |
 | `--headless` | Run with no window, API only (for batch generation). `zebractl` starts this mode for you. |
+
+The first build also builds the web player: `crates/zebra-web/build.rs`
+compiles that crate for `wasm32-unknown-unknown` (release, into
+`target/web-player`, cached after that) and embeds it gzip-compressed, so
+the app needs no wasm tools at run time. Without the wasm32 target the
+build only warns and File › Export › Web Page reports that the player is
+missing; `scripts/bundle-macos.sh` refuses to bundle without it.
+`ZEBRA_WEB_PLAYER=/path/zebra_web.wasm` uses a player built elsewhere, and
+`ZEBRA_WEB_PLAYER=none` skips it.
 
 The binary is `target/release/zebra`. It builds and runs on Linux too, which
 is how CI and the UI tests run, but macOS is the primary platform.
@@ -63,6 +73,20 @@ Open Recent is in the File menu. While there are unsaved changes, Zebra
 autosaves a sidecar file every 30 s and offers to restore it. Export PDF
 produces one page per step.
 
+**Import**: File › Import… (⇧⌘I), or drop a PDF on the canvas, brings a
+PDF's pages in as pictures, one per frame, with a path step each, as one
+undo step. Zebra keeps the PDF in the document and draws pages from it, so
+they stay sharp at any zoom.
+
+**Web page**: File › Export To › Export Web Page (HTML)… writes one `.html`
+file that presents the deck in any current browser (Safari, Chrome,
+Firefox; desktop and phone), with nothing to install: the same drawing and
+camera flights as the app, fade-ins, autoplay, soundtrack and videos, the
+keys above, click or swipe to step, wheel or pinch to zoom, and a small
+control bar. When its video and audio pass 50 MB it becomes a folder
+(`index.html` plus `media/`) to share whole. Zebra then offers to open it
+in your browser. Agents: `zebractl export html -o talk.html`.
+
 ## Keyboard shortcuts
 
 Change any of these in Settings › Keyboard. Arrow keys nudge the selection
@@ -78,6 +102,7 @@ rewrites it).
 | Open… | ⌘O |
 | Save | ⌘S |
 | Save As… | ⇧⌘S |
+| Import… | ⇧⌘I |
 | Export as PDF… | ⌘E |
 | Duplicate | ⌘D |
 | Delete | ⌫ or Del |
@@ -164,6 +189,7 @@ See [docs/API.md](docs/API.md) for the protocol, `zebractl` and the MCP setup.
 | `crates/zebra-render` | Display list, text layout, vello GPU canvas, CPU captures, PDF export |
 | `crates/zebra-api` | JSON-RPC automation server, headless mode |
 | `crates/zebra-ctl` | `zebractl` CLI and MCP bridge (shipped inside Zebra.app) |
+| `crates/zebra-web` | Web player (core + renderer built for wasm32, page script in `web/`) and the HTML exporter; browser check in `tests/browser/check.js` |
 | `scripts/bundle-macos.sh`, `packaging/macos/` | Builds Zebra.app with zebractl inside; Info.plist and App Store entitlements |
 | `crates/zebra-app` | This app (`zebra` binary) |
 

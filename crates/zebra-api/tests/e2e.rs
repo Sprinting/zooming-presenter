@@ -176,6 +176,15 @@ fn full_session() {
     let jp = dir.join("deck.json");
     c.call("export", json!({"format":"json","path": jp})).unwrap();
     assert!(std::fs::read_to_string(&jp).unwrap().contains("Hello Zebra"));
+    // A web page, to a file and inline.
+    let hp = dir.join("deck.html");
+    let page = c.call("export", json!({"format":"html","path": hp})).unwrap();
+    assert_eq!((page["folder"].as_bool(), page["mime"].as_str()), (Some(false), Some("text/html")), "{page}");
+    assert!(std::fs::read_to_string(&hp).unwrap().starts_with("<!doctype html>"));
+    let page = c.call("export", json!({"format":"html"})).unwrap();
+    assert!(page["data_base64"].as_str().unwrap().len() > 100_000, "player and document inline");
+    let e = rpc_err(c.call("export", json!({"format":"html","path": hp, "folder": true})));
+    assert!(e.message.contains("unknown field `folder`"), "{e}");
 
     // Images by path.
     let img = dir.join("dot.png");
@@ -514,7 +523,12 @@ impl zebra_api::Documents for Windows {
     fn new_document(&mut self) -> Result<String, zebra_api::RpcError> {
         let id = format!("d{}", self.next);
         self.next += 1;
-        self.eds.push((id.clone(), zebra_core::Editor::default()));
+        // Like the app: a new document takes the level the others have.
+        let mut e = zebra_core::Editor::default();
+        if let Some((_, first)) = self.eds.first() {
+            e.view.agent_permission = first.view.agent_permission;
+        }
+        self.eds.push((id.clone(), e));
         Ok(id)
     }
     fn close(&mut self, id: &str, _discard: bool) -> Result<(), zebra_api::RpcError> {
@@ -594,4 +608,108 @@ fn discarding_needs_a_read_of_the_latest_version() {
     c.call("close_document", json!({"document":"d1","discard":true})).unwrap();
     stop.store(true, std::sync::atomic::Ordering::SeqCst);
     assert!(host.join().unwrap().is_empty());
+}
+
+#[test]
+fn open_and_save_refuse_a_file_another_document_has_open() {
+    let (socket, token, stop, host) = windows_host(Permission::Full);
+    let dir = scratch().join("already-open");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("pitch.zebra");
+    let _ = std::fs::remove_file(&file);
+    let mut c = Client::connect_hello(&socket, "files", &token).unwrap();
+    c.call("save", json!({"document":"d1","path":file})).unwrap();
+    let id = c.call("new_document", json!({})).unwrap()["document"]["id"].as_str().unwrap().to_string();
+
+    // Opening it in the second document: refused, naming the first.
+    let e = rpc_err(c.call("open", json!({"document":id,"path":file})));
+    assert_eq!(e.kind(), "already_open", "{e}");
+    assert!(e.to_string().contains("\"d1\""), "{e}");
+    // Another spelling of the same file too.
+    let other_spelling = dir.join(".").join("pitch.zebra");
+    let e = rpc_err(c.call("open", json!({"document":id,"path":other_spelling})));
+    assert_eq!(e.kind(), "already_open", "{e}");
+    // Saving over it from the second document: refused.
+    c.call("apply", json!({"document":id,"command":{"op":"add_frame"}})).unwrap();
+    let e = rpc_err(c.call("save", json!({"document":id,"path":file})));
+    assert_eq!(e.kind(), "already_open", "{e}");
+    // The document's own file, and another path, are fine.
+    c.call("save", json!({"document":"d1"})).unwrap();
+    c.call("save", json!({"document":id,"path":dir.join("notes.zebra")})).unwrap();
+    c.call("open", json!({"document":"d1","path":file})).unwrap();
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    host.join().unwrap();
+}
+
+fn sample_commands() -> Vec<zebra_core::Command> {
+    vec![serde_json::from_value(json!({"op":"add_text","id":"hello","text":"From the sample","x":0,"y":0})).unwrap()]
+}
+
+#[test]
+fn my_themes_and_my_templates_and_the_sample() {
+    let data = scratch().join("data");
+    let h = start(Permission::Full);
+    let mut c = connect(&h, "librarian");
+    c.call("describe", json!({})).unwrap();
+
+    // save_theme with to_library: into the document and My Themes.
+    let mut t = zebra_core::Theme::resolve("night");
+    t.id = "lib-theme".into();
+    t.name = "Library theme".into();
+    let r = c.call("apply", json!({"command":{"op":"save_theme","theme":t,"to_library":true}})).unwrap();
+    let file = std::path::PathBuf::from(r["library"][0].as_str().expect("the reply names the file"));
+    assert!(file.starts_with(data.join("Themes")) && file.exists(), "{r}");
+    // Gone from the document, it is still in My Themes, and set_theme brings it back.
+    c.call("apply", json!({"command":{"op":"delete_theme","id":"lib-theme"}})).unwrap();
+    let th = c.call("query", json!({"query":"themes"})).unwrap();
+    assert!(th["library"].as_array().unwrap().iter().any(|l| l["id"] == "lib-theme"), "{th}");
+    c.call("apply", json!({"command":{"op":"set_theme","theme":"lib-theme"}})).unwrap();
+    let th = c.call("query", json!({"query":"themes"})).unwrap();
+    assert_eq!(th["current"], "lib-theme");
+    assert!(th["custom"].as_array().unwrap().iter().any(|t| t["id"] == "lib-theme"), "copied into the document: {th}");
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"set_theme","theme":"nope"}})));
+    assert!(e.to_string().contains("lib-theme") || e.data["valid_values"].to_string().contains("lib-theme"), "{e}");
+
+    // Save as Template, then start a document from it.
+    c.call("apply", json!({"command":{"op":"add_frame","id":"tf","x":0,"y":0,"add_to_path":true}})).unwrap();
+    let r = c.call("save_template", json!({"name":"Quarterly"})).unwrap();
+    assert_eq!(r["template"], "saved:Quarterly");
+    assert!(data.join("Templates/Quarterly.zebra").exists(), "{r}");
+    let tl = c.call("query", json!({"query":"templates"})).unwrap();
+    assert!(tl["saved"].as_array().unwrap().iter().any(|s| s["id"] == "saved:Quarterly"), "{tl}");
+    c.call("apply", json!({"command":{"op":"delete","ids":["tf"]}})).unwrap();
+    c.call("apply", json!({"command":{"op":"clear_path"}})).unwrap();
+    c.call("apply", json!({"command":{"op":"add_text","id":"old","text":"old","x":0,"y":0}})).unwrap();
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"apply_template","template":"saved:Quarterly"}})));
+    assert_eq!(e.kind(), "not_empty");
+    c.call("apply", json!({"label":"From my template","command":{"op":"apply_template","template":"saved:Quarterly","replace":true}})).unwrap();
+    let st = c.call("state", json!({})).unwrap();
+    assert_eq!(st["path_length"], 1);
+    assert!(c.call("query", json!({"query":{"q":"element","id":"tf"}})).is_ok());
+    assert!(c.call("query", json!({"query":{"q":"element","id":"old"}})).is_err());
+    // Not tied to the template's file: the document has no path.
+    assert!(st["file"].is_null(), "{st}");
+    // One undo step back.
+    c.call("undo", json!({})).unwrap();
+    assert!(c.call("query", json!({"query":{"q":"element","id":"old"}})).is_ok());
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"apply_template","template":"saved:Nope"}})));
+    assert!(e.data["valid_values"].to_string().contains("saved:Quarterly"), "{e}");
+
+    // The sample, where the host has one (the app's is in its language files).
+    zebra_api::library::install(Some(sample_commands));
+    assert_eq!(c.call("query", json!({"query":"templates"})).unwrap()["sample"], true);
+    c.call("apply", json!({"command":{"op":"apply_template","template":"sample","replace":true}})).unwrap();
+    assert!(c.call("query", json!({"query":{"q":"element","id":"hello"}})).is_ok());
+    h.stop().unwrap();
+
+    // Writing into the person's library takes full permission.
+    let h = start(Permission::Edit);
+    let mut c = connect(&h, "editor");
+    c.call("describe", json!({})).unwrap();
+    assert_eq!(rpc_err(c.call("save_template", json!({}))).kind(), "permission");
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"save_theme","theme":t,"to_library":true}})));
+    assert_eq!(e.kind(), "permission");
+    // Using them doesn't.
+    c.call("apply", json!({"command":{"op":"apply_template","template":"saved:Quarterly"}})).unwrap();
+    h.stop().unwrap();
 }

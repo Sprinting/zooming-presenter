@@ -1,5 +1,7 @@
 //! Minimal stand-in for `zebra --headless --api`: same flags, no GUI deps.
-//! `cargo run -p zebra-api --example headless -- --headless --api [--agent-permission full] [--api-socket P] [file]`
+//! `cargo run -p zebra-api --example headless -- --headless --api [--agent-permission observe] [--api-socket P] [file]`
+//! Agents get `edit`; the flag only lowers it (only a person raises it, in
+//! the app's AI button).
 use zebra_api::{ApiOptions, Permission};
 
 fn main() -> anyhow::Result<()> {
@@ -11,10 +13,8 @@ fn main() -> anyhow::Result<()> {
             "--headless" | "--api" => {}
             "--api-socket" => opts.socket = args.next().map(Into::into),
             "--agent-permission" => {
-                opts.permission = match args.next().as_deref() {
-                    Some("observe") => Permission::Observe,
-                    Some("full") => Permission::Full,
-                    _ => Permission::Edit,
+                if args.next().as_deref() == Some("observe") {
+                    opts.permission = Permission::Observe;
                 }
             }
             other => file = Some(other.into()),

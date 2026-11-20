@@ -231,6 +231,98 @@ impl Atlas {
     }
 }
 
+/// Step until the import sheet leaves `Reading` (or the import is over).
+fn until_read(h: &mut H) {
+    for _ in 0..200 {
+        settle(h, 1);
+        if !matches!(h.state().import, Some(zebra_app::import_ui::Flow::Reading { .. })) {
+            break;
+        }
+    }
+}
+
+/// Import pages `from`..=`to` of `pdf` through the sheet, and wait.
+fn import_range(h: &mut H, pdf: &std::path::Path, from: f64, to: f64) {
+    zebra_app::import_ui::start(h.state_mut(), pdf.to_path_buf());
+    until_read(h);
+    if let Some(zebra_app::import_ui::Flow::Choose { all, from: f, to: t, .. }) = &mut h.state_mut().import {
+        (*all, *f, *t) = (false, from, to);
+    }
+    settle(h, 2);
+    click_label(h, &zebra_app::t!("sheet-import"));
+    for _ in 0..400 {
+        settle(h, 1);
+        if h.state().import.is_none() {
+            break;
+        }
+    }
+    wait(h, 1.5);
+}
+
+fn import_pages(a: &mut Atlas, pdf: PathBuf) {
+    use zebra_app::import_ui::Flow;
+    a.section("File › Import…");
+    let p = pdf.clone();
+    a.run("Import sheet: which pages", false, false, move |h| {
+        zebra_app::import_ui::start(h.state_mut(), p);
+        until_read(h);
+    });
+    let p = pdf.clone();
+    a.run("Import sheet: a range of pages, dark mode", true, false, move |h| {
+        zebra_app::import_ui::start(h.state_mut(), p);
+        until_read(h);
+        if let Some(Flow::Choose { all, from, to, .. }) = &mut h.state_mut().import {
+            (*all, *from, *to) = (false, 2.0, 5.0);
+        }
+    });
+    let p = pdf.clone();
+    a.run("Importing: progress and Cancel", false, false, move |h| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Never answers: the sheet stays on its progress.
+        std::mem::forget(tx);
+        let ctl = zebra_import::Control::default();
+        for _ in 0..7 {
+            ctl.page_done();
+        }
+        h.state_mut().import = Some(Flow::Running { path: p, rx, ctl, total: 27 });
+    });
+    a.run("After an import that left a page out", false, false, |h| {
+        let notes = std::collections::BTreeMap::from([(zebra_core::import::ImportNote::PageSkipped, 1usize)]);
+        let message = zebra_app::import_ui::note_lines(&notes).join("\n");
+        let title = zebra_app::t!("import-done-title", count = 26);
+        zebra_app::sheets::request(h.state_mut(), zebra_app::sheets::SheetKind::ImportNotes { title, message });
+    });
+    a.run("A file that can't be imported", false, false, |h| {
+        let txt = std::env::temp_dir().join("Notes for the talk.txt");
+        std::fs::write(&txt, "not a PDF").unwrap();
+        zebra_app::import_ui::start(h.state_mut(), txt);
+        until_read(h);
+    });
+    let p = pdf.clone();
+    a.run("Pages 1–6 imported: frames and path steps right of the deck", false, false, move |h| {
+        import_range(h, &p, 1.0, 6.0);
+        wait(h, 3.0);
+    });
+    for (raster, cap) in [(true, "Zoomed in on an imported page: drawn from the PDF"), (false, "The same view from the page's picture only (as without PDFium)")] {
+        let p = pdf.clone();
+        a.run(cap, false, false, move |h| {
+            import_range(h, &p, 1.0, 2.0);
+            let app = h.state_mut();
+            if !raster {
+                app.renderer.set_page_raster(None);
+                app.renderer.images().clear();
+            }
+            // The first page's top-left part at about 3x.
+            let page = app.editor.doc.ordered().find(|e| e.is_frame() && e.name == zebra_app::t!("import-page-name", n = 1)).map(|e| e.bounds());
+            if let Some(b) = page {
+                let (w, hh) = (b.x1 - b.x0, b.y1 - b.y0);
+                app.editor.view.camera = zebra_core::Camera { cx: b.x0 + w * 0.32, cy: b.y0 + hh * 0.28, zoom: 3.0 * 1100.0 / w.max(1.0), rotation: 0.0 };
+            }
+            wait(h, 2.0);
+        });
+    }
+}
+
 fn main() {
     let dir = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "atlas".into()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -444,6 +536,98 @@ fn main() {
         });
     }
 
+    if want("sidebar") {
+        a.section("The path sidebar (spec 08)");
+        // A third step uses the first frame again: its rows light alone.
+        fn three(h: &mut H) {
+            let _ = h.state_mut().editor.apply(serde_json::from_value(serde_json::json!({"op":"add_step","target":{"kind":"element","id":"one"}})).unwrap(), HUMAN);
+            let _ = h.state_mut().editor.view(ViewCommand::FitAll { animate: false }, HUMAN);
+            settle(h, 6);
+        }
+        fn row(h: &H, i: usize) -> Pos2 {
+            h.state().step_rows[i].center()
+        }
+        fn gap(h: &H, k: usize) -> Pos2 {
+            let rows = &h.state().step_rows;
+            Pos2::new(rows[k].min.x + h.state().step_number_w / 2.0 + 1.0, (rows[k - 1].max.y + rows[k].min.y) / 2.0)
+        }
+        fn empty(h: &H) -> Pos2 {
+            let r = h.state().canvas.rect;
+            Pos2::new(r.center().x, r.max.y - 40.0)
+        }
+        for dark in [false, true] {
+            let mode = if dark { ", dark" } else { "" };
+            a.run(&format!("Step 3 clicked: the list has the keys, its row in the accent (step 1 uses the same frame and stays plain){mode}"), dark, false, |h| {
+                three(h);
+                let r = row(h, 2);
+                click_at(h, r, PointerButton::Primary);
+                wait(h, 1.2);
+            });
+            a.run(&format!("Then empty canvas clicked: the keys go back to the canvas, the row turns grey{mode}"), dark, false, |h| {
+                three(h);
+                let r = row(h, 2);
+                click_at(h, r, PointerButton::Primary);
+                wait(h, 1.2);
+                let _ = h.state_mut().editor.view(ViewCommand::FitAll { animate: false }, HUMAN);
+                settle(h, 4);
+                let e = empty(h);
+                click_at(h, e, PointerButton::Primary);
+            });
+            a.run(&format!("Frame One selected on the canvas: both its steps show, grey (the canvas has the keys){mode}"), dark, false, |h| {
+                three(h);
+                select(h, &["one"]);
+            });
+            a.run(&format!("Hovering the gap between steps 1 and 2: an insertion line with a +{mode}"), dark, false, |h| {
+                three(h);
+                let g = gap(h, 1);
+                h.event(Event::PointerMoved(g));
+                settle(h, 4);
+            });
+            a.run(&format!("After the +: an empty step waits for a frame{mode}"), dark, false, |h| {
+                three(h);
+                let g = gap(h, 1);
+                click_at(h, g, PointerButton::Primary);
+                let e = empty(h);
+                h.event(Event::PointerMoved(e));
+                settle(h, 4);
+            });
+            a.run(&format!("Waiting for a frame, the pointer on frame Two: outlined, pointing hand{mode}"), dark, false, |h| {
+                three(h);
+                let g = gap(h, 1);
+                click_at(h, g, PointerButton::Primary);
+                let t = screen_of(h, "two");
+                h.event(Event::PointerMoved(t));
+                settle(h, 4);
+            });
+        }
+        a.run("Right-click on a step: Add Step After This One", false, false, |h| {
+            three(h);
+            let r = row(h, 0);
+            click_at(h, r, PointerButton::Secondary);
+        });
+        a.run("Steps 1 to 3 selected with ⇧-click", false, false, |h| {
+            three(h);
+            let r = row(h, 0);
+            click_at(h, r, PointerButton::Primary);
+            let r = row(h, 2);
+            h.event(Event::ModifiersChanged(Modifiers::SHIFT));
+            click_at(h, r, PointerButton::Primary);
+            h.event(Event::ModifiersChanged(Modifiers::NONE));
+            settle(h, 4);
+        });
+        a.run("A path of 1,200 steps, at its end: four-digit numbers fit their column", false, true, |h| {
+            let cmds: Vec<Command> = (0..1200)
+                .map(|i| serde_json::from_value(serde_json::json!({"op":"add_frame","x": (i % 40) as f64 * 1000.0,"y": (i / 40) as f64 * 800.0,"w":800,"h":600,"add_to_path":true})).unwrap())
+                .collect();
+            let _ = h.state_mut().editor.apply_batch(cmds, None, HUMAN);
+            settle(h, 4);
+            let ctx = h.ctx.clone();
+            h.state_mut().perform(&ctx, Action::Deselect);
+            zebra_app::sidebar::select_step(h.state_mut(), 1197);
+            wait(h, 1.5);
+        });
+    }
+
     if want("windows") {
         a.section("Windows and panels");
         let wins: Vec<(&str, Action)> = vec![
@@ -489,6 +673,25 @@ fn main() {
             h.state_mut().show_settings = true;
         });
         a.run("Insert › Diagram in dark mode", true, false, |h| perform(h, Action::InsertDiagram));
+    }
+
+    if want("big") {
+        a.section("Big decks");
+        a.run("Opening a big file: progress in the window", false, false, |h| {
+            h.state_mut().opening = Some(zebra_app::opening::Opening::stalled(std::path::Path::new("/tmp/A rather long deck name of 200,000 elements.zebra"), 0.4));
+        });
+        a.run("Zoomed far out: text too small to read is drawn as faint bars; the title, still big enough, as text", false, true, |h| {
+            let mut cmds = vec![serde_json::json!({"op":"add_text","text":"Quarterly review","style":"title","x":7000,"y":-1200,"width":4000})];
+            for i in 0..200 {
+                let (x, y) = ((i % 20) as f64 * 800.0, (i / 20) as f64 * 500.0);
+                cmds.push(serde_json::json!({"op":"add_text","text":"A line of body text\nand a shorter one","style":"body","x":x,"y":y}));
+            }
+            let cmds: Vec<Command> = cmds.into_iter().map(|c| serde_json::from_value(c).unwrap()).collect();
+            let app = h.state_mut();
+            app.editor.apply_batch(cmds, None, HUMAN).unwrap();
+            let _ = app.editor.view(ViewCommand::FitAll { animate: false }, HUMAN);
+            settle(h, 6);
+        });
     }
 
     if want("present") {
@@ -563,6 +766,15 @@ fn main() {
             zebra_app::sample::demo(h.state_mut(), &ctx, "embed,empty,diagram=process");
             settle(h, 6);
         });
+    }
+
+    // File › Import…: needs PDFium (ZEBRA_PDFIUM) and a PDF (ZEBRA_ATLAS_PDF).
+    if want("import") {
+        if let Some(pdf) = std::env::var_os("ZEBRA_ATLAS_PDF").map(PathBuf::from) {
+            import_pages(&mut a, pdf);
+        } else {
+            eprintln!("import: set ZEBRA_ATLAS_PDF to a PDF");
+        }
     }
 
     std::fs::write(dir.join("pages.tsv"), a.rows.join("\n") + "\n").unwrap();

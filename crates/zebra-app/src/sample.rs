@@ -27,6 +27,17 @@ pub fn build(renderer: &zebra_render::Renderer) -> Document {
 }
 
 pub fn build_with(measure: Box<dyn zebra_core::TextMeasure>) -> Document {
+    let mut ed = Editor::default();
+    ed.measure = measure;
+    for c in commands() {
+        ed.apply(c, H).expect("sample command");
+    }
+    ed.doc
+}
+
+/// The sample's commands, in the person's language (agents get them with
+/// `apply_template {"template": "sample"}`).
+pub fn commands() -> Vec<Command> {
     #[derive(serde::Deserialize)]
     struct File {
         commands: Vec<Command>,
@@ -34,12 +45,7 @@ pub fn build_with(measure: Box<dyn zebra_core::TextMeasure>) -> Document {
     let mut v: serde_json::Value = serde_json::from_str(include_str!("../data/sample.json")).expect("data/sample.json is valid");
     fill_words(&mut v);
     let f: File = serde_json::from_value(v).expect("data/sample.json is valid");
-    let mut ed = Editor::default();
-    ed.measure = measure;
-    for c in f.commands {
-        ed.apply(c, H).expect("sample command");
-    }
-    ed.doc
+    f.commands
 }
 
 /// Debug demo states for screenshots: sample, pathedit, present, agent, text.
@@ -92,7 +98,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 app.open_ai_panel = true;
             }
             "select" => {
-                let found = app.editor.doc.ordered().find(|e| e.name == "A new angle").map(|e| e.id.clone());
+                let found = app.editor.doc.ordered().find(|e| e.name == "Rotated frames").map(|e| e.id.clone());
                 if let Some(id) = found {
                     app.select(vec![id]);
                 }
@@ -202,13 +208,13 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
             }
             "palette" => app.palette = Some(("fra".into(), 0)),
             "seltext" => {
-                let found = app.editor.doc.ordered().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text == "Why zoom?")).map(|e| e.id.clone());
+                let found = app.editor.doc.ordered().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text == "Zooming shows how ideas connect")).map(|e| e.id.clone());
                 if let Some(id) = found {
                     app.select(vec![id]);
                 }
             }
             "edittext" => {
-                let found = app.editor.doc.ordered().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text == "Why zoom?")).map(|e| e.id.clone());
+                let found = app.editor.doc.ordered().find(|e| matches!(&e.kind, ElementKind::Text(t) if t.text == "Zooming shows how ideas connect")).map(|e| e.id.clone());
                 if let Some(id) = found {
                     crate::canvas::begin_edit_existing(app, id);
                 }
@@ -341,7 +347,7 @@ fn demo_parallax(app: &mut ZebraApp) {
         zebra_core::BackgroundLayer { asset: a, depth: 0.1, opacity: 1.0 },
         zebra_core::BackgroundLayer { asset: b, depth: 0.45, opacity: 1.0 },
     ];
-    let _ = app.editor.apply(Command::SaveTheme { theme: t, apply: true }, H);
+    let _ = app.editor.apply(Command::SaveTheme { theme: t, apply: true, to_library: false }, H);
 }
 
 // ----------------------------------------------------------------------
@@ -479,15 +485,15 @@ mod tests {
 
     pub fn build_old() -> Document {
         let mut ed = Editor::default();
-        ed.apply(Command::SetTitle { title: "Thinking in Zoom".into() }, H).unwrap();
+        ed.apply(Command::SetTitle { title: "Presenting on a zooming canvas".into() }, H).unwrap();
 
         // Overview title
-        text(&mut ed, "Thinking in Zoom", 0.0, -560.0, TextStyle::Title, 2.2, 0.0, false);
-        text(&mut ed, "a tiny tour of a zooming canvas", 0.0, -400.0, TextStyle::Subtitle, 1.6, 0.0, false);
+        text(&mut ed, "Presenting on a zooming canvas", 0.0, -560.0, TextStyle::Title, 2.2, 0.0, false);
+        text(&mut ed, "A short tour", 0.0, -400.0, TextStyle::Subtitle, 1.6, 0.0, false);
 
         // 1. Bracket frame with fade-in bullets
-        let f1 = frame(&mut ed, FrameStyle::Bracket, "Why zoom?", -1150.0, 250.0, 900.0, 620.0, 0.0);
-        let t1 = text(&mut ed, "Why zoom?", -1150.0, 40.0, TextStyle::Title, 1.0, 0.0, false);
+        let f1 = frame(&mut ed, FrameStyle::Bracket, "How ideas connect", -1150.0, 250.0, 900.0, 620.0, 0.0);
+        let t1 = text(&mut ed, "Zooming shows how ideas connect", -1150.0, 40.0, TextStyle::Title, 1.0, 0.0, false);
         let b1 = text(&mut ed, "Show the big picture first", -1150.0, 200.0, TextStyle::Body, 1.4, 0.0, true);
         let b2 = text(&mut ed, "Then zoom into the details", -1150.0, 290.0, TextStyle::Body, 1.4, 0.0, true);
         let b3 = text(&mut ed, "Zoom out again to connect them", -1150.0, 380.0, TextStyle::Body, 1.4, 0.0, true);
@@ -498,16 +504,16 @@ mod tests {
         // 2. Circle frame with a tiny hidden detail
         let f2 = frame(&mut ed, FrameStyle::Circle, "Circles", 0.0, 300.0, 720.0, 720.0, 0.0);
         text(&mut ed, "Frames come in four styles", 0.0, 170.0, TextStyle::Subtitle, 1.0, 0.0, false);
-        text(&mut ed, "brackets · circles · rectangles · invisible", 0.0, 260.0, TextStyle::Body, 1.0, 0.0, false);
+        text(&mut ed, "Brackets, circles, rectangles and invisible frames", 0.0, 260.0, TextStyle::Body, 1.0, 0.0, false);
         shape(&mut ed, ShapeKind::Ellipse, 0.0, 450.0, 64.0, 64.0, 0.0, None, Some("theme:accent"));
-        let detail = frame(&mut ed, FrameStyle::Invisible, "A secret", 0.0, 450.0, 26.0, 17.0, 0.0);
-        text(&mut ed, "Look closer…", 0.0, 400.0, TextStyle::Body, 0.6, 0.0, false);
-        text(&mut ed, "hidden in plain sight!", 0.0, 448.0, TextStyle::Body, 0.05, 0.0, false);
+        let detail = frame(&mut ed, FrameStyle::Invisible, "Small detail", 0.0, 450.0, 26.0, 17.0, 0.0);
+        text(&mut ed, "Zoom in to see small details", 0.0, 400.0, TextStyle::Body, 0.6, 0.0, false);
+        text(&mut ed, "You can read this only after you zoom in", 0.0, 448.0, TextStyle::Body, 0.05, 0.0, false);
 
         // 3. Rotated rectangle frame
-        let f3 = frame(&mut ed, FrameStyle::Rectangle, "A new angle", 1150.0, 260.0, 860.0, 560.0, -12.0);
-        text(&mut ed, "A new angle", 1150.0 + 13.0, 120.0, TextStyle::Title, 0.9, -12.0, false);
-        text(&mut ed, "Rotate a frame, and the view\nturns to match it when you play.", 1150.0 - 10.0, 330.0, TextStyle::Body, 1.2, -12.0, false);
+        let f3 = frame(&mut ed, FrameStyle::Rectangle, "Rotated frames", 1150.0, 260.0, 860.0, 560.0, -12.0);
+        text(&mut ed, "Rotated frames", 1150.0 + 13.0, 120.0, TextStyle::Title, 0.9, -12.0, false);
+        text(&mut ed, "Rotate a frame, and the view turns\nto match it when you play.", 1150.0 - 10.0, 330.0, TextStyle::Body, 1.2, -12.0, false);
 
         // Arrows linking the ideas
         shape(&mut ed, ShapeKind::Arrow, -560.0, 280.0, 140.0, 40.0, 0.0, None, Some("theme:shape2"));

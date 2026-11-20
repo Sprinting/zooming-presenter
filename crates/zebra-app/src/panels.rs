@@ -99,6 +99,8 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     let rect = app.canvas.rect;
     floating(app, &ctx, rect, &p);
     crate::sheets::ui(app, &ctx);
+    crate::opening::ui(app, &ctx);
+    crate::import_ui::ui(app, &ctx);
     crate::shape_library::ui(app, &ctx, &p);
     dialogs(app, &ctx, &p);
 }
@@ -150,6 +152,9 @@ fn toolbar(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
         }
         if w::menu_item(ui, &crate::t!("toolbar-export-png"), None).clicked() {
             app.queued.push(Action::ExportPng);
+        }
+        if w::menu_item(ui, &crate::t!("toolbar-export-html"), None).clicked() {
+            app.queued.push(Action::ExportHtml);
         }
     });
     let th = w::toolbar_item(&mut right, Icon::Theme, &crate::t!("toolbar-theme"), ToolbarState { menu: true, ..st() }).on_hover_text(&crate::t!("toolbar-theme-tip"));

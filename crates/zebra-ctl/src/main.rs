@@ -148,7 +148,7 @@ enum Cmd {
         #[arg(long)]
         height: Option<u32>,
     },
-    /// Export pdf | png | json | zebra.
+    /// Export pdf | png | json | zebra | html (a web page; a folder when its media is big).
     Export {
         format: String,
         #[arg(short, long)]
@@ -167,6 +167,9 @@ enum Cmd {
     },
     /// Save (needs 'full' permission).
     Save { path: Option<PathBuf> },
+    /// File › Save as Template: into the person's My Templates (needs
+    /// 'full' permission). Default name: the document's title.
+    SaveTemplate { name: Option<String> },
     /// Print events as JSON lines.
     Events {
         /// Keep printing forever.
@@ -236,6 +239,18 @@ enum Cmd {
         x: Option<f64>,
         #[arg(long, requires = "x")]
         y: Option<f64>,
+    },
+    /// File › Import…: a PDF's pages as pictures inside one frame, with a
+    /// path step each, right of what is on the canvas, as one undo step.
+    Import {
+        /// The .pdf file.
+        file: PathBuf,
+        /// First page (1-based; default 1).
+        #[arg(long)]
+        from: Option<u64>,
+        /// Last page (default: the last).
+        #[arg(long)]
+        to: Option<u64>,
     },
     /// Internal: the per-agent background relay that holds this agent's one
     /// connection to Zebra (started by the first command).
@@ -475,6 +490,16 @@ fn run(cli: Cli) -> Result<()> {
             }
             print(&call(c, "copy_to", p)?)
         }
+        Cmd::Import { file, from, to } => {
+            let mut p = json!({ "path": abs(&file)? });
+            if let Some(n) = from {
+                p["from"] = json!(n);
+            }
+            if let Some(n) = to {
+                p["to"] = json!(n);
+            }
+            print(&call(c, "import", p)?)
+        }
         Cmd::Describe => {
             let v = call(c, "describe", json!({}))?;
             match v.get("outline").and_then(|o| o.as_str()) {
@@ -586,6 +611,7 @@ fn run(cli: Cli) -> Result<()> {
             let p = path.map(|p| abs(&p)).transpose()?;
             print(&call(c, "save", json!({ "path": p }))?);
         }
+        Cmd::SaveTemplate { name } => print(&call(c, "save_template", json!({ "name": name }))?),
         Cmd::Events { follow, count, filter } => {
             let p = if filter.is_empty() { json!({}) } else { json!({ "events": filter }) };
             call(c, "subscribe", p)?;
@@ -747,7 +773,9 @@ fn find_zebra_bin(explicit: Option<PathBuf>) -> Result<PathBuf> {
 
 fn spawn_headless(bin: &Path, file: Option<&Path>) -> Result<Headless> {
     let mut cmd = Proc::new(bin);
-    cmd.args(["--headless", "--api", "--agent-permission", "full"]);
+    // Permission is the person's saved choice (the AI button); no flag
+    // raises it.
+    cmd.args(["--headless", "--api"]);
     if let Some(f) = file {
         cmd.arg(abs(f)?);
     }

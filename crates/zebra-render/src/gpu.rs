@@ -1,7 +1,7 @@
 //! GPU canvas: vello renders the display list into a wgpu texture on eframe's
 //! device (Metal on macOS) and egui shows it as an image.
 use egui_wgpu::wgpu;
-use kurbo::{Affine, Rect};
+use kurbo::{Affine, Rect, Shape};
 use vello::peniko::{BlendMode, Color, Fill, Mix};
 use vello::{AaConfig, AaSupport, RenderParams, RendererOptions, Scene};
 
@@ -17,7 +17,27 @@ fn color(c: Rgba) -> Color {
 pub fn encode_scene(scene: &mut Scene, list: &DisplayList) {
     let full = Rect::new(0.0, 0.0, list.width_px as f64, list.height_px as f64);
     scene.fill(Fill::NonZero, Affine::IDENTITY, color(list.background), None, &full);
-    for item in &list.items {
+    let layer_rects = layer_bounds(&list.items, full);
+    let mut skip_pop = Vec::new();
+    let mut alpha = 1.0f32;
+    for (i, item) in list.items.iter().enumerate() {
+        // A group holding one fill or stroke: fold the opacity into its
+        // colour instead of opening a layer (same pixels, much cheaper).
+        if let Item::PushOpacity(a) = item {
+            if matches!(list.items.get(i + 2), Some(Item::PopOpacity))
+                && matches!(list.items.get(i + 1), Some(Item::Fill { .. } | Item::Stroke { .. }))
+            {
+                alpha = *a;
+                skip_pop.push(i + 2);
+                continue;
+            }
+        }
+        if skip_pop.last() == Some(&i) {
+            skip_pop.pop();
+            alpha = 1.0;
+            continue;
+        }
+        let color = |c: Rgba| color(c).multiply_alpha(alpha);
         match item {
             Item::Fill { path, color: c } => scene.fill(Fill::NonZero, Affine::IDENTITY, color(*c), None, path),
             Item::Stroke { path, color: c, stroke } => scene.stroke(stroke, Affine::IDENTITY, color(*c), None, path),
@@ -42,11 +62,76 @@ pub fn encode_scene(scene: &mut Scene, list: &DisplayList) {
                 }
             }
             Item::Image { image, transform } => scene.draw_image(&image.data, *transform),
-            Item::PushOpacity(a) => scene.push_layer(Fill::NonZero, BlendMode::from(Mix::Normal), *a, Affine::IDENTITY, &full),
+            // A layer costs work in every tile its clip covers, so bound it
+            // to what it holds: dozens of full-screen layers (faded tiny
+            // text at fit-all) overflowed vello's fixed buffers and the
+            // whole frame came out black.
+            Item::PushOpacity(a) => {
+                scene.push_layer(Fill::NonZero, BlendMode::from(Mix::Normal), *a, Affine::IDENTITY, &layer_rects[i])
+            }
             Item::PopOpacity | Item::PopClip => scene.pop_layer(),
             Item::PushClip(path) => scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, path),
         }
     }
+}
+
+/// For each `PushOpacity`, the device rect its group can touch (clamped to
+/// the frame); other entries are unused.
+fn layer_bounds(items: &[Item], full: Rect) -> Vec<Rect> {
+    let mut out = vec![full; items.len()];
+    // Open groups: (index, bounds so far, any unbounded item).
+    let mut open: Vec<(usize, Option<Rect>, bool)> = Vec::new();
+    let mut clips: Vec<Option<Rect>> = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let r = match item {
+            Item::Fill { path, .. } => Some(path.bounding_box()),
+            Item::Stroke { path, stroke, .. } => Some(path.bounding_box().inflate(stroke.width * 2.0 + 2.0, stroke.width * 2.0 + 2.0)),
+            Item::Text { layout, transform, .. } => {
+                // Glyphs can overhang the layout box (italics, accents): pad.
+                let pad = layout.runs.iter().map(|r| r.font_size as f64).fold(0.0, f64::max);
+                let b = Rect::new(-pad, -pad, layout.width + pad, layout.height + pad);
+                Some(transform.transform_rect_bbox(b))
+            }
+            Item::Image { image, transform } => {
+                Some(transform.transform_rect_bbox(Rect::new(0.0, 0.0, image.width as f64, image.height as f64)))
+            }
+            Item::PushOpacity(_) => {
+                open.push((i, None, false));
+                continue;
+            }
+            Item::PushClip(path) => {
+                clips.push(Some(path.bounding_box()));
+                continue;
+            }
+            Item::PopClip => {
+                clips.pop();
+                continue;
+            }
+            Item::PopOpacity => {
+                let Some((at, b, unbounded)) = open.pop() else { continue };
+                let b = if unbounded { full } else { b.map_or(Rect::ZERO, |b| b.inflate(2.0, 2.0).intersect(full)) };
+                out[at] = b;
+                // The finished group counts as one item of its parent.
+                if let Some(parent) = open.last_mut() {
+                    parent.1 = Some(parent.1.map_or(b, |p| p.union(b)));
+                    parent.2 |= unbounded;
+                }
+                continue;
+            }
+        };
+        // A clip bounds what's inside it.
+        let r = match (r, clips.iter().flatten().next_back()) {
+            (Some(r), Some(c)) => Some(r.intersect(*c)),
+            (r, _) => r,
+        };
+        if let Some(g) = open.last_mut() {
+            match r {
+                Some(r) if r.is_finite() => g.1 = Some(g.1.map_or(r, |p| p.union(r))),
+                _ => g.2 = true,
+            }
+        }
+    }
+    out
 }
 
 /// vello renderer bound to one wgpu device. Usable headless (tests,
@@ -57,7 +142,20 @@ pub struct GpuRenderer {
     /// Milliseconds of the last render: (scene encode, vello submit, error
     /// scope wait). For the `perf` query.
     pub last_ms: [f32; 3],
+    /// Pictures drawn in the last frame (blob ids).
+    last_images: std::collections::HashSet<u64>,
+    /// Frames still to draw so pictures that didn't fit show (see
+    /// [`GpuRenderer::needs_another_frame`]).
+    settle: u8,
 }
+
+/// Frames heavier than this (see [`crate::frame_cost`]) don't leave their
+/// encoding buffers behind.
+const SHRINK_AFTER_COST: usize = 200_000;
+
+/// Pictures in a frame above this many pixels might not fit next to the
+/// last frames' in vello's atlas (8192² = 67M).
+const SETTLE_ABOVE_PX: u64 = 8_000_000;
 
 fn renderer_options() -> RendererOptions {
     RendererOptions { antialiasing_support: AaSupport::area_only(), ..Default::default() }
@@ -67,7 +165,7 @@ impl GpuRenderer {
     pub fn new(device: &wgpu::Device) -> Result<Self, String> {
         let renderer = vello::Renderer::new(device, renderer_options())
         .map_err(|e| format!("vello init failed: {e}"))?;
-        Ok(GpuRenderer { renderer, scene: Scene::new(), last_ms: [0.0; 3] })
+        Ok(GpuRenderer { renderer, scene: Scene::new(), last_ms: [0.0; 3], last_images: Default::default(), settle: 0 })
     }
 
     /// Render `list` into `view` (an Rgba8Unorm texture with STORAGE_BINDING,
@@ -79,6 +177,7 @@ impl GpuRenderer {
         list: &DisplayList,
         view: &wgpu::TextureView,
     ) -> Result<(), String> {
+        self.note_images(list);
         let t0 = std::time::Instant::now();
         self.scene.reset();
         encode_scene(&mut self.scene, list);
@@ -98,6 +197,12 @@ impl GpuRenderer {
         let res = self.renderer.render_to_texture(device, queue, &self.scene, view, &params);
         let t2 = std::time::Instant::now();
         let gpu_err = pollster::block_on(scope.pop());
+        // A heavy frame grows the scene's encoding buffers, and reset keeps
+        // their capacity: after one, start a fresh scene so the memory goes
+        // back instead of staying at the high-water mark.
+        if crate::clip::frame_cost(&list.items) > SHRINK_AFTER_COST {
+            self.scene = Scene::new();
+        }
         let ms = |a: std::time::Instant, b: std::time::Instant| (b - a).as_secs_f32() * 1000.0;
         self.last_ms = [ms(t0, t1), ms(t1, t2), ms(t2, std::time::Instant::now())];
         if let Some(e) = gpu_err {
@@ -107,6 +212,35 @@ impl GpuRenderer {
             return Err(format!("vello render failed, renderer reset: {e}"));
         }
         res.map_err(|e| format!("vello render failed: {e}"))
+    }
+
+    /// True when the frame just drawn may have left pictures out, so the
+    /// host should draw it again (at most twice per change).
+    ///
+    /// vello keeps every picture of the last three frames in one 8192²
+    /// atlas and leaves out what doesn't fit, without telling us. Zooming
+    /// a big PDF page swaps whole sets of tiles, and the new set could
+    /// find the atlas still full of the old one: tiles went missing, and
+    /// with nothing else to repaint the window they stayed missing. Two
+    /// more frames let vello drop the old set and place the new one.
+    pub fn needs_another_frame(&self) -> bool {
+        self.settle > 0
+    }
+
+    fn note_images(&mut self, list: &DisplayList) {
+        let mut ids = std::collections::HashSet::new();
+        let mut px = 0u64;
+        for it in &list.items {
+            if let Item::Image { image, .. } = it {
+                if ids.insert(image.data.data.id()) {
+                    px += image.width as u64 * image.height as u64;
+                }
+            }
+        }
+        let new = ids.iter().any(|id| !self.last_images.contains(id));
+        // Small sets can't fill the atlas; don't spend frames on them.
+        self.settle = if new && px > SETTLE_ABOVE_PX { 2 } else { self.settle.saturating_sub(1) };
+        self.last_images = ids;
     }
 
     /// Render off-screen and read back straight RGBA8 rows (for tests and
@@ -249,6 +383,9 @@ impl VelloCanvas {
             let bg = list.background;
             ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]));
             return;
+        }
+        if gpu.needs_another_frame() {
+            ui.ctx().request_repaint();
         }
         if let Some(id) = self.texture_id {
             let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));

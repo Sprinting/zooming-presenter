@@ -169,11 +169,16 @@ fn group_name(g: &str) -> String {
 
 const GROUPS: [&str; 6] = ["emoji", "colour", "drawn", "people", "mono", "classic"];
 
+/// Why there are no symbols: not installed, or a pack this build can't read.
+pub fn not_installed() -> String {
+    if zebra_core::symbols::library_error().is_some() { crate::t!("symbols-old-pack") } else { crate::t!("symbols-not-installed") }
+}
+
 /// The Symbols tab: set menu, then the grid. Clicking a tile inserts the
 /// symbol in the middle of the view.
 pub fn grid(app: &mut ZebraApp, win: &mut Window, ui: &mut egui::Ui, p: &Palette) {
     let Some(lib) = library() else {
-        ui.label(RichText::new(crate::t!("symbols-not-installed")).color(p.weak));
+        ui.label(RichText::new(not_installed()).color(p.weak));
         return;
     };
     let mut sym = std::mem::take(&mut app.symbols);
@@ -228,7 +233,7 @@ pub fn grid(app: &mut ZebraApp, win: &mut Window, ui: &mut egui::Ui, p: &Palette
                     if resp.hovered() {
                         ui.painter().rect_filled(rect, 6.0, p.hover);
                     }
-                    let name = lib.name(r);
+                    let name = display_name(lib.name(r));
                     let tip = match (sym.set, lib.set(r.set)) {
                         (None, Some(s)) => format!("{name} · {}", s.name),
                         _ => name.to_string(),
@@ -322,5 +327,37 @@ pub fn inspector(insp: &mut crate::inspector::Insp, ui: &mut egui::Ui, look: &ze
                 insp.set(ElementPatch { color2: Some(k), ..Default::default() });
             }
         });
+    }
+}
+
+/// A symbol's name as people read it. Pack names are upstream file names
+/// ("add-circle-20", "zoom_out"): hyphens and underscores become spaces, a
+/// trailing size or index number goes, and the first letter is a capital.
+pub fn display_name(raw: &str) -> String {
+    let spaced = raw.replace(['-', '_'], " ");
+    let mut words: Vec<&str> = spaced.split_whitespace().collect();
+    if words.len() > 1 && words.last().is_some_and(|w| w.chars().all(|c| c.is_ascii_digit())) {
+        words.pop();
+    }
+    let joined = words.join(" ");
+    let mut c = joined.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().chain(c).collect(),
+        None => raw.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::display_name;
+
+    #[test]
+    fn pack_names_read_as_words() {
+        assert_eq!(display_name("add-circle-20"), "Add circle");
+        assert_eq!(display_name("2nd-place-medal"), "2nd place medal");
+        assert_eq!(display_name("micah 120"), "Micah");
+        assert_eq!(display_name("zoom_out"), "Zoom out");
+        assert_eq!(display_name("1"), "1");
+        assert_eq!(display_name("a-b-off"), "A b off");
     }
 }

@@ -412,6 +412,7 @@ fn r9_opening_an_open_file_shows_its_window() {
     let file = data_dir().join("r9.zebra");
     frame(&mut h.state_mut().windows[0], 0.0, false);
     assert!(h.state_mut().windows[0].save_to(&file));
+    h.state_mut().windows[0].wait_save();
     // From a second window with work in it, and from an untouched one.
     h.state_mut().windows[0].queued.push(Action::New);
     h.run_steps(4);
@@ -492,11 +493,13 @@ fn r12_autosave_does_not_outlive_a_save() {
     let app = h.state_mut();
     let saved = data_dir().join("r12.zebra");
     assert!(app.save_to(&saved));
+    app.wait_save();
     frame(app, 2000.0, false);
     app.last_autosave = app.now() - 1000.0;
     zebra_app::files::autosave_tick(app);
     // Saved while (or just after) the autosave is written.
     assert!(app.save_to(&saved));
+    app.wait_save();
     let t0 = std::time::Instant::now();
     while app.autosave_job.busy() && t0.elapsed().as_secs() < 10 {
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -552,12 +555,12 @@ fn r24_the_theme_editor_follows_the_document() {
     h.run_steps(3);
     let mut mine = h.state().theme_ed.as_ref().unwrap().draft.clone();
     mine.accent = "#112233".into();
-    h.state_mut().editor.apply(Command::SaveTheme { theme: mine.clone(), apply: true }, H).unwrap();
+    h.state_mut().editor.apply(Command::SaveTheme { theme: mine.clone(), apply: true, to_library: false }, H).unwrap();
     h.run_steps(2);
     assert_eq!(h.state().theme_ed.as_ref().unwrap().draft.accent, "#112233");
     let mut theirs = mine.clone();
     theirs.accent = "#445566".into();
-    h.state_mut().editor.apply(Command::SaveTheme { theme: theirs, apply: true }, Origin::agent("a")).unwrap();
+    h.state_mut().editor.apply(Command::SaveTheme { theme: theirs, apply: true, to_library: false }, Origin::agent("a")).unwrap();
     h.run_steps(2);
     assert_eq!(h.state().theme_ed.as_ref().unwrap().draft.accent, "#445566", "the agent's change shows in the editor");
     h.state_mut().editor.undo(H).unwrap();
@@ -624,6 +627,63 @@ fn r26_a_dragged_step_is_let_go_when_the_path_changes() {
     h.input_mut().events.push(Event::PointerButton { pos: rows[2] + egui::vec2(0.0, 30.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
     assert_eq!(h.state().editor.doc.path, before[1..].to_vec(), "the two steps left keep their order");
+}
+
+/// Spec 04: a long path lays out (and draws thumbnails for) only the rows
+/// in view, and still scrolls to the step selected and reorders by drag.
+#[test]
+fn a_long_path_lays_out_only_the_rows_in_view() {
+    let mut h = harness();
+    for i in 0..300 {
+        frame(h.state_mut(), i as f64 * 1000.0, true);
+    }
+    h.run_steps(3);
+    let on = h.state().thumbs.showing();
+    assert_eq!(on.start, 0);
+    assert!(on.len() > 2 && on.len() < 20, "only the rows in view: {on:?}");
+    assert_eq!(h.state().step_rows.len(), 300, "every row has its place");
+    h.state_mut().selected_step = Some(250);
+    h.run_steps(4);
+    let on = h.state().thumbs.showing();
+    assert!(on.contains(&250), "scrolled to the selected step: {on:?}");
+    let r = h.state().step_rows[250];
+    assert!(r.min.y >= 0.0 && r.max.y <= 1000.0, "its row is on screen: {r:?}");
+    // Drag the row on screen down one place.
+    let (a, b) = (h.state().step_rows[250].center(), h.state().step_rows[251].center());
+    let start = h.state().editor.doc.path.clone();
+    h.input_mut().events.push(Event::PointerMoved(a));
+    h.input_mut().events.push(Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerMoved(b + egui::vec2(0.0, 30.0)));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: b + egui::vec2(0.0, 30.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let path = &h.state().editor.doc.path;
+    assert_eq!((&path[250], &path[251]), (&start[251], &start[250]), "dragged one place down");
+}
+
+/// Spec 04: the step whose notes the sidebar shows (nearest the camera,
+/// worked out once per camera and revision) follows the camera and edits.
+#[test]
+fn the_current_step_follows_the_camera() {
+    let mut h = harness();
+    for i in 0..3 {
+        frame(h.state_mut(), i as f64 * 1000.0, true);
+    }
+    h.run_steps(2);
+    let go = |h: &mut Harness<'static, ZebraApp>, i: usize| {
+        let cam = h.state().editor.camera_for_step(i);
+        h.state_mut().editor.view.camera = cam;
+        h.run_steps(2);
+    };
+    go(&mut h, 2);
+    assert_eq!(h.state().current_step(), Some(2));
+    go(&mut h, 0);
+    assert_eq!(h.state().current_step(), Some(0));
+    // Same camera, different path: step 0 now frames what step 2 did.
+    h.state_mut().editor.apply(Command::MoveStep { from: 0, to: 2 }, H).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().current_step(), Some(2));
 }
 
 /// Mac round, 18 Nov: on a fresh document, Edit › Undo was greyed out while

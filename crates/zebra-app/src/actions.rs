@@ -21,6 +21,10 @@ pub enum Action {
     SaveAs,
     ExportPdf,
     ExportPng,
+    /// File > Export > Web Page (HTML)…
+    ExportHtml,
+    /// File › Import… (PDF).
+    Import,
     Close,
     Quit,
     // Edit
@@ -126,6 +130,8 @@ impl Action {
             SaveAs => crate::t!("action-save-as"),
             ExportPdf => crate::t!("action-export-pdf"),
             ExportPng => crate::t!("action-export-png"),
+            ExportHtml => crate::t!("action-export-html"),
+            Import => crate::t!("action-import"),
             Close => crate::t!("action-close"),
             Quit => crate::t!("action-quit"),
             Undo => crate::t!("action-undo"),
@@ -209,7 +215,7 @@ impl Action {
     pub fn palette() -> Vec<Action> {
         use Action::*;
         let mut v = vec![
-            New, NewFromSample, ShowTemplates, SaveAsTemplate, Open, Save, SaveAs, ExportPdf, ExportPng, Undo, Redo, Cut, Copy, Paste, Duplicate, Delete,
+            New, NewFromSample, ShowTemplates, SaveAsTemplate, Open, Save, SaveAs, Import, ExportPdf, ExportPng, ExportHtml, Undo, Redo, Cut, Copy, Paste, Duplicate, Delete,
             SelectAll, Deselect,
         ];
         for t in TOOLS {
@@ -305,6 +311,7 @@ pub static DEFAULTS: &[(Modifiers, Key, Action)] = &[
     (CMD_ALT_SHIFT, Key::G, Action::Ungroup),
     (CMD_CTRL, Key::S, Action::ToggleSidebar),
     (CMD_SHIFT, Key::S, Action::SaveAs),
+    (CMD_SHIFT, Key::I, Action::Import),
     (CMD_SHIFT, Key::N, Action::ShowTemplates),
     (CMD_SHIFT, Key::Z, Action::Redo),
     (CMD_SHIFT, Key::A, Action::AddToPath),

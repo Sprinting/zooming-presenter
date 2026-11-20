@@ -143,6 +143,10 @@ pub struct Shell {
     /// released) with the shell when Zebra quits; macOS also drops a
     /// process's assertions when it exits.
     pub awake: crate::keep_awake::SystemKeepAwake,
+    /// Where windows were, noted and put back like Keynote. None when off
+    /// (UI tests, and debug runs that ask for a fixed size).
+    pub frames: Option<crate::window_frames::Frames>,
+    frames_changed: bool,
 }
 
 /// The placeholder title a new window is created with, so its NSWindow
@@ -162,7 +166,7 @@ impl Shell {
         let reopen = std::mem::take(&mut first.reopen_untitled);
         // Lets zebractl say "AI control is off" rather than "isn't open".
         let running = if first.wgpu.is_some() { zebra_api::discovery::RunningNote::write().ok() } else { None };
-        let mut shell = Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None, untitled_seq: 0, awake: Default::default(), _running: running };
+        let mut shell = Shell { shared: Shared::read(&first), windows: vec![first], front: 0, dispatcher, next_id: 2, quitting: false, empty: false, tab_into: None, untitled_seq: 0, awake: Default::default(), _running: running, frames: None, frames_changed: false };
         // More untitled documents from the last run: a window each.
         for p in reopen {
             let id = format!("d{}", shell.next_id);
@@ -264,9 +268,11 @@ impl Shell {
             {
                 w.mac_sync = Default::default();
             }
-            if let Some(r) = rect {
-                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::OuterPosition(r.min));
-                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::InnerSize(r.size()));
+            // InnerSize takes the content's size: the outer one grew the
+            // window by its title bar each time.
+            if let Some((pos, size)) = rect {
+                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::OuterPosition(pos));
+                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::InnerSize(size));
             }
         } else {
             self.windows.remove(i);
@@ -324,7 +330,7 @@ impl Shell {
     /// unsaved changes comes to the front before it asks, so its Save
     /// Changes sheet is the one in view; Cancel there stops the quit.
     fn quit_step(&mut self, ctx: &egui::Context) {
-        let busy = |w: &ZebraApp| w.close_me || w.sheet_showing() || !w.queued.is_empty();
+        let busy = |w: &ZebraApp| w.close_me || w.sheet_showing() || !w.queued.is_empty() || w.editor.saving().is_some() || !w.after_save.is_empty();
         if let Some(w) = self.windows.iter().find(|w| w.quit_pending) {
             if busy(w) {
                 return;
@@ -357,7 +363,11 @@ impl Shell {
     fn pump(&mut self, ctx: &egui::Context) {
         let api = self.shared.api.clone();
         match (&api, &mut self.dispatcher) {
-            (Some(_), None) => self.dispatcher = Some(zebra_api::Dispatcher::new(self.windows[0].renderer.clone())),
+            (Some(_), None) => {
+                let mut d = zebra_api::Dispatcher::new(self.windows[0].renderer.clone());
+                d.web_labels = crate::files::web_labels();
+                self.dispatcher = Some(d);
+            }
             (None, Some(d)) => {
                 d.shutdown_docs(&mut Docs { windows: &mut self.windows, front: self.front, next_id: &mut self.next_id, shared: &self.shared, empty: &mut self.empty, ctx: ctx.clone() });
                 self.dispatcher = None;
@@ -399,10 +409,11 @@ fn hidden(ctx: &egui::Context) -> bool {
     ctx.input(|i| i.viewport().occluded == Some(true) || i.viewport().minimized == Some(true))
 }
 
-/// Where a document window is on screen (egui's last report).
-fn viewport_rect(ctx: &egui::Context, id: &str) -> Option<egui::Rect> {
+/// Where a document window is on screen (egui's last report): its outer
+/// top-left corner and the size of its content.
+fn viewport_rect(ctx: &egui::Context, id: &str) -> Option<(egui::Pos2, egui::Vec2)> {
     let vid = egui::ViewportId::from_hash_of(("document", id));
-    ctx.input(|i| i.raw.viewports.get(&vid).and_then(|v| v.outer_rect))
+    ctx.input(|i| i.raw.viewports.get(&vid).and_then(|v| Some((v.outer_rect?.min, v.inner_rect?.size()))))
 }
 
 /// The open documents, for the agent API.
@@ -479,6 +490,40 @@ impl zebra_api::Documents for Docs<'_> {
 }
 
 impl Shell {
+    /// Put each window where its document was last, and note where every
+    /// window is (see `window_frames`).
+    fn place_windows(&mut self, ctx: &egui::Context) {
+        use crate::window_frames::{step, Frame, Step};
+        let Some(frames) = self.frames.as_mut() else { return };
+        if self.empty {
+            return;
+        }
+        for w in &mut self.windows {
+            let info = ctx.input(|i| i.raw.viewports.get(&w.viewport).cloned());
+            let Some(info) = info else { continue };
+            let now = Frame::of(&info);
+            let may_move = !crate::mac::shares_tab_group(w) && info.fullscreen != Some(true);
+            let path = w.editor.file_path.clone();
+            match step(&mut w.placement, frames, path.as_deref(), now, may_move) {
+                Step::Nothing => {}
+                Step::Place(f) => {
+                    let (pos, size) = f.fit(info.monitor_size);
+                    ctx.send_viewport_cmd_to(w.viewport, egui::ViewportCommand::InnerSize(size));
+                    if let Some(p) = pos {
+                        ctx.send_viewport_cmd_to(w.viewport, egui::ViewportCommand::OuterPosition(p));
+                    }
+                }
+                Step::Note(f) => {
+                    if frames.remember(path.as_deref(), f) {
+                        self.frames_changed = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Shell {
     /// Files Finder, the Dock or Open With asked for: each one opens like
     /// File › Open from the front window (a window of its own unless that
     /// one is untouched; a file already open just comes to the front). With
@@ -532,7 +577,7 @@ impl eframe::App for Shell {
         if self.empty {
             self.logic_empty(ctx);
         }
-        let open: Vec<Option<std::path::PathBuf>> = self.windows.iter().map(|w| w.editor.file_path.as_deref().map(crate::app::same_file)).collect();
+        let open: Vec<Option<std::path::PathBuf>> = self.windows.iter().map(|w| w.shown_file().map(crate::app::same_file)).collect();
         for i in 0..self.windows.len() {
             let w = &mut self.windows[i];
             w.open_elsewhere = open.iter().enumerate().filter(|(j, _)| *j != i).filter_map(|(_, p)| p.clone()).collect();
@@ -541,6 +586,7 @@ impl eframe::App for Shell {
             self.sync_from(i);
         }
         self.pump(ctx);
+        self.place_windows(ctx);
         // Close, New and Quit also move on when no window is being drawn
         // (all minimised, or an agent closed a document in the background).
         if !self.empty {
@@ -632,6 +678,10 @@ impl eframe::App for Shell {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::App::save(&mut self.windows[self.front], storage);
+        if let (Some(f), true) = (&self.frames, self.frames_changed) {
+            f.store();
+            self.frames_changed = false;
+        }
     }
 
     fn persist_egui_memory(&self) -> bool {

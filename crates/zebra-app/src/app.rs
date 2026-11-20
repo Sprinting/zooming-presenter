@@ -42,11 +42,14 @@ pub struct AppOptions {
     pub screenshot: Option<(f64, PathBuf)>,
     /// Debug: start in a demo state (sample, pathedit, present, agent, text).
     pub demo: Option<String>,
+    /// Tests: start like a launch with a window (last run's untitled
+    /// documents come back, the template chooser is offered) without a GPU.
+    pub as_launch: bool,
 }
 
 impl AppOptions {
-    /// A launch with nothing to open offers the template chooser (or brings
-    /// back last run's untitled documents). One with a file, from the
+    /// A launch with nothing to open offers the template chooser (unless
+    /// last run's untitled documents come back). One with a file, from the
     /// command line or from Finder, just opens it.
     pub fn offers_chooser(&self) -> bool {
         self.open.is_none() && self.demo.is_none() && self.screenshot.is_none()
@@ -91,6 +94,8 @@ pub struct ZebraApp {
     /// The size this window opens at: that of the window it was made from,
     /// as in Keynote (without it every new window came up 800 by 600).
     pub open_size: Option<egui::Vec2>,
+    /// Where this window was put and noted (see `window_frames`).
+    pub placement: crate::window_frames::Placement,
     /// `editor.loads` when `after_load` last ran.
     pub seen_loads: u64,
     /// When decoded pictures were last trimmed.
@@ -130,10 +135,20 @@ pub struct ZebraApp {
     pub palette: Option<(String, usize)>,
     /// Where the sidebar drew each step's row in the last frame.
     pub step_rows: Vec<egui::Rect>,
+    /// How wide the sidebar drew the step number column in the last frame.
+    pub step_number_w: f32,
     pub show_shortcuts: bool,
     pub library: crate::shape_library::Library,
     pub show_about: bool,
     pub selected_step: Option<usize>,
+    /// The path list has the keys (it was clicked last, not the canvas):
+    /// Keynote's navigator model, spec 08. See `sidebar::list_focused`.
+    pub path_focus: bool,
+    /// Several steps selected in the path list (⇧/⌘-click, Select All).
+    pub step_multi: Option<crate::sidebar::StepMulti>,
+    /// An empty step waiting for a frame (insert between steps). Interface
+    /// state only: never saved, never seen by agents.
+    pub step_pick: Option<crate::sidebar::Pick>,
     /// Objects copied in any window (shared by all of them).
     pub clipboard: Arc<zebra_core::clip::Clip>,
     /// The text Copy put on the system clipboard: while it's still there,
@@ -144,12 +159,22 @@ pub struct ZebraApp {
     pub toast: Option<Toast>,
     /// The sheet waiting for an answer (save changes, errors, confirmations).
     pub sheet: Option<crate::sheets::SheetKind>,
+    /// File › Import… under way (its sheet is up).
+    pub import: Option<crate::import_ui::Flow>,
     /// Use native NSAlert sheets and system dialogs (macOS with a window);
     /// off in UI tests, where sheets are drawn in egui.
     pub native_dialogs: bool,
     /// The native sheet on screen, waiting for its answer (macOS).
     #[cfg(target_os = "macos")]
     pub open_sheet: Option<crate::sheets::OpenSheet>,
+    /// An open or save panel asked for: it goes up as a sheet on this
+    /// window once the frame is drawn (see `pickers`).
+    pub want_pick: Option<crate::pickers::Pick>,
+    /// The pass in which `want_pick` was set: the panel waits until a
+    /// frame without the menu that asked for it has been drawn.
+    pub want_pick_pass: u64,
+    #[cfg(target_os = "macos")]
+    pub open_picker: Option<crate::sheets::OpenPicker>,
     pub show_settings: bool,
     /// Debug: draw the icon sheet (`--demo icons`).
     pub show_icon_sheet: bool,
@@ -166,7 +191,20 @@ pub struct ZebraApp {
     pub mac_sync: crate::mac::WindowSync,
     /// Step that was just added: its sidebar row highlights briefly.
     pub flash_step: Option<(usize, f64)>,
+    /// The step nearest the camera, with what it was worked out for
+    /// (revision, loads, camera and viewport bits): the sidebar asks for it
+    /// a few times a frame, and every frame while idle.
+    nearest_step: std::cell::Cell<Option<((u64, u64, [u64; 6]), Option<usize>)>>,
+    /// Every step's camera for the revision, loads and viewport it was
+    /// built for: `nearest_step` searches it.
+    step_index: std::cell::RefCell<Option<((u64, u64, [u64; 2]), zebra_core::step_index::StepIndex)>>,
     pub queued: Vec<Action>,
+    /// Actions held while the document is being saved (Close, Quit, Open,
+    /// another Save, and what a Save Changes sheet's Save goes on to do).
+    /// They run when the save is done, and are dropped if it failed.
+    pub after_save: Vec<Action>,
+    /// A big file being opened on a worker thread.
+    pub opening: Option<crate::opening::Opening>,
     pub scroll_mode: ScrollMode,
     /// Reduce Motion chosen in Settings; `None` follows the system.
     pub motion_override: Option<bool>,
@@ -269,6 +307,7 @@ impl ZebraApp {
     fn build(ctx: &Context, wgpu: Option<egui_wgpu::RenderState>, storage: Option<&dyn eframe::Storage>, opts: AppOptions, shared: Option<Arc<Renderer>>) -> Self {
         let is_root = shared.is_none();
         let offers_chooser = opts.offers_chooser();
+        let launch = is_root && (wgpu.is_some() || opts.as_launch) && opts.demo.is_none() && opts.screenshot.is_none();
         let renderer = match shared {
             Some(r) => r,
             None => {
@@ -279,6 +318,11 @@ impl ZebraApp {
                 // Pictures decode on worker threads; repaint when one lands.
                 let waker_ctx = ctx.clone();
                 renderer.images().set_waker(Some(Arc::new(move || waker_ctx.request_repaint())));
+                // Imported PDF pages are drawn again from the PDF when
+                // zoomed in past their pictures.
+                renderer.set_page_raster(Some(Arc::new(|r: &zebra_render::pages::PageRequest| {
+                    zebra_import::pdf::raster(&r.pdf, &r.bytes, r.index, r.page_px, r.rect)
+                })));
                 renderer
             }
         };
@@ -306,6 +350,7 @@ impl ZebraApp {
             viewport: egui::ViewportId::ROOT,
             wake_hidden: false,
             open_size: None,
+            placement: Default::default(),
             seen_loads: 0,
             last_image_trim: 0.0,
             open_elsewhere: vec![],
@@ -328,6 +373,7 @@ impl ZebraApp {
             stage: crate::presenting::Stage::new(ctx, renderer.clone(), storage),
             theme_ed: None,
             step_rows: vec![],
+            step_number_w: 0.0,
             welcome: None,
             previews: None,
             show_layouts: false,
@@ -343,15 +389,23 @@ impl ZebraApp {
             library: Default::default(),
             show_about: false,
             selected_step: None,
+            path_focus: false,
+            step_multi: None,
+            step_pick: None,
             clipboard: Default::default(),
             clipboard_marker: None,
             paste_count: 0,
             recent,
             toast: None,
             sheet: None,
+            import: None,
             native_dialogs: cfg!(target_os = "macos") && has_window,
             #[cfg(target_os = "macos")]
             open_sheet: None,
+            want_pick: None,
+            want_pick_pass: 0,
+            #[cfg(target_os = "macos")]
+            open_picker: None,
             show_settings: false,
             show_icon_sheet: false,
             settings_pane: storage.and_then(|s| eframe::get_value(s, "settings_pane")).unwrap_or_default(),
@@ -361,7 +415,11 @@ impl ZebraApp {
             snapping: storage.and_then(|s| eframe::get_value(s, "snapping")).unwrap_or(true),
             mac_sync: Default::default(),
             flash_step: None,
+            nearest_step: Default::default(),
+            step_index: Default::default(),
             queued: vec![],
+            after_save: vec![],
+            opening: None,
             scroll_mode,
             motion_override,
             last_autosave: 0.0,
@@ -390,15 +448,22 @@ impl ZebraApp {
             menu: None,
             media: Default::default(),
         };
-        let saved_ai: bool = storage.and_then(|s| eframe::get_value(s, "ai_enabled")).unwrap_or(false);
+        // The person's choice is kept with the grant (the keychain in a
+        // signed Mac build, where nothing else can change it); the app's
+        // own settings file only counts for older grants that didn't keep it.
+        let switch = zebra_api::discovery::ai_switch();
+        let saved_ai: bool = switch.on.unwrap_or_else(|| storage.and_then(|s| eframe::get_value(s, "ai_enabled")).unwrap_or(false));
         app.ai_saved = saved_ai;
         // The first time is always a person: until someone has switched AI
         // control on in this window, neither a launch flag nor a saved
-        // setting turns it on.
-        let granted = zebra_api::discovery::human_has_granted();
-        if let Some(api_opts) = opts.api.filter(|_| granted) {
+        // setting turns it on. Once switched off (by the person, or an
+        // agent's `disconnect`), a launch flag can't switch it back on.
+        let granted = switch.granted;
+        if let Some(api_opts) = opts.api.filter(|_| switch.lets_flags_start()) {
             app.api_socket = api_opts.socket.clone();
-            app.editor.view.agent_permission = api_opts.permission;
+            // The person's choice; the flag only ever lowers it.
+            let saved = storage.and_then(|s| eframe::get_value::<String>(s, "agent_permission")).map(|p| parse_permission(&p));
+            app.editor.view.agent_permission = launch_permission(saved, api_opts.permission);
             app.set_ai_control(true);
         } else if saved_ai && granted {
             if let Some(p) = storage.and_then(|s| eframe::get_value::<String>(s, "agent_permission")) {
@@ -406,22 +471,25 @@ impl ZebraApp {
             }
             app.set_ai_control(true);
         }
-        let launch_welcome = offers_chooser && app.wgpu.is_some();
-        if let Some(p) = opts.open {
-            app.open_path(&p);
-        }
+        let launch_welcome = launch && offers_chooser;
         // Like Keynote: untitled documents the last run left unsaved come
-        // back, still unsaved. Otherwise a fresh launch offers the
-        // template chooser.
-        if launch_welcome && is_root {
-            let mut left = crate::files::leftover_untitled();
-            if !left.is_empty() {
-                let first = left.remove(0);
-                if app.reopen_autosave(&first) {
-                    app.reopen_untitled = left;
+        // back, still unsaved, unless the Mac closes windows at quit. A
+        // file the launch was for (command line, Finder) opens beside them
+        // in a window of its own, in front: queued here, the shell gives
+        // it that window. With nothing to bring back, the file takes this
+        // window, or a fresh launch offers the template chooser.
+        if launch && crate::mac::restores_windows() {
+            let mut left = crate::files::leftover_untitled().into_iter();
+            while let Some(p) = left.next() {
+                if app.reopen_autosave(&p) {
+                    app.reopen_untitled = left.collect();
+                    app.queued.extend(opts.open.map(Action::OpenPath));
                     return app;
                 }
             }
+        }
+        if let Some(p) = opts.open {
+            app.open_path(&p);
         }
         if launch_welcome && app.recovered.is_none() && storage.and_then(|s| s.get_string("welcome_at_launch")).is_none_or(|v| v != "false") {
             app.welcome = Some(crate::welcome::Welcome::new());
@@ -466,7 +534,9 @@ impl ZebraApp {
             Ok(s) => {
                 // Hosted windows are answered by the shell's dispatcher.
                 if !self.hosted {
-                    self.dispatcher = Some(zebra_api::Dispatcher::new(self.renderer.clone()));
+                    let mut d = zebra_api::Dispatcher::new(self.renderer.clone());
+                    d.web_labels = crate::files::web_labels();
+                    self.dispatcher = Some(d);
                 }
                 self.api = Some(Arc::new(s));
                 self.api_error = None;
@@ -578,6 +648,11 @@ impl ZebraApp {
                 self.spawn.push(a);
             }
             Quit if self.hosted => self.quit_all = true,
+            // The document is being written: closing it, replacing it or
+            // saving it again waits for that save, then asks afresh.
+            New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close | Save | SaveAs if self.editor.saving().is_some() => {
+                self.after_save.push(a);
+            }
             New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Quit | Close if self.editor.dirty() && self.sheet.is_none() && !self.force_quit => {
                 crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(a));
             }
@@ -620,11 +695,7 @@ impl ZebraApp {
                 self.editor.load(doc, None);
                 self.after_load();
             }
-            Open => {
-                if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-zebra"), &["zebra"]).pick_file() {
-                    self.perform_inner(ctx, OpenPath(p));
-                }
-            }
+            Open => crate::pickers::ask(self, crate::pickers::Pick::Open),
             OpenPath(p) => self.open_path(&p),
             Save => {
                 self.save(false);
@@ -634,6 +705,8 @@ impl ZebraApp {
             }
             ExportPdf => crate::files::export_pdf(self),
             ExportPng => crate::files::export_png(self),
+            ExportHtml => crate::files::export_html(self),
+            Import => crate::import_ui::choose_file(self),
             Quit => {
                 self.force_quit = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -676,13 +749,19 @@ impl ZebraApp {
                     }
                 }
             }
+            // Keys and menus go to the pane clicked last (spec 08).
+            Delete if self.step_pick.is_some() && self.path_focus => crate::sidebar::cancel_pick(self),
+            Delete if crate::sidebar::list_focused(self) => crate::sidebar::delete_selected(self),
             Delete => {
                 let ids = self.editable_selection();
                 if !ids.is_empty() {
                     self.apply(Command::Delete { ids });
                 }
             }
+            SelectAll if crate::sidebar::list_focused(self) => crate::sidebar::select_all_steps(self),
             SelectAll => self.view_cmd(ViewCommand::SelectAll),
+            Deselect if self.step_pick.is_some() => crate::sidebar::cancel_pick(self),
+            Deselect if crate::sidebar::list_focused(self) => self.path_focus = false,
             Deselect => {
                 if self.editor.view.mode == Mode::PathEdit {
                     self.view_cmd(ViewCommand::SetMode { mode: Mode::Edit });
@@ -724,10 +803,8 @@ impl ZebraApp {
                 }
             }
             InsertImage => {
-                if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), &["png", "jpg", "jpeg", "webp", "gif"]).pick_file() {
-                    let c = self.canvas_center_world();
-                    self.insert_image_file(&p, c);
-                }
+                let c = self.canvas_center_world();
+                crate::pickers::ask(self, crate::pickers::Pick::InsertImage(c));
             }
             WrapInFrame => {
                 let ids = self.selection();
@@ -814,10 +891,8 @@ impl ZebraApp {
             ToggleAiControl => {
                 // Only the person reaches this (toolbar, menu, Settings).
                 let on = !self.ai_enabled;
-                if on {
-                    if let Err(e) = zebra_api::discovery::record_human_grant() {
-                        eprintln!("zebra: couldn't record the AI control grant: {e}");
-                    }
+                if let Err(e) = zebra_api::discovery::record_ai_switch(on) {
+                    eprintln!("zebra: couldn't keep the AI control switch: {e}");
                 }
                 self.ai_saved = on;
                 self.set_ai_control(on);
@@ -942,8 +1017,9 @@ impl ZebraApp {
     /// Only ids whose parent frame is not also in the list (for selecting
     /// duplicates/pastes as the user sees them).
     pub fn top_level(&self, ids: &[ElementId]) -> Vec<ElementId> {
+        let set: std::collections::HashSet<&ElementId> = ids.iter().collect();
         ids.iter()
-            .filter(|id| !self.editor.doc.parent_frame(id).is_some_and(|p| ids.contains(&p)))
+            .filter(|id| !self.editor.parent_frame(id).is_some_and(|p| set.contains(&p)))
             .cloned()
             .collect()
     }
@@ -1045,15 +1121,24 @@ impl ZebraApp {
         if let Some(s) = crate::sidebar::selected_steps(self).first() {
             return Some(*s);
         }
-        let cam = self.editor.view.camera;
-        (0..self.editor.doc.path.len()).min_by(|a, b| {
-            let d = |i: usize| {
-                let c = self.editor.camera_for_step(i);
-                let dist = (c.center() - cam.center()).len() * cam.zoom / self.editor.view.viewport.x;
-                dist + (c.zoom / cam.zoom).ln().abs()
-            };
-            d(*a).total_cmp(&d(*b))
-        })
+        let ed = &self.editor;
+        let (cam, vp) = (ed.view.camera, ed.view.viewport);
+        let key = (ed.revision, ed.loads, [cam.cx, cam.cy, cam.zoom, cam.rotation, vp.x, vp.y].map(f64::to_bits));
+        if let Some((k, s)) = self.nearest_step.get() {
+            if k == key {
+                return s;
+            }
+        }
+        // Step cameras once per revision and viewport (a long path is
+        // thousands); each camera change then searches them sub-linearly.
+        let ix_key = (ed.revision, ed.loads, [vp.x, vp.y].map(f64::to_bits));
+        let mut ix = self.step_index.borrow_mut();
+        if ix.as_ref().is_none_or(|(k, _)| *k != ix_key) {
+            *ix = Some((ix_key, zebra_core::step_index::StepIndex::build(ed)));
+        }
+        let s = ix.as_ref().and_then(|(_, ix)| ix.nearest(&cam, vp.x));
+        self.nearest_step.set(Some((key, s)));
+        s
     }
 
     /// Settings › General › Language. Every string is looked up each
@@ -1090,10 +1175,27 @@ impl ZebraApp {
     // ------------------------------------------------------------------
     // Files
 
+    /// Open `p` in this window: a big file on a worker thread, with
+    /// progress in the window; a small one at once.
     pub fn open_path(&mut self, p: &std::path::Path) {
-        match zebra_core::io::load(p) {
-            Ok(doc) => {
-                self.editor.load(doc, Some(p.to_path_buf()));
+        if crate::opening::is_big(p) {
+            crate::opening::start(self, p);
+            return;
+        }
+        let r = zebra_core::io::load(p).map(|doc| zebra_core::Editor::prepare(doc, &*self.editor.measure, &|_| {}));
+        self.finish_open(p, r);
+    }
+
+    /// The file being opened, or the one this window has open.
+    pub fn shown_file(&self) -> Option<&std::path::Path> {
+        self.opening.as_ref().map(|o| o.path.as_path()).or(self.editor.file_path.as_deref())
+    }
+
+    /// Load `p`, read and prepared, or say why it couldn't be opened.
+    pub fn finish_open(&mut self, p: &std::path::Path, r: zebra_core::ZResult<zebra_core::Prepared>) {
+        match r {
+            Ok(prepared) => {
+                self.editor.load_prepared(prepared, Some(p.to_path_buf()));
                 self.after_load();
                 self.push_recent(p.to_path_buf());
                 self.recovered = crate::files::autosave_newer(p);
@@ -1126,7 +1228,7 @@ impl ZebraApp {
     /// A Save Changes or other sheet is up (or waiting to go up).
     pub fn sheet_showing(&self) -> bool {
         #[cfg(target_os = "macos")]
-        if self.open_sheet.is_some() {
+        if self.open_sheet.is_some() || self.open_picker.is_some() {
             return true;
         }
         self.sheet.is_some()
@@ -1147,6 +1249,11 @@ impl ZebraApp {
                 return false;
             }
         };
+        // An empty document has nothing to bring back: no blank window.
+        if doc.elements.is_empty() {
+            let _ = std::fs::remove_file(path);
+            return false;
+        }
         self.editor.load(doc, None);
         self.after_load();
         // Unsaved work: the document shows as edited and asks before closing.
@@ -1160,6 +1267,9 @@ impl ZebraApp {
     pub fn after_load(&mut self) {
         self.media.stop_all();
         self.selected_step = None;
+        self.path_focus = false;
+        self.step_multi = None;
+        self.step_pick = None;
         self.canvas = CanvasState::default();
         self.thumbs.clear();
         self.recovered = None;
@@ -1187,22 +1297,54 @@ impl ZebraApp {
         self.save_to(&path)
     }
 
+    /// Start saving to `path` on a worker thread (the window stays
+    /// responsive); [`ZebraApp::poll_save`] finishes it. False if it
+    /// couldn't start (the person has been told why).
     pub fn save_to(&mut self, path: &std::path::Path) -> bool {
-        match zebra_core::io::save(&mut self.editor.doc, path) {
-            Ok(()) => {
-                self.editor.mark_saved(Some(path.to_path_buf()));
-                crate::files::remove_autosave(path);
-                crate::files::remove_autosave_untitled(self);
-                self.push_recent(path.to_path_buf());
-                true
-            }
+        let ctx = self.ctx.clone();
+        let viewport = self.viewport;
+        match self.editor.start_save(path.to_path_buf(), H, Box::new(move || ctx.request_repaint_of(viewport))) {
+            Ok(()) => true,
             Err(e) => {
-                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                crate::sheets::request(
-                    self,
-                    crate::sheets::SheetKind::Alert { title: crate::t!("app-save-failed-title", name = name.as_str()), message: e.message.clone() },
-                );
+                self.save_failed(path, &e);
                 false
+            }
+        }
+    }
+
+    fn save_failed(&mut self, path: &std::path::Path, e: &zebra_core::ZError) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        crate::sheets::request(self, crate::sheets::SheetKind::Alert { title: crate::t!("app-save-failed-title", name = name.as_str()), message: e.message.clone() });
+    }
+
+    /// Wait for the save in flight, then finish it (tests, scripts).
+    pub fn wait_save(&mut self) {
+        self.editor.wait_save();
+        self.poll_save();
+    }
+
+    /// Finish a save that is done (the person's or an agent's), and run
+    /// what waited for it.
+    pub fn poll_save(&mut self) {
+        self.editor.poll_save();
+        let mut failed = false;
+        for s in self.editor.take_saved(|s| s.by == H) {
+            match s.result {
+                Ok(()) => {
+                    crate::files::remove_autosave(&s.path);
+                    crate::files::remove_autosave_untitled(self);
+                    self.push_recent(s.path);
+                }
+                Err(e) => {
+                    failed = true;
+                    self.save_failed(&s.path, &e);
+                }
+            }
+        }
+        if self.editor.saving().is_none() && !self.after_save.is_empty() {
+            let waiting = std::mem::take(&mut self.after_save);
+            if !failed {
+                self.queued.extend(still_for_this_document(waiting));
             }
         }
     }
@@ -1265,6 +1407,9 @@ impl ZebraApp {
         if let Some(t) = self.ai_off_at {
             if self.now() >= t {
                 let name = self.agent_name();
+                if let Err(e) = zebra_api::discovery::record_ai_switch(false) {
+                    eprintln!("zebra: couldn't keep the AI control switch: {e}");
+                }
                 self.ai_saved = false;
                 self.set_ai_control(false);
                 self.toast(crate::t!("app-toast-agent-switched-ai-off", name = name.as_str()));
@@ -1285,6 +1430,8 @@ impl ZebraApp {
     /// may be editing a minimised window), and the menu and queued actions
     /// of a window that is out of sight (Quit, Close, Save).
     fn background_work(&mut self, ctx: &egui::Context) {
+        self.poll_save();
+        crate::opening::poll(self);
         crate::files::autosave_tick(self);
         if let Some(wait) = crate::files::autosave_due_in(self) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
@@ -1356,6 +1503,7 @@ impl ZebraApp {
         crate::media_ui::tick(self);
         self.handle_close(&ctx);
         self.sync_present_mode(&ctx);
+        crate::sidebar::check_focus(self);
 
         if self.editor.view.mode == Mode::Present {
             crate::present::ui(self, ui);
@@ -1432,7 +1580,7 @@ impl ZebraApp {
         for (k, v) in self.renderer.cache_stats() {
             caches.insert(k.into(), v);
         }
-        caches.insert("thumbnails".into(), self.thumbs.textures.iter().flatten().count() as u64);
+        caches.insert("thumbnails".into(), self.thumbs.len() as u64);
         caches.insert("presenter_kb".into(), self.stage.slides.texture_bytes() / 1024);
         caches.insert("previews".into(), self.previews.as_ref().map(|p| p.textures.len() as u64).unwrap_or(0));
     }
@@ -1446,6 +1594,11 @@ impl ZebraApp {
         let events = ctx.input(|i| i.events.clone());
         for ev in events {
             let egui::Event::Key { key, pressed: true, modifiers, .. } = ev else { continue };
+            // The path list has the keys: Up/Down/Home/End move through the
+            // steps (Delete and Escape reach it as actions, below).
+            if !text_focus && self.palette.is_none() && self.step_pick.is_none() && crate::sidebar::list_focused(self) && crate::sidebar::key(self, key, modifiers) {
+                continue;
+            }
             // Arrow keys: nudge selection (screen-relative), else pan.
             if !text_focus && self.palette.is_none() {
                 let arrow = match key {
@@ -1564,6 +1717,14 @@ impl ZebraApp {
             }
             return;
         }
+        if ctx.input(|i| i.viewport().close_requested()) && self.editor.saving().is_some() {
+            // Quitting waits for the save in flight.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if !self.after_save.contains(&Action::Quit) {
+                self.after_save.push(Action::Quit);
+            }
+            return;
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !self.force_quit && self.editor.dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             crate::sheets::request(self, crate::sheets::SheetKind::SaveChanges(Action::Quit));
@@ -1617,6 +1778,26 @@ pub fn permission_name(p: zebra_core::view::Permission) -> &'static str {
         Edit => "edit",
         Full => "full",
     }
+}
+
+/// What an agent may do in a run a launch flag started: the person's
+/// saved choice (Edit if they never chose), lowered to `cap` (from
+/// `--agent-permission`) but never raised by it.
+pub fn launch_permission(saved: Option<zebra_core::view::Permission>, cap: zebra_core::view::Permission) -> zebra_core::view::Permission {
+    saved.unwrap_or(zebra_core::view::Permission::Edit).min(cap)
+}
+
+/// The eframe app id; its settings file is `app.ron` under
+/// `eframe::storage_dir(APP_ID)`.
+pub const APP_ID: &str = "dev.zebra.Zebra";
+
+/// The person's saved agent permission (the AI button / Settings), read
+/// from the app's settings file, for a run with no window (headless).
+pub fn saved_agent_permission() -> Option<zebra_core::view::Permission> {
+    let f = eframe::storage_dir(APP_ID)?.join("app.ron");
+    let kv: HashMap<String, String> = ron::de::from_str(&std::fs::read_to_string(f).ok()?).ok()?;
+    let v: String = ron::de::from_str(kv.get("agent_permission")?).ok()?;
+    Some(parse_permission(&v))
 }
 
 pub fn parse_permission(s: &str) -> zebra_core::view::Permission {
@@ -1685,3 +1866,39 @@ pub fn same_file(p: &std::path::Path) -> PathBuf {
 const IMAGE_IDLE: f64 = 300.0;
 /// How often that is checked.
 const IMAGE_TRIM_EVERY: f64 = 60.0;
+
+/// What waited for a save, in order, minus saves asked for after the
+/// document is replaced or closed: they were meant for the document that
+/// was just written, not the new empty one (which would put up a Save
+/// dialog nobody asked for).
+pub fn still_for_this_document(waiting: Vec<Action>) -> Vec<Action> {
+    use Action::*;
+    let mut replaced = false;
+    let mut out = Vec::with_capacity(waiting.len());
+    for a in waiting {
+        if replaced && matches!(a, Save | SaveAs) {
+            continue;
+        }
+        if matches!(a, New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | Close) {
+            replaced = true;
+        }
+        out.push(a);
+    }
+    out
+}
+
+#[cfg(test)]
+mod launch_permission_tests {
+    use super::launch_permission;
+    use zebra_core::view::Permission::*;
+
+    #[test]
+    fn a_launch_flag_only_lowers_the_persons_choice() {
+        assert_eq!(launch_permission(None, Full), Edit, "never chose: edit, even with --agent-permission full");
+        assert_eq!(launch_permission(Some(Edit), Full), Edit);
+        assert_eq!(launch_permission(Some(Observe), Full), Observe);
+        assert_eq!(launch_permission(Some(Full), Full), Full, "headless keeps full only when the person chose it");
+        assert_eq!(launch_permission(Some(Full), Observe), Observe);
+        assert_eq!(launch_permission(Some(Full), Edit), Edit);
+    }
+}

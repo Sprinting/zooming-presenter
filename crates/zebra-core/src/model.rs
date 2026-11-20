@@ -88,7 +88,8 @@ fn d_volume() -> f64 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Asset {
     /// Lower-case extension: png, jpg, webp, gif (images), mp4, mov, m4v
-    /// (video), mp3, m4a, aac, wav (audio).
+    /// (video), mp3, m4a, aac, wav (audio), pdf (an imported PDF, drawn
+    /// through the pictures that show its pages).
     pub ext: String,
     /// The encoded file (PNG, JPEG...). Assets from a saved `.zebra` are
     /// memory-mapped from it, not copied into RAM.
@@ -110,6 +111,8 @@ pub enum MediaKind {
     Image,
     Video,
     Audio,
+    /// A PDF that imported pages are drawn from.
+    Document,
 }
 
 impl MediaKind {
@@ -117,6 +120,7 @@ impl MediaKind {
         match ext {
             "mp4" | "mov" | "m4v" => MediaKind::Video,
             "mp3" | "m4a" | "aac" | "wav" => MediaKind::Audio,
+            "pdf" => MediaKind::Document,
             _ => MediaKind::Image,
         }
     }
@@ -637,6 +641,21 @@ pub struct ImageData {
     /// library.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<SymbolLook>,
+    /// Set when the picture is a page of an imported PDF. `asset` is then
+    /// a picture of the page made at import (thumbnails, the web player
+    /// and exports draw that); the app draws the page itself from the PDF,
+    /// so it stays sharp at any zoom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<PageRef>,
+}
+
+/// A page of a PDF kept in the document as an asset.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PageRef {
+    /// Asset key of the PDF (extension "pdf").
+    pub pdf: String,
+    /// 0-based page number.
+    pub index: u32,
 }
 
 /// Where a symbol came from and how it is drawn.
@@ -860,6 +879,23 @@ impl Element {
     pub fn is_frame(&self) -> bool {
         matches!(self.kind, ElementKind::Frame(_))
     }
+    /// A page of an imported PDF (a picture with a page reference).
+    pub fn is_page(&self) -> bool {
+        matches!(&self.kind, ElementKind::Image(i) if i.page.is_some())
+    }
+    /// The margin (a fraction of the screen) left around this element when
+    /// the camera fits it, as a path step or by zooming to it. An imported
+    /// page fills the screen like a slide; frames and pictures nearly fill
+    /// it; other things get room around them.
+    pub fn fit_margin(&self) -> f64 {
+        if self.is_page() {
+            0.0
+        } else if matches!(self.kind, ElementKind::Frame(_) | ElementKind::Image(_)) {
+            0.04
+        } else {
+            0.12
+        }
+    }
     /// Short human label: name, else first text line, else type.
     pub fn label(&self, doc: &Document) -> String {
         self.own_label(doc).unwrap_or_else(|| self.kind.type_name().into())
@@ -869,12 +905,18 @@ impl Element {
     /// text), or `None` when only its type would describe it. The app
     /// shows a translated type name in that case.
     pub fn own_label(&self, doc: &Document) -> Option<String> {
+        self.own_label_in(doc, || doc.frame_contents(&self.id))
+    }
+
+    /// [`Element::own_label`], taking a frame's contents from `contents`
+    /// (called only when needed), e.g. from the editor's spatial index.
+    pub fn own_label_in(&self, doc: &Document, contents: impl FnOnce() -> Vec<ElementId>) -> Option<String> {
         if !self.name.is_empty() {
             return Some(self.name.clone());
         }
         match &self.kind {
             ElementKind::Text(t) => Some(truncate(t.text.lines().next().unwrap_or(""), 40)),
-            ElementKind::Frame(_) => doc.frame_contents(&self.id).iter().filter_map(|id| doc.elements.get(id)).find_map(|e| match &e.kind {
+            ElementKind::Frame(_) => contents().iter().filter_map(|id| doc.elements.get(id)).find_map(|e| match &e.kind {
                 ElementKind::Text(t) => Some(truncate(t.text.lines().next().unwrap_or(""), 40)),
                 _ => None,
             }),
@@ -953,25 +995,24 @@ impl Document {
     pub fn bounds(&self) -> Option<Rect> {
         self.ordered().map(|e| e.bounds()).reduce(|a, b| a.union(&b))
     }
-    /// Classic Prezi semantics: a frame "contains" every element whose bounds lie
-    /// inside the frame's bounds and that is smaller than the frame. Computed
-    /// geometrically, so dragging something into a frame makes it a child.
+    /// Everything a frame carries when the person drags it: every element
+    /// it holds ([`frame_holds`]), nested frames and their contents
+    /// included, back to front.
     pub fn frame_contents(&self, frame_id: &str) -> Vec<ElementId> {
         let Some(f) = self.elements.get(frame_id) else { return vec![] };
         let fb = f.visual_bounds();
-        let fa = fb.area();
-        self.ordered()
-            .filter(|e| e.id != f.id && e.bounds().area() < fa && fb.contains_rect(&e.bounds()))
-            .map(|e| e.id.clone())
-            .collect()
+        self.ordered().filter(|e| e.id != f.id && frame_holds(&fb, &e.bounds())).map(|e| e.id.clone()).collect()
     }
-    /// Smallest frame that contains this element.
+    /// The frame an element belongs to: the smallest frame that holds it
+    /// ([`frame_holds`]), then the lowest in the draw order. Dragging that
+    /// frame (or any other that holds it) moves the element. Brute force;
+    /// [`crate::Editor::parent_frame`] answers the same from its index.
     pub fn parent_frame(&self, id: &str) -> Option<ElementId> {
         let e = self.elements.get(id)?;
         let b = e.bounds();
         self.ordered()
             .filter(|f| f.is_frame() && f.id != id)
-            .filter(|f| f.visual_bounds().contains_rect(&b) && f.visual_bounds().area() > b.area())
+            .filter(|f| frame_holds(&f.visual_bounds(), &b))
             .min_by(|a, b| a.visual_bounds().area().total_cmp(&b.visual_bounds().area()))
             .map(|f| f.id.clone())
     }
@@ -997,8 +1038,10 @@ impl Document {
         if groups.is_empty() {
             return out;
         }
+        // A set: `out.contains` for every element was O(N x k).
+        let mut seen: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
         for z in &self.z_order {
-            if !out.contains(z) && self.elements[z].group.as_deref().is_some_and(|g| groups.contains(g)) {
+            if self.elements[z].group.as_deref().is_some_and(|g| groups.contains(g)) && seen.insert(z.as_str()) {
                 out.push(z.clone());
             }
         }
@@ -1022,6 +1065,9 @@ impl Document {
             match &e.kind {
                 ElementKind::Image(i) => {
                     out.insert(i.asset.as_str());
+                    if let Some(p) = &i.page {
+                        out.insert(p.pdf.as_str());
+                    }
                 }
                 ElementKind::Video(v) => {
                     out.insert(v.asset.as_str());
@@ -1056,4 +1102,23 @@ impl Document {
             .map(|(i, _)| i)
             .collect()
     }
+}
+
+
+/// How far (as a fraction of the frame's width plus height) an element may
+/// poke past a frame's edge and still be held by it: rounding when an
+/// element is snapped to the edge of a rotated or scaled frame.
+pub const FRAME_EDGE_TOLERANCE: f64 = 1e-9;
+
+/// THE frame-ownership rule, the one every part of Zebra uses (moving a
+/// frame, describe, the elements query, lint, builds, the spatial index):
+/// a frame with visual bounds `frame` (see [`Element::visual_bounds`])
+/// holds an element with bounds `b` when `b` lies inside `frame` (an
+/// element exactly on the edge is inside) and is smaller in area. Both are
+/// axis-aligned bounding boxes, so a rotated frame holds what lies in the
+/// box around it. An element that straddles a frame's edge is not held by
+/// it and doesn't move with it.
+pub fn frame_holds(frame: &Rect, b: &Rect) -> bool {
+    let eps = FRAME_EDGE_TOLERANCE * (frame.width() + frame.height());
+    b.area() < frame.area() && b.x0 >= frame.x0 - eps && b.x1 <= frame.x1 + eps && b.y0 >= frame.y0 - eps && b.y1 <= frame.y1 + eps
 }

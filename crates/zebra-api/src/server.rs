@@ -285,6 +285,13 @@ fn connection(id: u64, stream: UnixStream, shared: Arc<Shared>, tx: Sender<Inbou
             ));
             continue;
         };
+        // A field beside `params` (say `command`) would otherwise be lost.
+        if let Some(Err(e)) = msg.as_object().map(|o| crate::strict::check_keys("the request", o, &["jsonrpc", "id", "method", "params"])) {
+            if let Some(i) = &rid {
+                reply(protocol::response_err(i, &e.hint(r#"a method's params go inside "params", e.g. {"jsonrpc":"2.0","id":1,"method":"apply","params":{"command":{...}}}"#)));
+            }
+            continue;
+        }
         let mut params = msg.get("params").cloned().unwrap_or(Value::Null);
         // Any call can name the document it is for; the rest of the params
         // are the method's own.

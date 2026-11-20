@@ -15,20 +15,44 @@ fn r(v: f64) -> f64 {
 }
 
 pub fn element_json(ed: &Editor, e: &Element) -> Value {
+    element_json_in(ed, e, ed.parent_frame(&e.id).as_deref(), &ed.doc.steps_using(&e.id))
+}
+
+/// [`element_json`] with the parent frame and path steps worked out by
+/// the caller (once for a whole list, not per element).
+fn element_json_in(ed: &Editor, e: &Element, parent: Option<&str>, steps: &[usize]) -> Value {
     let b = e.bounds();
     let mut v = serde_json::to_value(e).unwrap();
     let o = v.as_object_mut().unwrap();
-    o.insert("label".into(), json!(e.label(&ed.doc)));
+    o.insert("label".into(), json!(ed.label(e)));
     o.insert("bounds".into(), json!([r(b.x0), r(b.y0), r(b.x1), r(b.y1)]));
-    o.insert("parent_frame".into(), json!(ed.doc.parent_frame(&e.id)));
-    o.insert("path_steps".into(), json!(ed.doc.steps_using(&e.id)));
+    o.insert("parent_frame".into(), json!(parent));
+    o.insert("path_steps".into(), json!(steps));
     if e.is_frame() {
-        o.insert("contents".into(), json!(ed.doc.frame_contents(&e.id)));
+        o.insert("contents".into(), json!(ed.frame_contents(&e.id)));
     }
     v
 }
 
-fn one_line(ed: &Editor, e: &Element) -> String {
+/// Every element's path steps ([`Document::steps_using`]) in one pass.
+fn steps_by_element(d: &Document) -> std::collections::HashMap<&str, Vec<usize>> {
+    let mut m: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    for (i, s) in d.path.iter().enumerate() {
+        let target = match &s.target {
+            StepTarget::Element { id } => Some(id.as_str()),
+            _ => None,
+        };
+        for id in target.into_iter().chain(s.builds.iter().map(|b| b.as_str())) {
+            let v = m.entry(id).or_default();
+            if v.last() != Some(&i) {
+                v.push(i);
+            }
+        }
+    }
+    m
+}
+
+fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
     let t = &e.transform;
     let (w, h) = e.world_size();
     let mut s = format!("{} {}", e.id, e.kind.type_name());
@@ -106,7 +130,6 @@ fn one_line(ed: &Editor, e: &Element) -> String {
     if let Some(g) = &e.group {
         let _ = write!(s, " group={g}");
     }
-    let steps = ed.doc.steps_using(&e.id);
     if !steps.is_empty() {
         let st: Vec<String> = steps.iter().map(|i| (i + 1).to_string()).collect();
         let _ = write!(s, " [step {}]", st.join(","));
@@ -139,7 +162,7 @@ pub fn describe(ed: &Editor) -> String {
         out.push_str("Path:\n");
         for (i, s) in d.path.iter().enumerate() {
             let tgt = match &s.target {
-                StepTarget::Element { id } => format!("{id} \"{}\"", d.get(id).map(|e| e.label(d)).unwrap_or_default()),
+                StepTarget::Element { id } => format!("{id} \"{}\"", d.get(id).map(|e| ed.label(e)).unwrap_or_default()),
                 StepTarget::View { view } => format!("view @({},{}) {}x{}", r(view.cx), r(view.cy), r(view.width), r(view.height)),
                 StepTarget::Overview => "overview".into(),
             };
@@ -160,21 +183,25 @@ pub fn describe(ed: &Editor) -> String {
         out.push_str("Canvas is empty.\n");
     } else {
         out.push_str("Canvas (back to front, children indented under their frame):\n");
-        // Build a tree by smallest enclosing frame.
-        let parents: std::collections::HashMap<&str, Option<String>> =
-            d.z_order.iter().map(|id| (id.as_str(), d.parent_frame(id))).collect();
-        fn walk(ed: &Editor, parents: &std::collections::HashMap<&str, Option<String>>, parent: Option<&str>, depth: usize, out: &mut String) {
-            for id in &ed.doc.z_order {
-                if parents.get(id.as_str()).map(|p| p.as_deref()) == Some(parent) {
-                    let e = &ed.doc.elements[id];
-                    let _ = writeln!(out, "{}{}", "  ".repeat(depth + 1), one_line(ed, e));
-                    if e.is_frame() {
-                        walk(ed, parents, Some(id), depth + 1, out);
-                    }
+        // Build a tree by smallest enclosing frame: every parent worked
+        // out once, children listed back to front.
+        let parents = ed.parent_frames();
+        let mut children: std::collections::HashMap<Option<&str>, Vec<&str>> = std::collections::HashMap::new();
+        for id in &d.z_order {
+            children.entry(parents.get(id.as_str()).copied()).or_default().push(id);
+        }
+        let steps = steps_by_element(d);
+        type Tree<'a> = std::collections::HashMap<Option<&'a str>, Vec<&'a str>>;
+        fn walk(ed: &Editor, children: &Tree, steps: &std::collections::HashMap<&str, Vec<usize>>, parent: Option<&str>, depth: usize, out: &mut String) {
+            for &id in children.get(&parent).map(|v| v.as_slice()).unwrap_or_default() {
+                let e = &ed.doc.elements[id];
+                let _ = writeln!(out, "{}{}", "  ".repeat(depth + 1), one_line(ed, e, steps.get(id).map(|v| v.as_slice()).unwrap_or_default()));
+                if e.is_frame() {
+                    walk(ed, children, steps, Some(id), depth + 1, out);
                 }
             }
         }
-        walk(ed, &parents, None, 0, &mut out);
+        walk(ed, &children, &steps, None, 0, &mut out);
     }
     let c = ed.view.camera;
     let _ = writeln!(
@@ -239,10 +266,12 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                     if d.get(f).is_none() {
                         return Err(ZError::not_found(f, d.elements.keys().cloned()));
                     }
-                    Some(d.frame_contents(f))
+                    Some(ed.frame_contents(f).into_iter().collect::<std::collections::HashSet<_>>())
                 }
                 None => None,
             };
+            let parents = ed.parent_frames();
+            let steps = steps_by_element(d);
             let vb = ed.view.camera.visible_bounds(ed.view.viewport);
             let needle = text.map(|t| t.to_lowercase());
             let list: Vec<Value> = d
@@ -261,18 +290,18 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                         hay.contains(n.as_str()) || e.name.to_lowercase().contains(n.as_str())
                     })
                 })
-                .map(|e| element_json(ed, e))
+                .map(|e| element_json_in(ed, e, parents.get(e.id.as_str()).copied(), steps.get(e.id.as_str()).map(|v| v.as_slice()).unwrap_or_default()))
                 .collect();
             json!({ "elements": list })
         }
         Query::HitTest { x, y } => {
             let tol = 4.0 / ed.view.camera.zoom;
-            json!({ "id": d.hit_test(Vec2::new(x, y), tol).map(|e| e.id.clone()) })
+            json!({ "id": ed.hit_test(Vec2::new(x, y), tol).map(|e| e.id.clone()) })
         }
         Query::HitTestScreen { x, y } => {
             let w = ed.view.camera.screen_to_world(Vec2::new(x, y), ed.view.viewport);
             let tol = 4.0 / ed.view.camera.zoom;
-            json!({ "id": d.hit_test(w, tol).map(|e| e.id.clone()), "world": [w.x, w.y] })
+            json!({ "id": ed.hit_test(w, tol).map(|e| e.id.clone()), "world": [w.x, w.y] })
         }
         Query::Path => {
             let steps: Vec<Value> = d
@@ -281,7 +310,7 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                 .enumerate()
                 .map(|(i, s)| {
                     let label = match &s.target {
-                        StepTarget::Element { id } => d.get(id).map(|e| e.label(d)).unwrap_or_default(),
+                        StepTarget::Element { id } => d.get(id).map(|e| ed.label(e)).unwrap_or_default(),
                         StepTarget::View { .. } => "view".into(),
                         StepTarget::Overview => "overview".into(),
                     };
@@ -291,8 +320,27 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                 .collect();
             json!({ "steps": steps, "play": d.play })
         }
-        Query::Themes => json!({ "current": d.theme, "themes": Theme::builtins(), "custom": d.themes }),
-        Query::Templates => json!({ "templates": &*crate::templates::TEMPLATES, "layouts": &*crate::templates::LAYOUTS }),
+        Query::Themes => {
+            // My Themes: `set_theme` takes these ids too (it copies the
+            // theme into the document, pictures and fonts included).
+            let lib = crate::library::get().map(|l| l.themes()).unwrap_or_default();
+            let library: Vec<Value> = lib.iter().filter(|(_, t)| !d.themes.iter().any(|c| c.id == t.id)).map(|(_, t)| json!({ "id": t.id, "name": t.name })).collect();
+            json!({ "current": d.theme, "themes": Theme::builtins(), "custom": d.themes, "library": library })
+        }
+        Query::Templates => {
+            // My Templates (`apply_template` takes `saved:<name>`) and the
+            // sample presentation, where the host has them.
+            let lib = crate::library::get();
+            let saved: Vec<Value> = lib
+                .as_ref()
+                .map(|l| l.templates())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|n| json!({ "id": format!("{}{n}", crate::library::SAVED_PREFIX), "name": n }))
+                .collect();
+            let sample = lib.is_some_and(|l| l.sample().is_some());
+            json!({ "templates": &*crate::templates::TEMPLATES, "layouts": &*crate::templates::LAYOUTS, "saved": saved, "sample": sample })
+        }
         Query::Fonts => json!({ "families": ed.measure.font_families(), "bundled": ["Sans", "Serif", "Mono", "Hand"] }),
         Query::Perf => {
             let mut v = ed.perf.report(ed.view.now);
@@ -319,7 +367,10 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
             })
         }
         Query::Symbols { query, set, limit } => match crate::symbols::library() {
-            None => json!({ "installed": false, "sets": [] }),
+            None => match crate::symbols::library_error() {
+                Some(e) => json!({ "installed": false, "error": e, "sets": [] }),
+                None => json!({ "installed": false, "sets": [] }),
+            },
             Some(lib) => {
                 if query.trim().is_empty() && set.is_none() {
                     json!({ "installed": true, "total": lib.total(), "sets": lib.sets().map(|s| json!({
@@ -393,14 +444,26 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
     let placed = |e: &Element| !e.is_frame() && !matches!(e.kind, ElementKind::Connector(_));
     for e in d.ordered().filter(|e| placed(e)) {
         let b = ink_bounds(ed, &theme, e);
-        // The frame it mostly sits in: the most overlap, then the smallest.
-        let home = frames
+        // Which frame it belongs to is the one rule (`frame_holds`, what
+        // moves with a dragged frame); what it looks like is its ink.
+        let owner = ed.parent_frame(&e.id).and_then(|id| d.get(&id));
+        // The frame it mostly sits in, of those it doesn't move with: the
+        // most overlap, then the smallest.
+        let stray = frames
             .iter()
-            .filter(|f| f.visual_bounds().area() > b.area())
+            .filter(|f| f.visual_bounds().area() > b.area() && !frame_holds(&f.visual_bounds(), &e.bounds()))
             .map(|f| (*f, overlap(&f.visual_bounds(), &b)))
             .filter(|(_, a)| *a > 0.0)
             .max_by(|x, y| x.1.total_cmp(&y.1).then(y.0.visual_bounds().area().total_cmp(&x.0.visual_bounds().area())));
-        if let Some((f, _)) = home {
+        let home = match (owner, stray) {
+            // Its own frame, when the ink spills past it.
+            (Some(f), _) if !f.visual_bounds().contains_rect(&b) => Some((f, true)),
+            // Inside its frame but mostly in a smaller one it straddles.
+            (Some(_), Some((f, a))) if a >= 0.5 * b.area() => Some((f, false)),
+            (Some(_), _) => None,
+            (None, s) => s.map(|(f, _)| (f, false)),
+        };
+        if let Some((f, moves)) = home {
             let fb = f.visual_bounds();
             if !fb.contains_rect(&b) {
                 let sides: Vec<String> = [
@@ -413,15 +476,18 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
                 .filter(|(_, px)| *px > 0.5)
                 .map(|(s, px)| format!("{px:.0} on the {s}"))
                 .collect();
-                issues.push(json!({"kind": "outside_frame", "id": e.id, "frame": f.id,
-                    "message": format!("{} {} runs past the edge of frame {} by {}", e.kind.type_name(), e.id, f.id, sides.join(", "))}));
+                let tail = if moves { String::new() } else { format!(", so it doesn't move with {}", f.id) };
+                issues.push(json!({"kind": "outside_frame", "id": e.id, "frame": f.id, "moves_with_frame": moves,
+                    "message": format!("{} {} runs past the edge of frame {} by {}{tail}", e.kind.type_name(), e.id, f.id, sides.join(", "))}));
             }
         }
         // Text too small at the step that shows it.
         let ElementKind::Text(t) = &e.kind else { continue };
         let font_world = theme.text_style(t.style).size * e.transform.scale;
         // The tightest step that shows it: its own frame, a frame it mostly
-        // sits in, or a step that reveals it as a build.
+        // sits in, or a step that reveals it as a build. This is what the
+        // audience sees, not ownership: text spilling past a frame's edge
+        // still shows at that frame's step.
         let best = d
             .path
             .iter()
@@ -505,7 +571,7 @@ pub fn lint(ed: &Editor) -> Vec<Value> {
     // Steps pointing at empty frames.
     for (i, s) in d.path.iter().enumerate() {
         if let StepTarget::Element { id } = &s.target {
-            if d.get(id).is_some_and(|e| e.is_frame()) && d.frame_contents(id).is_empty() {
+            if d.get(id).is_some_and(|e| e.is_frame()) && ed.frame_contents(id).is_empty() {
                 issues.push(json!({"kind": "empty_step", "step": i, "id": id, "message": format!("step {} shows an empty frame", i + 1)}));
             }
         }

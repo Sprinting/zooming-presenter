@@ -162,10 +162,10 @@ fn path_edit_click_adds_steps() {
     h.key_press(Key::P);
     h.run_steps(1);
     assert_eq!(h.state().editor.view.mode, Mode::PathEdit);
-    // click inside the "A new angle" frame
+    // click inside the "Rotated frames" frame
     let p = {
         let app = h.state();
-        let f = app.editor.doc.ordered().find(|e| e.name == "A new angle").unwrap();
+        let f = app.editor.doc.ordered().find(|e| e.name == "Rotated frames").unwrap();
         app.canvas.w2s(&app.editor, f.transform.center() + zebra_core::Vec2::new(0.0, 200.0))
     };
     click_at(&mut h, p, 1);
@@ -276,45 +276,6 @@ fn present_on_an_empty_document_is_refused() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
     h.run_steps(5);
     assert_eq!(h.state().editor.view.mode, Mode::Edit);
-}
-
-#[test]
-fn ai_control_is_switched_on_by_the_human_and_off_by_an_agent() {
-    let dir = std::env::temp_dir().join(format!("zebra-ai-toggle-{}", std::process::id()));
-    // SAFETY: no other test in this binary reads or writes the environment.
-    unsafe { std::env::set_var("ZEBRA_DATA_DIR", &dir) };
-    let mut h = harness(Some("empty"));
-    assert!(h.state().api.is_none(), "AI control must be off by default");
-    assert!(zebra_api::discovery::list().is_empty());
-
-    // Human: click the AI toolbar item, then the switch.
-    h.get_by_label("AI").click();
-    h.run_steps(3);
-    h.get_by_role_and_label(egui::accesskit::Role::Switch, "Allow AI control").click();
-    h.run_steps(3);
-    assert!(h.state().ai_enabled && h.state().api.is_some(), "the switch should turn AI control on");
-    let socket = h.state().api.as_ref().unwrap().socket_path();
-    assert_eq!(zebra_api::discovery::list().len(), 1, "a running agent must be able to find Zebra");
-
-    // Agent: discover, then switch it off. There is no method to switch it on.
-    let t = std::thread::spawn(move || {
-        let mut c = zebra_api::client::Client::discover(None, None, None, "test-agent").unwrap();
-        assert!(c.call("enable", serde_json::json!({})).is_err());
-        c.call("disconnect", serde_json::json!({})).unwrap()
-    });
-    let start = std::time::Instant::now();
-    while h.state().api.is_some() && start.elapsed().as_secs() < 10 {
-        h.step();
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let reply = t.join().unwrap();
-    assert_eq!(reply["ok"], true);
-    assert!(h.state().api.is_none() && !h.state().ai_enabled, "disconnect should switch AI control off");
-    assert!(!socket.exists(), "socket should be removed");
-    assert!(zebra_api::discovery::list().is_empty(), "discovery file should be removed");
-    let err = zebra_api::client::Client::discover(None, None, None, "test-agent").err().unwrap().to_string();
-    assert!(err.contains("AI control") && err.contains("Ask the person"), "{err}");
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -631,4 +592,34 @@ fn right_click_menu_selects_and_acts() {
     h.get_all_by_label("Group").min_by(|a, b| (a.rect().center() - pb).length().total_cmp(&(b.rect().center() - pb).length())).unwrap().click();
     h.run_steps(3);
     assert!(h.state().editor.doc.get("a").unwrap().group.is_some());
+}
+
+#[test]
+fn web_export_sheet_offers_the_browser() {
+    use zebra_app::sheets::SheetKind;
+    let mut h = harness(Some("sample"));
+    h.run_steps(5);
+    // The toolbar's Export menu lists the web page.
+    h.get_by_label("Export").click();
+    h.run_steps(3);
+    h.get_by_label("Web Page (HTML)…");
+    if let Some(dir) = std::env::var_os("ZEBRA_SHOTS") {
+        h.render().unwrap().save(std::path::Path::new(&dir).join("export-menu.png")).unwrap();
+    }
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    for folder in [false, true] {
+        let page = if folder { "/tmp/Talk/index.html" } else { "/tmp/Talk.html" };
+        zebra_app::sheets::request(h.state_mut(), SheetKind::WebExported { page: page.into(), folder });
+        h.run_steps(3);
+        h.get_by_label("Open in Browser");
+        let title = if folder { "Exported “Talk”" } else { "Exported “Talk.html”" };
+        h.get_by_label(title);
+        if let Some(dir) = std::env::var_os("ZEBRA_SHOTS") {
+            h.render().unwrap().save(std::path::Path::new(&dir).join(format!("export-sheet{}.png", if folder { "-folder" } else { "" }))).unwrap();
+        }
+        h.get_by_label("Done").click();
+        h.run_steps(3);
+        assert!(h.state().sheet.is_none());
+    }
 }

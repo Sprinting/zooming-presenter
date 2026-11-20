@@ -18,6 +18,10 @@ zebra-core.workspace = true
 zebra-render.workspace = true
 kurbo.workspace = true
 zebra-api.workspace = true
+# File > Export > Web Page: the exporter and its embedded web player.
+zebra-web = { path = "../zebra-web" }
+# File > Import (PDF pages as frames).
+zebra-import = { path = "../zebra-import" }
 zebra-media.workspace = true
 arboard = { version = "3.7", default-features = false, features = ["image-data"] }
 eframe.workspace = true
@@ -35,20 +39,23 @@ serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 libc.workspace = true
+# Reads the person's saved settings outside a window (headless runs).
+ron = "0.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda.workspace = true
 # Window-level AppKit calls only (title, edited dot, proxy icon, accent
 # colour, Reduce Motion, App Nap, screens). Never controls inside the egui UI.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSGeometry", "NSRange", "NSNotification", "NSURL"] }
-objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSApplication", "NSResponder", "NSRunningApplication", "NSSpellChecker"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSGeometry", "NSRange", "NSNotification", "NSURL", "NSUserDefaults"] }
+objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSApplication", "NSResponder", "NSRunningApplication", "NSSpellChecker", "NSWorkspace"] }
 raw-window-handle = "0.6"
 # Only to keep a background launch from activating the app (--background).
 winit = "0.30"
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
+ruzstd.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { workspace = true, features = ["x11", "wayland"] }

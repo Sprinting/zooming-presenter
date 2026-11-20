@@ -30,6 +30,10 @@ pub enum SheetKind {
     AutoPath,
     RevertAgent { name: String },
     RaisePermission,
+    /// A web page was exported: offer to open it in the browser.
+    WebExported { page: std::path::PathBuf, folder: bool },
+    /// File › Import… is done: what came in as pictures or was left out.
+    ImportNotes { title: String, message: String },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -59,6 +63,7 @@ fn spec(app: &ZebraApp, k: &SheetKind) -> Spec {
             warning: false,
         },
         SheetKind::Alert { title, message } => Spec { title: title.clone(), message: message.clone(), buttons: vec![(crate::t!("sheet-ok"), Role::Default)], warning: true },
+        SheetKind::ImportNotes { title, message } => Spec { title: title.clone(), message: message.clone(), buttons: vec![(crate::t!("sheet-ok"), Role::Default)], warning: false },
         SheetKind::ClearPath => {
             let n = app.editor.doc.path.len();
             Spec {
@@ -86,6 +91,17 @@ fn spec(app: &ZebraApp, k: &SheetKind) -> Spec {
             buttons: vec![(crate::t!("sheet-allow-full-control"), Role::Default), (crate::t!("sheet-cancel"), Role::Cancel)],
             warning: true,
         },
+        SheetKind::WebExported { page, folder } => {
+            // A folder export is named by its folder; index.html says nothing.
+            let shown = if *folder { page.parent().unwrap_or(page) } else { page.as_path() };
+            let name = shown.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            Spec {
+                title: crate::t!("sheet-web-exported-title", name = name),
+                message: if *folder { crate::t!("sheet-web-exported-folder-message") } else { crate::t!("sheet-web-exported-message") },
+                buttons: vec![(crate::t!("sheet-open-in-browser"), Role::Default), (crate::t!("sheet-done"), Role::Cancel)],
+                warning: false,
+            }
+        }
     }
 }
 
@@ -99,9 +115,10 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
     match k {
         SheetKind::SaveChanges(action) => {
             if label == crate::t!("sheet-save") {
+                // The save runs aside; the action follows once it's done
+                // (and asks again if the document changed meanwhile).
                 if app.save(false) {
-                    app.force_quit = true;
-                    app.queued.push(action);
+                    app.after_save.push(action);
                 }
             } else if label == crate::t!("sheet-dont-save") {
                 crate::files::discard_autosave(app);
@@ -109,7 +126,7 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
                 app.queued.push(action);
             }
         }
-        SheetKind::Alert { .. } => {}
+        SheetKind::Alert { .. } | SheetKind::ImportNotes { .. } => {}
         SheetKind::ClearPath => {
             if label == crate::t!("sheet-clear-path") && !app.editor.doc.path.is_empty() {
                 app.apply(zebra_core::Command::ClearPath { discard_notes: true });
@@ -128,6 +145,11 @@ pub fn resolve(app: &mut ZebraApp, k: SheetKind, label: &str) {
                 if n == 0 {
                     app.toast(crate::t!("sheet-toast-nothing-to-revert", name = name.as_str()));
                 }
+            }
+        }
+        SheetKind::WebExported { page, .. } => {
+            if label == crate::t!("sheet-open-in-browser") {
+                crate::files::open_in_browser(&page);
             }
         }
         SheetKind::RaisePermission => {
@@ -156,6 +178,9 @@ pub struct OpenSheet {
 pub fn run_native(app: &mut ZebraApp, frame: Option<&eframe::Frame>) -> bool {
     if !app.native_dialogs {
         return false;
+    }
+    if run_picker(app, frame) {
+        return true;
     }
     if app.open_sheet.is_none() {
         let Some(k) = app.sheet.take() else { return false };
@@ -293,4 +318,55 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
         app.sheet = None;
         resolve(app, k, &label);
     }
+}
+
+/// An open or save panel, up as a sheet on its window (see `pickers`).
+#[cfg(target_os = "macos")]
+pub struct OpenPicker {
+    pick: crate::pickers::Pick,
+    answer: std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>>>>,
+}
+
+/// Put up the panel a pick asked for, and finish the pick with the file
+/// it gives. Like the alerts above, it is a sheet with no modal loop,
+/// polled when AppKit wakes us. True while it is open.
+#[cfg(target_os = "macos")]
+fn run_picker(app: &mut ZebraApp, frame: Option<&eframe::Frame>) -> bool {
+    if app.open_picker.is_none() {
+        if app.want_pick.is_none() {
+            return false;
+        }
+        // Like a native app, let the menu that asked close first: macOS
+        // takes ~0.3 s (more on the first open) to put the panel up, and
+        // starting it in the click's frame left our menu frozen on screen
+        // for that long. Wait until a frame without it has been drawn.
+        if app.ctx.cumulative_pass_nr() < app.want_pick_pass + 2 {
+            app.ctx.request_repaint();
+            return false;
+        }
+        let Some(pick) = app.want_pick.take() else { return false };
+        let panel = pick.panel(app);
+        let dialog = rfd::AsyncFileDialog::new().add_filter(panel.filter, panel.types);
+        let dialog = match (frame, app.mac_sync.window.clone()) {
+            (Some(f), _) => dialog.set_parent(f),
+            (None, Some(w)) => dialog.set_parent(&crate::mac::NsParent(w)),
+            (None, None) => dialog,
+        };
+        let answer: std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>>>> = match panel.save_as {
+            Some(name) => Box::pin(dialog.set_file_name(name).save_file()),
+            None => Box::pin(dialog.pick_file()),
+        };
+        app.open_picker = Some(OpenPicker { pick, answer });
+    }
+    let ctx = app.ctx.clone();
+    let waker = std::task::Waker::from(std::sync::Arc::new(Repaint(ctx)));
+    let mut cx = std::task::Context::from_waker(&waker);
+    let open = app.open_picker.as_mut().expect("picker");
+    let std::task::Poll::Ready(file) = open.answer.as_mut().poll(&mut cx) else { return true };
+    let pick = open.pick.clone();
+    app.open_picker = None;
+    if let Some(f) = file {
+        crate::pickers::finish(app, pick, f.path().to_path_buf());
+    }
+    true
 }

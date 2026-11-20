@@ -14,6 +14,12 @@ dev-overrides = []
 zebra-core.workspace = true
 # CPU-only rendering: headless must not need a GPU.
 zebra-render = { path = "../zebra-render", default-features = false }
+# File > Export > Web Page (the player is built and embedded by its build.rs).
+zebra-web = { path = "../zebra-web" }
+# The `import` method (PDF pages as frames).
+zebra-import = { path = "../zebra-import" }
+# `set_poster` with `at` grabs a video frame; `play` asks whether video plays.
+zebra-media.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
@@ -22,3 +28,11 @@ base64.workspace = true
 dirs.workspace = true
 rand.workspace = true
 libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The AI control switch lives in the login keychain, readable only by
+# Zebra's own code signature (see discovery::AiSwitch).
+security-framework = "3"
+security-framework-sys = "2"
+core-foundation = "0.10"
+sha2 = "0.10"

@@ -108,7 +108,7 @@ fn fit_viewport(base: [f64; 2], w: u32, h: u32) -> ([f64; 2], f64) {
 
 fn fit_element(e: &zebra_core::Element, vp: [f64; 2]) -> Camera {
     let (w, h) = e.world_size();
-    let margin = if e.is_frame() { 0.04 } else { 0.12 };
+    let margin = e.fit_margin();
     Camera::fit(
         &zebra_core::ViewRect { cx: e.transform.x, cy: e.transform.y, width: w, height: h, rotation: e.transform.rotation },
         zebra_core::Vec2::new(vp[0], vp[1]),
@@ -134,6 +134,18 @@ pub(crate) fn camera_for_step(editor: &Editor, i: usize, vp: [f64; 2]) -> Camera
         Some(StepTarget::View { view }) => Camera::fit(view, zebra_core::Vec2::new(vp[0], vp[1]), 0.0),
         _ => fit_all(editor, vp),
     }
+}
+
+/// The camera and logical viewport a capture of path step `index` at
+/// `w`x`h` pixels frames it with (as [`crate::Renderer::capture`] does), or
+/// `None` when there is no such step. Lets a cache of step pictures tell
+/// whether a step is still framed the same way.
+pub fn step_view(editor: &Editor, index: usize, w: u32, h: u32) -> Option<(Camera, [f64; 2])> {
+    if index >= editor.doc.path.len() {
+        return None;
+    }
+    let (vp, _) = fit_viewport([editor.view.viewport.x, editor.view.viewport.y], w, h);
+    Some((camera_for_step(editor, index, vp), vp))
 }
 
 pub(crate) fn capture_view(editor: &Editor, target: &CaptureTarget, w: u32, h: u32) -> Result<CaptureView, ZError> {

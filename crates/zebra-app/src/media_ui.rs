@@ -59,6 +59,8 @@ pub struct Media {
     reported: HashSet<String>,
     /// Background work that ends with a message (exports).
     pub background: Vec<Receiver<String>>,
+    /// Web page exports under way (File > Export > Web Page).
+    pub web_exports: Vec<Receiver<Result<zebra_web::export::Written, String>>>,
 }
 
 struct Insert {
@@ -86,6 +88,7 @@ impl Default for Media {
             crop: None,
             reported: HashSet::new(),
             background: vec![],
+            web_exports: vec![],
         }
     }
 }
@@ -216,6 +219,15 @@ fn start_live(app: &mut ZebraApp, id: &str) {
 /// visible videos, close off-screen ones, run present-mode media, and
 /// schedule repaints only while something plays.
 pub fn tick(app: &mut ZebraApp) {
+    // An agent's `play` / `pause` (full permission), as the inspector's
+    // Play and Pause.
+    for (id, on) in std::mem::take(&mut app.editor.view.media_requests) {
+        if on {
+            play(app, &id);
+        } else {
+            pause(app, &id);
+        }
+    }
     let now = app.editor.view.now;
     let ppp = app.ctx.pixels_per_point() as f64;
     let presenting = app.editor.view.mode == Mode::Present;
@@ -232,6 +244,26 @@ pub fn tick(app: &mut ZebraApp) {
     });
     for m in msgs {
         app.toast(m);
+    }
+    let mut pages = vec![];
+    app.media.web_exports.retain(|rx| match rx.try_recv() {
+        Ok(r) => {
+            pages.push(r);
+            false
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => true,
+        Err(_) => false,
+    });
+    for r in pages {
+        match r {
+            Ok(w) => {
+                for family in &w.apple_ui_families {
+                    app.toast(crate::t!("export-toast-apple-ui-font", family = family.clone()));
+                }
+                crate::sheets::request(app, crate::sheets::SheetKind::WebExported { page: w.page, folder: w.folder })
+            }
+            Err(e) => app.toast(crate::t!("export-toast-failed", error = e)),
+        }
     }
 
     // Finished inserts.
@@ -362,14 +394,14 @@ fn videos_on_step(app: &ZebraApp, step: usize) -> Vec<ElementId> {
     let Some(s) = d.path.get(step) else { return vec![] };
     let ids: Vec<ElementId> = match &s.target {
         StepTarget::Element { id } => {
-            let mut v = d.frame_contents(id);
+            let mut v = app.editor.frame_contents(id);
             v.push(id.clone());
             v
         }
         StepTarget::View { .. } | StepTarget::Overview => {
             let cam = app.editor.camera_for_step(step);
             let b = cam.visible_bounds(app.editor.view.viewport);
-            d.ordered().filter(|e| b.contains_rect(&e.bounds())).map(|e| e.id.clone()).collect()
+            app.editor.elements_in(b).into_iter().filter(|e| b.contains_rect(&e.bounds())).map(|e| e.id.clone()).collect()
         }
     };
     ids.into_iter().filter(|id| matches!(d.get(id).map(|e| &e.kind), Some(ElementKind::Video(_)))).collect()
@@ -471,10 +503,8 @@ fn present_tick(app: &mut ZebraApp, loud_video: bool) {
 // Inserting
 
 pub fn insert_video_dialog(app: &mut ZebraApp) {
-    if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-video"), &["mp4", "mov", "m4v"]).pick_file() {
-        let c = app.canvas_center_world();
-        insert_video_file(app, &p, c);
-    }
+    let c = app.canvas_center_world();
+    crate::pickers::ask(app, crate::pickers::Pick::InsertVideo(c));
 }
 
 /// Insert a video: the poster is made on a worker, then the video is added
@@ -486,9 +516,11 @@ pub fn insert_video_file(app: &mut ZebraApp, p: &std::path::Path, at: Vec2) {
 
 /// Replace a video's clip, keeping its place, size and settings.
 pub fn replace_video_dialog(app: &mut ZebraApp, id: &str) {
-    if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-video"), &["mp4", "mov", "m4v"]).pick_file() {
-        make_poster_then(app, &p, Vec2::new(0.0, 0.0), Some(id.to_string()));
-    }
+    crate::pickers::ask(app, crate::pickers::Pick::ReplaceVideo(id.to_string()));
+}
+
+pub fn replace_video_file(app: &mut ZebraApp, p: &std::path::Path, id: ElementId) {
+    make_poster_then(app, p, Vec2::new(0.0, 0.0), Some(id));
 }
 
 fn make_poster_then(app: &mut ZebraApp, p: &std::path::Path, at: Vec2, replace: Option<ElementId>) {
@@ -539,9 +571,7 @@ fn finish_insert_video(app: &mut ZebraApp, i: Insert) {
 }
 
 pub fn soundtrack_dialog(app: &mut ZebraApp) {
-    if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-audio"), &["mp3", "m4a", "aac", "wav"]).pick_file() {
-        set_soundtrack_file(app, &p);
-    }
+    crate::pickers::ask(app, crate::pickers::Pick::Soundtrack);
 }
 
 pub fn set_soundtrack_file(app: &mut ZebraApp, p: &std::path::Path) {
@@ -555,15 +585,11 @@ pub fn set_soundtrack_file(app: &mut ZebraApp, p: &std::path::Path) {
 }
 
 pub fn voiceover_dialog(app: &mut ZebraApp, step: usize) {
-    if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-audio"), &["mp3", "m4a", "aac", "wav"]).pick_file() {
-        app.apply(Command::SetVoiceover { index: step, data_base64: String::new(), path: Some(p.to_string_lossy().to_string()) });
-    }
+    crate::pickers::ask(app, crate::pickers::Pick::Voiceover(step));
 }
 
 pub fn replace_image_dialog(app: &mut ZebraApp, id: &str) {
-    if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), &["png", "jpg", "jpeg", "webp", "gif"]).pick_file() {
-        app.apply(Command::ReplaceImage { id: id.to_string(), data_base64: String::new(), path: Some(p.to_string_lossy().to_string()) });
-    }
+    crate::pickers::ask(app, crate::pickers::Pick::ReplaceImage(id.to_string()));
 }
 
 /// Insert any dropped or pasted file by what it is: pictures and videos go
@@ -577,6 +603,7 @@ pub fn insert_file(app: &mut ZebraApp, p: &std::path::Path, at: Vec2) {
         MediaKind::Video => insert_video_file(app, p, at),
         MediaKind::Audio => set_soundtrack_file(app, p),
         MediaKind::Image => app.insert_image_file(p, at),
+        MediaKind::Document => crate::import_ui::start(app, p.to_path_buf()),
     }
 }
 
@@ -869,9 +896,9 @@ pub fn crop_interact(app: &mut ZebraApp, ui: &mut Ui, resp: &egui::Response) {
     let painter = ui.painter_at(resp.rect);
     let g = app.editor.doc.get(&id).and_then(|e| crop_geom(app, e)).unwrap_or(g);
     let dash = Stroke::new(1.0, Color32::from_white_alpha(200));
-    for i in 0..4 {
-        painter.extend(egui::Shape::dashed_line(&[g.full[i], g.full[(i + 1) % 4]], dash, 4.0, 3.0));
-    }
+    // Cut to the screen: when zoomed in, the whole picture can be far larger
+    // than the window.
+    crate::overlay::dashed(&painter, &g.full, true, dash, 4.0, 3.0);
     let edge = Stroke::new(1.5, crate::style::ACCENT);
     painter.add(egui::Shape::closed_line(g.window.to_vec(), edge));
     for (h, _) in handle_points(&g.window) {
@@ -999,16 +1026,14 @@ pub fn video_section(app: &mut ZebraApp, ui: &mut Ui, id: &str, v: &zebra_core::
         if let Some(f) = frame {
             if ui.button(crate::t!("media-poster-use-frame")).on_hover_text(crate::t!("media-poster-use-frame-tip")).clicked() {
                 let png = zebra_media::encode_png(&zebra_media::Frame { width: f.width, height: f.height, rgba: f.data.data.data().to_vec() });
-                app.apply(Command::SetPoster { id: id.to_string(), data_base64: base64::engine::general_purpose::STANDARD.encode(png), path: None });
+                app.apply(Command::SetPoster { id: id.to_string(), data_base64: base64::engine::general_purpose::STANDARD.encode(png), path: None, at: None });
             }
         }
         if ui.button(crate::t!("media-poster-choose")).clicked() {
-            if let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-image"), &["png", "jpg", "jpeg", "webp"]).pick_file() {
-                app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: Some(p.to_string_lossy().to_string()) });
-            }
+            crate::pickers::ask(app, crate::pickers::Pick::Poster(id.to_string()));
         }
         if v.poster.is_some() && ui.small_button(crate::t!("media-clear-button")).on_hover_text(crate::t!("media-poster-remove-tip")).clicked() {
-            app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: None });
+            app.apply(Command::SetPoster { id: id.to_string(), data_base64: String::new(), path: None, at: None });
         }
     });
     (patch, dragging)

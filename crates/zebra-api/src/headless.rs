@@ -60,6 +60,11 @@ fn run_loop(
     });
 
     let renderer = Arc::new(zebra_render::Renderer::new());
+    // Imported PDF pages keep only a small picture: captures and exports
+    // draw them from the PDF, as in the app.
+    renderer.set_page_raster(Some(Arc::new(|r: &zebra_render::pages::PageRequest| {
+        zebra_import::pdf::raster(&r.pdf, &r.bytes, r.index, r.page_px, r.rect)
+    })));
     let mut editor = Editor::default();
     editor.measure = renderer.measure();
     if let Some(p) = open {
@@ -88,6 +93,8 @@ fn run_loop(
         }
         *woken = false;
     }
+    // A save still being written finishes before the process ends.
+    editor.wait_save();
     // Give the quit reply a moment to flush before the socket closes.
     std::thread::sleep(Duration::from_millis(50));
     drop(server);

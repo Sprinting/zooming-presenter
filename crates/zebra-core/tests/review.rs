@@ -449,13 +449,13 @@ fn r13_deleting_a_custom_theme_returns_to_its_base() {
     let mut t = Theme::by_id("night").expect("a built-in theme");
     t.base = Some(t.id.clone());
     t.id = "custom-1".into();
-    ed.apply(Command::SaveTheme { theme: t.clone(), apply: true }, H).unwrap();
+    ed.apply(Command::SaveTheme { theme: t.clone(), apply: true, to_library: false }, H).unwrap();
     assert_eq!(ed.doc.theme, "custom-1");
     ed.apply(Command::DeleteTheme { id: "custom-1".into() }, H).unwrap();
     assert_eq!(ed.doc.theme, "night");
     // A base that no longer exists: the default.
     t.base = Some("custom-9".into());
-    ed.apply(Command::SaveTheme { theme: t, apply: true }, H).unwrap();
+    ed.apply(Command::SaveTheme { theme: t, apply: true, to_library: false }, H).unwrap();
     ed.apply(Command::DeleteTheme { id: "custom-1".into() }, H).unwrap();
     assert_eq!(ed.doc.theme, "classic");
 }

@@ -45,7 +45,7 @@ impl Clip {
 
 fn asset_keys(e: &Element) -> Vec<&str> {
     match &e.kind {
-        ElementKind::Image(i) => vec![i.asset.as_str()],
+        ElementKind::Image(i) => std::iter::once(i.asset.as_str()).chain(i.page.as_ref().map(|p| p.pdf.as_str())).collect(),
         ElementKind::Video(v) => std::iter::once(v.asset.as_str()).chain(v.poster.as_deref()).collect(),
         _ => vec![],
     }
@@ -57,6 +57,21 @@ impl Editor {
     /// copied with it and comes loose from one that wasn't; groups stay
     /// grouped.
     pub fn paste_clip(&mut self, clip: &Clip, dx: f64, dy: f64, label: Option<String>, origin: Origin) -> ZResult<Outcome> {
+        self.paste_clip_then(clip, dx, dy, label, origin, |_| vec![])
+    }
+
+    /// [`Editor::paste_clip`], with more commands in the same undo step:
+    /// `then` gets the ids the copies were given (by their id in `clip`)
+    /// and returns commands that run after the copies are in.
+    pub fn paste_clip_then(
+        &mut self,
+        clip: &Clip,
+        dx: f64,
+        dy: f64,
+        label: Option<String>,
+        origin: Origin,
+        then: impl FnOnce(&BTreeMap<&str, ElementId>) -> Vec<Command>,
+    ) -> ZResult<Outcome> {
         if clip.is_empty() {
             return Err(ZError::invalid("nothing to paste"));
         }
@@ -108,6 +123,7 @@ impl Editor {
         for ids in groups.into_values().filter(|v| v.len() > 1) {
             cmds.push(Command::Group { ids, id: None });
         }
+        cmds.extend(then(&new_id));
         // The bytes come first: an image can't point at a picture the
         // document doesn't have. Content-addressed, so a key already here
         // holds the same bytes.

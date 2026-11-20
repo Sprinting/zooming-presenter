@@ -65,6 +65,13 @@ pub enum Gesture {
         id: ElementId,
         to_end: bool,
     },
+    /// Dragging a text box's left or right width handle. `anchor`: the
+    /// world point of the opposite top corner, which stays put.
+    TextWidth {
+        id: ElementId,
+        right: bool,
+        anchor: Vec2,
+    },
 }
 
 /// World positions of a connector's two ends.
@@ -79,8 +86,8 @@ pub fn connector_ends(app: &ZebraApp, id: &str) -> Option<[Vec2; 2]> {
 pub fn attach_target(app: &ZebraApp, w: Vec2, exclude: Option<&str>) -> Option<ElementId> {
     let ed = &app.editor;
     let tol = 5.0 / ed.view.camera.zoom;
-    ed.doc
-        .ordered()
+    ed.elements_at(w, tol)
+        .into_iter()
         .rev()
         .filter(|e| Some(e.id.as_str()) != exclude && !matches!(e.kind, ElementKind::Connector(_)))
         .find(|e| e.hit(w, tol, false))
@@ -133,6 +140,9 @@ pub struct TextEditState {
     /// (Not in the frame of the change itself: there the text is still laid
     /// out at its old width and wraps, so the caret is in the wrong place.)
     pub caret_follow: bool,
+    /// A width handle is being dragged: (right handle, world point of the
+    /// opposite top corner, which stays put).
+    pub width_drag: Option<(bool, Vec2)>,
 }
 
 pub struct CanvasState {
@@ -209,6 +219,8 @@ pub struct SelBox {
     pub screen: [Pos2; 4],
     pub center: Vec2,
     pub rotation: f64,
+    /// A single unlocked text box: it gets width handles.
+    pub text: Option<ElementId>,
 }
 
 pub fn selection_box(app: &ZebraApp, ids: &[ElementId]) -> Option<SelBox> {
@@ -226,7 +238,28 @@ pub fn selection_box(app: &ZebraApp, ids: &[ElementId]) -> Option<SelBox> {
         _ => 0.0,
     };
     let center = (world[0] + world[2]) * 0.5;
-    Some(SelBox { world, screen: world.map(|p| app.canvas.w2s(ed, p)), center, rotation })
+    let text = match ids {
+        [one] => ed.doc.get(one).filter(|e| matches!(e.kind, ElementKind::Text(_)) && !e.locked).map(|e| e.id.clone()),
+        _ => None,
+    };
+    Some(SelBox { world, screen: world.map(|p| app.canvas.w2s(ed, p)), center, rotation, text })
+}
+
+/// Screen points of a text box's width handles: the middles of its left
+/// and right edges.
+fn width_handles(sb: &SelBox) -> [Pos2; 2] {
+    [sb.screen[0].lerp(sb.screen[3], 0.5), sb.screen[1].lerp(sb.screen[2], 0.5)]
+}
+
+/// The resize cursor for dragging along the screen direction `d`.
+fn resize_cursor(d: egui::Vec2) -> CursorIcon {
+    let a = d.y.atan2(d.x).to_degrees().rem_euclid(180.0);
+    match a {
+        a if !(22.5..157.5).contains(&a) => CursorIcon::ResizeHorizontal,
+        a if a < 67.5 => CursorIcon::ResizeNwSe,
+        a if a < 112.5 => CursorIcon::ResizeVertical,
+        _ => CursorIcon::ResizeNeSw,
+    }
 }
 
 fn rot_handle_pos(sb: &SelBox) -> Pos2 {
@@ -239,6 +272,8 @@ fn rot_handle_pos(sb: &SelBox) -> Pos2 {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Handle {
     Corner(usize),
+    /// A text box's width handle (`true`: the right one).
+    Width(bool),
     Rotate,
     Body,
 }
@@ -247,10 +282,13 @@ fn hit_handle(sb: &SelBox, p: Pos2) -> Option<Handle> {
     if rot_handle_pos(sb).distance(p) < 13.0 {
         return Some(Handle::Rotate);
     }
-    for (i, c) in sb.screen.iter().enumerate() {
-        if c.distance(p) < 9.0 {
-            return Some(Handle::Corner(i));
-        }
+    // The nearest handle wins: on a one-line text the width handles sit
+    // close to the corners.
+    let corners = sb.screen.iter().enumerate().map(|(i, c)| (Handle::Corner(i), *c));
+    let widths = sb.text.as_ref().map(|_| width_handles(sb)).into_iter().flat_map(|[l, r]| [(Handle::Width(false), l), (Handle::Width(true), r)]);
+    let near = corners.chain(widths).map(|(h, c)| (h, c.distance(p))).filter(|(_, d)| *d < 9.0).min_by(|a, b| a.1.total_cmp(&b.1));
+    if let Some((h, _)) = near {
+        return Some(h);
     }
     if point_in_quad(p, &sb.screen) {
         return Some(Handle::Body);
@@ -283,9 +321,9 @@ pub fn hit(app: &ZebraApp, p: Pos2, frames_inside: bool) -> Option<ElementId> {
     let tol = 5.0 / ed.view.camera.zoom;
     let hidden = ed.hidden_builds();
     let presenting = ed.view.mode == Mode::Present;
-    let found = ed
-        .doc
-        .ordered()
+    let under = ed.elements_at(w, tol);
+    let found = under
+        .iter()
         .rev()
         .filter(|e| !hidden.contains(&e.id))
         .filter(|e| !(presenting && matches!(&e.kind, ElementKind::Frame(f) if f.style == FrameStyle::Invisible)))
@@ -294,8 +332,8 @@ pub fn hit(app: &ZebraApp, p: Pos2, frames_inside: bool) -> Option<ElementId> {
     if found.is_some() || !frames_inside {
         return found;
     }
-    ed.doc
-        .ordered()
+    under
+        .into_iter()
         .filter(|e| e.is_frame() && e.hit(w, tol, true))
         .filter(|e| !(presenting && matches!(&e.kind, ElementKind::Frame(f) if f.style == FrameStyle::Invisible)))
         .min_by(|a, b| a.bounds().area().total_cmp(&b.bounds().area()))
@@ -543,6 +581,10 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
         app.canvas.refit_until = None;
     }
     let resp = ui.interact(rect, app.uid("zebra-canvas"), Sense::click_and_drag());
+    // A press on the canvas gives it the keys back from the path list.
+    if resp.hovered() && ui.input(|i| i.pointer.any_pressed()) {
+        app.path_focus = false;
+    }
     paint_content(app, ui, rect, false);
     if crate::media_ui::crop_active(app) {
         crate::media_ui::crop_interact(app, ui, &resp);
@@ -573,6 +615,15 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     let handle_under = pointer.and_then(|p| sb.as_ref().and_then(|b| hit_handle(b, p)));
     let badge_under = if path_mode { pointer.and_then(|p| badge_at(app, p)) } else { None };
     app.canvas.step_hover = badge_under;
+    // A step waits for a frame: the frame a click here would give it.
+    let pick_hover = match (&app.canvas.gesture, pointer) {
+        (Gesture::None, Some(p)) if app.step_pick.is_some() && matches!(tool, Tool::Select | Tool::Hand) => pick_target(app, p),
+        _ => None,
+    };
+    if app.step_pick.is_some() {
+        // Only the frame a click would pick shows as hovered (with its chip).
+        app.canvas.hover = pick_hover.clone();
+    }
 
     // Enter edits the selected text.
     if !text_focus && app.canvas.text.is_none() && ctx.input(|i| i.key_pressed(Key::Enter) && i.modifiers.is_none()) {
@@ -614,7 +665,9 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     // ---- clicks
     if resp.clicked() {
         if let Some(p) = resp.interact_pointer_pos() {
-            if app.canvas.text.is_some() {
+            if app.step_pick.is_some() && pick_click(app, p) {
+                // The waiting step took the frame, or the insert ended.
+            } else if app.canvas.text.is_some() {
                 commit_text_edit(app);
             } else if app.canvas.agent_edge.is_some_and(|r| r.contains(p)) && app.editor.agent_cursor.is_some() {
                 let c = app.editor.agent_cursor.unwrap_or_default();
@@ -658,6 +711,8 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
         (Gesture::Pan, _) => CursorIcon::Grabbing,
         (Gesture::Rotate { .. }, _) | (_, Some(Handle::Rotate)) => CursorIcon::Alias,
         (Gesture::Scale { .. }, _) => CursorIcon::ResizeNwSe,
+        (Gesture::TextWidth { .. }, _) => sb.as_ref().map_or(CursorIcon::ResizeHorizontal, |b| resize_cursor(b.screen[1] - b.screen[0])),
+        (_, Some(Handle::Width(_))) => sb.as_ref().map_or(CursorIcon::ResizeHorizontal, |b| resize_cursor(b.screen[1] - b.screen[0])),
         (_, Some(Handle::Corner(i))) => {
             if i % 2 == 0 { CursorIcon::ResizeNwSe } else { CursorIcon::ResizeNeSw }
         }
@@ -672,7 +727,9 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
         (_, Some(Handle::Body)) => CursorIcon::Move,
         _ => CursorIcon::Default,
     };
-    let cursor = if pointer.is_some_and(|p| app.canvas.agent_edge.is_some_and(|r| r.contains(p)) || app.canvas.chip_chevron.is_some_and(|r| r.contains(p))) {
+    let cursor = if pick_hover.is_some()
+        || pointer.is_some_and(|p| app.canvas.agent_edge.is_some_and(|r| r.contains(p)) || app.canvas.chip_chevron.is_some_and(|r| r.contains(p)))
+    {
         CursorIcon::PointingHand
     } else {
         cursor
@@ -684,6 +741,11 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     // ---- overlays
     let painter = ui.painter_at(rect);
     draw_overlays(app, &painter, path_mode, zoom);
+    if let Some(e) = pick_hover.as_ref().and_then(|id| app.editor.doc.get(id)) {
+        let mut q = outline_screen(app, e);
+        q.push(q[0]);
+        painter.add(Shape::line(q, Stroke::new(2.0, style::accent())));
+    }
     rename_overlay(app, ui);
     text_overlay(app, &ctx);
 }
@@ -723,7 +785,8 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
     let ed = &app.editor;
     let tool = ed.view.tool;
     let world = app.canvas.s2w(ed, start);
-    if space || tool == Tool::Hand {
+    // While a step waits for a frame, dragging looks around for one.
+    if space || tool == Tool::Hand || (app.step_pick.is_some() && tool == Tool::Select) {
         app.canvas.gesture = Gesture::Pan;
         return;
     }
@@ -794,6 +857,15 @@ fn start_gesture(app: &mut ZebraApp, start: Pos2, space: bool, shift: bool) {
                     start_dist: (world - anchor).len().max(1e-9),
                     applied: 1.0,
                 };
+                return;
+            }
+            Some(Handle::Width(right)) => {
+                let Some(id) = sb.text.clone() else { return };
+                let Some(e) = app.editor.doc.get(&id) else { return };
+                let anchor = e.corners()[if right { 0 } else { 1 }];
+                if app.editor.begin(crate::t!("canvas-undo-text-width"), H).is_ok() {
+                    app.canvas.gesture = Gesture::TextWidth { id, right, anchor };
+                }
                 return;
             }
             Some(Handle::Body) if hit(app, start, false).is_none_or(|h| sel.contains(&h)) => {
@@ -887,6 +959,9 @@ fn update_gesture(app: &mut ZebraApp, p: Pos2, delta: egui::Vec2, shift: bool, a
                 points.push(world);
             }
         }
+        Gesture::TextWidth { id, right, anchor } => {
+            drag_text_width(app, id, *right, *anchor, world);
+        }
         Gesture::ConnectorEnd { id, to_end } => {
             let spec = zebra_core::command::EndSpec { element: None, x: world.x, y: world.y };
             let patch = if *to_end { ElementPatch { to: Some(spec), ..Default::default() } } else { ElementPatch { from: Some(spec), ..Default::default() } };
@@ -903,7 +978,7 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
     let world = app.canvas.s2w(&app.editor, p);
     let zoom = app.editor.view.camera.zoom;
     match g {
-        Gesture::Move { .. } | Gesture::Scale { .. } | Gesture::Rotate { .. } => {
+        Gesture::Move { .. } | Gesture::Scale { .. } | Gesture::Rotate { .. } | Gesture::TextWidth { .. } => {
             app.editor.commit_as(&crate::app::HUMAN);
         }
         Gesture::Marquee { start, additive } => {
@@ -911,8 +986,8 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
             let r = Rect::from_points([a, world]).unwrap();
             let hidden: Vec<ElementId> = app
                 .editor
-                .doc
-                .ordered()
+                .elements_in(r)
+                .into_iter()
                 .filter(|e| r.contains_rect(&e.bounds()))
                 .map(|e| e.id.clone())
                 .collect();
@@ -955,6 +1030,31 @@ fn end_gesture(app: &mut ZebraApp, p: Pos2, shift: bool) {
     }
 }
 
+/// A text box's width handle dragged to `world`: the box wraps at the new
+/// width (in its own units, so rotation and scale count) and keeps the
+/// opposite top corner `anchor` where it was; its height follows the
+/// words. Call inside a transaction (the drag is one undo step).
+pub fn drag_text_width(app: &mut ZebraApp, id: &str, right: bool, anchor: Vec2, world: Vec2) {
+    let Some(e) = app.editor.doc.get(id) else { return };
+    let ElementKind::Text(t) = &e.kind else { return };
+    let tr = e.transform;
+    let (a, p) = (tr.inverse(anchor), tr.inverse(world));
+    // About one glyph at the narrowest.
+    let min = app.editor.theme().text_style(t.style).size * 0.6;
+    let w = if right { p.x - a.x } else { a.x - p.x }.max(min);
+    if t.fixed_width && (w - e.size.w).abs() < 1e-9 {
+        return;
+    }
+    if app.editor.apply(Command::Resize { id: id.to_string(), width: Some(w * tr.scale), height: None }, H).is_err() {
+        return;
+    }
+    let Some(e) = app.editor.doc.get(id) else { return };
+    let (hw, hh) = (e.size.w / 2.0, e.size.h / 2.0);
+    let corner = Vec2::new(if right { -hw } else { hw }, -hh);
+    let c = anchor - (corner * tr.scale).rotate_deg(tr.rotation);
+    let _ = app.editor.apply(Command::Update { id: id.to_string(), patch: ElementPatch { x: Some(c.x), y: Some(c.y), ..Default::default() } }, H);
+}
+
 /// Size on screen of a frame placed with a click.
 fn frame_size(style: FrameStyle) -> (f64, f64) {
     match style {
@@ -980,7 +1080,8 @@ pub fn insert_frame(app: &mut ZebraApp) {
     };
     let at = app.editor.doc.free_spot(at, bw, bh);
     let el = NewElement { id: None, x: at.x, y: at.y, scale: s, rotation: cam.rotation, w: Some(w), h: Some(h), name: String::new(), kind: ElementKind::Frame(FrameData { style, color: None }) };
-    if let Some(out) = app.apply(Command::AddElement { element: el }) {
+    // A step waiting for a frame takes this one (one undo step for both).
+    if let Some(out) = crate::sidebar::add_frame_for_pick(app, Command::AddElement { element: el }) {
         app.select(out.created);
         reveal_selection(app);
     }
@@ -1069,16 +1170,56 @@ fn create_shape(app: &mut ZebraApp, tool: Tool, a: Vec2, b: Vec2, shift: bool) {
         center = app.editor.doc.free_spot(center, bw, bh);
     }
     let el = NewElement { id: None, x: center.x, y: center.y, scale: s, rotation, w: Some(w), h: Some(h), name: String::new(), kind };
-    if let Some(out) = app.apply(Command::AddElement { element: el }) {
+    let cmd = Command::AddElement { element: el };
+    // A drawn frame fills a step waiting for one (one undo step for both).
+    let out = if is_frame { crate::sidebar::add_frame_for_pick(app, cmd) } else { app.apply(cmd) };
+    if let Some(out) = out {
         app.select(out.created.clone());
         if is_frame {
-            let n = out.created.first().map(|id| app.editor.doc.frame_contents(id).len()).unwrap_or(0);
+            let n = out.created.first().map(|id| app.editor.frame_contents(id).len()).unwrap_or(0);
             if n > 0 {
                 app.toast(crate::t!("canvas-toast-framed-objects", count = n));
             }
         }
     }
     let _ = app.editor.view(ViewCommand::SetTool { tool: Tool::Select }, H);
+}
+
+/// The frame a click at `p` gives a step waiting for one: the frame
+/// clicked, or the one around the object clicked.
+fn pick_target(app: &ZebraApp, p: Pos2) -> Option<ElementId> {
+    if let Some((r, id)) = &app.canvas.frame_chip {
+        if r.contains(p) {
+            return Some(id.clone());
+        }
+    }
+    let id = hit(app, p, true)?;
+    if app.editor.doc.get(&id)?.is_frame() {
+        return Some(id);
+    }
+    app.editor.parent_frame(&id)
+}
+
+/// A click while a step waits for a frame. True when it was used: a frame
+/// fills the step; anything else (empty canvas) ends the insert. With the
+/// frame tool the click draws a frame, which fills the step as it is made.
+fn pick_click(app: &mut ZebraApp, p: Pos2) -> bool {
+    match app.editor.view.tool {
+        Tool::Frame => false,
+        Tool::Select | Tool::Hand => {
+            match pick_target(app, p) {
+                Some(id) => {
+                    crate::sidebar::fill_pick(app, id);
+                }
+                None => crate::sidebar::cancel_pick(app),
+            }
+            true
+        }
+        _ => {
+            crate::sidebar::cancel_pick(app);
+            false
+        }
+    }
 }
 
 fn click(app: &mut ZebraApp, p: Pos2, shift: bool) {
@@ -1186,6 +1327,7 @@ pub fn begin_new_text(app: &mut ZebraApp, p: Pos2) {
         spell_word: None,
         caret_seen: None,
         caret_follow: false,
+        width_drag: None,
     });
     let _ = app.editor.view(ViewCommand::ClearSelection, H);
 }
@@ -1239,6 +1381,7 @@ pub fn begin_text_on_shape(app: &mut ZebraApp, shape: ElementId) {
         spell_word: None,
         caret_seen: None,
         caret_follow: false,
+        width_drag: None,
     });
     app.select(vec![shape]);
 }
@@ -1285,6 +1428,7 @@ pub fn begin_edit_existing(app: &mut ZebraApp, id: ElementId) {
         spell_word: None,
         caret_seen: None,
         caret_follow: false,
+        width_drag: None,
     });
     app.select(vec![id]);
 }
@@ -1315,6 +1459,10 @@ fn keep_orphan(app: &mut ZebraApp, t: &mut TextEditState) -> bool {
 /// Apply the in-place edit as one command (Add text / Edit text).
 pub fn commit_text_edit(app: &mut ZebraApp) {
     let Some(mut t) = app.canvas.text.take() else { return };
+    // A width drag still open ends with the edit, as its own undo step.
+    if t.width_drag.take().is_some() && t.id.is_some() {
+        app.editor.commit_as(&crate::app::HUMAN);
+    }
     if !keep_orphan(app, &mut t) {
         return;
     }
@@ -1451,7 +1599,8 @@ fn rich_job(rich: &TextData, text: &str, theme: &zebra_core::Theme, base: &FontI
         };
         let line = Stroke::new((size * k * 0.06).max(1.0), c);
         let mut fmt = egui::TextFormat {
-            font_id: FontId::new((size * k).max(1.0), style::doc_family(font_name, bold, italic)),
+            // Same cap as the box itself: egui rasterises glyphs at this size.
+            font_id: FontId::new((size * k).clamp(1.0, 600.0), style::doc_family(font_name, bold, italic)),
             color: c,
             ..Default::default()
         };
@@ -1575,11 +1724,34 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
         Color(String),
         List(ListKind),
         Indent(i32),
+        /// Backspace at the start of paragraph `n`, a list item or
+        /// indented: drop its marker, else outdent it one level.
+        Outdent(usize),
         Link,
     }
     let mut fx: Vec<Fx> = vec![];
+    /// What Tab types inside a line: the canvas text has no tab stops.
+    const TAB_SPACES: &str = "    ";
+    // The caret, with nothing selected, at the very start of a list item
+    // or an indented paragraph: that paragraph's number.
+    let caret = egui::TextEdit::load_state(ctx, edit_id).and_then(|s| s.cursor.char_range()).filter(|c| c.primary.index == c.secondary.index).map(|c| usize::from(c.primary.index));
+    let outdent_at = caret
+        .filter(|&c| c == 0 || t.buf.chars().nth(c - 1) == Some('\n'))
+        .map(|c| rich::paragraph_of(&t.rich, c))
+        .filter(|&n| matches!(rich::para(&t.rich, n), (l, i, _) if l != ListKind::None || i > 0));
+    // Tab with the caret inside a line of a plain paragraph types spaces
+    // (Kartik, 20 Nov); at a paragraph's start, in a list or over a
+    // selection it indents.
+    let mid_line = caret.is_some_and(|c| c > 0 && t.buf.chars().nth(c - 1) != Some('\n') && rich::para(&t.rich, rich::paragraph_of(&t.rich, c)).0 == ListKind::None);
     if focused {
         ctx.input_mut(|i| {
+            // Backspace there outdents, as in TextEdit and Pages, instead of
+            // joining the paragraph to the one before.
+            if let Some(n) = outdent_at {
+                if i.consume_key(egui::Modifiers::NONE, Key::Backspace) {
+                    fx.push(Fx::Outdent(n));
+                }
+            }
             if i.consume_key(egui::Modifiers::COMMAND, Key::B) {
                 fx.push(Fx::Bold);
             }
@@ -1595,7 +1767,13 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
             if i.consume_key(egui::Modifiers::SHIFT, Key::Tab) {
                 fx.push(Fx::Indent(-1));
             } else if i.consume_key(egui::Modifiers::NONE, Key::Tab) {
-                fx.push(Fx::Indent(1));
+                if mid_line {
+                    // Typed like any other text, so the editor's own undo
+                    // and span bookkeeping see it.
+                    i.events.push(egui::Event::Text(TAB_SPACES.into()));
+                } else {
+                    fx.push(Fx::Indent(1));
+                }
             }
         });
     }
@@ -1754,11 +1932,34 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
             }
         }
         let r = resp.rect.expand(4.0);
-        ui.painter().add(Shape::dashed_line(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], Stroke::new(1.0, style::accent()), 4.0, 3.0));
+        crate::overlay::dashed(ui.painter(), &[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], true, Stroke::new(1.0, style::accent()), 4.0, 3.0);
+        // Width handles on the box's sides: drag to set where it wraps.
+        let mut width_hit = None;
+        let mut on_handle = false;
+        for (right, c) in [(false, r.left_center()), (true, r.right_center())] {
+            let h = ui.interact(ERect::from_center_size(c, egui::vec2(14.0, 18.0)), edit_id.with(("width-handle", right)), Sense::drag());
+            draw_width_handle(ui.painter(), c, egui::Vec2::X, style::accent());
+            if h.hovered() || h.dragged() {
+                ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+            }
+            on_handle |= h.hovered() || h.dragged() || h.drag_stopped();
+            if h.dragged() || h.drag_stopped() {
+                width_hit = Some((right, h.drag_started(), h.drag_stopped(), h.interact_pointer_pos()));
+            }
+        }
         let caret = out.cursor_range.map(|c| out.galley.pos_from_cursor(c.primary).translate(out.galley_pos.to_vec2()));
-        (resp, caret)
+        (resp, caret, width_hit, on_handle)
     });
-    let (resp, caret) = r.inner;
+    let (resp, caret, width_hit, on_handle) = r.inner;
+    if let Some((right, started, stopped, at)) = width_hit {
+        text_width_handle(app, &mut t, resp.rect, right, started, at, ts.size * 0.6);
+        if stopped && t.width_drag.take().is_some() && t.id.is_some() {
+            app.editor.commit_as(&crate::app::HUMAN);
+            if matches!(app.canvas.gesture, Gesture::TextWidth { .. }) {
+                app.canvas.gesture = Gesture::None;
+            }
+        }
+    }
     t.size_px = resp.rect.size();
     if let Some(cr) = egui::TextEdit::load_state(ctx, edit_id).and_then(|s| s.cursor.char_range()) {
         let (a, b) = (cr.primary.index, cr.secondary.index);
@@ -1942,6 +2143,14 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
                 rich::format_paragraphs(&mut t.rich, pa, pb, None, None, d, None);
                 None
             }
+            Fx::Outdent(n) => {
+                if rich::para(&t.rich, n).0 != ListKind::None {
+                    rich::format_paragraphs(&mut t.rich, n, n, Some(ListKind::None), None, 0, None);
+                } else {
+                    rich::format_paragraphs(&mut t.rich, n, n, None, None, -1, None);
+                }
+                None
+            }
         };
         if let Some(fmt) = fmt {
             rich::apply_format(&mut t.rich, ra, rb, &fmt);
@@ -1951,7 +2160,7 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     app.canvas.text_toolbar = Some(tb.response.rect);
     let over_toolbar = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| tb.response.rect.contains(p));
     let link_open = t.link_draft.is_some();
-    if (refocus && !link_open) || (resp.lost_focus() && (over_toolbar || link_open || spell_open) && !committed) {
+    if (refocus && !link_open) || (resp.lost_focus() && (over_toolbar || on_handle || link_open || spell_open) && !committed) {
         if !link_open {
             resp.request_focus();
         }
@@ -1962,6 +2171,61 @@ fn text_overlay(app: &mut ZebraApp, ctx: &egui::Context) {
     if committed {
         commit_text_edit(app);
         app.canvas.text_toolbar = None;
+    }
+}
+
+/// A width handle of the text being typed was dragged to `at` (screen).
+/// A text already on the canvas changes as a drag on its handles would
+/// (one undo step, in its own transaction); a new one only takes the wrap
+/// width it will be made with. `field`: the text field on screen.
+fn text_width_handle(app: &mut ZebraApp, t: &mut TextEditState, field: ERect, right: bool, started: bool, at: Option<Pos2>, min: f64) {
+    let Some(at) = at else { return };
+    // The handles sit 4 points out from the text: the side follows the
+    // pointer without first jumping out to it.
+    let at = at + egui::vec2(if right { -4.0 } else { 4.0 }, 0.0);
+    let world = app.canvas.s2w(&app.editor, at);
+    if started || t.width_drag.is_none() {
+        let anchor = match t.id.as_ref().and_then(|id| app.editor.doc.get(id)) {
+            Some(e) => {
+                let a = e.corners()[if right { 0 } else { 1 }];
+                if app.editor.begin(crate::t!("canvas-undo-text-width"), H).is_err() {
+                    return;
+                }
+                // The canvas sees a drag under way: nothing else ends the
+                // transaction early.
+                app.canvas.gesture = Gesture::TextWidth { id: t.id.clone().unwrap_or_default(), right, anchor: a };
+                a
+            }
+            None => app.canvas.s2w(&app.editor, if right { field.left_top() } else { field.right_top() }),
+        };
+        t.width_drag = Some((right, anchor));
+    }
+    let Some((right, anchor)) = t.width_drag else { return };
+    match t.id.clone() {
+        Some(id) => {
+            drag_text_width(app, &id, right, anchor, world);
+            if let Some(e) = app.editor.doc.get(&id) {
+                t.wrap = Some(e.size.w);
+                t.anchor = e.corners()[0];
+            }
+        }
+        None => {
+            let px = (t.scale * app.editor.view.camera.zoom) as f32;
+            let a = app.canvas.w2s(&app.editor, anchor);
+            let host = t.host.as_ref().and_then(|h| app.editor.doc.get(h)).map(|h| app.canvas.w2s(&app.editor, h.transform.center()));
+            let w = match host {
+                // Text on a shape stays centred on it: both sides move.
+                Some(c) => 2.0 * (at.x - c.x).abs(),
+                None if right => at.x - a.x,
+                None => a.x - at.x,
+            };
+            let w = (w / px) as f64;
+            let w = w.max(min);
+            t.wrap = Some(w);
+            if host.is_none() && !right {
+                t.anchor = app.canvas.s2w(&app.editor, Pos2::new(a.x - w as f32 * px, a.y));
+            }
+        }
     }
 }
 
@@ -2110,10 +2374,11 @@ fn quad_screen(app: &ZebraApp, corners: [Vec2; 4]) -> Vec<Pos2> {
     corners.iter().map(|c| app.canvas.w2s(&app.editor, *c)).collect()
 }
 
+/// A dashed closed outline in screen points, drawn only near the screen
+/// (see [`crate::overlay`]): outlines of things far away or huge on screen
+/// would otherwise cost one shape per dash.
 fn dashed_quad(painter: &Painter, q: &[Pos2], stroke: Stroke, dash: f32, gap: f32) {
-    let mut pts = q.to_vec();
-    pts.push(q[0]);
-    painter.extend(Shape::dashed_line(&pts, stroke, dash, gap));
+    crate::overlay::dashed(painter, q, true, stroke, dash, gap);
 }
 
 pub fn draw_agent_presence(app: &ZebraApp, painter: &Painter) -> Option<ERect> {
@@ -2365,6 +2630,12 @@ fn draw_transform_tool(app: &ZebraApp, painter: &Painter, sb: &SelBox) {
         let r = ERect::from_center_size(c, egui::vec2(9.0, 9.0));
         painter.rect(r, 2.0, Color32::WHITE, Stroke::new(1.5, col), egui::StrokeKind::Middle);
     }
+    if sb.text.is_some() {
+        let along = (sb.screen[1] - sb.screen[0]).normalized();
+        for c in width_handles(sb) {
+            draw_width_handle(painter, c, along, col);
+        }
+    }
     // While rotating: the angle beside the handle. Hovering the handle: what
     // it does (critique 23).
     let label = match &app.canvas.gesture {
@@ -2387,6 +2658,22 @@ fn draw_transform_tool(app: &ZebraApp, painter: &Painter, sb: &SelBox) {
         let r = ERect::from_min_size(pos, galley.size() + pad * 2.0);
         painter.rect_filled(r, 5.0, Color32::from_black_alpha(190));
         painter.galley(r.min + pad, galley, Color32::WHITE);
+    }
+}
+
+/// A text box's width handle: the corner handles' square, upright along
+/// the box, with a double-headed arrow across it (Prezi's width handle).
+fn draw_width_handle(painter: &Painter, c: Pos2, along: egui::Vec2, col: Color32) {
+    let across = along.rot90();
+    let (hw, hh) = (4.5, 7.0);
+    let q = vec![c - along * hw - across * hh, c + along * hw - across * hh, c + along * hw + across * hh, c - along * hw + across * hh];
+    painter.add(Shape::convex_polygon(q, Color32::WHITE, Stroke::new(1.5, col)));
+    let s = Stroke::new(1.0, col);
+    let (a, b) = (c - along * 2.6, c + along * 2.6);
+    painter.line_segment([a, b], s);
+    for (tip, d) in [(a, along), (b, -along)] {
+        painter.line_segment([tip, tip + d * 1.6 + across * 1.6], s);
+        painter.line_segment([tip, tip + d * 1.6 - across * 1.6], s);
     }
 }
 

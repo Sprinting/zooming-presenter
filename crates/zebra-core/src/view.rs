@@ -35,7 +35,8 @@ pub enum Tool {
     Highlighter,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// Ordered: Observe < Edit < Full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Permission {
     /// Read state and render images only.
@@ -106,6 +107,11 @@ pub struct ViewState {
     #[serde(skip)]
     #[schemars(skip)]
     pub agent_status: std::collections::BTreeMap<String, AgentStatus>,
+    /// `play` / `pause` view commands for the host's video player: (video
+    /// id, play). The host takes them each frame.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub media_requests: Vec<(crate::model::ElementId, bool)>,
 }
 
 /// An agent's one-line status. Read-only for the person, who can hide it.
@@ -137,6 +143,7 @@ impl Default for ViewState {
             agent_permission: Permission::Edit,
             now: 0.0,
             agent_status: Default::default(),
+            media_requests: vec![],
         }
     }
 }

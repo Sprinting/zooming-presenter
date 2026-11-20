@@ -12,6 +12,23 @@ const FONTS: &[(&str, &str, &str)] = &[
     ("JetBrains Mono", "The JetBrains Mono Project Authors", include_str!("../../../assets/fonts/jetbrains-mono/OFL.txt")),
 ];
 
+/// The licence files shipped beside PDFium (Zebra.app/Contents/Resources/
+/// Licenses/PDFium), by file name. Empty outside the app bundle.
+fn pdfium_licences() -> &'static [(String, String)] {
+    static L: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    L.get_or_init(|| {
+        let Some(dir) = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.parent()?.join("Resources/Licenses/PDFium"))) else { return vec![] };
+        let mut v: Vec<(String, String)> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|f| Some((f.file_name().to_string_lossy().to_string(), std::fs::read_to_string(f.path()).ok()?)))
+            .collect();
+        v.sort();
+        v
+    })
+}
+
 fn entry(ui: &mut egui::Ui, p: &Palette, name: &str, by: &str, licence: &str, url: &str) {
     ui.label(RichText::new(name).font(style::semibold(12.5)).color(p.text));
     ui.label(RichText::new(crate::t!("credits-by", author = by, licence = licence)).size(11.5).color(p.weak));
@@ -45,7 +62,7 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
                         }
                     }
                     None => {
-                        ui.label(RichText::new(crate::t!("symbols-not-installed")).size(11.5).color(p.weak));
+                        ui.label(RichText::new(crate::symbols_ui::not_installed()).size(11.5).color(p.weak));
                     }
                 }
                 ui.add_space(6.0);
@@ -55,6 +72,19 @@ pub fn window(app: &mut ZebraApp, ctx: &egui::Context) {
                 egui::CollapsingHeader::new(crate::t!("credits-licence-text")).id_salt("lucide-licence").show(ui, |ui| {
                     ui.add(egui::Label::new(RichText::new(zebra_core::icons::LICENSE).size(10.5).monospace()).wrap());
                 });
+                ui.add_space(6.0);
+                ui.label(RichText::new(crate::t!("credits-software")).font(style::semibold(13.0)));
+                ui.add_space(4.0);
+                // File › Import (PDF). The licences of the libraries built
+                // into PDFium ship beside it (scripts/bundle-macos.sh).
+                entry(ui, &p, "PDFium", "The PDFium Authors", "BSD 3-Clause", "https://pdfium.googlesource.com/pdfium");
+                entry(ui, &p, "pdfium-binaries", "Benoît Blanchon", "MIT", "https://github.com/bblanchon/pdfium-binaries");
+                entry(ui, &p, "pdfium-render", "Alastair Carey", "MIT / Apache 2.0", "https://github.com/ajrcarey/pdfium-render");
+                for (name, text) in pdfium_licences() {
+                    egui::CollapsingHeader::new(name.as_str()).id_salt(("pdfium-licence", name.as_str())).show(ui, |ui| {
+                        ui.add(egui::Label::new(RichText::new(text).size(10.5).monospace()).wrap());
+                    });
+                }
                 ui.add_space(6.0);
                 ui.label(RichText::new(crate::t!("credits-fonts")).font(style::semibold(13.0)));
                 ui.add_space(4.0);

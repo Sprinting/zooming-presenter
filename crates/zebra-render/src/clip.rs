@@ -6,18 +6,53 @@
 //! buffers overflow (wgpu validation error, then a crash or a stuck canvas).
 //! Here such paths are reduced to the part near the screen before they reach
 //! any backend. Paths that already fit are left untouched.
+//!
+//! The same holds for text and pictures: a text box the camera is inside
+//! sends only the glyphs near the screen, a glyph many screens tall becomes
+//! a clipped outline, and pictures off screen are dropped. Last, a frame's
+//! total geometry is capped ([`MAX_FRAME_COST`]) so no element kind can grow
+//! a backend's buffers without bound.
 
-use kurbo::{BezPath, CubicBez, ParamCurve, PathEl, Point, Rect, Shape, Stroke};
+use std::sync::Arc;
 
-use crate::display::Item;
+use kurbo::{Affine, BezPath, CubicBez, ParamCurve, PathEl, Point, Rect, Shape, Stroke};
 
-/// Clip every oversized Fill/Stroke in `items` for a `w`x`h` px target.
+use crate::display::{affine_scale, Item};
+use crate::text::TextLayout;
+
+/// Most geometry (path elements, dashes and glyphs) one frame may hand a
+/// backend. Past it, further items are left out of that frame: a glitch at
+/// an absurd zoom is better than gigabytes of renderer buffers.
+pub const MAX_FRAME_COST: usize = 3_000_000;
+
+/// Clip every oversized item in `items` for a `w`x`h` px target.
 pub(crate) fn clip_items(items: &mut Vec<Item>, w: f64, h: f64) {
+    clip_paths(items, w, h);
+    clip_text_and_images(items, w, h);
+    cap_items(items, MAX_FRAME_COST);
+}
+
+/// The area kept around a `w`x`h` px target, and the larger area beyond
+/// which items are processed at all.
+fn areas(w: f64, h: f64) -> (Rect, Rect) {
     let m = 0.25 * w.max(h) + 64.0;
     let clip = Rect::new(-m, -m, w + m, h + m);
     let big = clip.width().max(clip.height());
+    (clip, clip.inflate(big * 4.0, big * 4.0))
+}
+
+fn inside(b: &Rect, limit: &Rect) -> bool {
+    b.x0 >= limit.x0 && b.y0 >= limit.y0 && b.x1 <= limit.x1 && b.y1 <= limit.y1
+}
+
+fn finite(b: &Rect) -> bool {
+    b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite()
+}
+
+/// Fill/Stroke/clip paths reaching far outside the target, cut to it.
+fn clip_paths(items: &mut Vec<Item>, w: f64, h: f64) {
     // Only paths reaching well beyond the clip area are processed.
-    let limit = clip.inflate(big * 4.0, big * 4.0);
+    let (clip, limit) = areas(w, h);
     let needs = |p: &BezPath, pad: f64| {
         let b = p.bounding_box();
         !(b.x0 >= limit.x0 - pad && b.y0 >= limit.y0 - pad && b.x1 <= limit.x1 + pad && b.y1 <= limit.y1 + pad)
@@ -52,6 +87,250 @@ pub(crate) fn clip_items(items: &mut Vec<Item>, w: f64, h: f64) {
             // A clip region can be cut to the visible area like a fill.
             Item::PushClip(path) if needs(&path, 0.0) => items.push(Item::PushClip(clip_fill(&path, clip))),
             other => items.push(other),
+        }
+    }
+}
+
+/// A glyph whose em is more than this many target sizes tall is drawn as
+/// a clipped outline instead of a glyph: rasterisers flatten glyph curves
+/// at their full size, so their work grows without bound with the zoom.
+const GIANT_GLYPH: f64 = 4.0;
+
+/// Text whose glyphs reach far outside the target keeps only the glyphs
+/// near it; giant glyphs become clipped outlines. Pictures entirely
+/// outside the target are dropped.
+fn clip_text_and_images(items: &mut Vec<Item>, w: f64, h: f64) {
+    let (clip, limit) = areas(w, h);
+    let big = clip.width().max(clip.height());
+    let needs = |it: &Item| match it {
+        Item::Text { layout, transform, .. } => {
+            let em = layout.runs.iter().map(|r| r.font_size as f64).fold(0.0, f64::max);
+            let b = transform.transform_rect_bbox(Rect::new(0.0, 0.0, layout.width, layout.height).inflate(2.0 * em, 2.0 * em));
+            !finite(&b) || !inside(&b, &limit) || em * affine_scale(transform) > GIANT_GLYPH * big
+        }
+        Item::Image { image, transform } => {
+            let b = transform.transform_rect_bbox(Rect::new(0.0, 0.0, image.width as f64, image.height as f64));
+            !finite(&b) || !hull_touches(&b, &clip)
+        }
+        _ => false,
+    };
+    if !items.iter().any(needs) {
+        return;
+    }
+    let old = std::mem::take(items);
+    for it in old {
+        if !needs(&it) {
+            items.push(it);
+            continue;
+        }
+        match it {
+            Item::Text { layout, transform, color, run_colors } => {
+                let (kept, outlines) = cull_glyphs(&layout, &transform, clip, big);
+                if let Some(kept) = kept {
+                    items.push(Item::Text { layout: kept, transform, color, run_colors: run_colors.clone() });
+                }
+                for (ri, path) in outlines {
+                    let path = clip_fill(&path, clip);
+                    if !path.elements().is_empty() {
+                        items.push(Item::Fill { path, color: run_colors.get(ri).copied().unwrap_or(color) });
+                    }
+                }
+            }
+            // Off screen (or not finite): nothing to draw.
+            Item::Image { .. } => {}
+            other => items.push(other),
+        }
+    }
+}
+
+/// The glyphs of `layout` that can reach `clip` (None when none can), and
+/// the giant ones as device-space outlines with their run index. Runs keep
+/// their order (run colours are indexed by run).
+fn cull_glyphs(layout: &Arc<TextLayout>, transform: &Affine, clip: Rect, big: f64) -> (Option<Arc<TextLayout>>, Vec<(usize, BezPath)>) {
+    let s = affine_scale(transform);
+    let mut out = (**layout).clone();
+    let mut outlines = vec![];
+    let mut any = false;
+    for (ri, run) in out.runs.iter_mut().enumerate() {
+        let em = run.font_size as f64;
+        let giant = em * s > GIANT_GLYPH * big;
+        let font = run.font.clone();
+        let (size, coords, skew) = (run.font_size, run.coords.clone(), run.skew);
+        run.glyphs.retain(|g| {
+            let (x, y) = (g.x as f64, g.y as f64);
+            let r = Rect::new(x - em, y - 1.5 * em, x + (g.advance as f64).max(0.0) + em, y + 0.7 * em);
+            let b = transform.transform_rect_bbox(r);
+            if !finite(&b) || !hull_touches(&b, &clip) {
+                return false;
+            }
+            if giant {
+                if let Some(mut p) = glyph_outline(&font, g.id, size, &coords, skew) {
+                    p.apply_affine(*transform * Affine::translate((x, y)));
+                    outlines.push((ri, p));
+                }
+                return false;
+            }
+            true
+        });
+        any |= !run.glyphs.is_empty();
+    }
+    (any.then(|| Arc::new(out)), outlines)
+}
+
+/// A glyph's outline in layout space (y down, origin on the baseline).
+fn glyph_outline(font: &crate::text::FontData, id: u32, size: f32, coords: &[i16], skew: Option<f32>) -> Option<BezPath> {
+    use skrifa::instance::{LocationRef, Size};
+    use skrifa::outline::{DrawSettings, OutlinePen};
+    use skrifa::raw::types::F2Dot14;
+    use skrifa::MetadataProvider;
+    struct Pen(BezPath, f64);
+    impl Pen {
+        fn p(&self, x: f32, y: f32) -> Point {
+            // Font space is y up; synthetic italics lean the top to the right.
+            Point::new(x as f64 + self.1 * y as f64, -(y as f64))
+        }
+    }
+    impl OutlinePen for Pen {
+        fn move_to(&mut self, x: f32, y: f32) {
+            let p = self.p(x, y);
+            self.0.move_to(p);
+        }
+        fn line_to(&mut self, x: f32, y: f32) {
+            let p = self.p(x, y);
+            self.0.line_to(p);
+        }
+        fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+            let (c, p) = (self.p(cx, cy), self.p(x, y));
+            self.0.quad_to(c, p);
+        }
+        fn curve_to(&mut self, ax: f32, ay: f32, bx: f32, by: f32, x: f32, y: f32) {
+            let (a, b, p) = (self.p(ax, ay), self.p(bx, by), self.p(x, y));
+            self.0.curve_to(a, b, p);
+        }
+        fn close(&mut self) {
+            self.0.close_path();
+        }
+    }
+    let f = skrifa::FontRef::from_index(font.data.as_ref(), font.index).ok()?;
+    let glyph = f.outline_glyphs().get(skrifa::GlyphId::new(id))?;
+    let coords: Vec<F2Dot14> = coords.iter().map(|c| F2Dot14::from_bits(*c)).collect();
+    let lean = skew.map_or(0.0, |a| (a as f64).to_radians().tan());
+    let mut pen = Pen(BezPath::new(), lean);
+    glyph.draw(DrawSettings::unhinted(Size::new(size), LocationRef::new(&coords)), &mut pen).ok()?;
+    Some(pen.0)
+}
+
+/// For UI overlays drawn outside the display list (egui): the runs of a
+/// screen-space polyline inside `clip`, each with its distance from the
+/// line's start (so a dash pattern stays continuous). An outline millions
+/// of pixels long, seen from deep inside, comes back as a few short runs.
+pub fn clip_polyline(pts: &[Point], closed: bool, clip: Rect) -> Vec<(Vec<Point>, f64)> {
+    let mut runs: Vec<(Vec<Point>, f64)> = vec![];
+    if pts.len() < 2 {
+        return runs;
+    }
+    let n = if closed { pts.len() } else { pts.len() - 1 };
+    let mut dist = 0.0;
+    let mut open = false;
+    for i in 0..n {
+        let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+        let len = a.distance(b);
+        if !(a.x.is_finite() && a.y.is_finite() && b.x.is_finite() && b.y.is_finite()) {
+            open = false;
+            continue;
+        }
+        match clip_segment(a, b, clip) {
+            Some((t0, t1)) => {
+                let (p0, p1) = (a.lerp(b, t0), a.lerp(b, t1));
+                if !(open && t0 == 0.0) {
+                    runs.push((vec![p0], dist + t0 * len));
+                }
+                runs.last_mut().unwrap().0.push(p1);
+                open = t1 == 1.0;
+            }
+            None => open = false,
+        }
+        dist += len;
+    }
+    runs
+}
+
+/// Rough work an item hands a backend: path elements, dashes, glyphs.
+fn cost(it: &Item) -> usize {
+    match it {
+        Item::Fill { path, .. } | Item::PushClip(path) => path.elements().len(),
+        Item::Stroke { path, stroke, .. } => {
+            let n = path.elements().len();
+            let period: f64 = stroke.dash_pattern.iter().sum();
+            if period <= 0.0 {
+                return n;
+            }
+            // Upper bound on the dashes: control polygon length / period.
+            let mut len = 0.0;
+            let mut last = Point::ZERO;
+            let mut start = Point::ZERO;
+            let mut step = |p: Point, last: &mut Point| {
+                len += last.distance(p);
+                *last = p;
+            };
+            for el in path.elements() {
+                match *el {
+                    PathEl::MoveTo(p) => {
+                        last = p;
+                        start = p;
+                    }
+                    PathEl::LineTo(p) => step(p, &mut last),
+                    PathEl::QuadTo(a, b) => {
+                        step(a, &mut last);
+                        step(b, &mut last);
+                    }
+                    PathEl::CurveTo(a, b, c) => {
+                        step(a, &mut last);
+                        step(b, &mut last);
+                        step(c, &mut last);
+                    }
+                    PathEl::ClosePath => step(start, &mut last),
+                }
+            }
+            let dashes = len / period;
+            n.saturating_add(if dashes.is_finite() { dashes.min(1e15) as usize } else { usize::MAX / 2 })
+        }
+        Item::Text { layout, .. } => layout.runs.iter().map(|r| r.glyphs.len()).sum(),
+        Item::Image { .. } => 4,
+        _ => 0,
+    }
+}
+
+/// The geometry a display list hands a backend (see [`MAX_FRAME_COST`]).
+pub fn frame_cost(items: &[Item]) -> usize {
+    items.iter().fold(0usize, |t, it| t.saturating_add(cost(it)))
+}
+
+/// Leave out drawing items once the frame's total cost passes `budget`.
+/// Layer pushes and pops stay so layers stay balanced; a clip pushed after
+/// that point clips to nothing.
+fn cap_items(items: &mut Vec<Item>, budget: usize) {
+    let mut total = 0usize;
+    let mut over = false;
+    let old = std::mem::take(items);
+    for it in old {
+        match it {
+            Item::PushOpacity(_) | Item::PopOpacity | Item::PopClip => items.push(it),
+            Item::PushClip(_) if over => items.push(Item::PushClip(BezPath::new())),
+            it => {
+                if over {
+                    continue;
+                }
+                total = total.saturating_add(cost(&it));
+                if total > budget {
+                    over = true;
+                    if matches!(it, Item::PushClip(_)) {
+                        items.push(Item::PushClip(BezPath::new()));
+                    }
+                    continue;
+                }
+                items.push(it);
+            }
         }
     }
 }

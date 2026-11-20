@@ -10,17 +10,73 @@ pub fn short(s: &str, n: usize) -> String {
 }
 
 pub fn export_pdf(app: &mut ZebraApp) {
-    let name = format!("{}.pdf", crate::app::sanitize(&app.editor.doc.title));
-    let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-pdf"), &["pdf"]).set_file_name(name).save_file() else { return };
+    crate::pickers::ask(app, crate::pickers::Pick::ExportPdf);
+}
+
+pub fn export_pdf_to(app: &mut ZebraApp, p: std::path::PathBuf) {
     export_in_background(app, p, |r, ed| r.export_pdf(ed));
 }
 
 pub fn export_png(app: &mut ZebraApp) {
-    let name = format!("{}.png", crate::app::sanitize(&app.editor.doc.title));
-    let Some(p) = rfd::FileDialog::new().add_filter(crate::t!("app-file-filter-png"), &["png"]).set_file_name(name).save_file() else { return };
+    crate::pickers::ask(app, crate::pickers::Pick::ExportPng);
+}
+
+pub fn export_png_to(app: &mut ZebraApp, p: std::path::PathBuf) {
     let vp = app.editor.view.viewport;
     let (w, h) = (((vp.x * 2.0) as u32).max(1), ((vp.y * 2.0) as u32).max(1));
     export_in_background(app, p, move |r, ed| r.capture(ed, &zebra_render::CaptureTarget::Viewport, w, h));
+}
+
+/// The exported page's control bar, in the person's language.
+pub fn web_labels() -> zebra_web::export::Labels {
+    zebra_web::export::Labels {
+        previous: crate::t!("present-hud-previous-step"),
+        next: crate::t!("present-hud-next-step"),
+        full_screen: crate::t!("web-full-screen"),
+        step_of: crate::t!("present-hud-step-of", step = "{step}", count = "{count}"),
+        overview: crate::t!("present-hud-overview", count = "{count}"),
+        play: crate::t!("web-play"),
+        pause: crate::t!("web-pause"),
+        unsupported: crate::t!("web-unsupported"),
+    }
+}
+
+/// File > Export > Web Page: one .html that presents the deck in a
+/// browser (a folder when its video and audio are big). Written on a
+/// worker; a sheet then offers to open it in the default browser.
+pub fn export_html(app: &mut ZebraApp) {
+    crate::pickers::ask(app, crate::pickers::Pick::ExportHtml);
+}
+
+pub fn export_html_to(app: &mut ZebraApp, p: std::path::PathBuf) {
+    let mut snap = zebra_core::Editor::new(app.editor.doc.clone());
+    snap.view = app.editor.view.clone();
+    snap.measure = app.renderer.measure();
+    let renderer = app.renderer.clone();
+    let labels = web_labels();
+    let ctx = app.ctx.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("zebra-export".into()).spawn(move || {
+        let _ = tx.send(zebra_web::export::export(&renderer, &snap, &labels, &p).map_err(|e| e.message));
+        ctx.request_repaint();
+    });
+    match spawned {
+        Ok(_) => {
+            app.media.web_exports.push(rx);
+            app.toast(crate::t!("export-toast-exporting"));
+        }
+        Err(e) => app.toast(crate::t!("export-toast-failed", error = e.to_string())),
+    }
+}
+
+/// Open an exported page in the default web browser (never inside Zebra).
+pub fn open_in_browser(page: &Path) {
+    #[cfg(target_os = "macos")]
+    crate::mac::open_in_browser(page);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(page).spawn();
+    }
 }
 
 /// Render a snapshot of the document on a worker and write it to `path`,
@@ -67,6 +123,13 @@ pub fn autosave_path(file: &Path) -> PathBuf {
 /// tests can point it at a scratch folder (ZEBRA_DATA_DIR).
 pub fn untitled_dir() -> PathBuf {
     zebra_api::discovery::app_dir().join("Autosave")
+}
+
+/// Spill new media to `Autosave/Media` (see `zebra_core::media::spill`),
+/// after sweeping what a crashed run left there.
+pub fn start_spilling() {
+    zebra_core::media::set_spill_dir(Some(untitled_dir().join("Media")));
+    zebra_core::media::sweep_spill(zebra_api::discovery::pid_alive);
 }
 
 /// A fresh name for a window's untitled autosave.
@@ -173,6 +236,11 @@ pub fn autosave_tick(app: &mut ZebraApp) {
         return;
     }
     if app.editor.in_transaction() || app.editor.doc.elements.is_empty() {
+        return;
+    }
+    // Not while the document itself is being saved: that save is about
+    // to make the autosave unneeded.
+    if app.editor.saving().is_some() {
         return;
     }
     // One at a time: a deck with large video can take longer to write

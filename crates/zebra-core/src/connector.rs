@@ -6,7 +6,7 @@
 //! route itself is a pure function of the connector's data, so renderers and
 //! hit tests need no document access.
 use crate::geom::{Rect, Transform, Vec2};
-use crate::model::{ConnectorData, Document, Element, ElementKind, FrameStyle, Route, ShapeKind, Size};
+use crate::model::{ConnectorData, Document, Element, ElementId, ElementKind, FrameStyle, Route, ShapeKind, Size};
 
 /// A connector's centre line in its own local coordinates.
 #[derive(Debug, Clone, PartialEq)]
@@ -166,11 +166,20 @@ fn edge_point(e: &Element, aim: Vec2, elbow: bool) -> (Vec2, Vec2) {
 }
 
 /// Recompute every connector from the elements it is attached to. Ends
-/// whose element is gone become free where they last were.
-pub fn refresh(doc: &mut Document) {
+/// whose element is gone become free where they last were. Returns the
+/// connectors that changed.
+///
+/// `before_change` sees each connector just before it changes.
+pub fn refresh(doc: &mut Document, before_change: impl FnMut(&ElementId, &crate::model::Element)) -> Vec<ElementId> {
     let ids: Vec<String> = doc.elements.iter().filter(|(_, e)| matches!(e.kind, ElementKind::Connector(_))).map(|(id, _)| id.clone()).collect();
+    refresh_these(doc, ids, before_change)
+}
+
+/// [`refresh`] for the connectors `ids` (others are skipped).
+pub fn refresh_these(doc: &mut Document, ids: impl IntoIterator<Item = ElementId>, mut before_change: impl FnMut(&ElementId, &crate::model::Element)) -> Vec<ElementId> {
+    let mut changed = vec![];
     for id in ids {
-        let e = &doc.elements[&id];
+        let Some(e) = doc.elements.get(&id) else { continue };
         let ElementKind::Connector(c) = &e.kind else { continue };
         let tf = e.transform;
         let target = |end: &crate::model::Endpoint| {
@@ -204,13 +213,17 @@ pub fn refresh(doc: &mut Document) {
         (n.to.x, n.to.y, n.to.dir) = (pb.x - center.x, pb.y - center.y, db);
         let transform = Transform::at(center.x, center.y);
         let size = Size { w: b.width(), h: b.height() };
-        let e = doc.elements.get_mut(&id).unwrap();
+        let e = &doc.elements[&id];
         if e.transform != transform || e.size != size || e.kind != ElementKind::Connector(n.clone()) {
+            before_change(&id, e);
+            let e = doc.elements.get_mut(&id).unwrap();
             e.transform = transform;
             e.size = size;
             e.kind = ElementKind::Connector(n);
+            changed.push(id);
         }
     }
+    changed
 }
 
 #[cfg(test)]

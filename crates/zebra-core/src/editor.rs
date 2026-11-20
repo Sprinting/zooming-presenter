@@ -9,6 +9,7 @@ use serde_json::json;
 use crate::camera::Camera;
 use crate::command::*;
 use crate::error::{ZError, ZResult};
+use crate::journal::Journal;
 use crate::geom::{rotated_extent, Rect, Transform, Vec2};
 use crate::model::*;
 use crate::theme::{valid_color, Theme};
@@ -183,8 +184,21 @@ pub struct Activity {
 struct Tx {
     label: String,
     origin: Origin,
-    before: Document,
+    /// Everything the transaction changed so far, as it was at `begin`.
+    journal: Journal,
     ids: BTreeSet<ElementId>,
+}
+
+/// A document ready to load, from [`Editor::prepare`].
+pub struct Prepared {
+    doc: Document,
+    index: crate::spatial::SpatialIndex,
+}
+
+impl Prepared {
+    pub fn doc(&self) -> &Document {
+        &self.doc
+    }
 }
 
 pub struct Editor {
@@ -214,6 +228,18 @@ pub struct Editor {
     pub perf: crate::perf::PerfStats,
     /// Translated history wording; see [`Phrase`].
     pub labeler: Option<Labeler>,
+    /// Where elements are (derived from `doc`; see [`crate::spatial`]).
+    pub(crate) index: crate::spatial::SpatialIndex,
+    /// The batch being applied: old values of what it touched.
+    journal: Option<Journal>,
+    /// A save running on a worker thread (see [`crate::saving`]).
+    pub(crate) saving: Option<crate::saving::SaveJob>,
+    /// Finished saves not yet taken by whoever started them.
+    pub(crate) saved: Vec<crate::saving::Saved>,
+    /// The step the editor camera was last sent to by `goto_step`, from
+    /// anyone (an agent too), with a count of such trips: a host scrolls
+    /// its step list to it when the count changes.
+    pub went_to_step: (u64, usize),
 }
 
 impl Default for Editor {
@@ -232,6 +258,7 @@ impl Editor {
     pub fn new(doc: Document) -> Self {
         Editor {
             loads: 0,
+            index: crate::spatial::SpatialIndex::build(&doc),
             doc,
             view: ViewState::default(),
             revision: 0,
@@ -242,12 +269,16 @@ impl Editor {
             measure: Box::new(EstimateMeasure),
             activity: VecDeque::new(),
             flashes: vec![],
+            went_to_step: (0, 0),
             agent_cursor: None,
             agent_cursor_time: 0.0,
             file_path: None,
             events: vec![],
             perf: Default::default(),
             labeler: None,
+            journal: None,
+            saving: None,
+            saved: vec![],
         }
     }
 
@@ -267,7 +298,11 @@ impl Editor {
         self.revision != self.saved_revision
     }
     pub fn mark_saved(&mut self, path: Option<std::path::PathBuf>) {
-        self.saved_revision = self.revision;
+        self.mark_saved_at(self.revision, path);
+    }
+    /// Saved as it was at `revision` (a save that ran while edits went on).
+    pub fn mark_saved_at(&mut self, revision: u64, path: Option<std::path::PathBuf>) {
+        self.saved_revision = revision;
         if let Some(p) = path {
             self.events.push(Event::Saved { path: p.display().to_string() });
             self.file_path = Some(p);
@@ -317,12 +352,37 @@ impl Editor {
     }
 
     /// Replace the whole document (open file). Clears history.
-    pub fn load(&mut self, mut doc: Document, path: Option<std::path::PathBuf>) {
-        self.tx = None;
-        self.loads += 1;
+    pub fn load(&mut self, doc: Document, path: Option<std::path::PathBuf>) {
+        let p = Self::prepare(doc, &*self.measure, &|_| {});
+        self.load_prepared(p, path);
+    }
+
+    /// The slow part of [`Editor::load`] (repair, measure every text,
+    /// index), which needs no editor: a big file is prepared on a worker
+    /// thread while the window stays responsive. `progress` hears 0..1.
+    pub fn prepare(mut doc: Document, measure: &dyn TextMeasure, progress: &dyn Fn(f32)) -> Prepared {
         crate::check::repair(&mut doc);
-        self.remeasure_all(&mut doc);
-        self.doc = doc;
+        measure.prepare(&doc);
+        let theme = Theme::resolve_in(&doc, &doc.theme);
+        let n = doc.elements.len().max(1);
+        for (i, e) in doc.elements.values_mut().enumerate() {
+            measure_text(measure, &theme, e);
+            if i % 1024 == 0 {
+                progress(0.9 * i as f32 / n as f32);
+            }
+        }
+        let index = crate::spatial::SpatialIndex::build(&doc);
+        progress(1.0);
+        Prepared { doc, index }
+    }
+
+    /// Load a document made ready by [`Editor::prepare`]. Clears history.
+    pub fn load_prepared(&mut self, p: Prepared, path: Option<std::path::PathBuf>) {
+        self.tx = None;
+        self.journal = None;
+        self.loads += 1;
+        self.doc = p.doc;
+        self.index = p.index;
         self.undo.clear();
         self.redo.clear();
         self.revision += 1;
@@ -344,6 +404,7 @@ impl Editor {
     }
 
     fn remeasure_all(&self, doc: &mut Document) {
+        // (Loading measures in `prepare`; this is for a theme change.)
         self.measure.prepare(doc);
         let theme = Theme::resolve_in(doc, &doc.theme);
         for e in doc.elements.values_mut() {
@@ -363,7 +424,7 @@ impl Editor {
             return Err(busy());
         }
         self.check_agent(&origin)?;
-        self.tx = Some(Tx { label: label.into(), origin, before: self.doc.clone(), ids: BTreeSet::new() });
+        self.tx = Some(Tx { label: label.into(), origin, journal: Journal::start(&self.doc), ids: BTreeSet::new() });
         Ok(())
     }
 
@@ -371,11 +432,11 @@ impl Editor {
     /// changed. Callers acting for one party use [`Editor::commit_as`].
     pub fn commit(&mut self) {
         let Some(tx) = self.tx.take() else { return };
-        if tx.before == self.doc {
+        if tx.journal.unchanged(&self.doc) {
             return;
         }
         let ids: Vec<_> = tx.ids.into_iter().collect();
-        self.record(tx.label, tx.origin, tx.before, ids, false, 1);
+        self.record(tx.label, tx.origin, tx.journal, ids, false, 1);
     }
 
     /// Who opened the transaction in progress.
@@ -406,8 +467,16 @@ impl Editor {
     /// Abort: restore the document as it was at `begin`.
     pub fn abort(&mut self) {
         if let Some(tx) = self.tx.take() {
-            if tx.before != self.doc {
-                self.doc = tx.before;
+            if !tx.journal.unchanged(&self.doc) {
+                let z = tx.journal.z_touched();
+                for id in tx.journal.restore(&mut self.doc) {
+                    self.index.touch(&id);
+                }
+                if z {
+                    self.index.z_changed();
+                }
+                self.index.sync(&self.doc);
+                self.check_index();
                 self.revision += 1;
                 let ids: Vec<ElementId> = tx.ids.into_iter().collect();
                 self.settle_view();
@@ -505,40 +574,51 @@ impl Editor {
             [c] => self.phrase(Phrase::Command(c)),
             _ => self.phrase(Phrase::Changes(steps)),
         });
-        let before = self.doc.clone();
+        debug_assert!(self.journal.is_none(), "batches don't nest");
+        self.journal = Some(Journal::start(&self.doc));
         let mut out = Outcome::default();
+        self.index.begin_journal();
         for (i, cmd) in cmds.into_iter().enumerate() {
             if let Err(mut e) = self.apply_inner(cmd, &mut out) {
-                self.doc = before;
+                self.rollback();
                 if i > 0 {
                     e.message = format!("command #{i} failed (batch rolled back): {}", e.message);
                 }
                 return Err(e);
             }
+            // The next command sees where this one put things.
+            self.index.sync(&self.doc);
         }
         // Connectors follow whatever they are stuck to.
-        crate::connector::refresh(&mut self.doc);
-        if self.doc == before {
+        self.refresh_connectors();
+        self.index.sync(&self.doc);
+        if self.journal.as_ref().is_some_and(|j| j.unchanged(&self.doc)) {
+            self.journal = None;
+            self.index.end_journal();
             out.revision = self.revision;
             return Ok(out);
         }
         // Nothing unusable gets in: a result with a number that overflowed
         // (or a text range outside its text) is refused whole. Checked on
         // the result, so every command and every route is covered.
-        if let Err(e) = self.check_result(&before, &out) {
-            self.doc = before;
+        if let Err(e) = self.check_result(&out) {
+            self.rollback();
             return Err(e);
         }
+        let journal = self.journal.take().expect("journal started above");
+        self.index.end_journal();
+        self.check_index();
         self.settle_view();
 
         // Deleted ids stay in the entry so "Delete 2 objects" says 2.
         let ids = out.affected();
         if let Some(tx) = &mut self.tx {
             tx.ids.extend(ids.iter().cloned());
+            tx.journal.absorb(journal);
             self.revision += 1;
             self.events.push(Event::DocumentChanged { revision: self.revision, origin: origin.clone(), label, ids });
         } else {
-            self.record(label, origin.clone(), before, ids, mergeable, steps);
+            self.record(label, origin.clone(), journal, ids, mergeable, steps);
         }
         if origin.is_agent() {
             let now = self.view.now;
@@ -555,12 +635,12 @@ impl Editor {
         Ok(out)
     }
 
-    fn record(&mut self, label: String, origin: Origin, before: Document, ids: Vec<ElementId>, allow_merge: bool, steps: usize) {
+    fn record(&mut self, label: String, origin: Origin, journal: Journal, ids: Vec<ElementId>, allow_merge: bool, steps: usize) {
         self.revision += 1;
         let now = self.view.now;
         self.redo.clear();
-        let delta = crate::delta::Delta::between(&before, &self.doc);
-        drop(before);
+        let delta = journal.delta(&self.doc);
+        drop(journal);
         let merged = allow_merge
             && origin.is_agent()
             && self.undo.last().is_some_and(|h| h.mergeable && h.origin == origin && now - h.time < AGENT_GROUP_SECS);
@@ -589,7 +669,8 @@ impl Editor {
     }
 
     /// What a batch left behind must hold the invariants in [`crate::check`].
-    fn check_result(&self, before: &Document, out: &Outcome) -> ZResult<()> {
+    fn check_result(&self, out: &Outcome) -> ZResult<()> {
+        let Some(j) = &self.journal else { return Ok(()) };
         let mut seen = HashSet::new();
         for id in out.created.iter().chain(&out.changed) {
             if !seen.insert(id) {
@@ -601,15 +682,79 @@ impl Editor {
         }
         // Connectors moved by `refresh`, and anything a command touched
         // without listing it.
-        for (id, e) in &self.doc.elements {
-            if !seen.contains(id) && before.elements.get(id) != Some(e) {
+        for (id, _) in j.changed(&self.doc) {
+            if let (false, Some(e)) = (seen.contains(id), self.doc.elements.get(id)) {
                 crate::check::element(e)?;
             }
         }
-        if self.doc.path != before.path || self.doc.play != before.play || self.doc.soundtrack != before.soundtrack {
+        if j.steps_changed(&self.doc) {
             crate::check::steps(&self.doc)?;
         }
         Ok(())
+    }
+
+    /// A batch failed: put the document back as it was before it.
+    fn rollback(&mut self) {
+        if let Some(j) = self.journal.take() {
+            j.restore(&mut self.doc);
+        }
+        self.index.rollback(&self.doc);
+    }
+
+    /// Connectors follow whatever they are stuck to.
+    fn refresh_connectors(&mut self) {
+        self.index.sync(&self.doc);
+        let journal = &mut self.journal;
+        let note = |id: &ElementId, old: &Element| {
+            if let Some(j) = journal {
+                j.element_value(id, old);
+            }
+        };
+        // The index knows the connectors; scanning every element for them
+        // cost a few ms per edit in a 100,000-element deck.
+        let changed = match self.index.connectors(&self.doc) {
+            Some(c) if c.is_empty() => vec![],
+            Some(c) => crate::connector::refresh_these(&mut self.doc, c.iter().cloned().collect::<Vec<_>>(), note),
+            None => crate::connector::refresh(&mut self.doc, note),
+        };
+        for id in changed {
+            self.index.touch(&id);
+        }
+    }
+
+    /// `id` is about to change, be added or be removed: the spatial index
+    /// rereads it at the next sync, and the batch's journal keeps its old
+    /// value. Every change to an element goes through here (or
+    /// [`Editor::el_mut`], which calls it).
+    fn note(&mut self, id: &str) {
+        self.index.touch(id);
+        if let Some(j) = &mut self.journal {
+            j.element(&self.doc, id);
+        }
+    }
+
+    /// Every element may be about to change.
+    fn note_all(&mut self) {
+        self.index.touch_all();
+        if let Some(j) = &mut self.journal {
+            j.all_elements(&self.doc);
+        }
+    }
+
+    /// The draw order, to change (its old order goes in the journal).
+    fn z_mut(&mut self) -> &mut Vec<ElementId> {
+        if let Some(j) = &mut self.journal {
+            j.z_order(&self.doc);
+        }
+        &mut self.doc.z_order
+    }
+
+    /// The path, to change (its old steps go in the journal).
+    fn path_mut(&mut self) -> &mut Vec<PathStep> {
+        if let Some(j) = &mut self.journal {
+            j.path(&self.doc);
+        }
+        &mut self.doc.path
     }
 
     pub fn undo(&mut self, origin: Origin) -> ZResult<Option<String>> {
@@ -620,6 +765,7 @@ impl Editor {
             self.undo.push(h);
             return Err(ZError::new("internal", format!("undo failed: {e}")));
         }
+        self.reindex_after(h.deltas.iter().map(|d| &d.backward));
         let label = h.label.clone();
         let ids = h.ids.clone();
         self.redo.push(h);
@@ -635,11 +781,53 @@ impl Editor {
             self.redo.push(h);
             return Err(ZError::new("internal", format!("redo failed: {e}")));
         }
+        self.reindex_after(h.deltas.iter().map(|d| &d.forward));
         let label = h.label.clone();
         let ids = h.ids.clone();
         self.undo.push(h);
         self.after_history_jump(&format!("Redo {label}"), origin, ids);
         Ok(Some(label))
+    }
+
+    /// Bring the spatial index up to date after `changes` were applied.
+    fn reindex_after<'a>(&mut self, changes: impl Iterator<Item = &'a crate::delta::Change>) {
+        let mut z = vec![];
+        for c in changes {
+            match c.element_ids() {
+                Some(ids) => ids.iter().for_each(|id| self.index.touch(id)),
+                None => self.index.touch_all(),
+            }
+            if !c.z_order.is_empty() {
+                z.push(c);
+            }
+        }
+        // Draw ranks: a removal keeps the others in order, and a single
+        // insertion gets a rank between its neighbours (before the sync
+        // reads it as a newcomer). Anything else renumbers, which walks
+        // the whole draw order.
+        match z.as_slice() {
+            [] => {}
+            [c] if c.z_order.iter().all(|s| s.insert.is_empty() || (s.remove == 0 && s.insert.len() == 1)) => {
+                let mut shift = 0isize;
+                for s in &c.z_order {
+                    if !s.insert.is_empty() {
+                        self.index.z_inserted(&self.doc, (s.at as isize + shift) as usize);
+                    }
+                    shift += s.insert.len() as isize - s.remove as isize;
+                }
+            }
+            _ => self.index.z_changed(),
+        }
+        self.index.sync(&self.doc);
+        self.check_index();
+    }
+
+    /// Debug builds: the spatial index matches the document (small decks;
+    /// a big one would make every test edit slow).
+    fn check_index(&self) {
+        if cfg!(debug_assertions) && self.doc.elements.len() <= 5000 {
+            self.index.assert_matches(&self.doc);
+        }
     }
 
     /// Bytes held by undo and redo deltas (approximate, for diagnostics).
@@ -675,7 +863,14 @@ impl Editor {
         if !self.doc.elements.contains_key(id) {
             return Err(ZError::not_found(id, self.doc.elements.keys().cloned()));
         }
-        Ok(self.doc.elements.get_mut(id).unwrap())
+        Ok(self.el_mut(id))
+    }
+
+    /// The element to change (see [`Editor::note`]). Panics if `id`
+    /// doesn't exist.
+    fn el_mut(&mut self, id: &str) -> &mut Element {
+        self.note(id);
+        self.doc.elements.get_mut(id).expect("element exists")
     }
 
     fn check_ids(&self, ids: &[ElementId]) -> ZResult<()> {
@@ -705,7 +900,7 @@ impl Editor {
                 }
             }
             if with_contents && self.doc.get(id).is_some_and(|e| e.is_frame()) {
-                for c in self.doc.frame_contents(id) {
+                for c in self.frame_contents(id) {
                     if seen.insert(c.clone()) {
                         out.push(c);
                     }
@@ -755,18 +950,11 @@ impl Editor {
         measure_text(&*self.measure, &self.theme(), &mut e);
         // Frames go behind the lowest element they enclose, so drawing a frame
         // around content keeps the content visible (Prezi behaviour).
-        let pos = if e.is_frame() {
-            let b = e.bounds();
-            self.doc
-                .z_order
-                .iter()
-                .position(|o| self.doc.get(o).is_some_and(|x| b.contains_rect(&x.bounds()) && x.bounds().area() < b.area()))
-                .unwrap_or(self.doc.z_order.len())
-        } else {
-            self.doc.z_order.len()
-        };
-        self.doc.z_order.insert(pos, id.clone());
+        let pos = if e.is_frame() { self.frame_insert_pos(&e.bounds()) } else { self.doc.z_order.len() };
+        self.note(&id);
+        self.z_mut().insert(pos, id.clone());
         self.doc.elements.insert(id.clone(), e);
+        self.index.z_inserted(&self.doc, pos);
         out.created.push(id.clone());
         Ok(id)
     }
@@ -865,7 +1053,7 @@ impl Editor {
                 };
                 let id = self.insert_element(e, out)?;
                 if add_to_path {
-                    self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
+                    self.path_mut().push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
                 }
             }
             Command::AddShape { shape, x, y, w, h, rotation, fill, stroke, id } => {
@@ -912,7 +1100,7 @@ impl Editor {
                 self.insert_element(e, out)?;
             }
             Command::AddSymbol { set, name, x, y, width, color, color2, sticker, id } => {
-                let lib = crate::symbols::library().ok_or_else(|| ZError::new("unavailable", "the symbol library isn't installed"))?;
+                let lib = crate::symbols::library().ok_or_else(|| ZError::new("unavailable", crate::symbols::library_error().unwrap_or("the symbol library isn't installed")))?;
                 let r = lib.find(&set, &name).ok_or_else(|| {
                     let near: Vec<String> = lib.search(&name.replace('-', " "), lib.set_index(&set).map(|s| vec![s]).as_deref(), 8).iter().map(|r| lib.name(*r).to_string()).collect();
                     ZError::new("not_found", format!("no symbol '{name}' in set '{set}'")).hint("search with the symbols query").values(near)
@@ -953,7 +1141,7 @@ impl Editor {
                     name: String::new(),
                     placeholder: false,
                     group: None,
-                    kind: ElementKind::Image(ImageData { asset: key, alt: name, crop: None, mask: ImageMask::Rectangle, symbol: Some(look) }),
+                    kind: ElementKind::Image(ImageData { asset: key, alt: name, crop: None, mask: ImageMask::Rectangle, symbol: Some(look), page: None }),
                 };
                 self.insert_element(e, out)?;
             }
@@ -974,15 +1162,15 @@ impl Editor {
                 if ids.len() > 1 && !has_frame {
                     let g = self.doc.alloc_group_id();
                     for id in &ids {
-                        if let Some(e) = self.doc.elements.get_mut(id) {
-                            e.group = Some(g.clone());
+                        if self.doc.elements.contains_key(id) {
+                            self.el_mut(id).group = Some(g.clone());
                         }
                     }
                 }
                 if d.path {
                     for (p, id) in pieces.iter().zip(&ids) {
                         if let crate::templates::Piece::Frame { path: true, .. } = p {
-                            self.doc.path.push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
+                            self.path_mut().push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
                         }
                     }
                 }
@@ -1003,7 +1191,7 @@ impl Editor {
                     name: String::new(),
                     placeholder: false,
                     group: None,
-                    kind: ElementKind::Image(ImageData { asset: key, alt, crop: None, mask: ImageMask::Rectangle, symbol: None }),
+                    kind: ElementKind::Image(ImageData { asset: key, alt, crop: None, mask: ImageMask::Rectangle, symbol: None, page: None }),
                 };
                 self.insert_element(e, out)?;
             }
@@ -1043,7 +1231,7 @@ impl Editor {
                     }),
                 };
                 self.insert_element(e, out)?;
-                crate::connector::refresh(&mut self.doc);
+                self.refresh_connectors();
             }
             Command::AddVideo { data_base64, path, x, y, width, alt, poster_base64, autoplay, looping, muted, id } => {
                 let (key, info) = self.load_media(&data_base64, path.as_deref(), MediaKind::Video)?;
@@ -1097,6 +1285,8 @@ impl Editor {
                 // No longer the library's symbol: its tint and outline
                 // settings would be applied to a picture they don't fit.
                 img.symbol = None;
+                // Nor a page of a PDF any more.
+                img.page = None;
                 // Keep the width; the height follows the new picture.
                 let (nw, nh) = (info.width.max(1) as f64, info.height.max(1) as f64);
                 let world_w = e.size.w * e.transform.scale;
@@ -1134,7 +1324,11 @@ impl Editor {
                 e.transform.scale = world_w / nw;
                 out.changed.push(id);
             }
-            Command::SetPoster { id, data_base64, path } => {
+            Command::SetPoster { id, data_base64, path, at } => {
+                if at.is_some() {
+                    // The host grabs the frame and passes it as data.
+                    return Err(ZError::new("unsupported", "this Zebra can't grab a frame of a video").hint("pass data_base64 or path with a picture"));
+                }
                 let poster = if data_base64.trim().is_empty() && path.is_none() {
                     None
                 } else {
@@ -1191,7 +1385,7 @@ impl Editor {
                 } else {
                     Some(self.load_media(&data_base64, path.as_deref(), MediaKind::Audio)?.0)
                 };
-                self.doc.path[index].voiceover = v;
+                self.path_mut()[index].voiceover = v;
             }
             Command::AddInk { points, color, width, highlighter, id } => {
                 if points.len() < 2 {
@@ -1216,19 +1410,20 @@ impl Editor {
                 self.insert_element(e, out)?;
             }
             Command::Update { id, patch } => {
-                self.element_mut(&id)?;
+                self.check_ids(std::slice::from_ref(&id))?;
                 // Text on a shape follows the shape when it moves or turns.
                 let riders = self.texts_on(&id);
                 let before = self.doc.elements[&id].transform;
                 // Changing a text's style (e.g. Body -> Title) must not push it
                 // out of the frame it sits in: remember the frame first.
-                let keep_in = if patch.style.is_some() && patch.scale.is_none() { self.doc.parent_frame(&id) } else { None };
+                let keep_in = if patch.style.is_some() && patch.scale.is_none() { self.parent_frame(&id) } else { None };
                 let frame_box = keep_in.and_then(|f| self.doc.get(&f)).map(|f| (f.world_size(), f.transform.rotation));
                 let crop_px = match (&patch.crop, &self.doc.elements[&id].kind) {
                     (Some(_), ElementKind::Image(i)) => self.doc.assets.get(&i.asset).map(|a| (a.width as f64, a.height as f64)),
                     _ => None,
                 };
-                let e = self.doc.elements.get_mut(&id).unwrap();
+                self.note(&id);
+                let e = self.doc.elements.get_mut(&id).expect("element exists");
                 apply_patch(e, &patch)?;
                 if patch.text.is_some() {
                     // Typing into a placeholder makes it real content.
@@ -1256,7 +1451,7 @@ impl Editor {
                 if after != before {
                     let turn = after.rotation - before.rotation;
                     for t in riders {
-                        let r = self.doc.elements.get_mut(&t).unwrap();
+                        let r = self.el_mut(&t);
                         let off = (r.transform.center() - before.center()).rotate_deg(turn);
                         let c = after.center() + off;
                         r.transform.x = c.x;
@@ -1269,7 +1464,8 @@ impl Editor {
             Command::FormatText { id, start, end, find, format } => {
                 self.check_ids(std::slice::from_ref(&id))?;
                 self.check_unlocked(std::slice::from_ref(&id))?;
-                let e = self.doc.elements.get_mut(&id).unwrap();
+                self.note(&id);
+                let e = self.doc.elements.get_mut(&id).expect("element exists");
                 let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
                 if let Some(c) = format.color.as_deref().filter(|c| !c.is_empty() && !valid_color(c)) {
                     return Err(ZError::invalid(format!("bad colour '{c}'")).values(Theme::COLOR_SLOTS.iter().map(|s| s.to_string()).collect()));
@@ -1301,7 +1497,8 @@ impl Editor {
             Command::FormatParagraphs { id, first, last, list, indent, indent_by, align } => {
                 self.check_ids(std::slice::from_ref(&id))?;
                 self.check_unlocked(std::slice::from_ref(&id))?;
-                let e = self.doc.elements.get_mut(&id).unwrap();
+                self.note(&id);
+                let e = self.doc.elements.get_mut(&id).expect("element exists");
                 let ElementKind::Text(t) = &mut e.kind else { return Err(ZError::invalid(format!("{id} is not a text"))) };
                 let count = t.text.split('\n').count();
                 let first = first.unwrap_or(0);
@@ -1319,7 +1516,7 @@ impl Editor {
                     return Err(ZError::invalid("dx and dy must be finite"));
                 }
                 for id in self.expand(&ids, with_contents) {
-                    let e = self.doc.elements.get_mut(&id).unwrap();
+                    let e = self.el_mut(&id);
                     e.transform.x += dx;
                     e.transform.y += dy;
                     out.changed.push(id);
@@ -1333,7 +1530,7 @@ impl Editor {
                 }
                 let about = about.map(|a| Vec2::new(a[0], a[1])).unwrap_or_else(|| self.bounds_of(&ids).center());
                 for id in self.expand(&ids, with_contents) {
-                    let e = self.doc.elements.get_mut(&id).unwrap();
+                    let e = self.el_mut(&id);
                     let p = about + (e.transform.center() - about) * factor;
                     e.transform.x = p.x;
                     e.transform.y = p.y;
@@ -1349,7 +1546,8 @@ impl Editor {
                     return Err(ZError::invalid("resize needs `width` and/or `height`, each > 0 (world units)"));
                 }
                 let theme = self.theme();
-                let e = self.doc.elements.get_mut(&id).unwrap();
+                self.note(&id);
+                let e = self.doc.elements.get_mut(&id).expect("element exists");
                 let s = e.transform.scale;
                 let (ww, wh) = (e.size.w * s, e.size.h * s);
                 match &mut e.kind {
@@ -1392,7 +1590,7 @@ impl Editor {
                 }
                 let about = about.map(|a| Vec2::new(a[0], a[1])).unwrap_or_else(|| self.bounds_of(&ids).center());
                 for id in self.expand(&ids, with_contents) {
-                    let e = self.doc.elements.get_mut(&id).unwrap();
+                    let e = self.el_mut(&id);
                     let p = about + (e.transform.center() - about).rotate_deg(degrees);
                     e.transform.x = p.x;
                     e.transform.y = p.y;
@@ -1407,35 +1605,53 @@ impl Editor {
                 let ids = self.expand(&ids, false);
                 let groups: BTreeSet<String> = ids.iter().filter_map(|id| self.doc.elements[id].group.clone()).collect();
                 let set: HashSet<&ElementId> = ids.iter().collect();
-                self.doc.z_order.retain(|z| !set.contains(z));
+                self.z_mut().retain(|z| !set.contains(z));
                 for id in &ids {
+                    self.note(id);
                     self.doc.elements.remove(id);
                 }
-                self.doc.path.retain(|s| !matches!(&s.target, StepTarget::Element { id } if set.contains(id)));
-                for s in &mut self.doc.path {
-                    s.builds.retain(|b| !set.contains(b));
-                }
-                // A group left with one member is no group.
-                for g in groups {
-                    let left: Vec<ElementId> = self.doc.elements.values().filter(|e| e.group.as_ref() == Some(&g)).map(|e| e.id.clone()).collect();
-                    if let [only] = left.as_slice() {
-                        self.doc.elements.get_mut(only).unwrap().group = None;
-                        out.changed.push(only.clone());
+                if self.doc.path.iter().any(|s| matches!(&s.target, StepTarget::Element { id } if set.contains(id)) || s.builds.iter().any(|b| set.contains(b))) {
+                    let path = self.path_mut();
+                    path.retain(|s| !matches!(&s.target, StepTarget::Element { id } if set.contains(id)));
+                    for s in path {
+                        s.builds.retain(|b| !set.contains(b));
                     }
+                }
+                // A group left with one member is no group. (One pass over
+                // the elements, not one per group.)
+                let mut left: HashMap<&String, Vec<ElementId>> = HashMap::new();
+                if !groups.is_empty() {
+                    for e in self.doc.elements.values() {
+                        if let Some(g) = e.group.as_ref().filter(|g| groups.contains(*g)) {
+                            left.entry(g).or_default().push(e.id.clone());
+                        }
+                    }
+                }
+                let lone: Vec<ElementId> = groups.iter().filter_map(|g| match left.get(g).map(Vec::as_slice) {
+                    Some([only]) => Some(only.clone()),
+                    _ => None,
+                }).collect();
+                for only in lone {
+                    self.el_mut(&only).group = None;
+                    out.changed.push(only);
                 }
                 self.gc_assets();
                 out.deleted.extend(ids);
             }
             Command::Duplicate { ids, dx, dy } => {
                 self.check_ids(&ids)?;
-                let all = self.expand(&ids, true);
-                let ordered: Vec<ElementId> = self.doc.z_order.iter().filter(|z| all.contains(z)).cloned().collect();
+                let all: HashSet<ElementId> = self.expand(&ids, true).into_iter().collect();
+                let ordered: Vec<ElementId> = self.doc.z_order.iter().filter(|z| all.contains(*z)).cloned().collect();
                 // Copies of a group form a new group; a lone copied member
                 // leaves its group.
+                let mut copied: HashMap<String, usize> = HashMap::new();
+                for g in ordered.iter().filter_map(|o| self.doc.elements[o].group.clone()) {
+                    *copied.entry(g).or_default() += 1;
+                }
                 let mut regroup: HashMap<String, Option<String>> = HashMap::new();
                 for old in &ordered {
                     if let Some(g) = self.doc.elements[old].group.clone() {
-                        let n = ordered.iter().filter(|o| self.doc.elements[*o].group.as_ref() == Some(&g)).count();
+                        let n = copied[&g];
                         if !regroup.contains_key(&g) {
                             let new = (n >= 2).then(|| self.doc.alloc_group_id());
                             regroup.insert(g, new);
@@ -1466,8 +1682,10 @@ impl Editor {
                     }
                     let nid = new_id[&old].clone();
                     e.id = nid.clone();
-                    self.doc.z_order.push(nid.clone());
+                    self.note(&nid);
+                    self.z_mut().push(nid.clone());
                     self.doc.elements.insert(nid.clone(), e);
+                    self.index.z_inserted(&self.doc, self.doc.z_order.len() - 1);
                     out.created.push(nid);
                 }
             }
@@ -1476,28 +1694,31 @@ impl Editor {
                 self.check_unlocked(&ids)?;
                 // The same id twice would be put in the order twice.
                 dedup(&mut ids);
-                let z = &mut self.doc.z_order;
+                self.index.z_changed();
+                // A set: looking each id up in the list was O(N x k).
+                let set: HashSet<ElementId> = ids.iter().cloned().collect();
+                let z = self.z_mut();
                 match order {
                     ZOrderOp::Front => {
-                        z.retain(|x| !ids.contains(x));
+                        z.retain(|x| !set.contains(x));
                         z.extend(ids.iter().cloned());
                     }
                     ZOrderOp::Back => {
-                        z.retain(|x| !ids.contains(x));
+                        z.retain(|x| !set.contains(x));
                         let mut v = ids.clone();
                         v.extend(z.drain(..));
                         *z = v;
                     }
                     ZOrderOp::Forward => {
                         for i in (0..z.len().saturating_sub(1)).rev() {
-                            if ids.contains(&z[i]) && !ids.contains(&z[i + 1]) {
+                            if set.contains(&z[i]) && !set.contains(&z[i + 1]) {
                                 z.swap(i, i + 1);
                             }
                         }
                     }
                     ZOrderOp::Backward => {
                         for i in 1..z.len() {
-                            if ids.contains(&z[i]) && !ids.contains(&z[i - 1]) {
+                            if set.contains(&z[i]) && !set.contains(&z[i - 1]) {
                                 z.swap(i, i - 1);
                             }
                         }
@@ -1565,7 +1786,7 @@ impl Editor {
                     _ => self.doc.alloc_group_id(),
                 };
                 for m in &members {
-                    self.doc.elements.get_mut(m).unwrap().group = Some(gid.clone());
+                    self.el_mut(m).group = Some(gid.clone());
                 }
                 out.changed.extend(members);
                 out.group = Some(gid);
@@ -1575,7 +1796,7 @@ impl Editor {
                 let members = self.doc.expand_groups(&ids);
                 self.check_unlocked(&members)?;
                 for m in &members {
-                    let e = self.doc.elements.get_mut(m).unwrap();
+                    let e = self.el_mut(m);
                     if e.group.take().is_some() {
                         out.changed.push(m.clone());
                     }
@@ -1590,17 +1811,18 @@ impl Editor {
                 if i > self.doc.path.len() {
                     return Err(ZError::invalid(format!("index {i} > path length {}", self.doc.path.len())));
                 }
-                self.doc.path.insert(i, PathStep { target, builds, notes, duration: None, dwell: None, hide_builds: false, voiceover: None });
+                self.path_mut().insert(i, PathStep { target, builds, notes, duration: None, dwell: None, hide_builds: false, voiceover: None });
             }
             Command::RemoveStep { index } => {
                 self.check_step(index)?;
-                self.doc.path.remove(index);
+                self.path_mut().remove(index);
             }
             Command::MoveStep { from, to } => {
                 self.check_step(from)?;
                 self.check_step(to)?;
-                let s = self.doc.path.remove(from);
-                self.doc.path.insert(to, s);
+                let path = self.path_mut();
+                let s = path.remove(from);
+                path.insert(to, s);
             }
             Command::UpdateStep { index, target, builds, notes, duration, dwell, hide_builds } => {
                 self.check_step(index)?;
@@ -1612,7 +1834,7 @@ impl Editor {
                         self.check_ids(std::slice::from_ref(id))?;
                     }
                 }
-                let s = &mut self.doc.path[index];
+                let s = &mut self.path_mut()[index];
                 if let Some(t) = target {
                     s.target = t;
                 }
@@ -1638,7 +1860,7 @@ impl Editor {
                     return Err(ZError::invalid(format!("steps {} have speaker notes that clearing the path would lose", noted.join(", ")))
                         .hint("pass \"discard_notes\": true to clear anyway, or remove the steps you don't want with remove_step"));
                 }
-                self.doc.path.clear();
+                self.path_mut().clear();
             }
             Command::AutoPath { discard_notes } => {
                 let mut frames: Vec<&Element> = self.doc.ordered().filter(|e| e.is_frame()).collect();
@@ -1670,7 +1892,7 @@ impl Editor {
                     return Err(ZError::new("notes_lost", format!("steps {} aren't frames and have speaker notes that the new path would lose", lost.join(", ")))
                         .hint("pass \"discard_notes\": true to go ahead, or move the notes first with update_step"));
                 }
-                let mut old: Vec<PathStep> = std::mem::take(&mut self.doc.path);
+                let mut old: Vec<PathStep> = std::mem::take(self.path_mut());
                 self.doc.path = ids
                     .into_iter()
                     .map(|id| {
@@ -1684,7 +1906,17 @@ impl Editor {
             }
             Command::SetTheme { theme } => {
                 if !Theme::ids_in(&self.doc).contains(&theme) {
-                    return Err(ZError::invalid(format!("unknown theme '{theme}'")).values(Theme::ids_in(&self.doc)));
+                    // A theme from My Themes: copied in, pictures and fonts too
+                    // (as the theme menu does).
+                    let Some((from, mut t)) = crate::library::theme(&theme) else {
+                        let mut ids = Theme::ids_in(&self.doc);
+                        ids.extend(crate::library::get().map(|l| l.themes()).unwrap_or_default().into_iter().map(|(_, t)| t.id));
+                        return Err(ZError::invalid(format!("unknown theme '{theme}'")).values(ids));
+                    };
+                    self.import_assets(&from, t.asset_keys());
+                    self.validate_theme(&t)?;
+                    self.embed_fonts(&mut t);
+                    self.doc.themes.push(t);
                 }
                 self.set_theme_id(theme);
             }
@@ -1697,7 +1929,7 @@ impl Editor {
                     self.doc.play.looping = l;
                 }
             }
-            Command::SaveTheme { mut theme, apply } => {
+            Command::SaveTheme { mut theme, apply, to_library: _ } => {
                 self.validate_theme(&theme)?;
                 self.embed_fonts(&mut theme);
                 let id = theme.id.clone();
@@ -1730,27 +1962,42 @@ impl Editor {
                 out.assets.push(key);
             }
             Command::ApplyTemplate { template, replace } => {
+                let lib = crate::library::get();
+                if let Some(name) = template.strip_prefix(crate::library::SAVED_PREFIX) {
+                    // My Templates (File > Save as Template).
+                    let Some(t) = lib.as_ref().and_then(|l| l.template(name)) else {
+                        let saved = lib.map(|l| l.templates()).unwrap_or_default();
+                        return Err(ZError::invalid(format!("no saved template '{name}'"))
+                            .values(saved.into_iter().map(|n| format!("{}{n}", crate::library::SAVED_PREFIX)).collect()));
+                    };
+                    self.clear_for_template(replace, out)?;
+                    self.insert_template_doc(t, out);
+                    return Ok(());
+                }
+                if template == crate::library::SAMPLE {
+                    if let Some(cmds) = lib.and_then(|l| l.sample()) {
+                        // File > New from Sample: the same commands, here.
+                        self.clear_for_template(replace, out)?;
+                        for c in cmds {
+                            self.apply_inner(c, out)?;
+                            self.index.sync(&self.doc);
+                        }
+                        return Ok(());
+                    }
+                }
                 let Some(t) = crate::templates::template(&template) else {
                     return Err(ZError::invalid(format!("unknown template '{template}'"))
-                        .values(crate::templates::TEMPLATES.iter().map(|t| t.id.to_string()).collect()));
+                        .values(crate::templates::TEMPLATES.iter().map(|t| t.id.to_string()).collect())
+                        .hint("the `templates` query lists them, and the person's saved ones (`saved:<name>`)"));
                 };
-                if !self.doc.elements.is_empty() || !self.doc.path.is_empty() {
-                    if !replace {
-                        return Err(ZError::new("not_empty", "the canvas isn't empty")
-                            .hint("pass \"replace\": true to clear it, or use add_layout to add to it"));
-                    }
-                    out.deleted.extend(self.doc.elements.keys().cloned());
-                    self.doc.elements.clear();
-                    self.doc.z_order.clear();
-                    self.doc.path.clear();
-                }
+                self.clear_for_template(replace, out)?;
                 if self.doc.theme != t.theme {
                     self.set_theme_id(t.theme.into());
                 }
                 let ids = self.add_pieces(&t.pieces, Vec2::new(0.0, 0.0), TEMPLATE_WIDTH, out)?;
                 for i in t.path {
                     if let Some(Some(id)) = ids.get(i) {
-                        self.doc.path.push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
+                        self.path_mut().push(PathStep { target: StepTarget::Element { id: id.clone() }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
                     }
                 }
             }
@@ -1767,7 +2014,7 @@ impl Editor {
                 if add_to_path {
                     for (p, id) in pieces.iter().zip(ids) {
                         if let (crate::templates::Piece::Frame { path: true, .. }, Some(id)) = (p, id) {
-                            self.doc.path.push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
+                            self.path_mut().push(PathStep { target: StepTarget::Element { id }, builds: vec![], notes: String::new(), duration: None, dwell: None, hide_builds: false, voiceover: None });
                         }
                     }
                 }
@@ -1776,8 +2023,53 @@ impl Editor {
         Ok(())
     }
 
+    /// A template needs an empty canvas, or `replace` to clear it.
+    fn clear_for_template(&mut self, replace: bool, out: &mut Outcome) -> ZResult<()> {
+        if !self.doc.elements.is_empty() || !self.doc.path.is_empty() {
+            if !replace {
+                return Err(ZError::new("not_empty", "the canvas isn't empty")
+                    .hint("pass \"replace\": true to clear it, or use add_layout to add to it"));
+            }
+            out.deleted.extend(self.doc.elements.keys().cloned());
+            self.note_all();
+            self.doc.elements.clear();
+            self.z_mut().clear();
+            self.path_mut().clear();
+        }
+        Ok(())
+    }
+
+    /// A saved template's content on the (empty) canvas: its elements with
+    /// their ids, its path, its themes and the theme it uses, with the
+    /// pictures, fonts and media they need.
+    fn insert_template_doc(&mut self, t: Document, out: &mut Outcome) {
+        for a in t.assets.keys() {
+            if let Some(v) = t.assets.get(a) {
+                self.doc.assets.entry(a.clone()).or_insert_with(|| v.clone());
+            }
+        }
+        for th in &t.themes {
+            if !Theme::is_builtin(&th.id) && !self.doc.themes.iter().any(|c| c.id == th.id) {
+                self.doc.themes.push(th.clone());
+            }
+        }
+        for id in &t.z_order {
+            let Some(e) = t.elements.get(id) else { continue };
+            self.note(id);
+            self.doc.elements.insert(id.clone(), e.clone());
+            self.z_mut().push(id.clone());
+            out.created.push(id.clone());
+        }
+        self.path_mut().extend(t.path);
+        self.doc.next_id = self.doc.next_id.max(t.next_id);
+        // Remeasure every text box for this machine's fonts.
+        self.set_theme_id(if Theme::ids_in(&self.doc).contains(&t.theme) { t.theme } else { self.doc.theme.clone() });
+    }
+
     fn set_theme_id(&mut self, id: String) {
         self.doc.theme = id;
+        // Every text box may have a new size.
+        self.note_all();
         let mut d = std::mem::take(&mut self.doc);
         self.remeasure_all(&mut d);
         self.doc = d;
@@ -1833,7 +2125,10 @@ impl Editor {
             let mut keys = vec![];
             for (bytes, ext) in files {
                 let key = content_key(&bytes);
-                self.doc.assets.entry(key.clone()).or_insert(Asset { ext, bytes: bytes.into(), width: 0, height: 0 });
+                if !self.doc.assets.contains_key(&key) {
+                    let bytes = crate::media::spill(bytes, &key);
+                    self.doc.assets.insert(key.clone(), Asset { ext, bytes, width: 0, height: 0 });
+                }
                 keys.push(key);
             }
             t.fonts.insert(fam, keys);
@@ -2029,7 +2324,7 @@ impl Editor {
     fn outermost(&self, ids: &[ElementId]) -> Vec<ElementId> {
         let mut ids = ids.to_vec();
         dedup(&mut ids);
-        let inside: HashSet<ElementId> = ids.iter().filter(|id| self.doc.get(id).is_some_and(|e| e.is_frame())).flat_map(|id| self.doc.frame_contents(id)).collect();
+        let inside: HashSet<ElementId> = ids.iter().filter(|id| self.doc.get(id).is_some_and(|e| e.is_frame())).flat_map(|id| self.frame_contents(id)).collect();
         ids.retain(|id| !inside.contains(id));
         ids
     }
@@ -2088,7 +2383,7 @@ impl Editor {
             let b = self.doc.elements[id].bounds().center();
             let d = t - b;
             for m in self.expand(std::slice::from_ref(id), true) {
-                let e = self.doc.elements.get_mut(&m).unwrap();
+                let e = self.el_mut(&m);
                 e.transform.x += d.x;
                 e.transform.y += d.y;
                 out.changed.push(m);
@@ -2104,6 +2399,7 @@ impl Editor {
             MediaKind::Image => "an image",
             MediaKind::Video => "a video",
             MediaKind::Audio => "an audio file",
+            MediaKind::Document => "a PDF",
         };
         let check = |info: &crate::media::MediaInfo| -> ZResult<()> {
             if info.kind != want {
@@ -2111,6 +2407,7 @@ impl Editor {
                     MediaKind::Image => "an image",
                     MediaKind::Video => "a video",
                     MediaKind::Audio => "audio",
+                    MediaKind::Document => "a PDF",
                 })));
             }
             Ok(())
@@ -2127,7 +2424,7 @@ impl Editor {
             let key = content_key(&map);
             if !self.doc.assets.contains_key(&key) {
                 let bytes: AssetBytes = if want == MediaKind::Image {
-                    map.to_vec().into()
+                    crate::media::spill(map.to_vec(), &key)
                 } else {
                     let m = crate::media::import_file(p, &key, &info.ext).map_err(ioe)?;
                     let len = m.len();
@@ -2146,10 +2443,10 @@ impl Editor {
         let info = crate::media::info(&bytes)?;
         check(&info)?;
         let key = content_key(&bytes);
-        self.doc
-            .assets
-            .entry(key.clone())
-            .or_insert(Asset { ext: info.ext.clone(), bytes: bytes.into(), width: info.width, height: info.height });
+        if !self.doc.assets.contains_key(&key) {
+            let bytes = crate::media::spill(bytes, &key);
+            self.doc.assets.insert(key.clone(), Asset { ext: info.ext.clone(), bytes, width: info.width, height: info.height });
+        }
         Ok((key, info))
     }
 
@@ -2157,7 +2454,10 @@ impl Editor {
     pub fn add_svg_asset(&mut self, bytes: Vec<u8>) -> String {
         let (w, h) = crate::symbols::svg_pixels(&bytes);
         let key = content_key(&bytes);
-        self.doc.assets.entry(key.clone()).or_insert(Asset { ext: "svg".into(), bytes: bytes.into(), width: w, height: h });
+        if !self.doc.assets.contains_key(&key) {
+            let bytes = crate::media::spill(bytes, &key);
+            self.doc.assets.insert(key.clone(), Asset { ext: "svg".into(), bytes, width: w, height: h });
+        }
         key
     }
 
@@ -2165,7 +2465,10 @@ impl Editor {
     pub fn add_asset(&mut self, bytes: Vec<u8>) -> ZResult<String> {
         let (ext, w, h) = image_info(&bytes)?;
         let key = content_key(&bytes);
-        self.doc.assets.entry(key.clone()).or_insert(Asset { ext, bytes: bytes.into(), width: w, height: h });
+        if !self.doc.assets.contains_key(&key) {
+            let bytes = crate::media::spill(bytes, &key);
+            self.doc.assets.insert(key.clone(), Asset { ext, bytes, width: w, height: h });
+        }
         Ok(key)
     }
 
@@ -2197,6 +2500,17 @@ impl Editor {
     // ------------------------------------------------------------------
     // View commands
 
+    /// `play` / `pause`: for the host's video player.
+    fn media_request(&mut self, id: ElementId, play: bool) -> ZResult<serde_json::Value> {
+        let e = self.doc.get(&id).ok_or_else(|| ZError::new("not_found", format!("no element '{id}'")))?;
+        if !matches!(e.kind, ElementKind::Video(_)) {
+            return Err(ZError::invalid(format!("'{id}' is a {}, not a video", e.kind.type_name())));
+        }
+        // The host's player picks it up on its next frame.
+        self.view.media_requests.push((id.clone(), play));
+        Ok(serde_json::json!({ "ok": true, "id": id, "playing": play }))
+    }
+
     pub fn view(&mut self, cmd: ViewCommand, origin: Origin) -> ZResult<serde_json::Value> {
         let agent_limited = origin.is_agent() && self.view.agent_permission != Permission::Full;
         if origin.is_agent() {
@@ -2218,10 +2532,12 @@ impl Editor {
                         | ViewCommand::SetFrameStyle { .. }
                         | ViewCommand::SetViewport { .. }
                         | ViewCommand::SetReduceMotion { .. }
+                        | ViewCommand::Play { .. }
+                        | ViewCommand::Pause { .. }
                 )
             {
                 return Err(ZError::new("permission", "this view command needs 'full' agent permission")
-                    .hint("the person can grant it from the AI button in Zebra's toolbar, or launch with --agent-permission full; captures of any step work without it"));
+                    .hint("the person can grant it from the AI button in Zebra's toolbar; captures of any step work without it"));
             }
         }
         let vp = self.view.viewport;
@@ -2334,6 +2650,7 @@ impl Editor {
                 self.check_step(step)?;
                 if self.view.mode != Mode::Present {
                     // In the editor this just flies the camera to the step.
+                    self.went_to_step = (self.went_to_step.0 + 1, step);
                     let c = self.camera_for_step(step);
                     cam_set!(c, true)
                 } else {
@@ -2362,6 +2679,8 @@ impl Editor {
             }
             ViewCommand::SetReduceMotion { on } => self.view.reduce_motion = on,
             ViewCommand::FollowAgent { on } => self.view.follow_agent = on,
+            ViewCommand::Play { id } => return self.media_request(id, true),
+            ViewCommand::Pause { id } => return self.media_request(id, false),
             ViewCommand::SetStatus { text } => {
                 let Origin::Agent { name } = &origin else {
                     return Err(ZError::invalid("set_status is for agents"));
@@ -2496,7 +2815,7 @@ impl Editor {
     /// The camera that shows `e` on a screen of `viewport` points.
     pub fn camera_for_element_in(&self, e: &Element, viewport: Vec2) -> Camera {
         let (w, h) = e.visual_world_size();
-        let margin = if e.is_frame() { 0.04 } else { 0.12 };
+        let margin = e.fit_margin();
         Camera::fit(
             &ViewRect { cx: e.transform.x, cy: e.transform.y, width: w, height: h, rotation: e.transform.rotation },
             viewport,
@@ -2725,6 +3044,11 @@ fn validate_element(e: &Element, doc: &Document) -> ZResult<()> {
         ElementKind::Image(i) => {
             if !doc.assets.get(&i.asset).is_some_and(|a| a.media_kind() == MediaKind::Image) {
                 return Err(ZError::invalid(format!("unknown image asset '{}'", i.asset)).hint("use add_image"));
+            }
+            if let Some(p) = &i.page {
+                if !doc.assets.get(&p.pdf).is_some_and(|a| a.media_kind() == MediaKind::Document) {
+                    return Err(ZError::invalid(format!("unknown PDF asset '{}'", p.pdf)).hint("pages come in with import"));
+                }
             }
         }
         ElementKind::Video(v) => {
@@ -3051,7 +3375,7 @@ fn plural(n: usize, w: &str) -> String {
     if n == 1 { format!("1 {w}") } else { format!("{n} {w}s") }
 }
 
-fn content_key(bytes: &[u8]) -> String {
+pub(crate) fn content_key(bytes: &[u8]) -> String {
     // FNV-1a 64 + length: stable across runs and platforms.
     let mut h: u64 = 0xcbf29ce484222325;
     for b in bytes {

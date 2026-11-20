@@ -85,7 +85,7 @@ mod tests {
     #[test]
     fn the_english_file_has_the_content_keys() {
         assert_eq!(english("content-add-a-title"), Some("Add a title"));
-        assert_eq!(english("content-add-your-points"), Some("Add your points here\nOne idea per line\nKeep it short"));
+        assert_eq!(english("content-add-your-points"), Some("Add your points\nOne point per line\nKeep each point short"));
         assert_eq!(english("content-frame-title"), Some("Title"));
     }
 }

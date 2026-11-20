@@ -23,6 +23,26 @@ pub fn system_reduce_motion() -> bool {
     }
 }
 
+/// Open a file in the default web browser (the app that opens https
+/// links), whatever opens .html files: an exported web page.
+#[cfg(target_os = "macos")]
+pub fn open_in_browser(page: &std::path::Path) {
+    use objc2_app_kit::{NSWorkspace, NSWorkspaceOpenConfiguration};
+    use objc2_foundation::{NSArray, NSString, NSURL};
+    let ws = NSWorkspace::sharedWorkspace();
+    let file = NSURL::fileURLWithPath(&NSString::from_str(&page.to_string_lossy()));
+    let browser = NSURL::URLWithString(&NSString::from_str("https://example.com")).and_then(|u| ws.URLForApplicationToOpenURL(&u));
+    match browser {
+        Some(app) => {
+            let urls = NSArray::from_retained_slice(&[file]);
+            ws.openURLs_withApplicationAtURL_configuration_completionHandler(&urls, &app, &NSWorkspaceOpenConfiguration::configuration(), None);
+        }
+        None => {
+            ws.openURL(&file);
+        }
+    }
+}
+
 /// Height of a document window's title row: the part at the top that
 /// AppKit draws over our content. That is the title bar (28 pt) and, when
 /// the window is one of several tabs, the tab bar under it. With a fixed
@@ -235,6 +255,43 @@ mod imp {
 #[cfg(target_os = "macos")]
 pub use imp::WindowSync;
 
+/// Room for a window's content on the main screen, in points: below the
+/// menu bar and beside the Dock, less a title bar. None off the Mac.
+pub fn main_screen_room() -> Option<egui::Vec2> {
+    #[cfg(target_os = "macos")]
+    {
+        let mtm = objc2::MainThreadMarker::new()?;
+        let screen = objc2_app_kit::NSScreen::mainScreen(mtm)?;
+        let f = screen.visibleFrame();
+        return Some(egui::vec2(f.size.width as f32, (f.size.height - 28.0).max(0.0) as f32));
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+/// The size Zebra's first window opens at when it has no remembered
+/// place: 1440 × 900, or less on a screen with less room (macOS would
+/// otherwise squeeze a window taller than the screen itself).
+pub fn first_window_size(room: Option<egui::Vec2>) -> egui::Vec2 {
+    let want = egui::vec2(1440.0, 900.0);
+    match room {
+        Some(r) if r.x > 0.0 && r.y > 0.0 => want.min(r).max(egui::vec2(760.0, 480.0)),
+        _ => want,
+    }
+}
+
+/// The window shares a tab group with others (moving it moves them all).
+pub fn shares_tab_group(app: &crate::app::ZebraApp) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(w) = &app.mac_sync.window {
+            return w.tabbedWindows().is_some_and(|t| t.len() > 1);
+        }
+    }
+    let _ = app;
+    false
+}
+
 /// Clicking the Dock icon while no window is open asks for one (like
 /// Keynote). Call once; [`take_reopen`] then says when it happened.
 pub fn install_reopen_hook(ctx: &egui::Context) {
@@ -322,6 +379,54 @@ pub fn take_reopen() -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         false
+    }
+}
+
+/// Whether a launch brings back last session's windows, unsaved Untitled
+/// ones included, like Keynote: yes unless System Settings › Desktop & Dock
+/// › "Close windows when quitting an application" is on
+/// (`NSQuitAlwaysKeepsWindows` = NO). Read through NSUserDefaults, so an
+/// app's own `defaults write` wins over the global one as it does for
+/// AppKit. Where it can't be read (never set, or off macOS) they come back.
+pub fn restores_windows() -> bool {
+    match RESTORE_OVERRIDE.load(std::sync::atomic::Ordering::SeqCst) {
+        1 => false,
+        2 => true,
+        _ => restores_windows_from(quit_keeps_windows()),
+    }
+}
+
+/// [`restores_windows`] from the setting's value, `None` if unset.
+pub fn restores_windows_from(keeps_windows: Option<bool>) -> bool {
+    keeps_windows.unwrap_or(true)
+}
+
+static RESTORE_OVERRIDE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Tests: answer [`restores_windows`] with `Some(value)` instead of the
+/// system setting; `None` reads the setting again.
+#[doc(hidden)]
+pub fn set_restores_windows(value: Option<bool>) {
+    let v = match value {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    };
+    RESTORE_OVERRIDE.store(v, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// `NSQuitAlwaysKeepsWindows`, if set anywhere in the defaults search list.
+fn quit_keeps_windows() -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        let defaults = objc2_foundation::NSUserDefaults::standardUserDefaults();
+        let key = objc2_foundation::NSString::from_str("NSQuitAlwaysKeepsWindows");
+        defaults.objectForKey(&key)?;
+        Some(defaults.boolForKey(&key))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
     }
 }
 
@@ -472,6 +577,15 @@ pub struct WindowSync;
 mod title_row_tests {
     use super::title_row_from;
 
+    #[test]
+    fn the_first_window_fits_a_small_screen() {
+        use super::first_window_size;
+        assert_eq!(first_window_size(None), egui::vec2(1440.0, 900.0));
+        // A 13-inch MacBook Air at its default scaling, Dock at the bottom.
+        assert_eq!(first_window_size(Some(egui::vec2(1440.0, 787.0))), egui::vec2(1440.0, 787.0));
+        assert_eq!(first_window_size(Some(egui::vec2(2560.0, 1360.0))), egui::vec2(1440.0, 900.0));
+    }
+
     /// Mac round, 18 Nov: two windows merged into tabs, and the tab bar was
     /// drawn over the toolbar. The title row grows by the tab bar's height.
     #[test]
@@ -497,5 +611,18 @@ mod title_row_tests {
         assert!(!new_window_is_tab(TabPref::FullScreen, false));
         assert!(new_window_is_tab(TabPref::Always, false));
         assert!(!new_window_is_tab(TabPref::Never, true));
+    }
+
+    /// Kartik, 19 Nov: like Keynote, windows come back unless "Close
+    /// windows when quitting an application" is on; unset means they do.
+    #[test]
+    fn windows_come_back_unless_the_mac_closes_them_at_quit() {
+        use super::restores_windows_from;
+        assert!(restores_windows_from(None), "never set, or not a Mac");
+        assert!(restores_windows_from(Some(true)), "setting off: windows kept");
+        assert!(!restores_windows_from(Some(false)), "setting on: windows closed");
+        if !cfg!(target_os = "macos") {
+            assert!(super::restores_windows(), "off macOS they always come back");
+        }
     }
 }
