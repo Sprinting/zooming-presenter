@@ -67,11 +67,11 @@ fn main() -> anyhow::Result<()> {
     let _ = std::thread::Builder::new().name("zebra-symbols".into()).spawn(|| {
         let _ = zebra_core::symbols::library();
     });
-    let granted = zebra_api::discovery::human_has_granted();
-    const NOT_GRANTED: &str = "AI control stays off until a person switches it on in Zebra once (the AI button in the toolbar). After that, --api and --headless work.";
+    let refused = zebra_api::discovery::ai_switch().flag_refusal();
     if cli.headless {
-        if !granted {
-            anyhow::bail!("{NOT_GRANTED}");
+        // No window and no person: only while the person's switch is on.
+        if let Some(why) = refused {
+            anyhow::bail!("{why}");
         }
         return zebra_api::run_headless(api_opts, cli.file);
     }
@@ -85,10 +85,10 @@ fn main() -> anyhow::Result<()> {
     let last = frames.as_ref().and_then(|f| f.last);
     let first = zebra_app::mac::first_window_size(zebra_app::mac::main_screen_room());
     let (w, h) = asked.or(last.map(|f| (f.size[0], f.size[1]))).unwrap_or((first.x, first.y));
-    if cli.api && !granted {
-        eprintln!("zebra: {NOT_GRANTED}");
+    if let (true, Some(why)) = (cli.api, refused) {
+        eprintln!("zebra: {why}");
     }
-    let opts = AppOptions { open: cli.file, api: (cli.api && granted).then_some(api_opts), screenshot, demo: cli.demo, as_launch: false };
+    let opts = AppOptions { open: cli.file, api: (cli.api && refused.is_none()).then_some(api_opts), screenshot, demo: cli.demo, as_launch: false };
 
     let background = cli.background || std::env::var_os("ZEBRA_BACKGROUND").is_some_and(|v| v != "0");
     let native = eframe::NativeOptions {

@@ -455,9 +455,10 @@ impl ZebraApp {
         app.ai_saved = saved_ai;
         // The first time is always a person: until someone has switched AI
         // control on in this window, neither a launch flag nor a saved
-        // setting turns it on.
+        // setting turns it on. Once switched off (by the person, or an
+        // agent's `disconnect`), a launch flag can't switch it back on.
         let granted = switch.granted;
-        if let Some(api_opts) = opts.api.filter(|_| granted) {
+        if let Some(api_opts) = opts.api.filter(|_| switch.lets_flags_start()) {
             app.api_socket = api_opts.socket.clone();
             app.editor.view.agent_permission = api_opts.permission;
             app.set_ai_control(true);

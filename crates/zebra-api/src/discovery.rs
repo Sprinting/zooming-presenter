@@ -103,6 +103,28 @@ pub struct AiSwitch {
     pub on: Option<bool>,
 }
 
+impl AiSwitch {
+    /// May a launch flag (`--api`, `--headless`) start AI control? Only
+    /// once a person has switched it on, and not after the person or an
+    /// agent switched it off since (`on == None` is an older grant that
+    /// didn't keep the choice: it counts as on).
+    pub fn lets_flags_start(&self) -> bool {
+        self.granted && self.on != Some(false)
+    }
+
+    /// Why a launch flag can't start AI control now, for the person who
+    /// ran it (None: it can).
+    pub fn flag_refusal(&self) -> Option<&'static str> {
+        if !self.granted {
+            Some("AI control stays off until a person switches it on in Zebra once (the AI button in the toolbar). After that, --api and --headless work.")
+        } else if self.on == Some(false) {
+            Some("AI control was switched off, so --api and --headless stay off until a person switches it back on in Zebra (the AI button in the toolbar).")
+        } else {
+            None
+        }
+    }
+}
+
 /// The file that keeps the switch where the keychain isn't used.
 pub fn human_grant_file() -> PathBuf {
     app_dir().join("ai-control-granted")
@@ -465,5 +487,23 @@ mod sweep_tests {
         assert!(!dir.join("2147483000-1.sock").exists(), "dead process's socket is removed");
         assert!(dir.join("notes.txt").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::AiSwitch;
+
+    #[test]
+    fn flags_start_only_a_switch_that_is_not_off() {
+        let never = AiSwitch::default();
+        assert!(!never.lets_flags_start() && never.flag_refusal().is_some());
+        let older = AiSwitch { granted: true, on: None };
+        assert!(older.lets_flags_start() && older.flag_refusal().is_none());
+        let on = AiSwitch { granted: true, on: Some(true) };
+        assert!(on.lets_flags_start());
+        let off = AiSwitch { granted: true, on: Some(false) };
+        assert!(!off.lets_flags_start());
+        assert!(off.flag_refusal().unwrap().contains("switched off"));
     }
 }
