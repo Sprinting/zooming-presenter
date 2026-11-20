@@ -87,6 +87,8 @@ struct Proc {
 
 struct LaneState {
     proc: Option<Proc>,
+    /// The helper's process id, readable while a request holds the lane.
+    pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
     /// Helpers lost in a row without a good answer between.
     deaths: u32,
     /// No new helper before this.
@@ -112,6 +114,8 @@ pub struct Pool {
     limits: Limits,
     helper: Option<PathBuf>,
     lanes: [Mutex<LaneState>; 2],
+    /// Each lane's helper's process id (0: none), without its lock.
+    pids: [std::sync::Arc<std::sync::atomic::AtomicU32>; 2],
     health: Mutex<HashMap<String, Health>>,
     /// PDFs that couldn't be drawn sharper: ever reported, and not yet
     /// taken by the app.
@@ -158,11 +162,13 @@ impl Pool {
     /// A separate pool (tests): its own helpers, limits and memory of
     /// bad pages. `helper`: the program, else [`helper_path`].
     pub fn new(limits: Limits, helper: Option<PathBuf>) -> Pool {
-        let lane = || Mutex::new(LaneState { proc: None, deaths: 0, not_before: Instant::now() });
+        let pids: [std::sync::Arc<std::sync::atomic::AtomicU32>; 2] = Default::default();
+        let lane = |i: usize| Mutex::new(LaneState { proc: None, pid: pids[i].clone(), deaths: 0, not_before: Instant::now() });
         Pool {
             limits,
             helper,
-            lanes: [lane(), lane()],
+            lanes: [lane(0), lane(1)],
+            pids: pids.clone(),
             health: Default::default(),
             reported: Default::default(),
             spawns: AtomicUsize::new(0),
@@ -244,9 +250,7 @@ impl Pool {
     /// Stop `lane`'s helper now (an import is over, or cancelled).
     pub fn release(&self, lane: Lane) {
         let mut st = lock(&self.lanes[lane as usize]);
-        if let Some(p) = st.proc.take() {
-            end(p);
-        }
+        st.stop();
     }
 
     /// The PDFs (asset keys) that `mine` claims and whose pages couldn't
@@ -280,7 +284,7 @@ impl Pool {
     /// The process id of `lane`'s helper, if one is running (tests).
     #[doc(hidden)]
     pub fn pid(&self, lane: Lane) -> Option<u32> {
-        lock(&self.lanes[lane as usize]).proc.as_ref().map(|p| p.child.id())
+        Some(self.pids[lane as usize].load(Ordering::SeqCst)).filter(|p| *p != 0)
     }
 
     fn give_up(&self, key: &str, page: Option<u32>, lane: Lane) {
@@ -314,9 +318,7 @@ impl Pool {
         if let Some(p) = &mut st.proc {
             let gone = !matches!(p.child.try_wait(), Ok(None));
             if gone || p.last.elapsed() > self.limits.idle {
-                if let Some(p) = st.proc.take() {
-                    end(p);
-                }
+                st.stop();
             }
         }
         if st.proc.is_none() {
@@ -327,7 +329,10 @@ impl Pool {
                 std::thread::sleep(limits::POLL.min(st.not_before.saturating_duration_since(Instant::now())));
             }
             match self.spawn(cancel) {
-                Ok(p) => st.proc = Some(p),
+                Ok(p) => {
+                    st.pid.store(p.child.id(), Ordering::SeqCst);
+                    st.proc = Some(p);
+                }
                 Err(e) => {
                     if e != PdfError::Cancelled {
                         self.lost(st, "it didn't start");
@@ -341,9 +346,7 @@ impl Pool {
 
     fn lost(&self, st: &mut LaneState, why: &str) {
         eprintln!("zebra: PDF helper stopped ({why})");
-        if let Some(p) = st.proc.take() {
-            end(p);
-        }
+        st.stop();
         st.deaths = st.deaths.saturating_add(1);
         st.not_before = Instant::now() + limits::backoff(st.deaths);
         self.deaths.fetch_add(1, Ordering::Relaxed);
@@ -482,9 +485,7 @@ impl Pool {
     /// Cancel kills the helper at once (it may be deep in a page); that
     /// is no fault of the PDF's, so nothing is given up on.
     fn cancelled(&self, st: &mut LaneState) -> PdfError {
-        if let Some(p) = st.proc.take() {
-            end(p);
-        }
+        st.stop();
         PdfError::Cancelled
     }
 
@@ -600,6 +601,16 @@ fn lock_or_cancel<'a>(m: &'a Mutex<LaneState>, cancel: &dyn Fn() -> bool) -> Res
                 }
                 std::thread::sleep(Duration::from_millis(5));
             }
+        }
+    }
+}
+
+impl LaneState {
+    /// Kill the helper, if any, and wait for it.
+    fn stop(&mut self) {
+        self.pid.store(0, Ordering::SeqCst);
+        if let Some(p) = self.proc.take() {
+            end(p);
         }
     }
 }
