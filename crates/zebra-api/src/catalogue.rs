@@ -115,6 +115,8 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::View, r#"{"op":"pause_agents","paused":true}"#),
     (Kind::View, r#"{"op":"set_agent_permission","permission":"full"}"#),
     (Kind::View, r#"{"op":"pause_autoplay","paused":true}"#),
+    (Kind::View, r#"{"op":"play","id":"v1"}"#),
+    (Kind::View, r#"{"op":"pause","id":"v1"}"#),
     (Kind::View, r#"{"op":"set_status","text":"Rewriting the intro"}"#),
     // ---- queries
     (Kind::Query, r#"{"q":"describe"}"#),

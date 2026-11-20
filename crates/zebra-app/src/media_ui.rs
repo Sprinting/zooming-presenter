@@ -219,6 +219,15 @@ fn start_live(app: &mut ZebraApp, id: &str) {
 /// visible videos, close off-screen ones, run present-mode media, and
 /// schedule repaints only while something plays.
 pub fn tick(app: &mut ZebraApp) {
+    // An agent's `play` / `pause` (full permission), as the inspector's
+    // Play and Pause.
+    for (id, on) in std::mem::take(&mut app.editor.view.media_requests) {
+        if on {
+            play(app, &id);
+        } else {
+            pause(app, &id);
+        }
+    }
     let now = app.editor.view.now;
     let ppp = app.ctx.pixels_per_point() as f64;
     let presenting = app.editor.view.mode == Mode::Present;

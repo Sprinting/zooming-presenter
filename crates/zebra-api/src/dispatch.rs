@@ -7,7 +7,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 use zebra_core::editor::Event;
 use zebra_core::view::Permission;
-use zebra_core::{Command, Editor, Mode, Origin, Query, ZError};
+use zebra_core::{Command, Editor, Mode, Origin, Query, ViewCommand, ZError};
 use zebra_render::CaptureTarget;
 
 use crate::protocol::{self, Call, CaptureReq, ExportFormat, RpcError, WaitUntil};
@@ -509,7 +509,18 @@ impl Dispatcher {
                 self.tx_owner.remove(doc);
                 json!({ "ok": true, "revision": editor.revision })
             }
-            Call::View(cmd) => editor.view(cmd, origin.clone())?,
+            Call::View(cmd) => {
+                if let ViewCommand::Play { .. } = cmd {
+                    // Nothing would play: say so instead of a silent "ok".
+                    if self.headless {
+                        return Err(RpcError::app("unsupported", "a headless Zebra has no window to play video in").hint("run the Zebra app"));
+                    }
+                    if !zebra_media::platform().can_play() {
+                        return Err(RpcError::app("unsupported", "video plays on macOS only"));
+                    }
+                }
+                editor.view(cmd, origin.clone())?
+            }
             Call::Query(q) => editor.query(q)?,
             Call::Describe => editor.query(Query::Describe)?,
             Call::State => editor.query(Query::State)?,

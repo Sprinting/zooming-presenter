@@ -2500,6 +2500,17 @@ impl Editor {
     // ------------------------------------------------------------------
     // View commands
 
+    /// `play` / `pause`: for the host's video player.
+    fn media_request(&mut self, id: ElementId, play: bool) -> ZResult<serde_json::Value> {
+        let e = self.doc.get(&id).ok_or_else(|| ZError::new("not_found", format!("no element '{id}'")))?;
+        if !matches!(e.kind, ElementKind::Video(_)) {
+            return Err(ZError::invalid(format!("'{id}' is a {}, not a video", e.kind.type_name())));
+        }
+        // The host's player picks it up on its next frame.
+        self.view.media_requests.push((id.clone(), play));
+        Ok(serde_json::json!({ "ok": true, "id": id, "playing": play }))
+    }
+
     pub fn view(&mut self, cmd: ViewCommand, origin: Origin) -> ZResult<serde_json::Value> {
         let agent_limited = origin.is_agent() && self.view.agent_permission != Permission::Full;
         if origin.is_agent() {
@@ -2521,6 +2532,8 @@ impl Editor {
                         | ViewCommand::SetFrameStyle { .. }
                         | ViewCommand::SetViewport { .. }
                         | ViewCommand::SetReduceMotion { .. }
+                        | ViewCommand::Play { .. }
+                        | ViewCommand::Pause { .. }
                 )
             {
                 return Err(ZError::new("permission", "this view command needs 'full' agent permission")
@@ -2666,6 +2679,8 @@ impl Editor {
             }
             ViewCommand::SetReduceMotion { on } => self.view.reduce_motion = on,
             ViewCommand::FollowAgent { on } => self.view.follow_agent = on,
+            ViewCommand::Play { id } => return self.media_request(id, true),
+            ViewCommand::Pause { id } => return self.media_request(id, false),
             ViewCommand::SetStatus { text } => {
                 let Origin::Agent { name } = &origin else {
                     return Err(ZError::invalid("set_status is for agents"));

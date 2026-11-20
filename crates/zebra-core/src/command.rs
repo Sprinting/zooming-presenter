@@ -792,6 +792,11 @@ pub enum ViewCommand {
     SetAgentPermission { permission: Permission },
     /// Pause or resume autoplay while presenting.
     PauseAutoplay { paused: bool },
+    /// Play a video in place, with its sound (the inspector's Play; a click
+    /// while presenting). Needs a window and a platform that plays video.
+    Play { id: ElementId },
+    /// Pause a playing video.
+    Pause { id: ElementId },
     /// Agents: a one-line status the person sees in the status bar
     /// ("Rewriting the intro"). Up to 120 characters; "" clears it.
     SetStatus { text: String },

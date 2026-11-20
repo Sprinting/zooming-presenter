@@ -1,5 +1,5 @@
 //! Video through the API: a poster from a frame of the video (`set_poster`
-//! with `at`). Its own test binary: it sets
+//! with `at`) and `play` / `pause`. Its own test binary: it sets
 //! ZEBRA_FAKE_MEDIA (synthetic frames, so this runs off macOS too).
 use base64::Engine;
 use serde_json::{Value, json};
@@ -14,7 +14,7 @@ fn rpc_err(r: Result<Value, ClientError>) -> zebra_api::RpcError {
 }
 
 #[test]
-fn poster_from_a_frame_of_the_video() {
+fn poster_from_a_frame_and_play_needs_a_window() {
     let dir = std::env::temp_dir().join(format!("zebra-media-api-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     // SAFETY: the only test in this binary, before any thread starts.
@@ -40,6 +40,18 @@ fn poster_from_a_frame_of_the_video() {
     let e = rpc_err(c.call("apply", json!({"command":{"op":"set_poster","id":"nope","at":1}})));
     assert_eq!(e.kind(), "not_found");
 
+    // Headless has no window: play says so instead of a silent ok.
+    let e = rpc_err(c.call("view", json!({"command":{"op":"play","id":id}})));
+    assert_eq!(e.kind(), "unsupported", "{e}");
+    // Pausing is harmless.
+    c.call("view", json!({"command":{"op":"pause","id":id}})).unwrap();
+    h.stop().unwrap();
+
+    // Edit permission: play and pause are present-mode commands, full only.
+    let h = HeadlessHandle::spawn(ApiOptions { socket: None, permission: Permission::Edit }, None).unwrap();
+    let mut c = Client::connect_hello(&h.socket, "media2", &h.token).unwrap();
+    let e = rpc_err(c.call("view", json!({"command":{"op":"pause","id":"v1"}})));
+    assert_eq!(e.kind(), "permission", "{e}");
     h.stop().unwrap();
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -251,6 +251,7 @@ Errors are JSON-RPC errors whose `data` explains how to fix the problem:
 | -32000 | `unsaved_changes` | `open` or `close_document` would discard unsaved work. Save first, or pass `force` (`open`) or `discard` (`close_document`). |
 | -32000 | `already_open` | `open` or `save` names a file another document has open (two documents on one file overwrite each other's saves). The message names that document's id: work in it with `"document"`, or save to another path. |
 | -32000 | `timeout` | A `wait` condition was not met in time. |
+| -32000 | `unsupported` | This Zebra can't do it: `play` in a headless instance or off macOS, or `set_poster` with `at` where no video decoder exists (only macOS has one). |
 | -32000 | `io`, `bad_file`, `no_path`, `unimplemented` | File and renderer problems. |
 
 **"Human wins":** while the person is dragging or typing, agent edits are
@@ -476,6 +477,8 @@ Send with `view {"command": ...}`. Session state, not undoable.
 | `pause_agents` | paused: boolean |  | `{"op":"pause_agents","paused":true}` |
 | `set_agent_permission` | permission: Permission |  | `{"op":"set_agent_permission","permission":"full"}` |
 | `pause_autoplay` | paused: boolean | Pause or resume autoplay while presenting. | `{"op":"pause_autoplay","paused":true}` |
+| `play` | id: string | Play a video in place, with its sound (the inspector's Play; a click while presenting). Needs a window and a platform that plays video. | `{"op":"play","id":"v1"}` |
+| `pause` | id: string | Pause a playing video. | `{"op":"pause","id":"v1"}` |
 | `set_status` | text: string | Agents: a one-line status the person sees in the status bar ("Rewriting the intro"). Up to 120 characters; "" clears it. | `{"op":"set_status","text":"Rewriting the intro"}` |
 
 ### Queries
