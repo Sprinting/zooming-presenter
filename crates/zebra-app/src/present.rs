@@ -15,6 +15,9 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
     // Keys.
     let events = ctx.input(|i| i.events.clone());
     for ev in events {
+        if crate::presenting::jump_key(app, &ev) {
+            continue;
+        }
         let egui::Event::Key { key, pressed: true, modifiers, .. } = ev else { continue };
         let cmd = match key {
             Key::ArrowRight | Key::ArrowDown | Key::Space | Key::PageDown | Key::Enter if !modifiers.command => Some(ViewCommand::Next),
@@ -106,6 +109,10 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
             app.last_pointer = pos;
             app.last_pointer_move = app.now();
         }
+        // Typing a step number keeps the bezel up with the number in it.
+        if app.stage.jump.is_some() {
+            app.last_pointer_move = app.now();
+        }
         let idle = app.now() - app.last_pointer_move;
         if idle < 2.0 {
             // A dark HUD bezel at the bottom centre: ‹ position › and how to
@@ -116,11 +123,13 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
                 Some(s) => crate::t!("present-hud-step-of", step = ((s + 1) as u64), count = n),
                 None => crate::t!("present-hud-overview", count = n),
             };
+            let txt = crate::presenting::jump_text(app, false).unwrap_or(txt);
             let a = ((2.0 - idle) / 0.4).clamp(0.0, 1.0) as f32;
             let white = Color32::WHITE.gamma_multiply(a);
             let font = crate::style::ui_font(13.0);
             let galley = painter.layout_no_wrap(txt, font.clone(), white);
-            let esc = painter.layout_no_wrap(crate::t!("present-hud-exit", key = "Esc"), crate::style::ui_font(11.0), Color32::from_gray(200).gamma_multiply(a));
+            let hint = if app.stage.jump.is_some() { crate::t!("present-hud-go-to-hint") } else { crate::t!("present-hud-exit", key = "Esc") };
+            let esc = painter.layout_no_wrap(hint, crate::style::ui_font(11.0), Color32::from_gray(200).gamma_multiply(a));
             let btn = egui::vec2(30.0, 30.0);
             let w = btn.x * 2.0 + galley.size().x + 24.0 + 1.0 + esc.size().x + 28.0;
             let hud = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.bottom() - 44.0), egui::vec2(w, 38.0));
@@ -144,7 +153,16 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
                 let _ = app.editor.view(ViewCommand::Prev, H);
             }
             x += btn.x + 12.0;
-            painter.galley(egui::pos2(x, hud.center().y - galley.size().y / 2.0), galley.clone(), white);
+            let at = egui::pos2(x, hud.center().y - galley.size().y / 2.0);
+            let pos_rect = egui::Rect::from_min_size(at, galley.size()).expand(4.0);
+            let pos_resp = ui.interact(pos_rect, hud_id.with("go-to"), Sense::click()).on_hover_text(crate::t!("present-go-to-tip"));
+            if pos_resp.clicked() && n > 0 {
+                app.stage.jump = Some(String::new());
+            }
+            if app.stage.jump.is_some() {
+                painter.line_segment([pos_rect.left_bottom() + egui::vec2(4.0, -2.0), pos_rect.right_bottom() + egui::vec2(-4.0, -2.0)], egui::Stroke::new(1.0, white));
+            }
+            painter.galley(at, galley.clone(), white);
             x += galley.size().x + 12.0;
             if step_btn(&painter, ui, x, Icon::ChevronRight, "next", !at_end) {
                 let _ = app.editor.view(ViewCommand::Next, H);
