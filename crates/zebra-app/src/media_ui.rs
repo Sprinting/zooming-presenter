@@ -93,6 +93,9 @@ enum Inserted {
     Video(Insert),
     /// A pasted picture, as PNG, and where it goes.
     Picture(Vec<u8>, Vec2),
+    /// The system clipboard held no picture after all: paste Zebra's own
+    /// copied objects, as Paste does when the clipboard has nothing newer.
+    NoPicture,
 }
 
 struct Insert {
@@ -421,6 +424,7 @@ pub fn tick(app: &mut ZebraApp) {
         match i {
             Inserted::Video(i) => finish_insert_video(app, i),
             Inserted::Picture(png, at) => app.insert_image_bytes(png, at, crate::t!("media-pasted-image")),
+            Inserted::NoPicture => app.paste_own(),
         }
     }
     crate::web_video_ui::poll_downloads(app);
@@ -788,11 +792,35 @@ pub fn insert_file(app: &mut ZebraApp, p: &std::path::Path, at: Vec2) {
         Ok(Dropped::Media(MediaKind::Image)) => app.insert_image_file(p, at),
         Ok(Dropped::Media(MediaKind::Document) | Dropped::Slides) => crate::import_ui::start(app, p.to_path_buf()),
         Ok(Dropped::Other) => {
-            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            app.toast(crate::t!("media-toast-unsupported-file", name = name));
+            app.toast(crate::t!("media-toast-unsupported-file", name = file_name(p)));
         }
-        Err(e) => app.toast(crate::t!("app-toast-read-failed", path = p.display().to_string(), error = e.to_string())),
+        Ok(Dropped::Damaged) => app.toast(crate::t!("app-toast-empty-or-damaged", name = file_name(p))),
+        Err(e) => app.toast(unreadable(p, &e)),
     }
+}
+
+/// A file's name as the person knows it (never the whole path).
+pub fn file_name(p: &std::path::Path) -> String {
+    p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string())
+}
+
+/// What the person reads when a file they gave can't be read: a folder,
+/// pipe or device isn't a file; anything else can't be read. (The details
+/// are for the log.)
+pub fn unreadable(p: &std::path::Path, e: &std::io::Error) -> String {
+    eprintln!("zebra: can't read {}: {e}", p.display());
+    if e.kind() == std::io::ErrorKind::InvalidInput || std::fs::metadata(p).is_ok_and(|m| !m.is_file()) {
+        crate::t!("app-toast-not-a-file", name = file_name(p))
+    } else {
+        crate::t!("app-toast-cant-read", name = file_name(p))
+    }
+}
+
+/// [`unreadable`] for an error that isn't an `io::Error` (a dropped
+/// file's bytes from the window system).
+pub fn cant_read(p: &std::path::Path, e: &str) -> String {
+    eprintln!("zebra: can't read {}: {e}", p.display());
+    crate::t!("app-toast-cant-read", name = file_name(p))
 }
 
 #[derive(Debug, PartialEq)]
@@ -800,6 +828,9 @@ pub enum Dropped {
     Media(MediaKind),
     /// A PowerPoint file, imported like a PDF (as Keynote does).
     Slides,
+    /// Named as a kind Zebra takes, but empty or not what its name says
+    /// (a cut-off download, an empty .pptx).
+    Damaged,
     Other,
 }
 
@@ -813,10 +844,15 @@ pub fn dropped_kind(p: &std::path::Path) -> std::io::Result<Dropped> {
         return Ok(Dropped::Media(k));
     }
     let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    if head.starts_with(b"PK\x03\x04") && matches!(ext.as_str(), "pptx" | "pptm" | "ppsx" | "potx") {
+    let slides = matches!(ext.as_str(), "pptx" | "pptm" | "ppsx" | "potx");
+    if head.starts_with(b"PK\x03\x04") && slides {
         return Ok(Dropped::Slides);
     }
-    Ok(Dropped::Other)
+    // Named as something Zebra takes, but it isn't: say so, rather than
+    // ask for the kind of file it already claims to be.
+    let known = slides
+        || matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "mp4" | "mov" | "m4v" | "mp3" | "m4a" | "aac" | "wav" | "pdf");
+    Ok(if known { Dropped::Damaged } else { Dropped::Other })
 }
 
 // ----------------------------------------------------------------------
@@ -899,11 +935,38 @@ pub fn paste_from_system(app: &mut ZebraApp) -> bool {
             return true;
         }
     }
-    if let Ok(img) = c.get_image() {
-        paste_rgba(app, img.width as u32, img.height as u32, img.bytes.into_owned());
-        return true;
+    // A picture: read and decoded on a worker (a 12000 x 9000 screenshot
+    // took 2 s on the window's thread). Whether there is one is only known
+    // there, so Zebra's own copy is pasted from there too if there isn't.
+    drop(c);
+    paste_picture_with(app, || {
+        let img = arboard::Clipboard::new().ok()?.get_image().ok()?;
+        Some((img.width as u32, img.height as u32, img.bytes.into_owned()))
+    });
+    true
+}
+
+/// Paste the picture `read` gives (width, height, RGBA), read, scaled and
+/// encoded on a worker so the window never waits for it. None from `read`
+/// pastes Zebra's own copied objects instead.
+pub fn paste_picture_with(app: &mut ZebraApp, read: impl FnOnce() -> Option<(u32, u32, Vec<u8>)> + Send + 'static) {
+    let at = app.canvas_center_world();
+    let (tx, rx) = channel();
+    let ctx = app.ctx.clone();
+    let spawned = std::thread::Builder::new().name("zebra-paste".into()).spawn(move || {
+        let got = match read() {
+            Some((w, h, rgba)) => pasted_png(w, h, rgba).map(|png| Inserted::Picture(png, at)),
+            None => Some(Inserted::NoPicture),
+        };
+        if let Some(i) = got {
+            let _ = tx.send(i);
+        }
+        ctx.request_repaint();
+    });
+    if spawned.is_ok() {
+        app.media.inserting.push(rx);
+        app.ctx.request_repaint();
     }
-    false
 }
 
 /// Paste raw RGBA pixels as a PNG picture at the view centre. Scaled and

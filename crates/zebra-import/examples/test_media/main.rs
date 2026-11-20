@@ -27,24 +27,36 @@ fn main() {
     for d in [&big, &bad] {
         std::fs::create_dir_all(d).expect("make the folder");
     }
-    let step = |what: &str| eprintln!("  {what}");
+    // Each line names the file as it is made (it used to say big/deck.pptx
+    // and big/pages.pdf for files named otherwise).
+    let step = |p: &Path, what: &str| {
+        let name = p.strip_prefix(dir).unwrap_or(p).display().to_string();
+        if what.is_empty() { eprintln!("  {name}") } else { eprintln!("  {name} ({what})") }
+    };
 
-    step("big/video.mp4 (plays a 6 s clip; the rest is padding)");
-    padded(SEED_MP4, &big.join(format!("video-{mb}MB.mp4")), mb << 20);
-    step("big/music.m4a");
-    padded(SEED_M4A, &big.join(format!("music-{}MB.m4a", mb / 2)), (mb / 2).max(1) << 20);
-    step("big/silence.wav");
-    wav(&big.join("silence-1GB.wav"), 1 << 30);
-    step("big/picture.png (about 217 MB of noise, under Zebra's 256 MB limit)");
-    noise_png(&big.join("picture-217MB.png"), 8700, 8700);
-    step("big/picture-over-limit.png");
-    sparse_after(&small_png(), &big.join("picture-over-limit-300MB.png"), 300 << 20);
-    step("big/deck.pptx (the big video inside a PowerPoint file; real size)");
-    pptx_with(&big.join(format!("video-{mb}MB.mp4")), &big.join(format!("deck-with-{mb}MB-video.pptx")));
-    step("big/pages.pdf (600 pages)");
-    pdf(&big.join("600-pages.pdf"), 600);
+    let video = big.join(format!("video-{mb}MB.mp4"));
+    step(&video, "plays a 6 s clip; the rest is padding");
+    padded(SEED_MP4, &video, mb << 20);
+    let music = big.join(format!("music-{}MB.m4a", mb / 2));
+    step(&music, "");
+    padded(SEED_M4A, &music, (mb / 2).max(1) << 20);
+    let wav_file = big.join("silence-1GB.wav");
+    step(&wav_file, "");
+    wav(&wav_file, 1 << 30);
+    let picture = big.join("picture-217MB.png");
+    step(&picture, "about 217 MB of noise, under Zebra's 256 MB limit");
+    noise_png(&picture, 8700, 8700);
+    let over = big.join("picture-over-limit-300MB.png");
+    step(&over, "");
+    sparse_after(&small_png(), &over, 300 << 20);
+    let deck = big.join(format!("deck-with-{mb}MB-video.pptx"));
+    step(&deck, "the big video inside a PowerPoint file; real size");
+    pptx_with(&video, &deck);
+    let pages = big.join("600-pages.pdf");
+    step(&pages, "600 pages");
+    pdf(&pages, 600);
 
-    step("hostile/…");
+    eprintln!("  hostile/…");
     std::fs::write(bad.join("empty.png"), b"").unwrap();
     std::fs::write(bad.join("empty.pptx"), b"").unwrap();
     std::fs::write(bad.join("empty.zebra"), b"").unwrap();

@@ -518,6 +518,15 @@ pub fn drag_end(app: &mut ZebraApp) {
 pub fn key(app: &mut ZebraApp, key: Key, m: Modifiers) -> bool {
     let Some(s) = app.canvas.table.clone() else { return false };
     if s.edit.is_some() {
+        // Esc while typing in a cell: egui has already let go of the
+        // field's focus, so the key reaches here before the field sees it.
+        // Like Numbers, it cancels the typing and keeps that cell selected
+        // (it used to go on to Deselect, which selected the whole table);
+        // a second Esc then goes to the table.
+        if key == Key::Escape && m.is_none() {
+            cancel_edit(app);
+            return true;
+        }
         return false;
     }
     let Some((_, t)) = table(app, &s.id) else { return false };
@@ -998,9 +1007,7 @@ fn cell_field(app: &mut ZebraApp, ctx: &egui::Context, e: &Element, t: &TableDat
         st.edit = Some(edit);
     }
     if esc || bar == Some(false) {
-        if let Some(st) = &mut app.canvas.table {
-            st.edit = None;
-        }
+        cancel_edit(app);
     } else if bar == Some(true) {
         commit_edit(app, None);
     } else if enter {
@@ -1009,6 +1016,14 @@ fn cell_field(app: &mut ZebraApp, ctx: &egui::Context, e: &Element, t: &TableDat
         commit_edit(app, Some((0, 1)));
     } else if back_tab {
         commit_edit(app, Some((0, -1)));
+    }
+}
+
+/// Stop typing in a cell without keeping what was typed; the cell stays
+/// selected.
+fn cancel_edit(app: &mut ZebraApp) {
+    if let Some(st) = &mut app.canvas.table {
+        st.edit = None;
     }
 }
 

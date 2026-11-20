@@ -112,7 +112,12 @@ fn read_zip(bytes: &[u8], map: Option<&Arc<crate::media::MappedFile>>) -> ZResul
     }
     let json = read_json(f)?;
     let mut doc = from_json(&json)?;
-    doc.assets = read_assets(&mut z, map)?;
+    // Only what the document refers to: a file can carry assets nothing
+    // uses (a hostile one, a 200 MB bomb), and reading one would spill it
+    // to disk for nothing. Just opened, nothing else can need them: there
+    // is no undo history yet, and a save would leave them out anyway.
+    let used: std::collections::BTreeSet<String> = doc.used_assets().into_iter().map(str::to_string).collect();
+    doc.assets = read_assets(&mut z, map, Some(&used))?;
     Ok(doc)
 }
 
@@ -123,7 +128,7 @@ pub const MAX_DOCUMENT_JSON: u64 = 32 << 20;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn too_long() -> ZError {
-    ZError::new("bad_file", "the document is too large to be a Zebra document (over 32 MB of text)")
+    ZError::new("bad_file", "the document is too large to be a Zebra document (over 32 MB of text)").about(crate::error::About::Document)
 }
 
 /// Largest inflation a compressed asset may claim. Zebra stores assets
@@ -147,7 +152,7 @@ fn read_json(r: impl Read) -> ZResult<String> {
 #[cfg(not(target_arch = "wasm32"))]
 /// The assets in a `.zebra` zip (mapped when `map` is the file and they
 /// are stored uncompressed). Assets are only read as far as their headers.
-fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc<crate::media::MappedFile>>) -> ZResult<std::collections::BTreeMap<String, Asset>> {
+fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc<crate::media::MappedFile>>, only: Option<&std::collections::BTreeSet<String>>) -> ZResult<std::collections::BTreeMap<String, Asset>> {
     let bad = |m: String| ZError::new("bad_file", m);
     let mut assets = std::collections::BTreeMap::new();
     for i in 0..z.len() {
@@ -157,7 +162,7 @@ fn read_assets(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, map: Option<&Arc
         let Some((key, _ext)) = file.rsplit_once('.') else { continue };
         // A key becomes a file name in the media cache: one that isn't a
         // plain name (a crafted "assets/../../x.mp4") is not an asset.
-        if !crate::check::safe_asset_key(key) {
+        if !crate::check::safe_asset_key(key) || only.is_some_and(|o| !o.contains(key)) {
             continue;
         }
         let mapped = match (map, f.compression(), f.data_start()) {
@@ -336,7 +341,7 @@ fn mapped_assets(path: &Path) -> ZResult<Vec<(String, AssetBytes)>> {
     let ioe = |e: std::io::Error| ZError::new("io", format!("{}: {e}", path.display()));
     let map = Arc::new(map_document(path).map_err(ioe)?);
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(&map[..])).map_err(|e| ZError::new("bad_file", e.to_string()))?;
-    Ok(read_assets(&mut z, Some(&map))?.into_iter().filter(|(_, a)| a.bytes.is_mapped()).map(|(k, a)| (k, a.bytes)).collect())
+    Ok(read_assets(&mut z, Some(&map), None)?.into_iter().filter(|(_, a)| a.bytes.is_mapped()).map(|(k, a)| (k, a.bytes)).collect())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -609,9 +614,9 @@ pub fn load_autosave(path: &Path, base: Option<&Path>) -> ZResult<Document> {
         let from = (|| -> Option<std::collections::BTreeMap<String, Asset>> {
             let map = Arc::new(map_document(b).ok()?);
             let mut z = zip::ZipArchive::new(std::io::Cursor::new(&map[..])).ok()?;
-            read_assets(&mut z, Some(&map)).ok()
+            read_assets(&mut z, Some(&map), Some(&want)).ok()
         })();
-        for (k, a) in from.into_iter().flatten().filter(|(k, _)| want.contains(k)) {
+        for (k, a) in from.into_iter().flatten() {
             doc.assets.insert(k, a);
         }
     }

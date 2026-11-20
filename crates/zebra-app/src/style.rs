@@ -321,6 +321,9 @@ pub fn ui_font(size: f32) -> FontId {
 pub fn apply_visuals(ctx: &egui::Context) {
     ctx.options_mut(|o| {
         o.zoom_with_keyboard = false;
+        // Zebra's own Quit (⌘Q) asks about unsaved documents. egui's
+        // built-in one closed the root window behind its back (B4).
+        o.quit_shortcuts.clear();
         // Follow the system appearance; light when the platform doesn't say.
         o.fallback_theme = egui::Theme::Light;
     });

@@ -694,3 +694,37 @@ fn an_export_that_panics_says_it_could_not_export() {
     assert!(good.exists(), "the next export works");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Cloud pass: with the template chooser up, ⌘V (and Delete, Undo…) went
+/// to the document hidden behind it. A sheet or the chooser has the
+/// window: only New, Open, Close, Quit and the app's own windows work.
+#[test]
+fn nothing_reaches_the_document_behind_the_template_chooser() {
+    use zebra_app::actions::Action;
+    let mut h = harness(Some("empty"));
+    let out = h
+        .state_mut()
+        .editor
+        .apply(Command::AddFrame { style: Default::default(), x: 0.0, y: 0.0, w: 800.0, h: 600.0, rotation: 0.0, name: None, id: None, add_to_path: false, find_space: false }, Origin::Human)
+        .unwrap();
+    h.state_mut().select(out.created.clone());
+    for a in [Action::Copy, Action::ShowTemplates] {
+        h.state_mut().queued.push(a);
+        h.run_steps(3);
+    }
+    assert!(h.state().welcome.is_some());
+    for a in [Action::Paste, Action::Delete, Action::Duplicate, Action::Undo, Action::InsertTable] {
+        h.state_mut().queued.push(a);
+        h.run_steps(2);
+    }
+    h.event(Event::Paste(String::new()));
+    h.run_steps(2);
+    let app = h.state();
+    assert_eq!(app.editor.doc.elements.len(), 1, "the document behind is untouched");
+    assert!(app.welcome.is_some(), "the chooser is still up");
+    // Closed: Paste works again.
+    h.state_mut().welcome = None;
+    h.state_mut().queued.push(Action::Paste);
+    h.run_steps(3);
+    assert_eq!(h.state().editor.doc.elements.len(), 2);
+}

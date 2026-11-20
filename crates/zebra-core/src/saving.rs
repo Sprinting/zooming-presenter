@@ -44,7 +44,7 @@ impl Editor {
     /// Refused with `busy` while another save of this document runs.
     pub fn start_save(&mut self, path: PathBuf, by: Origin, wake: Box<dyn Fn() + Send>) -> ZResult<()> {
         if let Some(j) = &self.saving {
-            return Err(ZError::new("busy", format!("{} is being saved", j.path.display())).hint("wait for that save to finish"));
+            return Err(ZError::new("busy", format!("{} is being saved", j.path.display())).hint("wait for that save to finish").about(crate::error::About::Saving));
         }
         // Media nothing can show any more goes; what only undo can bring
         // back is moved out of the old file below.

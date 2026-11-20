@@ -8,7 +8,7 @@ use crate::table::{CellFormat, CellInput, CellRange, Limit, RangeFormat, TableDa
 
 /// An input over a limit, as the API reports it.
 fn too_big(l: Limit) -> ZError {
-    ZError::new("too_big", l.message()).hint("nothing was changed")
+    ZError::new("too_big", l.message()).hint("nothing was changed").about(crate::error::About::Table)
 }
 
 /// The first input over a limit, if any.
@@ -403,7 +403,7 @@ fn fit_columns(m: &dyn TextMeasure, theme: &Theme, t: &mut TableData) {
             if longest.is_empty() {
                 continue;
             }
-            let td = TextData { text: longest.to_string(), bold: t.bold_at(r, c), ..Default::default() };
+            let td = TextData { text: crate::table::drawn_text(longest).into_owned(), bold: t.bold_at(r, c), ..Default::default() };
             widest = widest.max(m.measure(&td, theme, None).0 * t.font_size);
         }
         let w = (widest + 2.0 * l.pad_x + 2.0).ceil();
@@ -474,7 +474,7 @@ pub(super) fn measure_table(m: &dyn TextMeasure, theme: &Theme, e: &mut Element,
                 lh
             } else {
                 let italic = t.format_at(r, c).italic.unwrap_or(false);
-                let td = TextData { text: s.text, bold, italic, fixed_width: true, ..Default::default() };
+                let td = TextData { text: crate::table::drawn_text(&s.text).into_owned(), bold, italic, fixed_width: true, ..Default::default() };
                 m.measure(&td, theme, Some(avail / fs)).1 * fs
             };
             need = need.max(h);

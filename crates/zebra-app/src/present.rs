@@ -91,8 +91,9 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
             let _ = app.editor.view(ViewCommand::Prev, H);
         }
 
+        // The audience sees the show only: an agent's cursor, its name and
+        // the flashes of its edits are for the editor, never this screen.
         let painter = ui.painter_at(rect);
-        let _ = crate::canvas::draw_agent_presence(app, &painter);
         match app.blank() {
             Some(Blank::Black) => {
                 painter.rect_filled(rect, 0.0, Color32::BLACK);

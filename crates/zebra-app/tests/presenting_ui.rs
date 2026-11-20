@@ -219,3 +219,40 @@ fn clicker_keys_close_the_go_to_field_and_step() {
     assert_eq!(h.state().editor.view.present.step, Some(0));
     assert_eq!(h.state().editor.view.mode, Mode::Present);
 }
+
+/// Every text drawn this frame.
+fn drawn_texts(h: &Harness<'static, ZebraApp>) -> Vec<String> {
+    fn walk(s: &egui::Shape, out: &mut Vec<String>) {
+        match s {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    for c in &h.output().shapes {
+        walk(&c.shape, &mut out);
+    }
+    out
+}
+
+/// Cloud pass: an agent's cursor and name showed on the screen the
+/// audience sees. It shows while editing, never while presenting.
+#[test]
+fn the_agent_marker_is_not_shown_to_the_audience() {
+    let mut h = harness(Some("sample"));
+    let name = h.state().agent_name();
+    let put_cursor = |h: &mut Harness<'static, ZebraApp>| {
+        let a = h.state_mut();
+        a.editor.agent_cursor = Some(a.editor.view.camera.center());
+        a.editor.agent_cursor_time = a.editor.view.now;
+    };
+    put_cursor(&mut h);
+    h.run_steps(2);
+    assert!(drawn_texts(&h).iter().any(|t| t.contains(&name)), "shown in the editor");
+    perform(&mut h, Action::PresentStart);
+    assert_eq!(h.state().editor.view.mode, Mode::Present);
+    put_cursor(&mut h);
+    h.run_steps(2);
+    assert!(!drawn_texts(&h).iter().any(|t| t.contains(&name)), "not on the stage");
+}

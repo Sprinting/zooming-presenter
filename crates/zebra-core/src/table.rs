@@ -362,7 +362,7 @@ pub enum CellInput {
 impl CellInput {
     pub fn into_input(self) -> String {
         match self {
-            CellInput::Text(s) => s,
+            CellInput::Text(s) => one_newline(s),
             CellInput::Number(v) => plain_number(v),
             CellInput::Bool(b) => (if b { "TRUE" } else { "FALSE" }).into(),
             CellInput::Empty(()) => String::new(),
@@ -2182,6 +2182,54 @@ impl Limit {
     }
 }
 
+/// Line breaks as Zebra keeps them in a cell: CR LF (Windows, Excel's
+/// clipboard) and a lone CR (old Mac) become LF, as Numbers does, so a
+/// break never shows as a blank line.
+pub fn one_newline(s: String) -> String {
+    if !s.contains('\r') {
+        return s;
+    }
+    s.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+/// What a cell's text looks like drawn: a tab shows as a space (as in
+/// Numbers), not as a missing-glyph box.
+pub fn drawn_text(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains('\t') { std::borrow::Cow::Owned(s.replace('\t', " ")) } else { std::borrow::Cow::Borrowed(s) }
+}
+
+/// The separator of delimited text: a tab when one is outside quotes
+/// (what Numbers and Excel copy), else a comma. A tab inside a quoted
+/// field of comma-separated text doesn't make it tab-separated. Quotes
+/// open a field only at its start, as [`parse_delimited`] reads them;
+/// text whose quotes never close is judged by any tab at all.
+fn separator(text: &str) -> char {
+    let (mut quoted, mut at_start) = (false, true);
+    let mut it = text.chars().peekable();
+    while let Some(ch) = it.next() {
+        if quoted {
+            if ch == '"' {
+                if it.peek() == Some(&'"') {
+                    it.next();
+                } else {
+                    quoted = false;
+                }
+            }
+            continue;
+        }
+        match ch {
+            '\t' => return '\t',
+            '"' if at_start => {
+                quoted = true;
+                at_start = false;
+            }
+            ',' | '\n' | '\r' => at_start = true,
+            _ => at_start = false,
+        }
+    }
+    if quoted && text.contains('\t') { '\t' } else { ',' }
+}
+
 /// Most text read as a table (a paste, `add_table`'s csv): about what
 /// 100,000 short cells take, with room to spare.
 pub const MAX_PASTE_BYTES: usize = 16 << 20;
@@ -2198,7 +2246,7 @@ pub fn parse_delimited(text: &str) -> Result<Vec<Vec<String>>, Limit> {
         return Err(Limit::Bytes);
     }
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let sep = if text.contains('\t') { '\t' } else { ',' };
+    let sep = separator(text);
     let mut rows: Vec<Vec<String>> = vec![];
     let mut row: Vec<String> = vec![];
     let mut field = String::new();
@@ -2236,6 +2284,13 @@ pub fn parse_delimited(text: &str) -> Result<Vec<Vec<String>>, Limit> {
                 } else {
                     quoted = false;
                 }
+            } else if ch == '\r' {
+                // A break inside a quoted cell: CR LF or CR is one LF.
+                if it.peek() == Some(&'\n') {
+                    it.next();
+                }
+                field.push('\n');
+                field_chars += 1;
             } else {
                 field.push(ch);
                 field_chars += 1;
@@ -2251,8 +2306,9 @@ pub fn parse_delimited(text: &str) -> Result<Vec<Vec<String>>, Limit> {
                 end_field(&mut row, &mut field, &mut field_chars)?;
                 at_start = true;
             }
-            '\r' => {}
-            '\n' => {
+            // CR LF ends a row once; a lone CR (old Mac text) ends one too.
+            '\r' if it.peek() == Some(&'\n') => {}
+            '\r' | '\n' => {
                 end_field(&mut row, &mut field, &mut field_chars)?;
                 rows.push(std::mem::take(&mut row));
                 if rows.len() > MAX_ROWS {
@@ -2309,9 +2365,9 @@ pub fn to_tsv(rows: &[Vec<String>]) -> String {
 }
 
 /// Whether pasted text reads as a table: at least two fields, from text
-/// with a tab in it.
+/// with a tab in it (outside quotes).
 pub fn looks_tabular(text: &str) -> bool {
-    text.contains('\t') && {
+    text.contains('\t') && separator(text) == '\t' && {
         // Only the first lines matter: a tab and two fields.
         let head: String = text.lines().take(2).collect::<Vec<_>>().join("\n");
         let rows = parse_delimited(&head).unwrap_or_default();
@@ -2467,6 +2523,36 @@ mod tests {
         assert_eq!(parse_delimited("a,b\nc").unwrap(), [vec!["a", "b"], vec!["c", ""]]);
         assert!(looks_tabular("a\tb"));
         assert!(!looks_tabular("just words"));
+    }
+
+    #[test]
+    fn line_breaks_in_cells_are_one_newline() {
+        // CR LF inside a quoted cell (Excel on Windows) is one break, not
+        // a blank line; CR LF and a lone CR end rows outside quotes.
+        let rows = parse_delimited("Name\tNotes\r\nAda\t\"line one\r\nline two\"\r\nBob\t\"a\rb\"\r\n").unwrap();
+        assert_eq!(rows, [vec!["Name", "Notes"], vec!["Ada", "line one\nline two"], vec!["Bob", "a\nb"]]);
+        assert_eq!(parse_delimited("a,b\rc,d").unwrap(), [vec!["a", "b"], vec!["c", "d"]]);
+        // Typed or sent by an agent: the same.
+        assert_eq!(CellInput::Text("x\r\ny\rz".into()).into_input(), "x\ny\nz");
+    }
+
+    #[test]
+    fn a_tab_inside_quotes_doesnt_make_csv_tab_separated() {
+        let rows = parse_delimited("Item,Note\nPens,\"blue\tand red\"\n").unwrap();
+        assert_eq!(rows, [vec!["Item", "Note"], vec!["Pens", "blue\tand red"]]);
+        assert!(!looks_tabular("Item,Note\nPens,\"blue\tand red\"\n"));
+        // Tab-separated text with quoted commas, quoted tabs or a quote
+        // that never closes is still read on tabs.
+        assert_eq!(parse_delimited("\"a,b\"\tc").unwrap(), [vec!["a,b", "c"]]);
+        assert_eq!(parse_delimited("x\t\"a\tb\"").unwrap(), [vec!["x", "a\tb"]]);
+        assert_eq!(separator("\"5 inch\tscreen"), '\t');
+        assert!(looks_tabular("a\t\"b,c\"\nd\te"));
+    }
+
+    #[test]
+    fn a_tab_in_a_cell_is_drawn_as_a_space() {
+        assert_eq!(drawn_text("a\tb"), "a b");
+        assert!(matches!(drawn_text("plain"), std::borrow::Cow::Borrowed(_)));
     }
 
     #[test]

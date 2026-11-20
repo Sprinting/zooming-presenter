@@ -102,15 +102,26 @@ pub fn diagram_description(d: &zebra_core::diagrams::Diagram) -> String {
     named("diagram-description", d.key, d.description)
 }
 
-/// What a person reads when a command they gave fails, by error code.
-pub fn error(code: &str) -> String {
-    match code {
+/// What a person reads when a command they gave fails: by what the error
+/// is about where the code alone would say the wrong thing (`too_big` is
+/// a table, a picture or a document), else by its code.
+pub fn error(e: &zebra_core::ZError) -> String {
+    use zebra_core::error::About;
+    match e.about {
+        Some(About::Table) => return t!("table-too-big"),
+        Some(About::Picture) => return t!("app-error-picture-too-big"),
+        Some(About::Poster) => return t!("app-error-poster-too-big"),
+        Some(About::Document) => return t!("app-error-document-too-big"),
+        Some(About::Saving) => return t!("app-error-saving"),
+        None => {}
+    }
+    match e.code {
         "locked" => t!("app-error-locked"),
         "busy" => t!("app-error-busy"),
         "io" => t!("app-error-io"),
         "not_empty" => t!("app-error-not-empty"),
         "not_found" => t!("app-error-not-found"),
-        "too_big" => t!("app-error-too-big"),
+        "too_big" | "too_large" => t!("app-error-too-big"),
         zebra_core::beta::CODE => t!("app-error-beta-off"),
         _ => t!("app-error-other"),
     }

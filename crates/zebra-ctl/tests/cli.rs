@@ -56,7 +56,7 @@ fn zebractl_end_to_end() {
     let (ok, out, _) = ctl(&h, &data, &["query", r#"{"q":"element","id":"sp"}"#]);
     assert!(ok && out.contains("Move words"), "{out}");
     // Calls go through one relay holding this agent's single connection.
-    let relay = zebra_api::relay::socket_for(&h.socket, "zebractl");
+    let relay = zebra_api::relay::socket_for(&h.socket, "zebractl").unwrap();
     assert!(relay.exists(), "relay socket {}", relay.display());
     let (ok, out, _) = ctl(&h, &data, &["apply", r#"[{"op":"set_title","title":"T"},{"op":"auto_path"}]"#, "--label", "Two"]);
     assert!(ok, "{out}");
@@ -83,4 +83,27 @@ fn zebractl_end_to_end() {
     assert!(ok && out.contains("| `add_text` |"));
 
     h.stop().unwrap();
+}
+
+/// A Zebra socket path long enough that its relay's name wouldn't fit a
+/// socket address: calls answer at once (they used to wait 2 s each for a
+/// relay that couldn't start, then fall back).
+#[test]
+fn a_long_socket_path_does_not_slow_calls() {
+    let base = std::env::temp_dir().join(format!("zebractl-long-{}", std::process::id()));
+    let data = base.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let pad = 100usize.saturating_sub(base.as_os_str().len() + 8);
+    let dir = base.join("d".repeat(pad.max(1)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("z.sock");
+    let h = HeadlessHandle::spawn(ApiOptions { socket: Some(sock.clone()), permission: Permission::Full }, None).unwrap();
+    for _ in 0..3 {
+        let t = std::time::Instant::now();
+        let (ok, out, err) = ctl(&h, &data, &["--agent", "long", "describe"]);
+        assert!(ok, "{out}{err}");
+        assert!(t.elapsed() < std::time::Duration::from_millis(1500), "{:?}", t.elapsed());
+    }
+    h.stop().unwrap();
+    let _ = std::fs::remove_dir_all(&base);
 }
