@@ -1012,6 +1012,11 @@ present-toast-opened-link = Opened { $url }
 # Presentation HUD. $key is the key glyph that returns to the path (→).
 present-hud-off-path = { $step } of { $count }  ·  Press { $key } to return to the path
 present-hud-step-of = { $step } of { $count }
+# Typing a step number to jump to it ($step is what has been typed so far).
+present-hud-go-to = Go to { $step } of { $count }
+present-presenter-go-to = Go to Step { $step } of { $count }
+present-go-to-tip = Type a step number, then press Return
+present-hud-go-to-hint = Press Return to go
 present-hud-overview = Overview  ·  { $count ->
     [one] 1 step
    *[other] { $count } steps

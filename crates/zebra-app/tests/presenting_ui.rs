@@ -147,3 +147,42 @@ fn placeholders_turn_into_content_when_typed_into() {
     assert!(!h.state().editor.doc.get(&ph).unwrap().placeholder);
 }
 
+
+#[test]
+fn typing_a_step_number_while_presenting_jumps_there() {
+    let mut h = harness(Some("sample"));
+    h.key_press(Key::F5);
+    h.run_steps(2);
+    assert_eq!(h.state().editor.view.present.step, Some(0));
+    let n = h.state().editor.doc.path.len();
+    assert!(n >= 4);
+    // Like Keynote: type the number, then Return.
+    h.event(Event::Text("4".into()));
+    h.run_steps(1);
+    assert_eq!(h.state().stage.jump.as_deref(), Some("4"));
+    assert_eq!(h.state().editor.view.present.step, Some(0), "nothing moves until Return");
+    if let Some(dir) = std::env::var_os("ZEBRA_SHOTS") {
+        h.run_steps(30);
+        h.render().unwrap().save(std::path::Path::new(&dir).join("present-go-to.png")).unwrap();
+    }
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().editor.view.present.step, Some(3));
+    assert!(h.state().stage.jump.is_none());
+    // Esc closes the field without leaving the show; a number past the end does nothing.
+    h.event(Event::Text("9".into()));
+    h.event(Event::Text("9".into()));
+    h.run_steps(1);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().editor.view.mode, Mode::Present);
+    assert!(h.state().stage.jump.is_none());
+    h.event(Event::Text(format!("{}", n + 1)));
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().editor.view.present.step, Some(3));
+    // Then Return steps on as usual.
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().editor.view.present.step.map(|s| s >= 3), Some(true));
+}

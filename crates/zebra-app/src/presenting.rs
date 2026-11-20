@@ -43,6 +43,9 @@ pub struct Stage {
     pub slides: Slides,
     /// Frame timing for the perf query.
     pub frame_start: Option<std::time::Instant>,
+    /// A step number being typed to jump to (Keynote: type the slide
+    /// number, then Return). Some("") while the field is open but empty.
+    pub jump: Option<String>,
 }
 
 impl Stage {
@@ -60,6 +63,7 @@ impl Stage {
             saved_frame: None,
             slides: Slides::new(ctx.clone(), renderer),
             frame_start: None,
+            jump: None,
         }
     }
     pub fn save(&self, storage: &mut dyn eframe::Storage) {
@@ -451,7 +455,19 @@ pub fn presenter_ui(app: &mut ZebraApp, ui: &mut Ui, own_keys: bool) {
                 Some(s) => crate::t!("present-presenter-step-of", step = ((s + 1) as u64), count = n),
                 None => crate::t!("present-presenter-overview", count = n),
             };
-            ui.label(RichText::new(pos).size(16.0).color(fg));
+            let pos = jump_text(app, true).unwrap_or(pos);
+            let typing = app.stage.jump.is_some();
+            let mut text = RichText::new(pos).size(16.0).color(fg);
+            if typing {
+                text = text.underline();
+            }
+            let label = ui
+                .add(egui::Label::new(text).sense(egui::Sense::click()))
+                .on_hover_text(crate::t!("present-go-to-tip"))
+                .on_hover_cursor(egui::CursorIcon::Text);
+            if label.clicked() && n > 0 {
+                app.stage.jump = Some(String::new());
+            }
             if let Some(a) = app.editor.autoplay_interval() {
                 let s = if app.editor.view.present.autoplay_paused { crate::t!("present-presenter-autoplay-paused") } else { crate::t!("present-presenter-autoplay", time = fmt_secs(a)) };
                 ui.label(RichText::new(s).size(13.0).color(weak));
@@ -568,6 +584,9 @@ fn draw_slide(painter: &egui::Painter, r: Rect, tex: Option<&TextureHandle>, bla
 fn presenter_keys(app: &mut ZebraApp, ctx: &egui::Context) {
     let events = ctx.input(|i| i.events.clone());
     for ev in events {
+        if jump_key(app, &ev) {
+            continue;
+        }
         let egui::Event::Key { key, pressed: true, modifiers, .. } = ev else { continue };
         let cmd = match key {
             Key::ArrowRight | Key::ArrowDown | Key::Space | Key::PageDown | Key::Enter if !modifiers.command => Some(ViewCommand::Next),
@@ -582,6 +601,54 @@ fn presenter_keys(app: &mut ZebraApp, ctx: &egui::Context) {
             let _ = app.editor.view(c, H);
         }
     }
+}
+
+/// Typing a step number while presenting, as in Keynote: digits open the
+/// "Go to step" field, Return jumps, Esc or Delete-to-empty closes it.
+/// Returns true when the event was used (so Return doesn't also step on and
+/// Esc doesn't leave the show).
+pub fn jump_key(app: &mut ZebraApp, ev: &egui::Event) -> bool {
+    let n = app.editor.doc.path.len();
+    match ev {
+        egui::Event::Text(t) if n > 0 && t.chars().all(|c| c.is_ascii_digit()) && !t.is_empty() => {
+            let buf = app.stage.jump.get_or_insert_with(String::new);
+            for c in t.chars() {
+                if buf.len() < n.to_string().len() {
+                    buf.push(c);
+                }
+            }
+            true
+        }
+        egui::Event::Key { key, pressed: true, modifiers, .. } if app.stage.jump.is_some() && !modifiers.command => {
+            match key {
+                Key::Enter => {
+                    let typed = app.stage.jump.take().and_then(|b| b.parse::<usize>().ok());
+                    if let Some(k) = typed.filter(|k| (1..=n).contains(k)) {
+                        let _ = app.editor.view(ViewCommand::GotoStep { step: k - 1 }, H);
+                    }
+                }
+                Key::Escape => app.stage.jump = None,
+                Key::Backspace => {
+                    if let Some(b) = app.stage.jump.as_mut() {
+                        b.pop();
+                    }
+                }
+                _ => {}
+            }
+            // Digits arrive as Text; their Key events are swallowed too.
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The step position for the HUD and the presenter view: "4 of 12", or
+/// the step being typed.
+pub fn jump_text(app: &ZebraApp, long: bool) -> Option<String> {
+    let typed = app.stage.jump.as_ref()?;
+    let n = app.editor.doc.path.len();
+    let step = if typed.is_empty() { "–".to_string() } else { typed.clone() };
+    Some(if long { crate::t!("present-presenter-go-to", step = step, count = n) } else { crate::t!("present-hud-go-to", step = step, count = n) })
 }
 
 /// Where Next will go: the next build, else the next step. None at the end.
