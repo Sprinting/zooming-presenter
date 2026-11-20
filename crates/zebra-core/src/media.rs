@@ -215,6 +215,11 @@ pub struct MappedFile {
     map: memmap2::Mmap,
     path: Option<PathBuf>,
     owned: bool,
+    /// The open file, kept only for a mapping whose name is gone (a
+    /// document's clone or private copy, removed as soon as it is mapped):
+    /// the PDF helper reads such bytes through it. Others reopen their
+    /// name, so thousands of spill files hold no descriptors.
+    file: Option<std::fs::File>,
 }
 
 impl MappedFile {
@@ -224,7 +229,35 @@ impl MappedFile {
         // SAFETY: read-only map. Zebra never writes a file it has mapped
         // (saves write a new file and rename it over); see `AssetBytes`.
         let map = unsafe { memmap2::Mmap::map(&f) }?;
-        Ok(MappedFile { map, path: Some(path.to_path_buf()), owned: false })
+        Ok(MappedFile { map, path: Some(path.to_path_buf()), owned: false, file: None })
+    }
+
+    /// Map `path`, which the caller removes right after (a clone or a
+    /// private copy), keeping the open file so the bytes can still be
+    /// handed to another process ([`MappedFile::reopen`]).
+    pub fn open_unlinked(path: &Path) -> std::io::Result<MappedFile> {
+        let f = std::fs::File::open(path)?;
+        // SAFETY: as in `open`; the file is Zebra's own copy.
+        let map = unsafe { memmap2::Mmap::map(&f) }?;
+        Ok(MappedFile { map, path: Some(path.to_path_buf()), owned: false, file: Some(f) })
+    }
+
+    /// An open file holding these bytes, for another process to read (the
+    /// PDF helper): the kept file, else the file by its name.
+    pub fn reopen(&self) -> std::io::Result<std::fs::File> {
+        match (&self.file, &self.path) {
+            (Some(f), _) => f.try_clone(),
+            (None, Some(p)) => {
+                let f = std::fs::File::open(p)?;
+                // The name may lead to another file by now: it must at
+                // least be as long as the mapping.
+                if f.metadata()?.len() < self.map.len() as u64 {
+                    return Err(std::io::Error::other("the file changed"));
+                }
+                Ok(f)
+            }
+            (None, None) => Err(std::io::Error::other("no file")),
+        }
     }
 
     /// Map a file only Zebra knows (its own spill file or copy), which is
@@ -233,7 +266,7 @@ impl MappedFile {
         let f = std::fs::File::open(&path)?;
         // SAFETY: as in `open`; nobody else writes Zebra's own files.
         let map = unsafe { memmap2::Mmap::map(&f) }?;
-        Ok(MappedFile { map, path: Some(path), owned: true })
+        Ok(MappedFile { map, path: Some(path), owned: true, file: None })
     }
 
     /// The same mapping, known by `path` (a clone mapped in place of the
@@ -505,7 +538,7 @@ pub fn private_copy(path: &Path) -> std::io::Result<MappedFile> {
     let dir = stream_dir();
     std::fs::create_dir_all(&dir)?;
     let part = spill_path(&dir, "open");
-    let r = std::fs::copy(path, &part).and_then(|_| MappedFile::open(&part));
+    let r = std::fs::copy(path, &part).and_then(|_| MappedFile::open_unlinked(&part));
     let _ = std::fs::remove_file(&part);
     Ok(r?.renamed(path))
 }

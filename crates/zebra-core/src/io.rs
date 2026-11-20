@@ -470,7 +470,7 @@ fn clone_and_map(path: &Path) -> Option<crate::media::MappedFile> {
     if unsafe { libc::clonefile(src.as_ptr(), dst.as_ptr(), 0) } != 0 {
         return None;
     }
-    let m = crate::media::MappedFile::open(&clone);
+    let m = crate::media::MappedFile::open_unlinked(&clone);
     let _ = std::fs::remove_file(&clone);
     // The mapping keeps the clone's data; its name names the original, so
     // a save's "is this asset already in the file" check still sees it.
