@@ -144,6 +144,12 @@ pub fn repair(doc: &mut Document) -> usize {
     let mut fixed = 0;
     let mut drop = vec![];
     for (id, e) in doc.elements.iter_mut() {
+        // The map key is the element's id: code that collects `e.id` looks
+        // it up by key again.
+        if e.id != *id {
+            e.id = id.clone();
+            fixed += 1;
+        }
         if element(e).is_ok() {
             continue;
         }

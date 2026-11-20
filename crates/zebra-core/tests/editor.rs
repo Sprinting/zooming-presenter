@@ -652,3 +652,30 @@ fn a_text_width_change_reads_back_as_fixed_and_undoes_to_auto() {
 fn cmd_query(j: serde_json::Value) -> Query {
     serde_json::from_value(j).unwrap()
 }
+
+/// Hostile-input audit H2: a file whose element key and `id` differ. Opening
+/// mends the id; an editor holding such a document anyway (no repair)
+/// refuses the command instead of panicking.
+#[test]
+fn element_key_and_id_mismatch_does_not_crash_delete() {
+    let mut ed = Editor::default();
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"s1","shape":"rectangle","x":0,"y":0})), Origin::Human).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"add_shape","id":"s2","shape":"ellipse","x":1400,"y":200})), Origin::Human).unwrap();
+    ed.apply(cmd(serde_json::json!({"op":"group","ids":["s1","s2"]})), Origin::Human).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&io::to_json(&ed.doc)).unwrap();
+    v["elements"]["s1"]["id"] = serde_json::json!("a");
+    let json = serde_json::to_string(&v).unwrap();
+
+    let doc = io::from_json(&json).unwrap();
+    assert_eq!(doc.elements["s1"].id, "s1", "opening sets the id to its key");
+    let mut opened = Editor::new(doc);
+    opened.apply(cmd(serde_json::json!({"op":"delete","ids":["s2"]})), Origin::Human).unwrap();
+    assert!(opened.doc.elements["s1"].group.is_none());
+
+    // Not repaired: refused, and the document is as it was.
+    ed.doc.elements.get_mut("s1").unwrap().id = "a".into();
+    let before = io::to_json(&ed.doc);
+    let r = ed.apply(cmd(serde_json::json!({"op":"delete","ids":["s2"]})), Origin::Human);
+    assert!(r.is_err());
+    assert_eq!(io::to_json(&ed.doc), before);
+}
