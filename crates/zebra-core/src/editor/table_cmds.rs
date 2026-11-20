@@ -11,6 +11,19 @@ fn too_big(l: Limit) -> ZError {
     ZError::new("too_big", l.message()).hint("nothing was changed").about(crate::error::About::Table)
 }
 
+/// Refused if growing `t` to `rows` x `cols` goes over a limit. A table
+/// that doesn't grow is never refused: one a file brought in bigger than
+/// the limits stays editable.
+fn check_growth(t: &TableData, rows: usize, cols: usize) -> ZResult<()> {
+    if rows <= t.n_rows() && cols <= t.n_cols() {
+        return Ok(());
+    }
+    match Limit::of_size(rows, cols) {
+        Some(l) => Err(too_big(l)),
+        None => Ok(()),
+    }
+}
+
 /// The first input over a limit, if any.
 fn check_inputs<'a>(inputs: impl IntoIterator<Item = &'a String>) -> ZResult<()> {
     for s in inputs {
@@ -92,9 +105,7 @@ impl Editor {
                 let values: Vec<Vec<String>> = values.into_iter().map(|r| r.into_iter().map(CellInput::into_input).collect()).collect();
                 check_inputs(values.iter().flatten())?;
                 let t = self.table_mut(&id)?;
-                if let Some(l) = Limit::of_size(t.n_rows().max(r0.saturating_add(rows)), t.n_cols().max(c0.saturating_add(cols))) {
-                    return Err(too_big(l));
-                }
+                check_growth(t, t.n_rows().max(r0.saturating_add(rows)), t.n_cols().max(c0.saturating_add(cols)))?;
                 // Grow (formulas see the new rows as typing on would).
                 if c0 + cols > t.n_cols() {
                     let n = t.n_cols();
@@ -106,9 +117,7 @@ impl Editor {
                 // on: they go at the end.
                 let body_end = t.body_rows().end;
                 let (at, need) = if r0 < body_end && t.footer_rows > 0 { (body_end, (r0 + rows).saturating_sub(body_end)) } else { (t.n_rows(), (r0 + rows).saturating_sub(t.n_rows())) };
-                if let Some(l) = Limit::of_size(t.n_rows() + need, t.n_cols()) {
-                    return Err(too_big(l));
-                }
+                check_growth(t, t.n_rows() + need, t.n_cols())?;
                 if need > 0 {
                     self.reshape_table(&id, &Reshape::InsertRows { at, count: need })?;
                 }

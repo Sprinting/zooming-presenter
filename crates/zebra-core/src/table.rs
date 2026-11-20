@@ -30,11 +30,28 @@ pub mod refs;
 
 /// Most header rows, header columns or footer rows (as in Keynote).
 pub const MAX_HEADERS: u8 = 5;
-/// Most rows and columns a table can have.
-pub const MAX_ROWS: usize = 10_000;
-pub const MAX_COLUMNS: usize = 256;
-/// Most cells a table can have (rows x columns).
-pub const MAX_CELLS: usize = 100_000;
+/// Most rows and columns a table can have: Numbers' own (1,000,000 rows,
+/// 1,000 columns).
+pub const MAX_ROWS: usize = 1_000_000;
+pub const MAX_COLUMNS: usize = 1_000;
+/// Memory one cell takes, at most, in a table and while its file is read
+/// (an empty cell is about 100 bytes held, 150 being parsed).
+pub const CELL_COST: u64 = 256;
+
+/// Most cells a table can have: what fits in the memory a document may
+/// take ([`crate::io::memory_budget`], half the Mac's memory). Numbers has
+/// no cell limit of its own beyond its row and column limits; Zebra keeps
+/// every cell, so this is where memory stops it, with a message.
+pub fn max_cells() -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        usize::try_from(crate::io::memory_budget() / CELL_COST).unwrap_or(usize::MAX)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        usize::MAX
+    }
+}
 /// Longest input a cell takes, in characters (Excel's limit).
 pub const MAX_INPUT: usize = 32_767;
 /// Longest formula, in characters (Excel's limit).
@@ -65,7 +82,7 @@ pub enum InputProblem {
 
 /// Whether a `rows` x `cols` table is within the limits.
 pub fn fits_limits(rows: usize, cols: usize) -> bool {
-    rows >= 1 && cols >= 1 && rows <= MAX_ROWS && cols <= MAX_COLUMNS && rows.saturating_mul(cols) <= MAX_CELLS
+    rows >= 1 && cols >= 1 && rows <= MAX_ROWS && cols <= MAX_COLUMNS && rows.saturating_mul(cols) <= max_cells()
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -1326,7 +1343,7 @@ impl TableData {
     /// points high.
     pub fn new(rows: usize, cols: usize, body: f64) -> TableData {
         let cols = cols.clamp(1, MAX_COLUMNS);
-        let rows = rows.clamp(1, MAX_ROWS.min(MAX_CELLS / cols));
+        let rows = rows.clamp(1, MAX_ROWS.min(max_cells() / cols));
         TableData {
             cells: (0..rows).map(|_| CellRow::empty(cols)).collect(),
             columns: (0..cols).map(|_| Column::new((body * COLUMN_EMS).round())).collect(),
@@ -1918,12 +1935,22 @@ impl TableData {
         CellRange::new(0, 0, self.n_rows().saturating_sub(1), self.n_cols().saturating_sub(1))
     }
 
-    /// What's wrong with the table, if anything: not rectangular, counts
-    /// out of range, unusable sizes, merges outside it or overlapping.
+    /// Whether the table is within the limits a command may make it
+    /// grow to (a table read from a file may be bigger, and is kept whole).
+    pub fn check_size(&self) -> Result<(), String> {
+        if !fits_limits(self.n_rows(), self.n_cols()) {
+            return Err(format!("a table has 1 to {MAX_ROWS} rows and 1 to {MAX_COLUMNS} columns, and as many cells as fit in memory ({} here)", max_cells()));
+        }
+        Ok(())
+    }
+
+    /// What's wrong with the table, if anything: not rectangular, no
+    /// cells, unusable sizes, merges outside it or overlapping. (Its size
+    /// against the limits is [`TableData::check_size`].)
     pub fn check(&self) -> Result<(), String> {
         let (rows, cols) = (self.n_rows(), self.n_cols());
-        if !fits_limits(rows, cols) {
-            return Err(format!("a table has 1 to {MAX_ROWS} rows, 1 to {MAX_COLUMNS} columns and at most {MAX_CELLS} cells"));
+        if rows == 0 || cols == 0 {
+            return Err("a table has at least one row and one column".into());
         }
         if self.rows.len() != rows || self.cells.iter().any(|r| r.len() != cols) {
             return Err("every row needs one cell per column, and rows one height each".into());
@@ -1959,21 +1986,13 @@ impl TableData {
         if self.cells.is_empty() {
             self.cells.push(CellRow::new(vec![]));
         }
-        self.cells.truncate(MAX_ROWS);
-        let cols = self.cells.iter().map(|r| r.len()).max().unwrap_or(0).max(self.columns.len()).clamp(1, MAX_COLUMNS);
-        // Over the cell limit: the rows past it go.
-        self.cells.truncate((MAX_CELLS / cols).max(1));
+        // Nothing is cut, whatever its size (a file from a later Zebra or
+        // another program): every row, column and character is kept. Its
+        // memory was checked as the file was read (io::memory_budget).
+        let cols = self.cells.iter().map(|r| r.len()).max().unwrap_or(0).max(self.columns.len()).max(1);
         for row in &mut self.cells {
             if row.len() != cols {
                 row.resize(cols, Cell::default());
-            }
-            if row.iter().any(|c| input_problem(&c.input).is_some()) {
-                for c in row.iter_mut() {
-                    if input_problem(&c.input).is_some() {
-                        let cap = if c.is_formula() { MAX_FORMULA } else { MAX_INPUT };
-                        c.input = c.input.chars().take(cap).collect();
-                    }
-                }
             }
         }
         let col_w = (body * COLUMN_EMS).round();
@@ -2146,8 +2165,6 @@ pub enum Limit {
     Input,
     /// A formula over [`MAX_FORMULA`] characters.
     Formula,
-    /// Pasted or imported text over [`MAX_PASTE_BYTES`].
-    Bytes,
 }
 
 impl Limit {
@@ -2155,10 +2172,9 @@ impl Limit {
         match self {
             Limit::Rows => format!("a table has at most {MAX_ROWS} rows"),
             Limit::Columns => format!("a table has at most {MAX_COLUMNS} columns"),
-            Limit::Cells => format!("a table has at most {MAX_CELLS} cells"),
+            Limit::Cells => format!("the table would need more memory than this Mac has (at most {} cells here)", max_cells()),
             Limit::Input => format!("a cell holds at most {MAX_INPUT} characters"),
             Limit::Formula => format!("a formula is at most {MAX_FORMULA} characters"),
-            Limit::Bytes => format!("text for a table is at most {} MB", MAX_PASTE_BYTES >> 20),
         }
     }
     /// The limit `rows` x `cols` goes over, if any.
@@ -2167,7 +2183,7 @@ impl Limit {
             Some(Limit::Rows)
         } else if cols > MAX_COLUMNS {
             Some(Limit::Columns)
-        } else if rows.saturating_mul(cols) > MAX_CELLS {
+        } else if rows.saturating_mul(cols) > max_cells() {
             Some(Limit::Cells)
         } else {
             None
@@ -2230,21 +2246,15 @@ fn separator(text: &str) -> char {
     if quoted && text.contains('\t') { '\t' } else { ',' }
 }
 
-/// Most text read as a table (a paste, `add_table`'s csv): about what
-/// 100,000 short cells take, with room to spare.
-pub const MAX_PASTE_BYTES: usize = 16 << 20;
-
 /// Rows of fields from tab-separated text (what Numbers and Excel copy),
 /// or comma-separated when there is no tab. Quoted fields may hold the
 /// separator, quotes ("") and line breaks. Short rows are padded.
 ///
-/// Bounded: text over [`MAX_PASTE_BYTES`] is refused before it is read,
-/// and reading stops at the first row, column, cell or field over the
-/// limits, so a huge paste never becomes a huge grid.
+/// Any amount of text is read (no size limit, as in Numbers); reading
+/// stops at the first row, column, cell or field over the limits, so a
+/// huge paste never becomes a grid bigger than memory.
 pub fn parse_delimited(text: &str) -> Result<Vec<Vec<String>>, Limit> {
-    if text.len() > MAX_PASTE_BYTES {
-        return Err(Limit::Bytes);
-    }
+    let max_cells = max_cells();
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let sep = separator(text);
     let mut rows: Vec<Vec<String>> = vec![];
@@ -2266,7 +2276,7 @@ pub fn parse_delimited(text: &str) -> Result<Vec<Vec<String>>, Limit> {
         if row.len() > MAX_COLUMNS {
             return Err(Limit::Columns);
         }
-        if cells > MAX_CELLS {
+        if cells > max_cells {
             return Err(Limit::Cells);
         }
         Ok(())

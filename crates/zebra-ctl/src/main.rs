@@ -409,21 +409,17 @@ enum Add {
     },
 }
 
-/// Cells to send: a file (or stdin), refused unread when it is bigger
-/// than a table can take.
+/// Cells to send: a file (or stdin), whatever its size (the app says if
+/// the table would be over its limits).
 fn read_cells(path: &std::path::Path) -> Result<String> {
     use std::io::Read;
-    let cap = zebra_core::table::MAX_PASTE_BYTES as u64;
     let mut text = String::new();
     let read = if path.as_os_str() == "-" {
-        std::io::stdin().take(cap + 1).read_to_string(&mut text)
+        std::io::stdin().read_to_string(&mut text)
     } else {
-        std::fs::File::open(path).and_then(|f| f.take(cap + 1).read_to_string(&mut text))
+        std::fs::File::open(path).and_then(|mut f| f.read_to_string(&mut text))
     };
     read.with_context(|| path.display().to_string())?;
-    if text.len() as u64 > cap {
-        bail!("{}", zebra_core::table::Limit::Bytes.message());
-    }
     Ok(text)
 }
 

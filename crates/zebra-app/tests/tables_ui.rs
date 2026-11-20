@@ -276,11 +276,11 @@ fn pasting_tab_separated_cells() {
     assert_eq!((t.n_rows(), t.n_cols()), (4, 3));
     assert_eq!(t.cells[3][2].input, "6");
     // Over the limits: refused with a message, nothing changed.
-    let huge = "1\t".repeat(300) + "\n";
+    let huge = "1\t".repeat(1_001) + "\n";
     table_ui::paste_cells(h.state_mut(), &s, &huge);
     h.run_steps(2);
     assert_eq!(the_table(&h).1.n_cols(), 3);
-    assert!(h.state().note.as_ref().is_some_and(|n| n.text.contains("256")), "a note says why");
+    assert!(h.state().note.as_ref().is_some_and(|n| n.text.contains("1000") || n.text.contains("1,000")), "a note says why");
     // Copying out: what cells show, formulas made plain text.
     assert_eq!(table_ui::defuse("=cmd|' /C calc'!A0"), "'=cmd|' /C calc'!A0");
     assert_eq!(table_ui::defuse("-12"), "-12");
