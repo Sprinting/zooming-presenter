@@ -295,7 +295,8 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         copy: bool,
     },
-    /// Move elements by a world delta. Frames carry their contents.
+    /// Move elements by a world delta. Frames carry what they hold, except
+    /// anything locked; `with_contents: false` moves a frame alone.
     Move {
         ids: Vec<ElementId>,
         dx: f64,
@@ -304,6 +305,7 @@ pub enum Command {
         with_contents: bool,
     },
     /// Scale elements about a world point (default: their common centre).
+    /// Frames carry what they hold, as `move` does.
     Scale {
         ids: Vec<ElementId>,
         factor: f64,
@@ -323,7 +325,8 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         height: Option<f64>,
     },
-    /// Rotate elements by degrees (clockwise) about a point.
+    /// Rotate elements by degrees (clockwise) about a point. Frames carry
+    /// what they hold, as `move` does.
     Rotate {
         ids: Vec<ElementId>,
         degrees: f64,
@@ -785,7 +788,15 @@ pub enum ViewCommand {
         animate: bool,
     },
     ZoomToSelection,
-    Select { ids: Vec<ElementId> },
+    /// Select elements. `frame_only`: select one frame on its own, as
+    /// Option-clicking it does, so that moving, resizing or turning it in
+    /// Zebra leaves its contents where they are (the person's selection:
+    /// needs 'full' permission).
+    Select {
+        ids: Vec<ElementId>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        frame_only: bool,
+    },
     AddToSelection { ids: Vec<ElementId> },
     ClearSelection,
     SelectAll,

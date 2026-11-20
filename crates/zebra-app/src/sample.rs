@@ -123,7 +123,7 @@ pub fn demo(app: &mut ZebraApp, ctx: &egui::Context, which: &str) {
                 let found = app.editor.doc.ordered().find(|e| e.id == "why").map(|e| e.id.clone());
                 if let Some(c) = found {
                     let _ = app.editor.apply(Command::Update { id: c.clone(), patch: zebra_core::ElementPatch { frame_style: Some(FrameStyle::Bracket), ..Default::default() } }, agent.clone());
-                    let _ = app.editor.view(ViewCommand::Select { ids: vec![c] }, agent.clone());
+                    let _ = app.editor.view(ViewCommand::Select { ids: vec![c], frame_only: false }, agent.clone());
                 }
                 app.show_activity = true;
             }

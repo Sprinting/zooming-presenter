@@ -87,18 +87,28 @@ enum Cmd {
         #[command(subcommand)]
         what: Add,
     },
-    /// Move elements by a world delta (frames carry their contents).
+    /// Move elements by a world delta (frames carry what they hold, except
+    /// anything locked). --frame-only moves a frame without its contents.
     Move {
         ids: Vec<String>,
         #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
         dx: f64,
         #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
         dy: f64,
+        #[arg(long)]
+        frame_only: bool,
     },
     /// Delete elements.
     Delete { ids: Vec<String> },
     /// Select elements (your own selection unless you have 'full' permission).
-    Select { ids: Vec<String> },
+    /// --frame-only selects one frame on its own, as Option-clicking it
+    /// does: moving, resizing or turning it in Zebra leaves its contents
+    /// (needs 'full').
+    Select {
+        ids: Vec<String>,
+        #[arg(long)]
+        frame_only: bool,
+    },
     /// Set text of an element.
     SetText { id: String, text: String },
     /// Take characters START..END (counted in characters, END not
@@ -576,9 +586,21 @@ fn run(cli: Cli) -> Result<()> {
             };
             print(&call(c, "apply", json!({ "command": cmd }))?);
         }
-        Cmd::Move { ids, dx, dy } => print(&call(c, "apply", json!({ "command": { "op": "move", "ids": ids, "dx": dx, "dy": dy } }))?),
+        Cmd::Move { ids, dx, dy, frame_only } => {
+            let mut cmd = json!({ "op": "move", "ids": ids, "dx": dx, "dy": dy });
+            if frame_only {
+                cmd["with_contents"] = json!(false);
+            }
+            print(&call(c, "apply", json!({ "command": cmd }))?)
+        }
         Cmd::Delete { ids } => print(&call(c, "apply", json!({ "command": { "op": "delete", "ids": ids } }))?),
-        Cmd::Select { ids } => print(&view(c, json!({ "op": "select", "ids": ids }))?),
+        Cmd::Select { ids, frame_only } => {
+            let mut cmd = json!({ "op": "select", "ids": ids });
+            if frame_only {
+                cmd["frame_only"] = json!(true);
+            }
+            print(&view(c, cmd)?)
+        }
         Cmd::Split { id, start, end, x, y, copy } => {
             let mut cmd = json!({ "op": "split_text", "id": id, "start": start, "end": end });
             if let (Some(x), Some(y)) = (x, y) {

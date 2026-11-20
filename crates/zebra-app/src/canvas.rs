@@ -691,7 +691,7 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
                 if app.canvas.chip_chevron.is_some_and(|c| c.contains(p)) {
                     let _ = app.editor.view(ViewCommand::ZoomTo { id, animate: true }, H);
                 } else {
-                    let _ = app.editor.view(ViewCommand::Select { ids: vec![id] }, H);
+                    let _ = app.editor.view(ViewCommand::Select { ids: vec![id], frame_only: false }, H);
                 }
             } else {
                 click(app, p, mods.shift);

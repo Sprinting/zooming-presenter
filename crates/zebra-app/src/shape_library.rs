@@ -205,7 +205,7 @@ fn insert_shape(app: &mut ZebraApp, lib: &mut Library, k: ShapeKind) {
     let out = app.apply(Command::AddShape { shape: k, x, y, w: w / zoom, h: h / zoom, rotation: 0.0, fill: None, stroke: None, id: None });
     if let Some(o) = out {
         lib.inserted += 1;
-        app.view_cmd(ViewCommand::Select { ids: o.created });
+        app.view_cmd(ViewCommand::Select { ids: o.created, frame_only: false });
     }
 }
 
@@ -221,7 +221,7 @@ fn insert_icon(app: &mut ZebraApp, lib: &mut Library, name: &str) {
     let out = app.apply(Command::AddIcon { name: name.to_string(), x, y, size: 96.0 / zoom, color: None, id: None });
     if let Some(o) = out {
         lib.inserted += 1;
-        app.view_cmd(ViewCommand::Select { ids: o.created });
+        app.view_cmd(ViewCommand::Select { ids: o.created, frame_only: false });
     }
 }
 

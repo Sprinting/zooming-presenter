@@ -249,6 +249,7 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                 "mode": v.mode,
                 "tool": v.tool,
                 "selection": v.selection,
+                "frame_only": ed.frame_only().is_some(),
                 "agent_selection": v.agent_selection,
                 "camera": v.camera,
                 "agent_camera": v.agent_camera,

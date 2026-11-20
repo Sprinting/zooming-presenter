@@ -199,7 +199,7 @@ fn the_inspector_stays_put_when_the_selection_changes() {
     h.run_steps(10);
     let before = h.state().canvas.rect;
     let id = h.state().editor.doc.ordered().find(|e| e.is_frame()).unwrap().id.clone();
-    h.state_mut().editor.view(zebra_core::ViewCommand::Select { ids: vec![id] }, Origin::Human).unwrap();
+    h.state_mut().editor.view(zebra_core::ViewCommand::Select { ids: vec![id], frame_only: false }, Origin::Human).unwrap();
     h.run_steps(5);
     assert_eq!(h.state().canvas.rect, before, "selecting moved the canvas");
     h.state_mut().editor.view(zebra_core::ViewCommand::ClearSelection, Origin::Human).unwrap();

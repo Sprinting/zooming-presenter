@@ -579,7 +579,7 @@ impl ZebraApp {
     }
 
     pub fn select(&mut self, ids: Vec<ElementId>) {
-        self.view_cmd(ViewCommand::Select { ids });
+        self.view_cmd(ViewCommand::Select { ids, frame_only: false });
     }
 
     pub fn selection(&self) -> Vec<ElementId> {
