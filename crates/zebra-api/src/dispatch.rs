@@ -957,12 +957,19 @@ fn fetch_web(call: &mut Call, tasks: &[WebTask], files: &mut Vec<std::path::Path
         match t {
             WebTask::Check(i) => {
                 let Some(Command::AddWebVideo { url, poster_base64, alt, found, .. }) = cmds.get_mut(*i) else { continue };
+                let started = std::time::Instant::now();
                 let c = checker.check(url).map_err(link_error)?;
                 *found = Some(zebra_core::LinkFound { kind: c.kind, width: c.width, height: c.height, duration: c.duration });
                 if poster_base64.as_deref().is_none_or(|p| p.trim().is_empty()) {
-                    // A card's thumbnail; a file's first frame where this
-                    // Mac can take it; a stream has none until it plays.
-                    let png = c.poster.clone().or_else(|| (c.kind == zebra_core::LinkKind::File).then(|| backend.poster_png_url(url, 0.0, 1280).ok()).flatten());
+                    // A card's thumbnail; a file's frame at 1 s (its first
+                    // when shorter), as for a local video, where this Mac
+                    // can take it within what is left of the check's time;
+                    // a stream has none until it plays.
+                    let left = checker.timeout.saturating_sub(started.elapsed());
+                    let at = if c.duration > 0.0 && c.duration < 1.0 { 0.0 } else { 1.0 };
+                    let png = c.poster.clone().or_else(|| {
+                        (c.kind == zebra_core::LinkKind::File && !left.is_zero()).then(|| backend.poster_png_url(url, at, 1280, left).ok()).flatten()
+                    });
                     *poster_base64 = png.map(|p| base64::engine::general_purpose::STANDARD.encode(p));
                 }
                 if alt.trim().is_empty() {
@@ -978,7 +985,9 @@ fn fetch_web(call: &mut Call, tasks: &[WebTask], files: &mut Vec<std::path::Path
                     .filter(|e| matches!(e.as_str(), "mp4" | "mov" | "m4v"))
                     .unwrap_or_else(|| "mp4".into());
                 let file = dir.join(format!("{}-{}.{ext}", std::process::id(), files.len()));
-                checker.download(url, &file, &std::sync::atomic::AtomicBool::new(false)).map_err(link_error)?;
+                checker
+                    .download(url, &file, &std::sync::atomic::AtomicBool::new(false), &|_, _| {})
+                    .map_err(|e| RpcError::app(e.code(), e.message()))?;
                 *path = Some(file.to_string_lossy().to_string());
                 files.push(file);
             }

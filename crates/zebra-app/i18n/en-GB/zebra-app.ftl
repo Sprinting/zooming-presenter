@@ -1219,6 +1219,7 @@ history-add-connector = Add Connector
 history-insert-video = Insert Video
 history-replace-image = Replace Image
 history-replace-video = Replace Video
+history-download-video = Download Video
 history-set-poster = Set Poster Frame
 history-add-soundtrack = Add Background Music
 history-change-soundtrack = Change Background Music
