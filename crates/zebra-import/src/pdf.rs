@@ -73,14 +73,29 @@ fn load_error(e: PdfiumError) -> ImportError {
 }
 
 pub struct PdfReader {
-    bytes: Vec<u8>,
+    /// The PDF as the document will hold it, and its content key.
+    key: String,
+    bytes: AssetBytes,
     title: String,
     pages: usize,
 }
 
 impl PdfReader {
-    pub fn new(bytes: Vec<u8>, title: String) -> Result<PdfReader, ImportError> {
+    /// `bytes` mapped from the person's file are copied to a spill file of
+    /// the document's own first (streamed, not read into memory): the
+    /// document must not depend on a file the person may move or change.
+    pub fn new(bytes: AssetBytes, title: String) -> Result<PdfReader, ImportError> {
         let lib = pdfium()?;
+        let (key, bytes) = if bytes.is_mapped() && bytes.len() >= zebra_core::media::SPILL_MIN {
+            zebra_core::media::spill_reader(&mut std::io::Cursor::new(&bytes[..]), "pdf").map_err(|e| ImportError::Read(e.to_string()))?
+        } else {
+            let key = zebra_core::media::content_key(&bytes);
+            let bytes = match bytes {
+                AssetBytes::Memory(v) => zebra_core::media::spill(std::sync::Arc::try_unwrap(v).unwrap_or_else(|v| (*v).clone()), &key, "pdf"),
+                mapped => mapped,
+            };
+            (key, bytes)
+        };
         let pages = {
             let doc = lib.load_pdf_from_byte_slice(&bytes, None).map_err(load_error)?;
             doc.pages().len() as usize
@@ -88,7 +103,7 @@ impl PdfReader {
         if pages == 0 {
             return Err(ImportError::Damaged("PDF"));
         }
-        Ok(PdfReader { bytes, title, pages })
+        Ok(PdfReader { key, bytes, title, pages })
     }
 }
 
@@ -137,7 +152,7 @@ impl Reader for PdfReader {
         let lib = pdfium()?;
         let doc = lib.load_pdf_from_byte_slice(&self.bytes, None).map_err(load_error)?;
         let mut deck = ImportedDeck { title: self.title.clone(), ..Default::default() };
-        let (pdf_key, pdf) = asset_from(self.bytes.clone()).map_err(|_| ImportError::Damaged("PDF"))?;
+        let (pdf_key, pdf) = (self.key.clone(), zebra_core::Asset { ext: "pdf".into(), bytes: self.bytes.clone(), width: 0, height: 0 });
         let range = crate::page_range(opts, self.pages);
         // World units per point, from the largest page asked for.
         let largest = range.clone().filter_map(|i| doc.pages().page_size(i as i32).ok()).map(|r| r.width().value.max(r.height().value)).fold(0.0f32, f32::max);

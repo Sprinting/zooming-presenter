@@ -19,6 +19,7 @@ use zebra_core::Theme;
 pub mod pdf;
 pub mod pptx;
 mod pptx_xml;
+mod pptx_media;
 
 /// The file types File › Import… offers (lower case, no dot).
 pub const EXTENSIONS: &[&str] = &["pdf", "pptx"];
@@ -104,21 +105,29 @@ pub trait Reader: Send {
     fn read(&self, opts: &Options, ctl: &Control) -> Result<ImportedDeck, ImportError>;
 }
 
-/// Open `path` with the reader its contents call for.
+/// Open `path` with the reader its contents call for. The file is
+/// memory-mapped, not read: a PowerPoint file's video or a PDF of any size
+/// is streamed out of it, so importing costs disk (one copy of each
+/// medium, in the document's own spill files), not memory.
 pub fn open(path: &Path) -> Result<Box<dyn Reader>, ImportError> {
-    let bytes = std::fs::read(path).map_err(|e| ImportError::Read(e.to_string()))?;
+    let map = zebra_core::io::map_document(path).map_err(|e| ImportError::Read(e.to_string()))?;
     let title = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-    open_bytes(bytes, title)
+    open_source(map.into(), title)
 }
 
 /// Open a file's bytes; `title` names the import (the file name without
 /// its extension).
 pub fn open_bytes(bytes: Vec<u8>, title: String) -> Result<Box<dyn Reader>, ImportError> {
+    open_source(bytes.into(), title)
+}
+
+/// Open a file's bytes, in memory or mapped.
+pub fn open_source(bytes: zebra_core::AssetBytes, title: String) -> Result<Box<dyn Reader>, ImportError> {
     if zebra_core::import::is_pdf(&bytes) {
         return Ok(Box::new(pdf::PdfReader::new(bytes, title)?));
     }
     if pptx::is_pptx(&bytes) {
-        return Ok(Box::new(pptx::PptxReader::new(&bytes, title)?));
+        return Ok(Box::new(pptx::PptxReader::new(bytes, title)?));
     }
     // Old PowerPoint files and password-protected .pptx files are both
     // OLE compound files.

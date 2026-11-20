@@ -127,9 +127,31 @@ pub fn untitled_dir() -> PathBuf {
 
 /// Spill new media to `Autosave/Media` (see `zebra_core::media::spill`),
 /// after sweeping what a crashed run left there.
+/// Also clears out players' copies a crashed run left in the media cache,
+/// and media folders whose untitled autosave is gone.
 pub fn start_spilling() {
     zebra_core::media::set_spill_dir(Some(untitled_dir().join("Media")));
     zebra_core::media::sweep_spill(zebra_api::discovery::pid_alive);
+    zebra_core::media::sweep_cache(zebra_api::discovery::pid_alive);
+    sweep_autosave_media(&untitled_dir());
+    zebra_core::io::sweep_temp(&untitled_dir(), zebra_api::discovery::pid_alive);
+}
+
+/// Remove `<x>.autosave.media` folders in `dir` whose autosave `<x>.autosave`
+/// is gone (removed by an older build, or by hand).
+pub fn sweep_autosave_media(dir: &Path) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().to_string();
+        if let Some(autosave) = name.strip_suffix(".media").filter(|n| n.ends_with(".autosave")) {
+            // Not one an autosave is being written beside right now (its
+            // media goes in before the autosave itself).
+            let old = std::fs::metadata(&p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() > 600);
+            if p.is_dir() && old && !dir.join(autosave).exists() {
+                let _ = std::fs::remove_dir_all(&p);
+            }
+        }
+    }
 }
 
 /// A fresh name for a window's untitled autosave.
@@ -155,7 +177,7 @@ fn autosave_owner(p: &Path) -> Option<u32> {
 pub fn adopt_autosave(path: &Path) -> String {
     let name = new_autosave_name();
     let to = untitled_dir().join(format!("{name}.zebra.autosave"));
-    if path.parent() == Some(untitled_dir().as_path()) && std::fs::rename(path, &to).is_ok() {
+    if path.parent() == Some(untitled_dir().as_path()) && zebra_core::io::rename_autosave(path, &to).is_ok() {
         return name;
     }
     let old = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -167,14 +189,14 @@ fn untitled_autosave(app: &ZebraApp) -> PathBuf {
 }
 
 pub fn remove_autosave(file: &Path) {
-    let _ = std::fs::remove_file(autosave_path(file));
+    zebra_core::io::remove_autosave(&autosave_path(file));
 }
 
 /// Forget this window's untitled autosave (saved, or the person chose
 /// Don't Save).
 pub fn remove_autosave_untitled(app: &ZebraApp) {
     app.autosave_job.cancel();
-    let _ = std::fs::remove_file(untitled_autosave(app));
+    zebra_core::io::remove_autosave(&untitled_autosave(app));
 }
 
 /// The person chose Don't Save: their unsaved changes are meant to go,
@@ -251,12 +273,15 @@ pub fn autosave_tick(app: &mut ZebraApp) {
     }
     app.last_autosave = now;
     app.autosaved_rev = app.editor.revision;
-    let p = match &app.editor.file_path {
+    let base = app.editor.file_path.clone();
+    let p = match &base {
         Some(f) => autosave_path(f),
         None => untitled_autosave(app),
     };
     // Written on a worker from a copy (pictures and video are shared, not
     // copied): writing every asset here stalled the window on big decks.
+    // Media isn't rewritten each time (`write_autosave`): what the saved
+    // file holds is read from it on recovery, the rest is linked once.
     let doc = app.editor.doc.clone();
     let job = app.autosave_job.clone();
     let epoch = job.epoch.load(Ordering::SeqCst);
@@ -264,10 +289,10 @@ pub fn autosave_tick(app: &mut ZebraApp) {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = zebra_core::io::write_file(&doc, &p);
+        let _ = zebra_core::io::write_autosave(&doc, &p, base.as_deref());
         // Saved or discarded while this was being written: it is stale.
         if job.epoch.load(Ordering::SeqCst) != epoch {
-            let _ = std::fs::remove_file(&p);
+            zebra_core::io::remove_autosave(&p);
         }
         job.busy.store(false, Ordering::SeqCst);
     };

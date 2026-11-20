@@ -46,6 +46,9 @@ impl Editor {
         if let Some(j) = &self.saving {
             return Err(ZError::new("busy", format!("{} is being saved", j.path.display())).hint("wait for that save to finish"));
         }
+        // Media nothing can show any more goes; what only undo can bring
+        // back is moved out of the old file below.
+        let history_only = self.prune_assets();
         // The snapshot: assets are shared (Arc or mapped), not copied.
         let doc = self.doc.clone();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -53,13 +56,27 @@ impl Editor {
         std::thread::Builder::new()
             .name("zebra-save".into())
             .spawn(move || {
-                let r = crate::io::write_and_map(&doc, &to);
+                let r = crate::io::write_and_map(&doc, &to).map(|mut mapped| {
+                    mapped.extend(crate::io::rehome(&doc, &history_only));
+                    mapped
+                });
                 drop(doc);
                 let _ = tx.send(r);
                 wake();
             })
             .map_err(|e| ZError::new("io", format!("cannot start saving: {e}")))?;
         self.saving = Some(SaveJob { path, by, revision: self.revision, loads: self.loads, rx });
+        Ok(())
+    }
+
+    /// Save to `path` here and now (hosts without a worker): as
+    /// [`Editor::start_save`] then [`Editor::wait_save`], on this thread.
+    pub fn save_now(&mut self, path: &Path) -> ZResult<()> {
+        let history_only = self.prune_assets();
+        let mut mapped = crate::io::write_and_map(&self.doc, path)?;
+        mapped.extend(crate::io::rehome(&self.doc, &history_only));
+        crate::io::adopt_mapped(&mut self.doc, mapped);
+        self.mark_saved(Some(path.to_path_buf()));
         Ok(())
     }
 

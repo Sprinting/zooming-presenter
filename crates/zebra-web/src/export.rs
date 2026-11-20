@@ -73,8 +73,9 @@ pub struct Written {
 pub struct Page {
     pub html: String,
     /// Video and audio kept out of the page (folder export): path relative
-    /// to the page, bytes.
-    pub media: Vec<(String, Vec<u8>)>,
+    /// to the page, bytes (shared with the document, mapped: written out
+    /// from where they are, never copied into memory).
+    pub media: Vec<(String, zebra_core::AssetBytes)>,
     /// See [`Written::notes`].
     pub notes: Vec<String>,
     pub apple_ui_families: Vec<String>,
@@ -169,7 +170,7 @@ pub fn build(renderer: &Renderer, editor: &Editor, labels: &Labels, inline_limit
     let folder = media_bytes > 0 && other_bytes + media_bytes * 4 / 3 > inline_limit;
 
     let mut assets: Vec<serde_json::Value> = vec![];
-    let mut media: Vec<(String, Vec<u8>)> = vec![];
+    let mut media: Vec<(String, zebra_core::AssetBytes)> = vec![];
     for (key, a) in doc.assets.iter().filter(|(k, _)| used.contains(k.as_str()) && !font_keys.contains(k.as_str())) {
         let kind = a.media_kind();
         let mut entry = json!({"key": key, "ext": a.ext, "w": a.width, "h": a.height, "mime": mime(&a.ext),
@@ -177,7 +178,7 @@ pub fn build(renderer: &Renderer, editor: &Editor, labels: &Labels, inline_limit
         if kind != MediaKind::Image && folder {
             let rel = format!("media/{key}.{}", a.ext);
             entry["src"] = json!(rel);
-            media.push((rel, a.bytes.to_vec()));
+            media.push((rel, a.bytes.clone()));
         } else {
             entry["blob"] = json!(add_blob!(b64(&a.bytes)));
         }
@@ -285,7 +286,7 @@ pub fn export_with_limit(renderer: &Renderer, editor: &Editor, labels: &Labels, 
     let mut bytes = page.html.len() as u64;
     for (rel, data) in &page.media {
         let p = dir.join(rel);
-        std::fs::write(&p, data).map_err(|e| ioe(&p, e))?;
+        std::fs::write(&p, &data[..]).map_err(|e| ioe(&p, e))?;
         bytes += data.len() as u64;
     }
     Ok(Written { page: index, folder: true, bytes, notes: page.notes, apple_ui_families: page.apple_ui_families })

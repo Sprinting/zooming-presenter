@@ -414,9 +414,9 @@ pub fn media_demo(app: &mut ZebraApp, which: &str) {
         let _ = ed.apply(cmd(serde_json::json!({"op":"update","id":c,"patch":{"x":0,"y":80}})), h.clone());
     }
     // A video file (header only; the fake backend plays it).
-    let dir = zebra_core::media::cache_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("demo-clip.mp4");
+    // Written to a temp file, copied in like any inserted clip, then removed.
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("zebra-demo-clip-{}.mp4", std::process::id()));
     let _ = std::fs::write(&path, zebra_core::media::fixtures::tiny_mp4(1280, 720, 20, true));
     let poster = app.media.backend.poster_png(&path, 2.0, 640).ok();
     let v = app
@@ -439,6 +439,7 @@ pub fn media_demo(app: &mut ZebraApp, which: &str) {
         )
         .ok()
         .and_then(|o| o.created.first().cloned());
+    let _ = std::fs::remove_file(&path);
     let _ = app.editor.view(zebra_core::ViewCommand::FitAll { animate: false }, h.clone());
     match which {
         "mediacrop" => {

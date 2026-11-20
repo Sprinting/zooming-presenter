@@ -682,12 +682,12 @@ fn main() {
         a.run("Background music added (inspector, nothing selected)", false, false, |h| {
             // A tiny silent WAV: the inspector only needs a track to show.
             let wav = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
-            let cmd = zebra_core::Command::SetSoundtrack { data_base64: wav.into(), path: None, looping: Some(true), volume: Some(0.6), name: Some("music.wav".into()) };
+            let cmd = zebra_core::Command::SetSoundtrack { data_base64: wav.into(), path: None, looping: Some(true), volume: Some(0.6), name: Some("music.wav".into()), asset: None };
             let _ = h.state_mut().editor.apply(cmd, HUMAN);
         });
         a.run("A step with a voice-over (frame selected, Path tab)", false, false, |h| {
             let wav = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
-            let _ = h.state_mut().editor.apply(zebra_core::Command::SetVoiceover { index: 0, data_base64: wav.into(), path: None }, HUMAN);
+            let _ = h.state_mut().editor.apply(zebra_core::Command::SetVoiceover { index: 0, data_base64: wav.into(), path: None, asset: None }, HUMAN);
             select(h, &["one"]);
             let tabs = zebra_app::inspector::tabs_for(h.state().editor.doc.get("one").map(|e| e.kind.clone()).as_ref(), false);
             if let Some(t) = tabs.last() {

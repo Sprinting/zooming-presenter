@@ -26,18 +26,24 @@ fn new_media_is_mapped_from_a_spill_file_that_leaves_nothing_behind() {
     let a = ed.doc.assets.values().next().unwrap();
     assert!(a.bytes.is_mapped(), "spilled and mapped");
     assert_eq!(&a.bytes[..], &png[..]);
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "the spill file's name is gone once mapped");
-    // Undo and redo keep the picture; a save writes it and reads back the same.
+    let spilled = |dir: &std::path::Path| std::fs::read_dir(dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".png")).count();
+    assert_eq!(spilled(&dir), 1, "one spill file, named for its process and key");
+    assert_eq!(a.bytes.own_file().and_then(|p| p.extension()).and_then(|e| e.to_str()), Some("png"));
+    // Undo and redo keep the picture; a save writes it and reads back the
+    // same, and the spill file goes: the saved file holds the bytes now.
     ed.undo(Origin::Human).unwrap();
     ed.redo(Origin::Human).unwrap();
     let file = dir.join("deck.zebra");
-    zebra_core::io::save(&mut ed.doc, &file).unwrap();
+    ed.save_now(&file).unwrap();
+    assert_eq!(spilled(&dir), 0, "the spill file goes once the save holds the picture");
     let back = zebra_core::io::load(&file).unwrap();
     assert_eq!(&back.assets.values().next().unwrap().bytes[..], &png[..]);
     // An imported file's pictures and PDF are spilled the same way.
     let (_, imported) = zebra_core::import::asset_from(png.clone()).unwrap();
     assert!(imported.bytes.is_mapped());
     assert_eq!((&imported.bytes[..], imported.width, imported.ext.as_str()), (&png[..], 256, "png"));
+    drop(imported);
+    assert_eq!(spilled(&dir), 0, "a spill file goes with the last asset using it");
     let mut pdf = b"%PDF-1.4\n".to_vec();
     pdf.extend(std::iter::repeat_n(b'x', zebra_core::media::SPILL_MIN));
     let (_, imported) = zebra_core::import::asset_from(pdf.clone()).unwrap();
@@ -48,9 +54,11 @@ fn new_media_is_mapped_from_a_spill_file_that_leaves_nothing_behind() {
     assert!(!ed.doc.assets[&key].bytes.is_mapped());
     // A leftover of a run that died is swept; this run's are kept.
     std::fs::write(dir.join("999999999-0-abc.spill"), b"x").unwrap();
+    std::fs::write(dir.join("999999999-3-abc.mp4"), b"x").unwrap();
     std::fs::write(dir.join(format!("{}-7-abc.spill", std::process::id())), b"x").unwrap();
     zebra_core::media::sweep_spill(|pid| pid == std::process::id());
-    let left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.ends_with(".spill")).collect();
+    let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.contains("-abc.")).collect();
+    left.sort();
     assert_eq!(left, vec![format!("{}-7-abc.spill", std::process::id())]);
     let _ = std::fs::remove_dir_all(&dir);
 }

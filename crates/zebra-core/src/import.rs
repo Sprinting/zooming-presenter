@@ -6,7 +6,6 @@
 //! shares, so a PDF and a PowerPoint file land on the canvas the same way.
 use std::collections::BTreeMap;
 
-use base64::Engine as _;
 use serde::Serialize;
 
 use crate::clip::Clip;
@@ -14,7 +13,7 @@ use crate::command::Command;
 use crate::editor::{Editor, Outcome};
 use crate::error::{ZError, ZResult};
 use crate::geom::Transform;
-use crate::model::{Align, Asset, Element, ElementKind, FrameData, FrameStyle, MediaKind, Size, Soundtrack, StepTarget};
+use crate::model::{Align, Asset, AssetBytes, Element, ElementKind, FrameData, FrameStyle, MediaKind, Size, Soundtrack, StepTarget};
 use crate::Origin;
 
 /// What a reader made of a file.
@@ -175,29 +174,49 @@ pub fn is_pdf(bytes: &[u8]) -> bool {
 /// so an imported file's pictures and PDF need not sit on the heap.
 pub fn asset_from(bytes: Vec<u8>) -> ZResult<(String, Asset)> {
     let key = crate::editor::content_key(&bytes);
-    let (ext, w, h) = if is_pdf(&bytes) {
+    let mut a = asset_of(AssetBytes::from(Vec::new()), &bytes)?;
+    a.bytes = crate::media::spill(bytes, &key, &a.ext);
+    Ok((key, a))
+}
+
+/// [`asset_from`] for bytes already in place (streamed to a spill file
+/// with [`crate::media::spill_reader`]), with their key.
+pub fn asset_from_bytes(bytes: AssetBytes) -> ZResult<Asset> {
+    let probe = bytes.clone();
+    asset_of(bytes, &probe)
+}
+
+/// What `data` is, as an asset holding `bytes` (the same bytes, or an
+/// empty stand-in to be filled).
+fn asset_of(bytes: AssetBytes, data: &[u8]) -> ZResult<Asset> {
+    let (ext, w, h) = if is_pdf(data) {
         ("pdf".to_string(), 0, 0)
-    } else if bytes.starts_with(b"<svg") {
-        let (w, h) = crate::symbols::svg_pixels(&bytes);
+    } else if data.starts_with(b"<svg") {
+        let (w, h) = crate::symbols::svg_pixels(data);
         ("svg".to_string(), w, h)
     } else {
-        crate::editor::image_info(&bytes)?
+        crate::editor::image_info(data)?
     };
-    let bytes = crate::media::spill(bytes, &key);
-    Ok((key, Asset { ext, bytes, width: w, height: h }))
+    Ok(Asset { ext, bytes, width: w, height: h })
 }
 
 /// A video or sound asset (MP4, MOV, M4V; MP3, M4A, AAC, WAV) and its
 /// content key, for [`ImportedDeck::assets`], with what its header says
 /// (kind, size, length). Other formats are refused: they won't play.
 pub fn av_asset_from(bytes: Vec<u8>) -> ZResult<(String, Asset, crate::media::MediaInfo)> {
-    let info = crate::media::info(&bytes)?;
+    let key = crate::editor::content_key(&bytes);
+    let (mut a, info) = av_asset_from_bytes(AssetBytes::from(Vec::new()), &bytes)?;
+    a.bytes = crate::media::spill(bytes, &key, &info.ext);
+    Ok((key, a, info))
+}
+
+/// [`av_asset_from`] for bytes already in place (`data` is what they hold).
+pub fn av_asset_from_bytes(bytes: AssetBytes, data: &[u8]) -> ZResult<(Asset, crate::media::MediaInfo)> {
+    let info = crate::media::info(data)?;
     if !matches!(info.kind, MediaKind::Video | MediaKind::Audio) {
         return Err(crate::error::ZError::invalid("not a video or a sound"));
     }
-    let key = crate::editor::content_key(&bytes);
-    let bytes = crate::media::spill(bytes, &key);
-    Ok((key, Asset { ext: info.ext.clone(), bytes, width: info.width, height: info.height }, info))
+    Ok((Asset { ext: info.ext.clone(), bytes, width: info.width, height: info.height }, info))
 }
 
 /// Pages per row on the canvas for `n` pages: a block about as wide as tall.
@@ -298,9 +317,10 @@ impl Editor {
                 clip.elements.push(e);
             }
         }
-        // Sounds go in through the commands that set them, which take the
-        // bytes; they are the assets the paste adds, so stored once.
-        let b64 = |key: &str| deck.assets.get(key).map(|a| base64::engine::general_purpose::STANDARD.encode(&a.bytes[..]));
+        // Sounds go in through the commands that set them, by key: they are
+        // among the assets the paste adds (they used to go as base64, the
+        // whole sound encoded and decoded again in memory).
+        let has = |key: &str| deck.assets.contains_key(key).then(|| key.to_string());
         // A paste adds unlocked copies: lock what the page has locked.
         let locked: Vec<String> = clip.elements.iter().filter(|e| e.locked).map(|e| e.id.clone()).collect();
         let first_step = self.doc.path.len();
@@ -311,13 +331,13 @@ impl Editor {
                 .map(|(f, notes, _)| Command::AddStep { target: StepTarget::Element { id: ids[f.as_str()].clone() }, index: None, builds: vec![], notes: notes.clone() })
                 .collect();
             for (i, (_, _, voice)) in steps.iter().enumerate() {
-                if let Some(data) = voice.as_deref().and_then(b64) {
-                    cmds.push(Command::SetVoiceover { index: first_step + i, data_base64: data, path: None });
+                if let Some(asset) = voice.as_deref().and_then(has) {
+                    cmds.push(Command::SetVoiceover { index: first_step + i, data_base64: String::new(), path: None, asset: Some(asset) });
                 }
             }
             if let Some(t) = music {
-                if let Some(data) = b64(&t.asset) {
-                    cmds.push(Command::SetSoundtrack { data_base64: data, path: None, looping: Some(t.looping), volume: Some(t.volume), name: Some(t.name.clone()) });
+                if let Some(asset) = has(&t.asset) {
+                    cmds.push(Command::SetSoundtrack { data_base64: String::new(), path: None, looping: Some(t.looping), volume: Some(t.volume), name: Some(t.name.clone()), asset: Some(asset) });
                 }
             }
             for id in &locked {

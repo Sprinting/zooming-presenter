@@ -27,8 +27,12 @@ quick-xml = { version = "0.41", features = ["encoding"] }
 # its `svg` feature brings in anyway) for the compressed .emz and .wmz.
 betteroffice-metafile = { version = "=0.5.1", features = ["svg"] }
 flate2 = "1"
+# Reading the .pptx container ourselves: the parser gets the file without
+# its media, which is streamed out of the mapped file (see pptx_media).
+zip.workspace = true
 
 [dev-dependencies]
+memmap2 = "0.9"
 zebra-render = { path = "../zebra-render", default-features = false }
 serde_json.workspace = true
 zip.workspace = true

@@ -92,3 +92,50 @@ fn saves_waiting_behind_a_new_document_are_dropped() {
     assert_eq!(keep(vec![Action::New, Action::Save, Action::SaveAs]), vec![Action::New]);
     assert_eq!(keep(vec![Action::Close, Action::Save, Action::Quit]), vec![Action::Close, Action::Quit]);
 }
+
+#[test]
+fn dropped_files_are_told_apart_by_their_bytes_not_their_names() {
+    use zebra_app::media_ui::{dropped_kind, Dropped};
+    use zebra_core::MediaKind;
+    let dir = std::env::temp_dir().join(format!("zebra-dropped-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // A 4 GB disk image (sparse) named .png: one read of 256 KB, no more.
+    let dmg = dir.join("Installer.png");
+    let f = std::fs::File::create(&dmg).unwrap();
+    f.set_len(4 << 30).unwrap();
+    let t = std::time::Instant::now();
+    assert_eq!(dropped_kind(&dmg).unwrap(), Dropped::Other);
+    assert!(t.elapsed().as_millis() < 1000);
+    // A picture with no extension, a video named .txt.
+    let pic = dir.join("picture");
+    let mut png = vec![];
+    image::RgbaImage::new(2, 2).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    std::fs::write(&pic, &png).unwrap();
+    assert_eq!(dropped_kind(&pic).unwrap(), Dropped::Media(MediaKind::Image));
+    let vid = dir.join("clip.txt");
+    std::fs::write(&vid, zebra_core::media::fixtures::tiny_mp4(64, 64, 2, true)).unwrap();
+    assert_eq!(dropped_kind(&vid).unwrap(), Dropped::Media(MediaKind::Video));
+    // A PowerPoint file goes to import, like a PDF.
+    let pptx = dir.join("Deck.pptx");
+    std::fs::write(&pptx, b"PK\x03\x04\x14\x00\x00\x00[Content_Types].xml").unwrap();
+    assert_eq!(dropped_kind(&pptx).unwrap(), Dropped::Slides);
+    // A folder, a device: an error, not a read.
+    assert!(dropped_kind(&dir).is_err());
+    assert!(dropped_kind(std::path::Path::new("/dev/zero")).is_err());
+}
+
+#[test]
+fn pasted_pictures_are_bounded() {
+    use zebra_app::media_ui::{pasted_png, MAX_PASTE_SIDE};
+    // Pixels that don't match the size, or no pixels: nothing.
+    assert!(pasted_png(0, 0, vec![]).is_none());
+    assert!(pasted_png(100, 100, vec![0; 16]).is_none());
+    assert!(pasted_png(u32::MAX, u32::MAX, vec![0; 16]).is_none());
+    // Wider than the limit: scaled down to it, aspect kept.
+    let w = MAX_PASTE_SIDE + 1808;
+    let png = pasted_png(w, 50, vec![255; w as usize * 50 * 4]).unwrap();
+    let (pw, ph) = image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().unwrap().into_dimensions().unwrap();
+    assert_eq!(pw, MAX_PASTE_SIDE);
+    assert_eq!(ph, (50.0 * MAX_PASTE_SIDE as f64 / w as f64).round() as u32);
+}
