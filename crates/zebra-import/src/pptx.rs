@@ -27,7 +27,7 @@
 //! What has no Zebra match comes in as the picture the file keeps of it,
 //! when it keeps one, or is left out; either way it is counted in the
 //! deck's notes ([`ImportNote`]).
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use zebra_core::diagrams::Item;
 use zebra_core::templates::Piece;
@@ -37,7 +37,9 @@ use pptx_parse::{
     SlideLayout, SlideMaster, SourceShape, TargetMode, TextAutofit, TextBody, TextCaps,
 };
 use crate::pptx_media::MediaSource;
-use zebra_core::import::{asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox};
+use crate::pptx_package::{Package, Read, Skip};
+use zebra_core::import::{asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox, MAX_IMPORT_SPANS};
+use zebra_core::rich::MAX_INSERT_CHARS;
 use zebra_core::{
     Align, AssetBytes, Crop, Dash, Element, ElementKind, ImageData, ImageMask, InkData, ListKind, MediaKind, ParaFormat, ShapeData, ShapeKind, Size, Soundtrack, SpanFormat, TextData, TextSpan, TextStyle, Transform, VideoData,
 };
@@ -51,6 +53,9 @@ pub const SLIDE_UNITS: f64 = crate::pdf::PAGE_UNITS;
 const EMU_PER_PT: f64 = 12_700.0;
 /// PowerPoint's default slide, 13.333 x 7.5 inches.
 const DEFAULT_SLIDE: (i64, i64) = (12_192_000, 6_858_000);
+/// SmartArt drawings read inside one another at most (PowerPoint never
+/// nests them; a drawing that names itself is cut off sooner).
+const MAX_SMARTART_DEPTH: usize = 4;
 
 /// Is this a PowerPoint file (a zip holding `ppt/presentation.xml`)?
 /// Reads the zip's directory, not the whole file; a zip too damaged to
@@ -91,23 +96,18 @@ pub fn compound_file_error(bytes: &[u8]) -> Option<ImportError> {
 }
 
 pub struct PptxReader {
-    pkg: PptxPackage,
-    /// The file's media, read from the file as it is needed.
-    src: MediaSource,
+    /// The file, read a batch of slides at a time; its media read from
+    /// the file as it is needed.
+    package: Package,
     title: String,
 }
 
 impl PptxReader {
-    /// `bytes`: the file, mapped (or in memory). The parser is given the
-    /// file without its media ([`MediaSource::open`]).
+    /// `bytes`: the file, mapped (or in memory). Only its directory and
+    /// slide list are read here; slides are read by [`Reader::read`].
     pub fn new(bytes: AssetBytes, title: String) -> Result<PptxReader, ImportError> {
-        let (src, slim) = MediaSource::open(bytes)?;
-        let pkg = pptx_parse::parse_pptx(&slim).map_err(|_| ImportError::Damaged("PowerPoint"))?;
-        drop(slim);
-        if pkg.slides.is_empty() {
-            return Err(ImportError::Damaged("PowerPoint"));
-        }
-        Ok(PptxReader { pkg, src, title })
+        let package = Package::open(MediaSource::open(bytes)?)?;
+        Ok(PptxReader { package, title })
     }
 }
 
@@ -116,55 +116,113 @@ impl Reader for PptxReader {
         "PowerPoint"
     }
     fn page_count(&self) -> usize {
-        self.pkg.slides.len()
+        self.package.slide_count()
     }
     fn read(&self, opts: &Options, ctl: &Control) -> Result<ImportedDeck, ImportError> {
-        let pkg = &self.pkg;
-        let (sw, sh) = match (pkg.presentation.width_emu, pkg.presentation.height_emu) {
-            (w, h) if w > 0 && h > 0 => (w, h),
-            _ => DEFAULT_SLIDE,
-        };
-        let k = SLIDE_UNITS / sw.max(sh) as f64;
         let mut deck = ImportedDeck { title: self.title.clone(), ..Default::default() };
         let mut pending = vec![];
         let mut media = BTreeMap::new();
         let mut counted = BTreeSet::new();
-        let mut infos = BTreeMap::new();
-        for i in crate::page_range(opts, pkg.slides.len()) {
+        // The slide size, from the first batch (it is the presentation's,
+        // the same in every batch).
+        let mut k_size: Option<(f64, (i64, i64))> = None;
+        let mut cancelled = false;
+        // Slides left out, and how many of them for being too big.
+        let (mut skipped, mut too_big) = (0usize, 0usize);
+        self.package.read(crate::page_range(opts, self.package.slide_count()), |batch| {
             if ctl.cancelled() {
-                return Err(ImportError::Cancelled);
+                cancelled = true;
+                return false;
             }
-            let slide = &pkg.slides[i];
-            if slide.hidden == Some(true) {
-                *deck.notes.entry(ImportNote::HiddenSlide).or_default() += 1;
-                ctl.page_done();
-                continue;
-            }
-            let (layout, master) = slide_parts(pkg, slide);
-            let parts = [Some(pkg.presentation.part_path.as_str()), Some(slide.part_path.as_str()), layout.map(|l| l.part_path.as_str()), master.map(|m| m.part_path.as_str())];
-            for part in parts.into_iter().flatten() {
-                if !infos.contains_key(part) {
-                    infos.insert(part.to_string(), part_info(pkg, part));
+            let (pkg, slides) = match batch {
+                Read::Skipped(i, why) => {
+                    deck.note_slide(ImportNote::PageSkipped, i + 1);
+                    skipped += 1;
+                    too_big += usize::from(why == Skip::TooBig);
+                    ctl.page_done();
+                    return true;
                 }
+                Read::Parsed(pkg, slides) => (pkg, slides),
+            };
+            let pkg = &*pkg;
+            let (k, (sw, sh)) = *k_size.get_or_insert_with(|| {
+                let (sw, sh) = match (pkg.presentation.width_emu, pkg.presentation.height_emu) {
+                    (w, h) if w > 0 && h > 0 => (w, h),
+                    _ => DEFAULT_SLIDE,
+                };
+                (SLIDE_UNITS / sw.max(sh) as f64, (sw, sh))
+            });
+            let index = Index::new(pkg);
+            let mut infos = BTreeMap::new();
+            for (slide, &i) in pkg.slides.iter().zip(&slides) {
+                if ctl.cancelled() {
+                    cancelled = true;
+                    return false;
+                }
+                if slide.hidden == Some(true) {
+                    *deck.notes.entry(ImportNote::HiddenSlide).or_default() += 1;
+                    ctl.page_done();
+                    continue;
+                }
+                let (layout, master) = slide_parts(pkg, slide);
+                let parts = [Some(pkg.presentation.part_path.as_str()), Some(slide.part_path.as_str()), layout.map(|l| l.part_path.as_str()), master.map(|m| m.part_path.as_str())];
+                for part in parts.into_iter().flatten() {
+                    if !infos.contains_key(part) {
+                        infos.insert(part.to_string(), part_info(pkg, part));
+                    }
+                }
+                let mut r = SlideReader::new(pkg, self.package.media(), &index, slide, k, (sw, sh), &mut deck, &mut media, &mut counted, &infos, &opts.theme);
+                r.has_soundtrack = opts.has_soundtrack;
+                r.number = i + 1;
+                r.read();
+                let SlideReader { items, pending: texts, voiceover, .. } = r;
+                let page = deck.pages.len();
+                pending.extend(texts.into_iter().map(|t| (page, t)));
+                let name = slide_title(slide).unwrap_or_else(|| (opts.slide_name)(i + 1));
+                deck.pages.push(ImportedPage { w: sw as f64 * k, h: sh as f64 * k, name, items, notes: slide.notes.trim().to_string(), slide: true, voiceover });
+                ctl.page_done();
+                // The slide's own part info isn't needed again.
+                infos.remove(&slide.part_path);
             }
-            let mut r = SlideReader::new(pkg, &self.src, slide, k, (sw, sh), &mut deck, &mut media, &mut counted, &infos, &opts.theme);
-            r.has_soundtrack = opts.has_soundtrack;
-            r.read();
-            let SlideReader { items, pending: texts, voiceover, .. } = r;
-            let page = deck.pages.len();
-            pending.extend(texts.into_iter().map(|t| (page, t)));
-            let name = slide_title(slide).unwrap_or_else(|| (opts.slide_name)(i + 1));
-            deck.pages.push(ImportedPage { w: sw as f64 * k, h: sh as f64 * k, name, items, notes: slide.notes.trim().to_string(), slide: true, voiceover });
-            ctl.page_done();
-        }
-        if ctl.cancelled() {
+            true
+        });
+        if cancelled || ctl.cancelled() {
             return Err(ImportError::Cancelled);
         }
-        if deck.pages.is_empty() {
-            return Err(ImportError::AllHidden);
+        let designs = self.package.broken_designs();
+        if designs > 0 {
+            deck.notes.insert(ImportNote::Design, designs);
         }
-        rank_text(&mut deck, &pending, opts, k);
+        if deck.pages.is_empty() {
+            // Nothing could be read (every slide too big, or some broken),
+            // or everything chosen is hidden.
+            return Err(match (skipped, too_big) {
+                (0, _) => ImportError::AllHidden,
+                (s, t) if s == t => ImportError::TooBig,
+                _ => ImportError::Damaged("PowerPoint"),
+            });
+        }
+        rank_text(&mut deck, &pending, opts, k_size.map_or(1.0, |k| k.0));
         Ok(deck)
+    }
+}
+
+/// A batch's relationships and media parts, by id and path (looked up for
+/// every run's link and every picture).
+struct Index<'p> {
+    rels: HashMap<&'p str, HashMap<&'p str, &'p Relationship>>,
+    media: HashMap<&'p str, &'p pptx_parse::MediaPart>,
+}
+
+impl<'p> Index<'p> {
+    fn new(pkg: &'p PptxPackage) -> Index<'p> {
+        let rels = pkg.relationships.iter().map(|(part, list)| (part.as_str(), list.iter().rev().map(|r| (r.id.as_str(), r)).collect())).collect();
+        let media = pkg.media.iter().rev().map(|m| (m.part_path.as_str(), m)).collect();
+        Index { rels, media }
+    }
+    /// Relationship `id` of part `part` (the first with that id).
+    fn rel(&self, part: &str, id: &str) -> Option<&'p Relationship> {
+        self.rels.get(part)?.get(id).copied()
     }
 }
 
@@ -173,6 +231,18 @@ fn slide_parts<'p>(pkg: &'p PptxPackage, slide: &Slide) -> (Option<&'p SlideLayo
     let layout = slide.layout_part_path.as_deref().and_then(|p| pkg.layouts.iter().find(|l| l.part_path == p)).or_else(|| pkg.layouts.first());
     let master = pptx_parse::master_for_layout(pkg, layout).or_else(|| pkg.masters.first());
     (layout, master)
+}
+
+/// A text box's text as [`SlideReader::build_text`] made it.
+struct Built {
+    data: TextData,
+    /// The size most of its characters have, points.
+    base_pt: f64,
+    chars: usize,
+    /// Cut to [`MAX_INSERT_CHARS`].
+    cut: bool,
+    /// Formatting past [`MAX_IMPORT_SPANS`] dropped.
+    simplified: bool,
 }
 
 /// A text box read from a slide, waiting for the deck-wide size ranking.
@@ -320,6 +390,13 @@ struct SlideReader<'a> {
     deck: &'a mut ImportedDeck,
     /// The file's media.
     src: &'a MediaSource,
+    /// The batch's relationships and media by id and path.
+    index: &'a Index<'a>,
+    /// The slide's number in the deck (1-based), for notes that name it.
+    number: usize,
+    /// SmartArt drawings being read, innermost last (a drawing that names
+    /// itself, or one inside it, is not read again).
+    drawings: Vec<String>,
     /// Asset key of each media part read so far (None: it can't come in).
     media: &'a mut BTreeMap<String, Option<String>>,
     items: Vec<ImportedItem>,
@@ -347,6 +424,7 @@ impl<'a> SlideReader<'a> {
     fn new(
         pkg: &'a PptxPackage,
         src: &'a MediaSource,
+        index: &'a Index<'a>,
         slide: &'a Slide,
         k: f64,
         size: (i64, i64),
@@ -364,7 +442,7 @@ impl<'a> SlideReader<'a> {
             .or_else(|| pkg.themes.first())
             .map(|t| t.format_scheme.clone())
             .unwrap_or_default();
-        SlideReader { pkg, src, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos, has_soundtrack: false, voiceover: None, zebra }
+        SlideReader { pkg, src, index, number: 0, drawings: vec![], slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos, has_soundtrack: false, voiceover: None, zebra }
     }
 
     fn note(&mut self, n: ImportNote) {
@@ -534,6 +612,10 @@ impl<'a> SlideReader<'a> {
         // when there was none): its shapes sit in the frame's box.
         let pkg = self.pkg;
         let saved = drawing.and_then(|p| pkg.diagram_drawings.iter().find(|d| d.part_path == p)).filter(|d| d.synthesis_extent.is_none());
+        // A drawing that holds a SmartArt naming the drawing itself (or one
+        // around it) would be read forever: it is read once, and SmartArt
+        // is never nested deeper than PowerPoint makes it.
+        let saved = saved.filter(|d| self.drawings.len() < MAX_SMARTART_DEPTH && !self.drawings.contains(&d.part_path));
         if let Some(dd) = saved {
             let before = self.items.len();
             let gid = self.group_for(group);
@@ -542,7 +624,9 @@ impl<'a> SlideReader<'a> {
             ps.push(&frame);
             let part = self.part;
             self.part = &dd.part_path;
+            self.drawings.push(dd.part_path.clone());
             self.walk(&dd.shapes, None, &ps, Some(&gid), Role::Slide);
+            self.drawings.pop();
             self.part = part;
             if self.items.len() > before {
                 return true;
@@ -909,8 +993,7 @@ impl<'a> SlideReader<'a> {
     /// file links to it, it is in a format a Mac won't play, or the music
     /// or voice-over is taken).
     fn media_node(&mut self, p: &Picture, m: &MediaRef, parents: &[&ShapeTransform], group: Option<&str>) -> bool {
-        let rels: &[Relationship] = self.pkg.relationships.get(self.part).map(Vec::as_slice).unwrap_or_default();
-        let found = m.rels.iter().filter_map(|id| rels.iter().find(|r| &r.id == id)).filter_map(|r| r.resolved_target.as_deref()).find_map(|t| self.pkg.media.iter().find(|x| x.part_path == t));
+        let found = m.rels.iter().filter_map(|id| self.index.rel(self.part, id)).filter_map(|r| r.resolved_target.as_deref()).find_map(|t| self.index.media.get(t).copied());
         let Some(part) = found else { return false };
         let Some((key, asset, info)) = self.src.av(&part.part_path) else { return false };
         let timing = self.infos.get(self.part).and_then(|i| i.timing.get(&p.base.id)).cloned().unwrap_or_default();
@@ -974,7 +1057,7 @@ impl<'a> SlideReader<'a> {
     /// The asset for media part `path`, or None (noted) when Zebra can't
     /// show it.
     fn media_asset(&mut self, path: &str) -> Option<String> {
-        let Some(part) = self.pkg.media.iter().find(|m| m.part_path == path) else {
+        let Some(part) = self.index.media.get(path).copied() else {
             self.note(ImportNote::Picture);
             return None;
         };
@@ -1064,6 +1147,12 @@ impl<'a> SlideReader<'a> {
             _ => 1.0,
         };
         let Some(built) = self.build_text(&c, scale) else { return };
+        if built.cut {
+            self.deck.note_slide(ImportNote::TextCut, self.number);
+        }
+        if built.simplified {
+            self.deck.note_slide(ImportNote::Simplified, self.number);
+        }
         let k = self.k;
         let (w, h) = ((at.w - il - ir).max(at.w * 0.2), (at.h - it - ib).max(0.0));
         // The text box's centre, moved by uneven insets (turned with it).
@@ -1072,7 +1161,7 @@ impl<'a> SlideReader<'a> {
         let (cx, cy) = (at.cx + ox * a.cos() - oy * a.sin(), at.cy + ox * a.sin() + oy * a.cos());
         let (bw, bh) = (w * k, h * k);
         let fit = SourceBox { x0: cx * k - bw / 2.0, y0: cy * k - bh / 2.0, x1: cx * k + bw / 2.0, y1: cy * k + bh / 2.0, anchor };
-        let (data, base_pt, chars) = built;
+        let Built { data, base_pt, chars, .. } = built;
         let mut data = data;
         data.fixed_width = wraps;
         self.pending.push(PendingText { item: self.items.len(), base_pt, chars, wrap: if wraps { bw } else { 0.0 } });
@@ -1092,11 +1181,16 @@ impl<'a> SlideReader<'a> {
     }
 
     /// The text, its base size in points (the size most characters have)
-    /// and its length, or None when there is nothing to show.
-    fn build_text(&self, c: &Cascade, font_scale: f64) -> Option<(TextData, f64, usize)> {
+    /// and its length, or None when there is nothing to show. A text longer
+    /// than paste allows ([`MAX_INSERT_CHARS`]) is cut there, and formatting
+    /// past [`MAX_IMPORT_SPANS`] changes is dropped (a box with 65,536
+    /// crashed text layout).
+    fn build_text(&self, c: &Cascade, font_scale: f64) -> Option<Built> {
         struct Run {
             start: usize,
             end: usize,
+            /// Has characters other than spaces.
+            visible: bool,
             pt: f64,
             bold: bool,
             italic: bool,
@@ -1157,6 +1251,7 @@ impl<'a> SlideReader<'a> {
                 runs.push(Run {
                     start: n,
                     end: n + len,
+                    visible: t.chars().any(|c| !c.is_whitespace()),
                     pt,
                     bold: rp.bold.unwrap_or(false),
                     italic: rp.italic.unwrap_or(false),
@@ -1167,6 +1262,20 @@ impl<'a> SlideReader<'a> {
                 });
                 text.push_str(&t);
                 n += len;
+            }
+        }
+        // Longer than one paste may be: cut there (laid out on every frame,
+        // a megabyte of text froze the window).
+        let cut = n > MAX_INSERT_CHARS;
+        if cut {
+            if let Some((at, _)) = text.char_indices().nth(MAX_INSERT_CHARS) {
+                text.truncate(at);
+            }
+            n = MAX_INSERT_CHARS;
+            paras.truncate(text.split('\n').count());
+            runs.retain(|r| r.start < n);
+            if let Some(r) = runs.last_mut() {
+                r.end = r.end.min(n);
             }
         }
         // Empty lines at the end take room and show nothing.
@@ -1187,7 +1296,7 @@ impl<'a> SlideReader<'a> {
         };
         let base_pt: f64 = commonest(&|r| format!("{:.1}", r.pt)).parse().unwrap_or(18.0);
         let color = commonest(&|r| r.color.clone());
-        let visible = |r: &&Run| text.chars().skip(r.start).take(r.end - r.start).any(|c| !c.is_whitespace());
+        let visible = |r: &&Run| r.visible;
         let bold = runs.iter().filter(visible).all(|r| r.bold);
         let italic = runs.iter().filter(visible).all(|r| r.italic);
         let mut align_count: BTreeMap<u8, usize> = BTreeMap::new();
@@ -1213,8 +1322,12 @@ impl<'a> SlideReader<'a> {
             .collect();
         let paras = paras.iter().map(|(level, list, align)| ParaFormat { indent: *level, list: Some(*list), align: (*align != box_align).then_some(*align) }).collect();
         let mut data = TextData { text, style: TextStyle::Body, bold, italic, align: box_align, bullets: false, color: Some(color.to_ascii_lowercase()), fixed_width: true, spans, paras };
+        // Neighbouring runs that look the same are one span, then the
+        // spans past the cap go: their characters take the box's style.
         zebra_core::rich::normalize(&mut data);
-        Some((data, base_pt, n))
+        let simplified = data.spans.len() > MAX_IMPORT_SPANS;
+        data.spans.truncate(MAX_IMPORT_SPANS);
+        Some(Built { data, base_pt, chars: n, cut, simplified })
     }
 
     /// The strike-through part `part`'s shape `id` says (None when it
@@ -1260,13 +1373,16 @@ impl<'a> SlideReader<'a> {
         out
     }
 
-    /// The URL a run's link relationship points at (web and mail links
-    /// only; links to other slides are left out).
+    /// The URL a run's link relationship points at: web and mail links
+    /// only ([`web_link`]). Links to other slides, and links that would run
+    /// something (`javascript:`, `file:`…), are left out: the run's words
+    /// stay, plain.
     fn link(&self, id: &str) -> Option<String> {
-        let rels: &[Relationship] = self.pkg.relationships.get(self.part).map(Vec::as_slice).unwrap_or_default();
-        let r = rels.iter().find(|r| r.id == id)?;
-        let t = r.target.trim();
-        (r.target_mode == TargetMode::External || t.contains("://") || t.starts_with("mailto:")).then(|| t.to_string()).filter(|t| !t.is_empty())
+        let r = self.index.rel(self.part, id)?;
+        if r.target_mode != TargetMode::External && !r.target.contains(':') {
+            return None;
+        }
+        web_link(&r.target)
     }
 
     /// Paragraph `index` at `level`'s properties, from the master's text
@@ -1356,6 +1472,21 @@ impl<'a> SlideReader<'a> {
             return None;
         }
         resolve_color_value_to_hex_with_theme(Some(c), Some(&self.theme)).map(|h| h.to_ascii_lowercase())
+    }
+}
+
+/// `url` when it is a web or mail link (http, https or mailto, in any
+/// case; its scheme is written in lower case), else None. Spaces round it
+/// and tabs and line breaks inside are dropped first, as browsers drop
+/// them (`java\tscript:` is `javascript:` to a browser).
+pub fn web_link(url: &str) -> Option<String> {
+    let url: String = url.trim_matches(|c: char| c.is_whitespace() || c.is_control()).chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
+    let (scheme, rest) = url.split_once(':')?;
+    let scheme = scheme.to_ascii_lowercase();
+    match scheme.as_str() {
+        "http" | "https" if rest.starts_with("//") && rest.len() > 2 => Some(format!("{scheme}:{rest}")),
+        "mailto" if !rest.is_empty() => Some(format!("{scheme}:{rest}")),
+        _ => None,
     }
 }
 

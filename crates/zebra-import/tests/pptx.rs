@@ -595,7 +595,8 @@ fn broken_parts_give_an_error_or_a_partial_deck_never_a_panic() {
                             let mut ed = editor();
                             ed.import_deck(&deck, "Import".into(), Origin::Human).unwrap();
                         }
-                        Err(e) => assert!(matches!(e, ImportError::AllHidden), "{target} cut at {cut}: {e:?}"),
+                        // Every slide broken: nothing to import.
+                        Err(e) => assert!(matches!(e, ImportError::AllHidden | ImportError::Damaged(_)), "{target} cut at {cut}: {e:?}"),
                     },
                     Err(e) => assert!(matches!(e, ImportError::Damaged(_) | ImportError::NotSupported), "{target} cut at {cut}: {e:?}"),
                 }

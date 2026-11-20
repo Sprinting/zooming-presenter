@@ -118,14 +118,27 @@ fn parse_mov(b: &[u8]) -> Option<MovInfo> {
     Some(out)
 }
 
+/// Longest a video or sound may say it lasts, seconds. A header saying
+/// more is lying (or is a stream of unknown length): its length is then
+/// unknown (0), and the player asks the file itself.
+pub const MAX_MEDIA_SECONDS: f64 = 24.0 * 60.0 * 60.0;
+
+/// `d` seconds if it is a believable length, else 0 (unknown).
+pub fn plausible_duration(d: f64) -> f64 {
+    if d.is_finite() && d > 0.0 && d <= MAX_MEDIA_SECONDS { d } else { 0.0 }
+}
+
 fn mvhd_duration(m: &[u8]) -> Option<f64> {
     let version = *m.first()?;
+    // A duration of all ones means "unknown" (ISO/IEC 14496-12).
     let (ts, dur) = if version == 1 {
-        (u32::from_be_bytes(m.get(20..24)?.try_into().ok()?) as f64, u64::from_be_bytes(m.get(24..32)?.try_into().ok()?) as f64)
+        let d = u64::from_be_bytes(m.get(24..32)?.try_into().ok()?);
+        (u32::from_be_bytes(m.get(20..24)?.try_into().ok()?) as f64, (d != u64::MAX).then_some(d as f64)?)
     } else {
-        (u32::from_be_bytes(m.get(12..16)?.try_into().ok()?) as f64, u32::from_be_bytes(m.get(16..20)?.try_into().ok()?) as f64)
+        let d = u32::from_be_bytes(m.get(16..20)?.try_into().ok()?);
+        (u32::from_be_bytes(m.get(12..16)?.try_into().ok()?) as f64, (d != u32::MAX).then_some(d as f64)?)
     };
-    (ts > 0.0).then(|| dur / ts)
+    (ts > 0.0).then(|| plausible_duration(dur / ts))
 }
 
 /// Iterate the boxes directly inside `b`: (type, body).
@@ -171,7 +184,7 @@ fn wav_duration(b: &[u8]) -> Option<f64> {
             byte_rate = u32::from_le_bytes(b[pos + 16..pos + 20].try_into().ok()?);
         }
         if id == b"data" {
-            return (byte_rate > 0).then(|| len as f64 / byte_rate as f64);
+            return (byte_rate > 0).then(|| plausible_duration(len as f64 / byte_rate as f64));
         }
         pos += 8 + len + (len & 1);
     }
@@ -714,6 +727,44 @@ mod tests {
         let m = info(&tiny_mp4(1920, 1080, 12, true)).unwrap();
         assert_eq!((m.ext.as_str(), m.kind, m.width, m.height), ("mp4", MediaKind::Video, 1920, 1080));
         assert!((m.duration - 12.0).abs() < 1e-9);
+    }
+
+    /// An `mvhd` box (version 0) saying `duration` units of 1/`scale` s.
+    fn mvhd_v0(scale: u32, duration: u32) -> Vec<u8> {
+        let mut b = vec![0u8; 20];
+        b[12..16].copy_from_slice(&scale.to_be_bytes());
+        b[16..20].copy_from_slice(&duration.to_be_bytes());
+        b
+    }
+
+    #[test]
+    fn a_lying_or_unknown_length_is_unknown() {
+        // 20 Nov audit, W10: timescale 1, duration 0xffffffff was believed
+        // (136 years).
+        assert_eq!(mvhd_duration(&mvhd_v0(1, u32::MAX)), None);
+        assert_eq!(mvhd_duration(&mvhd_v0(1000, u32::MAX)), None);
+        assert_eq!(mvhd_duration(&mvhd_v0(1, u32::MAX - 1)), Some(0.0));
+        assert_eq!(mvhd_duration(&mvhd_v0(1, 86_400)), Some(86_400.0));
+        assert_eq!(mvhd_duration(&mvhd_v0(1, 86_401)), Some(0.0));
+        assert_eq!(mvhd_duration(&mvhd_v0(600, 600 * 90)), Some(90.0));
+        assert_eq!(mvhd_duration(&mvhd_v0(0, 5)), None);
+        let mut v1 = vec![0u8; 32];
+        v1[0] = 1;
+        v1[20..24].copy_from_slice(&1u32.to_be_bytes());
+        v1[24..32].copy_from_slice(&u64::MAX.to_be_bytes());
+        assert_eq!(mvhd_duration(&v1), None);
+        v1[24..32].copy_from_slice(&(1u64 << 40).to_be_bytes());
+        assert_eq!(mvhd_duration(&v1), Some(0.0));
+        for d in [f64::NAN, f64::INFINITY, -1.0, 0.0, 1e12] {
+            assert_eq!(plausible_duration(d), 0.0);
+        }
+        // A WAV whose byte rate is 1 says 4 GB of data lasts 136 years.
+        let mut w = tiny_wav(0.01);
+        let rate = w.windows(4).position(|x| x == b"fmt ").unwrap() + 16;
+        w[rate..rate + 4].copy_from_slice(&1u32.to_le_bytes());
+        let data = w.windows(4).position(|x| x == b"data").unwrap() + 4;
+        w[data..data + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(info(&w).unwrap().duration, 0.0);
     }
 
     #[test]

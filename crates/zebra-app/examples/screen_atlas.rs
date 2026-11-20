@@ -314,7 +314,7 @@ fn import_pages(a: &mut Atlas, pdf: PathBuf) {
     });
     a.run("After an import that left a page out", false, false, |h| {
         let notes = std::collections::BTreeMap::from([(zebra_core::import::ImportNote::PageSkipped, 1usize)]);
-        let message = zebra_app::import_ui::note_lines(&notes).join("\n");
+        let message = zebra_app::import_ui::note_lines(&notes, &Default::default()).join("\n");
         let title = zebra_app::t!("import-done-title", count = 26);
         zebra_app::sheets::request(h.state_mut(), zebra_app::sheets::SheetKind::ImportNotes { title, message });
     });

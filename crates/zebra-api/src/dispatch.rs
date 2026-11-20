@@ -749,6 +749,7 @@ fn import_error(e: zebra_import::ImportError) -> RpcError {
         E::Encrypted => "encrypted",
         E::OldPowerPoint => "unsupported",
         E::AllHidden => "empty",
+        E::TooBig => "too_big",
         E::NoEngine(_) => "no_engine",
         E::Read(_) => "io",
         E::Cancelled => "cancelled",
@@ -759,6 +760,7 @@ fn import_error(e: zebra_import::ImportError) -> RpcError {
         E::NotSupported => r.hint(format!("Zebra imports: {}", zebra_import::EXTENSIONS.join(", "))),
         E::OldPowerPoint => r.hint("open it in PowerPoint or Keynote and save it as .pptx, then import that"),
         E::AllHidden => r.hint("choose slides that are shown, or show the hidden ones in PowerPoint first"),
+        E::TooBig => r.hint("a slide can hold up to 8 MB of XML and 100,000 shapes; split it in PowerPoint first"),
         E::BetaOff => match zebra_core::beta::BetaFeature::PptxImport.error().hint {
             Some(h) => r.hint(h),
             None => r,
@@ -784,7 +786,18 @@ impl Dispatcher {
         let out = editor.import_deck(&deck, format!("Import {}", done.name), done.origin.clone())?;
         self.seen.insert(key, editor.revision);
         let frames: Vec<String> = out.created.iter().filter(|id| editor.doc.get(id).is_some_and(|e| e.is_frame())).cloned().collect();
-        let notes: Vec<Value> = deck.notes.iter().map(|(n, c)| json!({ "note": n, "count": c, "text": n.english(*c) })).collect();
+        let notes: Vec<Value> = deck
+            .notes
+            .iter()
+            .map(|(n, c)| {
+                let slides = deck.slides.get(n).map(Vec::as_slice).unwrap_or_default();
+                let mut v = json!({ "note": n, "count": c, "text": n.english_with(*c, slides) });
+                if !slides.is_empty() {
+                    v["slides"] = json!(slides);
+                }
+                v
+            })
+            .collect();
         let mut v = to_value(out);
         if let Value::Object(o) = &mut v {
             o.insert("pages".into(), json!(deck.pages.len()));

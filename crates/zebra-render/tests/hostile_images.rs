@@ -150,3 +150,37 @@ fn jpeg_shrinks_without_an_rgba_copy() {
     let px = &l.data.data.data()[..4];
     assert!((px[0] as i32 - 200).abs() < 6 && (px[1] as i32 - 100).abs() < 6, "{px:?}");
 }
+
+/// Leftover of the last fix branch: a CPU capture copied a decoded level
+/// into vello_cpu's pixmap, so an 8000² picture was held twice (515 MB).
+/// The pixmap and the GPU's image data are now the same buffer.
+#[test]
+fn a_captured_level_is_held_once() {
+    let bytes: zebra_core::AssetBytes = big_grey_png(8000).into();
+    let cache = zebra_render::images::ImageCache::default();
+    let (pixmap, peak) = measure(|| {
+        let d = cache.get("p8k", "png", &bytes, (8000, 8000), 0, true).unwrap();
+        let zebra_render::images::Decoded::Still(l) = d else { panic!() };
+        assert_eq!((l.width, l.height), (8000, 8000));
+        assert_eq!(l.bytes(), 8000 * 8000 * 4);
+        // What the CPU renderer draws from is what the GPU draws from.
+        let p = l.pixmap();
+        assert_eq!(p.data_as_u8_slice().as_ptr(), l.data.data.data().as_ptr());
+        p
+    });
+    eprintln!("8000x8000 PNG level 0 and its CPU pixmap: peak {} MB", peak / MB);
+    assert_eq!(pixmap.width(), 8000);
+    // One 256 MB level, not two.
+    assert!(peak < 300 * MB, "peak {} MB", peak / MB);
+}
+
+/// Odd buffers still make a level (the pixmap needs whole 4-byte pixels).
+#[test]
+fn levels_from_odd_buffers() {
+    let mut v = Vec::with_capacity(4 * 9 + 3);
+    v.resize(4 * 9, 7u8);
+    let l = zebra_render::display::ImageLevel::from_premultiplied("odd", 3, 3, v);
+    assert_eq!(l.pixmap().data_as_u8_slice(), &[7u8; 36][..]);
+    let l = zebra_render::display::ImageLevel::video_frame("v", 2, 1, vec![1; 8]);
+    assert!(l.moving);
+}

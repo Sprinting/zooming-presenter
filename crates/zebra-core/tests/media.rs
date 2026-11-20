@@ -210,3 +210,20 @@ fn replacing_a_video_keeps_its_place_width_and_settings() {
     let img = ed.apply(cmd(json!({"op":"add_image","data_base64":b64(&png(4,4))})), Origin::Human).unwrap().created[0].clone();
     assert!(ed.apply(cmd(json!({"op":"replace_video","id":img,"data_base64":b64(&tiny_mp4(320,240,1,true))})), Origin::Human).is_err());
 }
+
+/// A saved video whose length came from a lying header (20 Nov audit, W10)
+/// is repaired to "unknown" when the document is opened.
+#[test]
+fn an_absurd_video_length_is_repaired_on_open() {
+    let mut ed = Editor::default();
+    let id = ed.apply(cmd(json!({"op":"add_video","data_base64":b64(&tiny_mp4(320,240,10,true))})), Origin::Human).unwrap().created[0].clone();
+    for (said, kept) in [(4_294_967_295.0, 0.0), (86_401.0, 0.0), (-3.0, 0.0), (7200.0, 7200.0)] {
+        let mut doc = ed.doc.clone();
+        if let Some(ElementKind::Video(v)) = doc.elements.get_mut(&id).map(|e| &mut e.kind) {
+            v.duration = said;
+        }
+        zebra_core::check::repair(&mut doc);
+        let ElementKind::Video(v) = &doc.get(&id).unwrap().kind else { panic!() };
+        assert_eq!(v.duration, kept, "{said}");
+    }
+}

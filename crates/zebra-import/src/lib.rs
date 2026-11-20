@@ -20,6 +20,7 @@ pub mod pdf;
 pub mod pptx;
 mod pptx_xml;
 mod pptx_media;
+mod pptx_package;
 
 /// The file types File › Import… offers (lower case, no dot).
 pub const EXTENSIONS: &[&str] = &["pdf", "pptx"];
@@ -40,6 +41,10 @@ pub enum ImportError {
     /// Every slide asked for is hidden.
     #[error("every slide chosen is hidden")]
     AllHidden,
+    /// Every slide asked for that isn't hidden is over a limit (more than
+    /// 8 MB of XML, or more shapes than can be read).
+    #[error("every slide chosen is too big to import")]
+    TooBig,
     /// The PDF engine is missing from the app (a broken install).
     #[error("the PDF reader is missing from Zebra ({0})")]
     NoEngine(String),
