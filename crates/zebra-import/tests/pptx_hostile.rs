@@ -161,6 +161,43 @@ fn import(deck: &ImportedDeck) {
     ed.import_deck(deck, "Import".into(), Origin::Human).unwrap();
 }
 
+/// T-C1: a SmartArt drawing whose graphic frame names the drawing itself
+/// overflowed the stack (and so did two drawings naming each other).
+#[test]
+fn smartart_drawings_that_name_themselves_are_read_once() {
+    let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let frame = |uri_ns: &str| format!(r#"<dsp:graphicFrame><dsp:nvGraphicFramePr><dsp:cNvPr id="4" name="Diagram 1"/><dsp:cNvGraphicFramePr/><dsp:nvPr/></dsp:nvGraphicFramePr><dsp:xfrm><a:off x="914400" y="914400"/><a:ext cx="7315200" cy="3657600"/></dsp:xfrm><a:graphic><a:graphicData uri="{uri_ns}"><dgm:relIds xmlns:dgm="{uri_ns}" r:dm="rId2" r:lo="rId3"/></a:graphicData></a:graphic></dsp:graphicFrame>"#);
+    let drawing = |inner: &str| {
+        format!(r#"<dsp:drawing xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dsp:spTree><dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/><dsp:sp modelId="{{A}}"><dsp:nvSpPr><dsp:cNvPr id="5" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="999999"/></a:solidFill></dsp:spPr></dsp:sp>{inner}</dsp:spTree></dsp:drawing>"#)
+            .into_bytes()
+    };
+    let rels = |to: &str| format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="{REL}/diagramData" Target="{to}"/><Relationship Id="rId4" Type="http://schemas.microsoft.com/office/2007/relationships/diagramDrawing" Target="{to}"/></Relationships>"#).into_bytes();
+    let dgm = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
+    let on_slide = format!(r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="4" name="Diagram 1"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="914400" y="914400"/><a:ext cx="7315200" cy="3657600"/></p:xfrm><a:graphic><a:graphicData uri="{dgm}"><dgm:relIds xmlns:dgm="{dgm}" r:dm="rId2" r:lo="rId3"/></a:graphicData></a:graphic></p:graphicFrame>"#);
+    let slide_rels = format!(r#"<Relationship Id="rId2" Type="{REL}/diagramData" Target="../diagrams/drawing1.xml"/><Relationship Id="rId4" Type="http://schemas.microsoft.com/office/2007/relationships/diagramDrawing" Target="../diagrams/drawing1.xml"/>"#);
+    let one = S { xml: Some(slide(&on_slide).into_bytes()), rels: slide_rels.clone() };
+    let after = s(slide(&words(2, "After")));
+    // The audit's case (the frame's namespace typo kept), the drawing naming
+    // itself with the real namespace, and two drawings naming each other.
+    for (d1, r1, extra) in [
+        (drawing(&frame("httdsp://schemas.openxmlformats.org/drawingml/2006/diagram")), rels("drawing1.xml"), None),
+        (drawing(&frame(dgm)), rels("drawing1.xml"), None),
+        (drawing(&frame(dgm)), rels("drawing2.xml"), Some((drawing(&frame(dgm)), rels("drawing1.xml")))),
+    ] {
+        let mut parts = vec![("ppt/diagrams/drawing1.xml", d1), ("ppt/diagrams/_rels/drawing1.xml.rels", r1)];
+        if let Some((d2, r2)) = extra {
+            parts.push(("ppt/diagrams/drawing2.xml", d2));
+            parts.push(("ppt/diagrams/_rels/drawing2.xml.rels", r2));
+        }
+        let one = S { xml: one.xml.clone(), rels: one.rels.clone() };
+        let after = S { xml: after.xml.clone(), rels: String::new() };
+        let d = read(deck(&[one, after], &parts, &[])).unwrap();
+        assert_eq!(d.pages.len(), 2);
+        assert_eq!(texts(&d).last().map(|t| t.text.as_str()), Some("After"));
+        import(&d);
+    }
+}
+
 /// T-W3: a missing, broken or hostile part used to make the whole file
 /// "damaged". Now the slide it belongs to is left out and named, or a
 /// design part is left out and noted, and the rest comes in.

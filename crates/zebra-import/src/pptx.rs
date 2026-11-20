@@ -52,6 +52,9 @@ pub const SLIDE_UNITS: f64 = crate::pdf::PAGE_UNITS;
 const EMU_PER_PT: f64 = 12_700.0;
 /// PowerPoint's default slide, 13.333 x 7.5 inches.
 const DEFAULT_SLIDE: (i64, i64) = (12_192_000, 6_858_000);
+/// SmartArt drawings read inside one another at most (PowerPoint never
+/// nests them; a drawing that names itself is cut off sooner).
+const MAX_SMARTART_DEPTH: usize = 4;
 
 /// Is this a PowerPoint file (a zip holding `ppt/presentation.xml`)?
 /// Reads the zip's directory, not the whole file; a zip too damaged to
@@ -368,6 +371,9 @@ struct SlideReader<'a> {
     src: &'a MediaSource,
     /// The batch's relationships and media by id and path.
     index: &'a Index<'a>,
+    /// SmartArt drawings being read, innermost last (a drawing that names
+    /// itself, or one inside it, is not read again).
+    drawings: Vec<String>,
     /// Asset key of each media part read so far (None: it can't come in).
     media: &'a mut BTreeMap<String, Option<String>>,
     items: Vec<ImportedItem>,
@@ -413,7 +419,7 @@ impl<'a> SlideReader<'a> {
             .or_else(|| pkg.themes.first())
             .map(|t| t.format_scheme.clone())
             .unwrap_or_default();
-        SlideReader { pkg, src, index, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos, has_soundtrack: false, voiceover: None, zebra }
+        SlideReader { pkg, src, index, drawings: vec![], slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos, has_soundtrack: false, voiceover: None, zebra }
     }
 
     fn note(&mut self, n: ImportNote) {
@@ -583,6 +589,10 @@ impl<'a> SlideReader<'a> {
         // when there was none): its shapes sit in the frame's box.
         let pkg = self.pkg;
         let saved = drawing.and_then(|p| pkg.diagram_drawings.iter().find(|d| d.part_path == p)).filter(|d| d.synthesis_extent.is_none());
+        // A drawing that holds a SmartArt naming the drawing itself (or one
+        // around it) would be read forever: it is read once, and SmartArt
+        // is never nested deeper than PowerPoint makes it.
+        let saved = saved.filter(|d| self.drawings.len() < MAX_SMARTART_DEPTH && !self.drawings.contains(&d.part_path));
         if let Some(dd) = saved {
             let before = self.items.len();
             let gid = self.group_for(group);
@@ -591,7 +601,9 @@ impl<'a> SlideReader<'a> {
             ps.push(&frame);
             let part = self.part;
             self.part = &dd.part_path;
+            self.drawings.push(dd.part_path.clone());
             self.walk(&dd.shapes, None, &ps, Some(&gid), Role::Slide);
+            self.drawings.pop();
             self.part = part;
             if self.items.len() > before {
                 return true;
