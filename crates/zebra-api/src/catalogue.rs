@@ -54,6 +54,8 @@ pub const EXAMPLES: &[(Kind, &str)] = &[
     (Kind::Command, r##"{"op":"update","id":"t1","patch":{"text":"New text","bold":true,"color":"#cc3333"}}"##),
     (Kind::Command, r##"{"op":"format_text","id":"t1","find":"zebras","format":{"bold":true,"color":"theme:accent"}}"##),
     (Kind::Command, r#"{"op":"format_paragraphs","id":"t1","first":1,"last":3,"list":"bullet","indent_by":1}"#),
+    (Kind::Command, r#"{"op":"split_text","id":"t1","start":12,"end":27,"x":0,"y":400}"#),
+    (Kind::Command, r#"{"op":"split_text","id":"t1","start":0,"end":5,"copy":true}"#),
     (Kind::Command, r#"{"op":"update","id":"i1","patch":{"crop":{"x":0.1,"y":0,"w":0.8,"h":1},"mask":"circle"}}"#),
     (Kind::Command, r#"{"op":"update","id":"v1","patch":{"start":2.5,"end":20,"muted":true,"autoplay":true}}"#),
     (Kind::Command, r#"{"op":"move","ids":["f1"],"dx":200,"dy":0}"#),

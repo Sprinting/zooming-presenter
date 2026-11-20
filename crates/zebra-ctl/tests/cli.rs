@@ -44,6 +44,17 @@ fn zebractl_end_to_end() {
     assert!(ok, "{err}");
     let (ok, out, _) = ctl(&h, &data, &["describe"]);
     assert!(ok && out.contains("Hello CLI"), "{out}");
+    // split: words out of a box into a box of their own, or a copy of them.
+    let (ok, _, err) = ctl(&h, &data, &["add", "text", "Move these words", "--id", "sp", "--x", "3000", "--y", "0"]);
+    assert!(ok, "{err}");
+    let (ok, out, err) = ctl(&h, &data, &["split", "sp", "5", "10", "--x", "3000", "--y", "400"]);
+    assert!(ok && out.contains("created"), "{out}{err}");
+    let (ok, _, err) = ctl(&h, &data, &["split", "sp", "0", "4", "--copy"]);
+    assert!(ok, "{err}");
+    let (ok, _, err) = ctl(&h, &data, &["split", "sp", "0", "4", "--x", "5"]);
+    assert!(!ok && err.contains("--y"), "x needs y: {err}");
+    let (ok, out, _) = ctl(&h, &data, &["query", r#"{"q":"element","id":"sp"}"#]);
+    assert!(ok && out.contains("Move words"), "{out}");
     // Calls go through one relay holding this agent's single connection.
     let relay = zebra_api::relay::socket_for(&h.socket, "zebractl");
     assert!(relay.exists(), "relay socket {}", relay.display());
