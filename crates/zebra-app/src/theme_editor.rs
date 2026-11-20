@@ -203,9 +203,17 @@ fn editor_ui(app: &mut ZebraApp, ui: &mut Ui, te: &mut ThemeEditor) -> bool {
             (crate::t!("theme-editor-colour-frame-fill"), &mut d.frame_fill),
             (crate::t!("theme-editor-colour-accent"), &mut d.accent),
         ];
-        let shape_names = [crate::t!("theme-editor-colour-1"), crate::t!("theme-editor-colour-2"), crate::t!("theme-editor-colour-3"), crate::t!("theme-editor-colour-4")];
-        for (i, s) in d.shapes.iter_mut().enumerate() {
-            rows.push((shape_names[i].clone(), s));
+        let shape_names = [
+            crate::t!("theme-editor-colour-1"),
+            crate::t!("theme-editor-colour-2"),
+            crate::t!("theme-editor-colour-3"),
+            crate::t!("theme-editor-colour-4"),
+            crate::t!("theme-editor-colour-5"),
+            crate::t!("theme-editor-colour-6"),
+        ];
+        // Six since tables (shape5, shape6); a theme with more shows the first six.
+        for (name, s) in shape_names.iter().zip(d.shapes.iter_mut()) {
+            rows.push((name.clone(), s));
         }
         // Two label/well pairs to a line; each label in its own column.
         let mut it = rows.into_iter().enumerate().peekable();

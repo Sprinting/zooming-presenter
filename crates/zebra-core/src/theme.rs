@@ -24,6 +24,26 @@ pub struct TextStyleDef {
     pub weight: u16,
 }
 
+/// Four to six shape colours; a missing fifth or sixth is left empty.
+fn four_to_six<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[String; 6], D::Error> {
+    let v: Vec<String> = Vec::deserialize(d)?;
+    if !(4..=6).contains(&v.len()) {
+        return Err(serde::de::Error::custom(format!("shapes has {} colours; give 4 to 6", v.len())));
+    }
+    let mut out: [String; 6] = Default::default();
+    for (i, c) in v.into_iter().enumerate() {
+        out[i] = c;
+    }
+    Ok(out)
+}
+
+/// Shape colours as saved: the fifth and sixth only when set, so a theme
+/// without them still opens in builds that know four.
+fn six_trimmed<S: serde::Serializer>(v: &[String; 6], s: S) -> Result<S::Ok, S::Error> {
+    let n = v.iter().rposition(|c| !c.is_empty()).map_or(4, |i| (i + 1).max(4));
+    v[..n].serialize(s)
+}
+
 fn d_weight() -> u16 {
     REGULAR
 }
@@ -99,7 +119,13 @@ pub struct Theme {
     /// Fill for rectangle/circle frames.
     pub frame_fill: String,
     pub accent: String,
-    pub shapes: [String; 4],
+    /// Shape and series colours, `theme:shape1` to `theme:shape6`. Files
+    /// from before shape5 and shape6 have four: the missing two are empty
+    /// here and resolve to the base theme's (or Classic's), see
+    /// [`Theme::shape`].
+    #[serde(deserialize_with = "four_to_six", serialize_with = "six_trimmed")]
+    #[schemars(with = "Vec<String>", length(min = 4, max = 6))]
+    pub shapes: [String; 6],
     /// A picture behind everything, fixed to the screen (asset key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_image: Option<String>,
@@ -171,7 +197,7 @@ impl Theme {
                 frame: "#3d7ab8".into(),
                 frame_fill: "#e8f0f8".into(),
                 accent: "#e8792b".into(),
-                shapes: ["#3d7ab8".into(), "#e8792b".into(), "#6aa84f".into(), "#9e9e9e".into()],
+                shapes: ["#3d7ab8".into(), "#e8792b".into(), "#6aa84f".into(), "#9e9e9e".into(), "#7b5ea7".into(), "#c0392b".into()],
                 background_image: None,
                 layers: vec![],
                 fonts: BTreeMap::new(),
@@ -189,7 +215,7 @@ impl Theme {
                 frame: "#f4f1e8".into(),
                 frame_fill: "#3a5847".into(),
                 accent: "#f6d66b".into(),
-                shapes: ["#f4f1e8".into(), "#f6d66b".into(), "#9fd3e6".into(), "#f2a3a3".into()],
+                shapes: ["#f4f1e8".into(), "#f6d66b".into(), "#9fd3e6".into(), "#f2a3a3".into(), "#c5e1a5".into(), "#ffcc99".into()],
                 background_image: None,
                 layers: vec![],
                 fonts: BTreeMap::new(),
@@ -205,7 +231,7 @@ impl Theme {
                 frame: "#a9d1ff".into(),
                 frame_fill: "#245a9b".into(),
                 accent: "#ffd166".into(),
-                shapes: ["#ffffff".into(), "#ffd166".into(), "#a9d1ff".into(), "#7fdbca".into()],
+                shapes: ["#ffffff".into(), "#ffd166".into(), "#a9d1ff".into(), "#7fdbca".into(), "#ffb3c6".into(), "#c3f584".into()],
                 background_image: None,
                 layers: vec![],
                 fonts: BTreeMap::new(),
@@ -221,7 +247,7 @@ impl Theme {
                 frame: "#9c4a2f".into(),
                 frame_fill: "#ece2cf".into(),
                 accent: "#9c4a2f".into(),
-                shapes: ["#9c4a2f".into(), "#5b7553".into(), "#c99a3b".into(), "#7a6a5f".into()],
+                shapes: ["#9c4a2f".into(), "#5b7553".into(), "#c99a3b".into(), "#7a6a5f".into(), "#3f6e8c".into(), "#8c5a7a".into()],
                 background_image: None,
                 layers: vec![],
                 fonts: BTreeMap::new(),
@@ -237,7 +263,7 @@ impl Theme {
                 frame: "#39d0ff".into(),
                 frame_fill: "#1b1f29".into(),
                 accent: "#ff4fa3".into(),
-                shapes: ["#39d0ff".into(), "#ff4fa3".into(), "#b4ff39".into(), "#8a8f99".into()],
+                shapes: ["#39d0ff".into(), "#ff4fa3".into(), "#b4ff39".into(), "#8a8f99".into(), "#ffb547".into(), "#a78bfa".into()],
                 background_image: None,
                 layers: vec![],
                 fonts: BTreeMap::new(),
@@ -293,7 +319,10 @@ impl Theme {
             ("accent", self.accent.as_str()),
         ];
         for (i, c) in self.shapes.iter().enumerate() {
-            v.push((["shapes[0]", "shapes[1]", "shapes[2]", "shapes[3]"][i], c.as_str()));
+            // An empty fifth or sixth follows the base theme (older files).
+            if !c.is_empty() {
+                v.push((["shapes[0]", "shapes[1]", "shapes[2]", "shapes[3]", "shapes[4]", "shapes[5]"][i], c.as_str()));
+            }
         }
         v
     }
@@ -346,6 +375,8 @@ impl Theme {
                 "shape2" => &self.shapes[1],
                 "shape3" => &self.shapes[2],
                 "shape4" => &self.shapes[3],
+                "shape5" => return self.shape(4),
+                "shape6" => return self.shape(5),
                 _ => "#ff00ff",
             },
             None => c.as_str(),
@@ -353,7 +384,19 @@ impl Theme {
         parse_hex(hex).unwrap_or([255, 0, 255, 255])
     }
 
-    pub const COLOR_SLOTS: [&'static str; 11] = [
+    /// Shape colour `i` (0-based, 0..6) as RGBA. A fifth or sixth colour
+    /// a theme from before they existed leaves empty comes from its base
+    /// theme, else Classic.
+    pub fn shape(&self, i: usize) -> [u8; 4] {
+        let own = self.shapes.get(i).map(String::as_str).unwrap_or("");
+        if let Some(c) = parse_hex(own) {
+            return c;
+        }
+        let base = self.base.as_deref().and_then(Theme::by_id).filter(|b| b.id != self.id).unwrap_or_else(|| Theme::resolve("classic"));
+        base.shapes.get(i).and_then(|c| parse_hex(c)).unwrap_or([255, 0, 255, 255])
+    }
+
+    pub const COLOR_SLOTS: [&'static str; 13] = [
         "theme:background",
         "theme:title",
         "theme:subtitle",
@@ -365,6 +408,8 @@ impl Theme {
         "theme:shape2",
         "theme:shape3",
         "theme:shape4",
+        "theme:shape5",
+        "theme:shape6",
     ];
 }
 

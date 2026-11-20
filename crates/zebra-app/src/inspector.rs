@@ -51,6 +51,10 @@ pub enum Tab {
     Text,
     Arrange,
     Path,
+    /// Tables: styles, headers, gridlines.
+    Table,
+    /// Tables: the selected cells' Data Format, fill and border.
+    Cell,
 }
 
 impl Tab {
@@ -60,6 +64,8 @@ impl Tab {
             Tab::Text => crate::t!("inspector-tab-text"),
             Tab::Arrange => crate::t!("inspector-tab-arrange"),
             Tab::Path => crate::t!("inspector-tab-path"),
+            Tab::Table => crate::t!("inspector-tab-table"),
+            Tab::Cell => crate::t!("inspector-tab-cell"),
         }
     }
 }
@@ -86,6 +92,7 @@ pub fn tabs_for(kind: Option<&ElementKind>, multi: bool) -> Vec<Tab> {
     }
     match kind {
         Some(ElementKind::Text(_)) => vec![Tab::Text, Tab::Arrange, Tab::Path],
+        Some(ElementKind::Table(_)) => crate::table_ui::tabs(),
         Some(_) => vec![Tab::Style, Tab::Arrange, Tab::Path],
         None => vec![],
     }
@@ -164,7 +171,14 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
         ui.set_width(ui.available_width() - 4.0);
         let theme = app.editor.theme();
         let mut insp = Insp { app, el: el.clone(), sel: sel.clone(), theme, patch: None, gesture: false };
-        header(&mut insp, ui, &p);
+        // A table's own tabs start with their sections, as in the mockups:
+        // "Table" over the Table tab would say it twice.
+        let table_tab = matches!(el.kind, ElementKind::Table(_)) && matches!(tab, Tab::Table | Tab::Cell | Tab::Text);
+        if !(table_tab && sel.len() == 1) {
+            header(&mut insp, ui, &p);
+        } else {
+            ui.add_space(4.0);
+        }
         if sel.len() > 1 {
             match tab {
                 Tab::Arrange => arrange_multi(&mut insp, ui),
@@ -174,7 +188,10 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
         } else {
             match tab {
                 Tab::Style => style_tab(&mut insp, ui),
+                Tab::Text if matches!(el.kind, ElementKind::Table(_)) => crate::table_ui::text_tab(&mut insp, ui),
                 Tab::Text => text_tab(&mut insp, ui),
+                Tab::Table => crate::table_ui::table_tab(&mut insp, ui),
+                Tab::Cell => crate::table_ui::cell_tab(&mut insp, ui),
                 Tab::Arrange => arrange_tab(&mut insp, ui, &p),
                 Tab::Path => path_tab(&mut insp, ui, &p),
             }
@@ -228,6 +245,7 @@ fn kind_name(e: &Element) -> String {
         ElementKind::Image(i) if i.symbol.is_some() => crate::t!("inspector-kind-symbol"),
         ElementKind::Image(_) => crate::t!("inspector-kind-image"),
         ElementKind::Ink(_) => crate::t!("inspector-kind-drawing"),
+        ElementKind::Table(_) => crate::t!("inspector-kind-table"),
         #[allow(unreachable_patterns)]
         _ => crate::t!("inspector-kind-object"),
     }

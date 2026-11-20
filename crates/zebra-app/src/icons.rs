@@ -34,6 +34,8 @@ pub enum Icon {
     AddStep,
     Play,
     Shapes,
+    /// A table: a grid with a header row.
+    Table,
     Media,
     Theme,
     Share,
@@ -71,17 +73,24 @@ pub enum Icon {
     Keyboard,
     /// A chain link: a web video's mark on the canvas.
     Link,
+    /// Table gridlines: all inner lines, between rows, between columns,
+    /// round the outside.
+    GridAll,
+    GridRows,
+    GridColumns,
+    GridOutline,
 }
 
 /// Every icon, for review (`zebra --demo icons`).
 pub const ALL: &[Icon] = &[
     Icon::Select, Icon::Hand, Icon::Text, Icon::Frame(FrameStyle::Bracket), Icon::Frame(FrameStyle::Circle), Icon::Frame(FrameStyle::Rectangle),
     Icon::Frame(FrameStyle::Invisible), Icon::Rect, Icon::Ellipse, Icon::Line, Icon::Arrow, Icon::Pen, Icon::Image, Icon::Undo, Icon::Redo,
-    Icon::Plus, Icon::Minus, Icon::Home, Icon::Zoom, Icon::AddStep, Icon::Play, Icon::Shapes, Icon::Media, Icon::Theme, Icon::Share,
+    Icon::Plus, Icon::Minus, Icon::Home, Icon::Zoom, Icon::AddStep, Icon::Play, Icon::Shapes, Icon::Table, Icon::Media, Icon::Theme, Icon::Share,
     Icon::Sparkles, Icon::Format, Icon::SidebarLeft, Icon::ChevronDown, Icon::ChevronRight, Icon::ChevronLeft, Icon::UpDown, Icon::Check, Icon::Close,
     Icon::Gear, Icon::Lock, Icon::Unlock, Icon::Trash, Icon::Note, Icon::Video, Icon::Path, Icon::AlignLeft, Icon::AlignCenter,
     Icon::AlignRight, Icon::List, Icon::Bold, Icon::Italic, Icon::Underline, Icon::Group, Icon::Activity, Icon::Pause, Icon::Warning, Icon::Keyboard,
     Icon::Link,
+    Icon::GridAll, Icon::GridRows, Icon::GridColumns, Icon::GridOutline,
 ];
 
 pub fn debug_sheet(ui: &mut egui::Ui) {
@@ -183,6 +192,26 @@ pub fn paint_icon(painter: &Painter, r: Rect, icon: Icon, c: Color32) {
         Icon::Pen => {
             painter.add(closed(&[(-7.5, 7.5), (-6.6, 3.4), (4.0, -7.2), (7.2, -4.0), (-3.4, 6.6)]));
             painter.add(line(&[(1.9, -5.1), (5.1, -1.9)]));
+        }
+        Icon::GridAll => {
+            painter.add(line(&[(-8.0, 0.0), (8.0, 0.0)]));
+            painter.add(line(&[(0.0, -8.0), (0.0, 8.0)]));
+        }
+        Icon::GridRows => {
+            painter.add(line(&[(-8.0, 0.0), (8.0, 0.0)]));
+        }
+        Icon::GridColumns => {
+            painter.add(line(&[(0.0, -8.0), (0.0, 8.0)]));
+        }
+        Icon::GridOutline => {
+            painter.add(rr(-6.5, -6.5, 6.5, 6.5, 0.5));
+        }
+        Icon::Table => {
+            painter.add(rr(-8.5, -7.0, 8.5, 7.0, 1.5));
+            painter.add(line(&[(-8.5, -2.6), (8.5, -2.6)]));
+            painter.add(line(&[(-8.5, 2.2), (8.5, 2.2)]));
+            painter.add(line(&[(-2.8, -2.6), (-2.8, 7.0)]));
+            painter.add(line(&[(2.8, -2.6), (2.8, 7.0)]));
         }
         Icon::Image | Icon::Media => {
             painter.add(rr(-8.5, -6.5, 8.5, 6.5, 2.0));

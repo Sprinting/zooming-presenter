@@ -127,6 +127,47 @@ pub fn paint(
                 painter.line_segment([local(-hw, -hh), local(hw, hh)], Stroke::new(1.0, Color32::from_gray(190)));
                 painter.line_segment([local(hw, -hh), local(-hw, hh)], Stroke::new(1.0, Color32::from_gray(190)));
             }
+            ElementKind::Table(t) => {
+                // The grid and the text of up to 400 cells: enough to see
+                // what's there. The real drawing is zebra-render's.
+                let l = t.layout(theme.text_style(zebra_core::TextStyle::Body).size);
+                let at = |x: f64, y: f64| local(x - hw, y - hh);
+                let edge = Stroke::new(1.0, col("theme:frame"));
+                let faint = Stroke::new(1.0, col("theme:frame").gamma_multiply(0.3));
+                let (x0, x1, y0, y1) = (0.0, l.width(), l.caption, l.height());
+                painter.add(Shape::convex_polygon(vec![at(x0, y0), at(x1, y0), at(x1, y1), at(x0, y1)], Color32::TRANSPARENT, edge));
+                let rows = l.ys.len().saturating_sub(1).min(400);
+                for (i, y) in l.ys.iter().enumerate().take(rows).skip(1) {
+                    painter.line_segment([at(x0, *y), at(x1, *y)], if i == t.header_rows as usize { edge } else { faint });
+                }
+                for x in l.xs.iter().skip(1).take(l.xs.len().saturating_sub(2)) {
+                    painter.line_segment([at(*x, y0), at(*x, y1)], faint);
+                }
+                let size = l.font as f32 * px;
+                if (3.0..400.0).contains(&size) {
+                    let font = egui::FontId::proportional(size);
+                    let mut budget = 400usize;
+                    'rows: for r in 0..rows {
+                        for c in 0..t.n_cols() {
+                            if budget == 0 {
+                                break 'rows;
+                            }
+                            budget -= 1;
+                            let sh = t.shown(r, c, None);
+                            if sh.text.is_empty() {
+                                continue;
+                            }
+                            let ink = if sh.error.is_some() { Color32::from_rgb(0xc0, 0x39, 0x2b) } else { col("theme:body") };
+                            let (cx0, cx1, cy) = (l.xs[c] + l.pad_x, l.xs[c + 1] - l.pad_x, (l.ys[r] + l.ys[r + 1]) / 2.0);
+                            let galley = painter.layout_no_wrap(sh.text, font.clone(), ink);
+                            let w = galley.size().x / px.max(1e-6);
+                            let x = if sh.numeric { cx1 - w as f64 } else { cx0 };
+                            let tl = at(x, cy) - egui::vec2(0.0, galley.size().y / 2.0);
+                            painter.add(Shape::Text(TextShape::new(tl, galley, ink)));
+                        }
+                    }
+                }
+            }
             ElementKind::Video(_) => {
                 painter.add(Shape::convex_polygon(quad(), Color32::from_rgb(29, 29, 31).gamma_multiply(alpha), Stroke::NONE));
                 let c = local(0.0, 0.0);

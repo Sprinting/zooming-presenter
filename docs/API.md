@@ -399,6 +399,20 @@ Send with `apply {"command": ...}` or inside `batch {"commands": [...]}`. Undoab
 | `add_layout` | add_to_path?: boolean, layout: string, width?: number, x?: number, y?: number | Insert a layout (see the `templates` query): a frame arrangement with placeholder text, centred at `x`,`y`, `width` world units wide. | `{"op":"add_layout","layout":"two_columns","x":4000,"y":0,"width":1600}` |
 | `add_symbol` | color?: string, color2?: string, id?: string, name: string, set: string, sticker?: boolean, width?: number, x?: number, y?: number | A symbol from the clip-art library (Insert › Shapes, Icons & Symbols), centred at x, y. Find sets and names with the `symbols` query. The drawing is copied into the document. | `{"op":"add_symbol","set":"noto","name":"rocket","x":300,"y":0,"width":200}` |
 | `add_diagram` | diagram: string, width?: number, x?: number, y?: number | Insert a diagram (see the `diagrams` query): frames, arrows and placeholder text in theme colours, grouped, centred at `x`,`y`, `width` world units wide. Diagrams made for zooming add their frames to the path. | `{"op":"add_diagram","diagram":"process","x":0,"y":1200,"width":1600}` |
+| `add_table` | cells?: array, columns?: integer, csv?: string, footer_rows?: integer, header_columns?: integer, header_rows?: integer, id?: string, name?: string, place?: Placement, rows?: integer, scale?: number, style?: TableStyle, x?: number, y?: number | Add a table centred at `x`,`y`: `rows` x `columns` empty cells, or the given `cells` (rows of values; a formula starts with `=`), or `csv` (comma- or tab-separated text). Cells are typed as a person types them: `1240`, `£980,000`, `13.7%`, `20/11/2026`, `=SUM(B2:B5)`. | `{"op":"add_table","rows":5,"columns":4,"x":0,"y":800,"style":"ts4","header_rows":1,"footer_rows":1}` |
+| `set_cells` | at?: string, id: string, values: CellInput[][] | Type into cells: `values` are rows of values written from cell `at` ("B2") rightwards and down. The table grows to fit. `null` or "" empties a cell. | `{"op":"set_cells","id":"b1","at":"B2","values":[["1240","=B2*1.1"],[980,true]]}` |
+| `insert_rows` | count?: integer, id: string, index: integer | Insert `count` empty rows before row `index` (0-based; the row count adds at the end). Formulas follow their cells. | `{"op":"insert_rows","id":"b1","index":2,"count":1}` |
+| `delete_rows` | count?: integer, id: string, index: integer |  | `{"op":"delete_rows","id":"b1","index":2,"count":1}` |
+| `insert_columns` | count?: integer, id: string, index: integer | Insert `count` empty columns before column `index` (0-based). | `{"op":"insert_columns","id":"b1","index":1,"count":2}` |
+| `delete_columns` | count?: integer, id: string, index: integer |  | `{"op":"delete_columns","id":"b1","index":1}` |
+| `move_rows` | count?: integer, from: integer, id: string, to: integer | Move `count` rows from `from` to before row `to` (0-based, counted before the move). References follow the cells. | `{"op":"move_rows","id":"b1","from":3,"count":1,"to":1}` |
+| `move_columns` | count?: integer, from: integer, id: string, to: integer |  | `{"op":"move_columns","id":"b1","from":2,"to":0}` |
+| `merge_cells` | id: string, range: CellRange | Merge a range ("A1:C1") into one cell. The content is kept. | `{"op":"merge_cells","id":"b1","range":"A1:C1"}` |
+| `unmerge_cells` | id: string, range: CellRange | Unmerge every merged cell the range touches. | `{"op":"unmerge_cells","id":"b1","range":"A1:C1"}` |
+| `format_cells` | clear?: boolean, format?: CellFormat, id: string, range: CellRange | Format a range: fill, text colour, bold, italic, alignment, number format, borders. Unset fields stay; `clear` removes all formatting from the range first. | `{"op":"format_cells","id":"b1","range":"B2:C5","format":{"number":{"type":"currency","decimals":0,"negative":"red"},"bold":true,"fill":"#fff3d6","border":{"edges":"bottom","width":2}}}` |
+| `set_column` | column: integer, format?: DataFormat, id: string, width?: number | A column's width (local units) and type (`automatic`, `text`, `number`, `currency`, `percentage`, `date_time`, `tick_box`) with its number format. | `{"op":"set_column","id":"b1","column":3,"width":160,"format":{"type":"percentage","decimals":1}}` |
+| `set_row` | height: number, id: string, row: integer | A row's smallest height (local units); rows grow to fit their text. | `{"op":"set_row","id":"b1","row":0,"height":60}` |
+| `sort_table` | column: integer, descending?: boolean, id: string | Sort the body rows by a column, by the column's type. Header and footer rows stay; empty cells go last. | `{"op":"sort_table","id":"b1","column":1,"descending":true}` |
 
 ### View commands
 
@@ -459,5 +473,6 @@ Send with `query {"query": ...}`. Read-only.
 | `templates` |  | Templates and layouts that `apply_template` / `add_layout` accept, the person's saved templates (`saved`) and whether `sample` is there. | `{"q":"templates"}` |
 | `fonts` | family?: string | Font families installed on this machine (any can be used in a theme). With `family`: that family's weights (what a theme style's `weight` can be), with the names the Weight pop-up shows. | `{"q":"fonts"}` |
 | `perf` |  | Memory and speed: heap in use, cache sizes, frame times, repaints. | `{"q":"perf"}` |
+| `table` | id: string, range?: CellRange | A table's cells: what each shows and, for formulas, what was typed; plus its columns, merges and settings. `range` ("A1:D10") limits the cells returned. | `{"q":"table","id":"b1","range":"A1:D6"}` |
 
 <!-- END GENERATED -->

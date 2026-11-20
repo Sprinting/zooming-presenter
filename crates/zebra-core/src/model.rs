@@ -10,7 +10,7 @@ use crate::geom::{Rect, Transform, Vec2};
 pub type ElementId = String;
 
 /// A colour: `#rrggbb`, `#rrggbbaa`, or a theme slot like `theme:accent`,
-/// `theme:title`, `theme:frame`, `theme:shape1`..`theme:shape4`.
+/// `theme:title`, `theme:frame`, `theme:shape1`..`theme:shape6`.
 pub type ColorRef = String;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -266,6 +266,8 @@ pub enum ElementKind {
     Icon(IconData),
     /// A line or arrow whose ends can stick to other elements.
     Connector(ConnectorData),
+    /// A table of cells, with formulas (see [`crate::table`]).
+    Table(crate::table::TableData),
 }
 
 impl ElementKind {
@@ -279,6 +281,7 @@ impl ElementKind {
             ElementKind::Ink(_) => "ink",
             ElementKind::Icon(_) => "icon",
             ElementKind::Connector(_) => "connector",
+            ElementKind::Table(_) => "table",
         }
     }
     pub fn id_prefix(&self) -> &'static str {
@@ -291,6 +294,7 @@ impl ElementKind {
             ElementKind::Ink(_) => "k",
             ElementKind::Icon(_) => "n",
             ElementKind::Connector(_) => "c",
+            ElementKind::Table(_) => "b",
         }
     }
 }
@@ -996,6 +1000,11 @@ impl Element {
             }),
             ElementKind::Image(i) if !i.alt.is_empty() => Some(truncate(&i.alt, 40)),
             ElementKind::Video(v) if !v.alt.is_empty() => Some(truncate(&v.alt, 40)),
+            // A table reads as its first row: "Region · Q2 · Q3".
+            ElementKind::Table(t) => {
+                let words: Vec<&str> = t.cells.first().into_iter().flatten().map(|c| c.input.trim()).filter(|s| !s.is_empty() && !s.starts_with('=')).collect();
+                (!words.is_empty()).then(|| truncate(&words.join(" · "), 40))
+            }
             _ => None,
         }
     }

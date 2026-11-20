@@ -199,6 +199,23 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, enabled: bool, active: bo
     resp
 }
 
+/// A bezel button with an icon that stays pressed while `on` (one of a row
+/// of independent toggles, such as a table's gridlines).
+pub fn icon_toggle(ui: &mut Ui, icon: Icon, on: bool, label: &str) -> Response {
+    let p = pal(ui);
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(34.0, H_REGULAR), Sense::click());
+    resp.widget_info(|| WidgetInfo::selected(Role::Button, true, on, label));
+    if ui.is_rect_visible(rect) {
+        paint_bezel(ui, rect, on || resp.is_pointer_button_down_on(), true);
+        if on {
+            ui.painter().rect_filled(rect.shrink(1.5), RADIUS - 1.0, p.segment_on);
+        }
+        let c = if on { accent() } else { p.text };
+        paint_icon(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(15.0)), icon, c);
+    }
+    resp.on_hover_text(label)
+}
+
 // ----------------------------------------------------------------------
 // Toolbar item: icon over a 10 pt label (Keynote's unified toolbar).
 
@@ -353,7 +370,23 @@ pub fn segmented_toggles(ui: &mut Ui, states: &[bool], segs: &[Seg], width: Opti
 pub fn tab_bar<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, items: &[(T, &str)]) -> Response {
     let segs: Vec<(T, Seg)> = items.iter().map(|(v, l)| (*v, Seg::Text(l))).collect();
     let w = ui.available_width();
-    ui.vertical_centered(|ui| segmented(ui, current, &segs, Some(w.min(items.len() as f32 * 66.0)))).inner
+    // Five tabs (a table's) don't fit the inspector at the regular size:
+    // the small one, as Keynote does.
+    let natural: f32 = items.iter().map(|(_, l)| ui.painter().layout_no_wrap(l.to_string(), Size::Regular.font(), Color32::PLACEHOLDER).size().x + 18.0).sum();
+    let size = if natural > w { Size::Small } else { Size::Regular };
+    ui.vertical_centered(|ui| {
+        let states: Vec<bool> = segs.iter().map(|(v, _)| v == current).collect();
+        let only: Vec<Seg> = segs.iter().map(|(_, s)| *s).collect();
+        let (mut resp, clicked) = segmented_impl(ui, &states, &only, Some(w.min(items.len() as f32 * 66.0)), size);
+        if let Some(i) = clicked {
+            if segs[i].0 != *current {
+                *current = segs[i].0;
+                resp.mark_changed();
+            }
+        }
+        resp
+    })
+    .inner
 }
 
 fn segmented_impl(ui: &mut Ui, states: &[bool], segs: &[Seg], width: Option<f32>, size: Size) -> (Response, Option<usize>) {
@@ -1151,9 +1184,15 @@ pub fn disclosure_section<R>(ui: &mut Ui, id_salt: &str, title: &str, default_op
 /// A row with a right-aligned 11 pt label in a fixed left column and the
 /// controls to its right (Keynote inspector layout).
 pub fn row<R>(ui: &mut Ui, label: &str, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    row_w(ui, label, LABEL_W, add_contents)
+}
+
+/// [`row`] with a wider label column, for a group whose labels are long
+/// ("Header Columns").
+pub fn row_w<R>(ui: &mut Ui, label: &str, label_w: f32, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     let p = pal(ui);
     ui.horizontal(|ui| {
-        let (r, _) = ui.allocate_exact_size(Vec2::new(LABEL_W, H_REGULAR), Sense::hover());
+        let (r, _) = ui.allocate_exact_size(Vec2::new(label_w, H_REGULAR), Sense::hover());
         if !label.is_empty() {
             ui.painter().text(Pos2::new(r.right() - 2.0, r.center().y), Align2::RIGHT_CENTER, label, style::ui_font(11.0), p.weak);
         }
@@ -1187,10 +1226,15 @@ pub fn caption(ui: &mut Ui, text: impl Into<String>) -> Response {
 pub fn button_grid(ui: &mut Ui, labels: &[(&str, &str, bool)], cols: usize) -> Option<usize> {
     let mut out = None;
     let w = ((ui.available_width() - 6.0 * (cols as f32 - 1.0)) / cols as f32).floor();
+    // A label too long for its share: every button at the small size, so
+    // the grid stays even and inside the pane.
+    let widest = labels.iter().map(|(l, _, _)| ui.painter().layout_no_wrap(l.to_string(), Size::Regular.font(), Color32::PLACEHOLDER).size().x).fold(0.0, f32::max);
+    let size = if widest + 20.0 > w { Size::Small } else { Size::Regular };
     for chunk in labels.chunks(cols).enumerate() {
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
             for (j, (l, tip, en)) in chunk.1.iter().enumerate() {
-                let r = push_button_ext(ui, l, Size::Regular, *en, Some(w));
+                let r = push_button_ext(ui, l, size, *en, Some(w));
                 let r = if tip.is_empty() { r } else { r.on_hover_text(*tip) };
                 if r.clicked() {
                     out = Some(chunk.0 * cols + j);

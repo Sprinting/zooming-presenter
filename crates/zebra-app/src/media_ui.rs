@@ -880,6 +880,10 @@ pub fn paste_from_system(app: &mut ZebraApp) -> bool {
         if app.clipboard_marker.as_deref() == Some(text.as_str()) {
             return false;
         }
+        // Rows of tab-separated cells (from Numbers or Excel): a table.
+        if crate::table_ui::paste_as_table(app, &text) {
+            return true;
+        }
         if zebra_core::rich::too_long_to_insert(&text) {
             app.toast(crate::t!("paste-too-long"));
             return true;

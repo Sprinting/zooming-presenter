@@ -111,11 +111,13 @@ pub struct Renderer {
     pub(crate) images: images::ImageCache,
     /// Draws imported PDF pages sharp when zoomed in (see [`pages`]).
     page_raster: std::sync::RwLock<Option<pages::PageRaster>>,
+    /// How formula results in each table column show (see `table_draw`).
+    pub(crate) table_looks: std::sync::Mutex<display::LookCache>,
 }
 
 impl Renderer {
     pub fn new() -> Self {
-        Renderer { fonts: text::Fonts::new(), images: images::ImageCache::default(), page_raster: Default::default() }
+        Renderer { fonts: text::Fonts::new(), images: images::ImageCache::default(), page_raster: Default::default(), table_looks: Default::default() }
     }
 
     /// Give the renderer a way to draw PDF pages (the app has PDFium; the

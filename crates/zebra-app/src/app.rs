@@ -158,6 +158,9 @@ pub struct ZebraApp {
     /// The text Copy put on the system clipboard: while it's still there,
     /// Paste uses Zebra's own copy.
     pub clipboard_marker: Option<String>,
+    /// Cells copied from a table: the text put on the clipboard and the
+    /// cells' inputs, so pasting them back into a table keeps formulas.
+    pub table_clip: Option<crate::table_ui::TableClip>,
     pub paste_count: u32,
     pub recent: Vec<PathBuf>,
     pub toast: Option<Toast>,
@@ -421,6 +424,7 @@ impl ZebraApp {
             step_pick: None,
             clipboard: Default::default(),
             clipboard_marker: None,
+            table_clip: None,
             paste_count: 0,
             recent,
             toast: None,
@@ -690,6 +694,11 @@ impl ZebraApp {
 
     fn perform_inner(&mut self, ctx: &Context, a: Action) {
         use Action::*;
+        // Cells selected in a table: the clipboard, Delete, Esc and Select
+        // All act on the cells.
+        if crate::table_ui::perform(self, &a) {
+            return;
+        }
         match a {
             // Like Keynote: a new or opened document gets its own window,
             // unless this one is still an untouched new document.
@@ -868,6 +877,7 @@ impl ZebraApp {
                     crate::media_ui::toggle(self, id);
                 }
             }
+            InsertTable => crate::table_ui::insert_table(self, zebra_core::table::TableStyle::default()),
             InsertImage => {
                 let c = self.canvas_center_world();
                 crate::pickers::ask(self, crate::pickers::Pick::InsertImage(c));
@@ -1527,6 +1537,11 @@ impl ZebraApp {
         // and agent steps are timed by it, and `frame` (the only other
         // place it is set) doesn't run for a window that is hidden or idle.
         self.editor.view.now = self.now();
+        // Cells selected in a table take Tab and the arrows: egui must not
+        // also move keyboard focus to the first field it finds.
+        if crate::table_ui::active(self) && !crate::table_ui::editing(self) && ctx.memory(|m| m.focused().is_none()) {
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        }
         // A document loaded behind our back (an agent's `open`): drop what
         // we held about the old one, as our own Open does.
         if self.editor.loads != self.seen_loads {
@@ -1756,6 +1771,10 @@ impl ZebraApp {
             // The path list has the keys: Up/Down/Home/End move through the
             // steps (Delete and Escape reach it as actions, below).
             if !text_focus && self.palette.is_none() && self.step_pick.is_none() && crate::sidebar::list_focused(self) && crate::sidebar::key(self, key, modifiers) {
+                continue;
+            }
+            // Cells selected in a table take arrows, Tab, Return and typing.
+            if !text_focus && self.palette.is_none() && crate::table_ui::key(self, key, modifiers) {
                 continue;
             }
             // Arrow keys: nudge selection (screen-relative), else pan.

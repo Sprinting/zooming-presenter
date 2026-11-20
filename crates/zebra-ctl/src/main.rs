@@ -111,6 +111,17 @@ enum Cmd {
     },
     /// Set text of an element.
     SetText { id: String, text: String },
+    /// A table's cells (what each shows, formulas as typed), columns,
+    /// merges and settings. --range A1:D10 limits the cells.
+    Table {
+        id: String,
+        #[arg(long)]
+        range: Option<String>,
+    },
+    /// Fill cells of a table from AT (e.g. B2) with tab- or
+    /// comma-separated rows read from FILE ("-" for stdin). The table
+    /// grows to take them. Formulas start with =.
+    SetCells { id: String, at: String, file: PathBuf },
     /// Take characters START..END (counted in characters, END not
     /// included) out of text ID into a new box of their own, as dragging
     /// selected words out of a box does. The new box's centre is --x,--y;
@@ -356,6 +367,31 @@ enum Add {
         #[arg(long)]
         end: Option<f64>,
     },
+    /// Add a table: empty (--rows, --columns) or filled from a CSV or
+    /// tab-separated file (--csv FILE, "-" for stdin). Style ts1..ts11
+    /// (default ts4, Ruled).
+    Table {
+        #[arg(long)]
+        rows: Option<usize>,
+        #[arg(long)]
+        columns: Option<usize>,
+        #[arg(long)]
+        csv: Option<PathBuf>,
+        #[arg(long)]
+        style: Option<String>,
+        #[arg(long)]
+        header_rows: Option<u8>,
+        #[arg(long)]
+        footer_rows: Option<u8>,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        x: f64,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        y: f64,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        id: Option<String>,
+    },
     /// Add a shape: rectangle | ellipse | triangle | line | arrow.
     Shape {
         shape: String,
@@ -370,6 +406,24 @@ enum Add {
         #[arg(long)]
         fill: Option<String>,
     },
+}
+
+/// Cells to send: a file (or stdin), refused unread when it is bigger
+/// than a table can take.
+fn read_cells(path: &std::path::Path) -> Result<String> {
+    use std::io::Read;
+    let cap = zebra_core::table::MAX_PASTE_BYTES as u64;
+    let mut text = String::new();
+    let read = if path.as_os_str() == "-" {
+        std::io::stdin().take(cap + 1).read_to_string(&mut text)
+    } else {
+        std::fs::File::open(path).and_then(|f| f.take(cap + 1).read_to_string(&mut text))
+    };
+    read.with_context(|| path.display().to_string())?;
+    if text.len() as u64 > cap {
+        bail!("{}", zebra_core::table::Limit::Bytes.message());
+    }
+    Ok(text)
 }
 
 fn main() {
@@ -609,6 +663,18 @@ fn run(cli: Cli) -> Result<()> {
                     if let Some(e) = end { m["end"] = json!(e) }
                     m
                 }
+                Add::Table { rows, columns, csv, style, header_rows, footer_rows, x, y, name, id } => {
+                    let mut m = json!({ "op": "add_table", "x": x, "y": y });
+                    if let Some(v) = rows { m["rows"] = json!(v) }
+                    if let Some(v) = columns { m["columns"] = json!(v) }
+                    if let Some(f) = csv { m["csv"] = json!(read_cells(&f)?) }
+                    if let Some(v) = style { m["style"] = json!(v) }
+                    if let Some(v) = header_rows { m["header_rows"] = json!(v) }
+                    if let Some(v) = footer_rows { m["footer_rows"] = json!(v) }
+                    if let Some(v) = name { m["name"] = json!(v) }
+                    if let Some(v) = id { m["id"] = json!(v) }
+                    m
+                }
                 Add::Shape { shape, x, y, w, h, fill } => {
                     let mut m = json!({ "op": "add_shape", "shape": shape, "x": x, "y": y, "w": w, "h": h });
                     if let Some(f) = fill { m["fill"] = json!(f) }
@@ -642,6 +708,18 @@ fn run(cli: Cli) -> Result<()> {
                 cmd["copy"] = json!(true);
             }
             print(&call(c, "apply", json!({ "command": cmd }))?)
+        }
+        Cmd::Table { id, range } => {
+            let mut q = json!({ "q": "table", "id": id });
+            if let Some(r) = range {
+                q["range"] = json!(r);
+            }
+            print(&call(c, "query", json!({ "query": q }))?)
+        }
+        Cmd::SetCells { id, at, file } => {
+            let text = read_cells(&file)?;
+            let rows = zebra_core::table::parse_delimited(&text).map_err(|l| anyhow!(l.message()))?;
+            print(&call(c, "apply", json!({ "command": { "op": "set_cells", "id": id, "at": at, "values": rows } }))?)
         }
         Cmd::SetText { id, text } => print(&call(c, "apply", json!({ "command": { "op": "update", "id": id, "patch": { "text": text } } }))?),
         Cmd::Undo => print(&call(c, "undo", json!({}))?),

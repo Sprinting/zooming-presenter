@@ -18,6 +18,10 @@ use crate::images::{level_for, Decoded};
 use crate::text::{wrap_for, TextLayout};
 use crate::{Renderer, SceneOptions};
 
+#[path = "table_draw.rs"]
+mod table_draw;
+pub(crate) use table_draw::LookCache;
+
 /// Straight (non-premultiplied) sRGB RGBA.
 pub type Rgba = [u8; 4];
 
@@ -872,6 +876,7 @@ impl Ctx<'_> {
                     }
                 }
             }
+            ElementKind::Table(t) => self.table(e, t, a, items),
             ElementKind::Ink(ink) => {
                 if ink.points.is_empty() {
                     return;

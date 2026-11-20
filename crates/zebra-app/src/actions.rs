@@ -50,6 +50,8 @@ pub enum Action {
     /// A frame in the nearest empty space.
     InsertFrame,
     InsertImage,
+    /// Insert › Table: a table in the default style.
+    InsertTable,
     InsertLayout,
     /// Insert › Diagram…: the diagram gallery.
     InsertDiagram,
@@ -162,6 +164,7 @@ impl Action {
             InsertFrame => crate::t!("action-insert-frame"),
             SetFrameStyle(s) => crate::t!("action-set-frame-style", style = frame_name(*s)),
             InsertImage => crate::t!("action-insert-image"),
+            InsertTable => crate::t!("action-insert-table"),
             InsertLayout => crate::t!("action-insert-layout"),
             InsertDiagram => crate::t!("action-insert-diagram"),
             InsertSymbols => crate::t!("action-insert-symbols"),
@@ -238,7 +241,7 @@ impl Action {
             v.push(SetTool(t.0));
         }
         v.extend([
-            InsertFrame, InsertImage, InsertLayout, InsertDiagram, InsertSymbols, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
+            InsertFrame, InsertImage, InsertTable, InsertLayout, InsertDiagram, InsertSymbols, WrapInFrame, BringForward, SendBackward, BringToFront, SendToBack, ToggleLock, ZoomIn, ZoomOut,
             FitAll, ZoomToSelection, ZoomReset, ToggleSidebar, ToggleProperties, ShowShortcuts, Settings, ShapeLibrary,
             InsertVideo, InsertWebVideo, InsertMusic, ReplaceImage, CropImage, PlayPauseVideo, Group, Ungroup,
             TogglePathEdit, AddToPath, AddCurrentView, AutoPath, ClearPath, PresentStart, PresentCurrent, TogglePresenterView, PlaybackOptions, ToggleAiControl, ToggleActivity,

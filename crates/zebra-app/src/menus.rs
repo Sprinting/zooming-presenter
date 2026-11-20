@@ -52,6 +52,7 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
                 A(SetTool(Tool::Line)),
                 A(SetTool(Tool::Arrow)),
                 A(SetTool(Tool::Pen)),
+                A(InsertTable),
                 Sep,
                 A(InsertImage),
                 A(InsertVideo),

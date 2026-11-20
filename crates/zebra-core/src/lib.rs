@@ -12,6 +12,7 @@ pub mod command;
 pub mod connector;
 pub mod content;
 pub mod delta;
+pub mod delta_table;
 pub mod describe;
 pub mod editor;
 pub mod error;
@@ -29,6 +30,9 @@ pub mod rich;
 pub mod spatial;
 pub mod step_index;
 pub mod symbols;
+pub mod table;
+pub mod table_style;
+pub mod calc;
 pub mod diagrams;
 pub mod templates;
 pub mod theme;
@@ -40,6 +44,7 @@ pub use command::{Command, ElementPatch, LinkFound, PosterBytes, NewElement, Que
 pub use editor::{command_label, Editor, FontFace, HistoryEntry, Labeler, Origin, Outcome, Phrase, Prepared, TextMeasure};
 pub use error::{ZError, ZResult};
 pub use geom::{Rect, Transform, Vec2};
+pub use io::required_version;
 pub use model::*;
 pub use theme::{BackgroundLayer, Theme, TextStyleDef};
 pub use view::{Mode, Tool, ViewState};
@@ -47,7 +52,9 @@ pub use view::{Mode, Tool, ViewState};
 /// Bumped whenever the on-disk document format changes. An older build
 /// refuses a newer file ("made by a newer version of Zebra") rather than
 /// dropping what it can't read, which a later save would lose.
-/// 2: web videos (a video with a `link` and no `asset`).
+///
+/// 2: web videos (a video with a `link` and no `asset`), tables
+/// (`type: "table"`, ids `b1`...) and theme colours shape5 and shape6.
 pub const FORMAT_VERSION: u32 = 2;
 /// Bumped whenever the command/query/API schema changes incompatibly.
 pub const API_VERSION: u32 = 1;

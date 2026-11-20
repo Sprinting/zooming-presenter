@@ -594,6 +594,131 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         width: Option<f64>,
     },
+    /// Add a table centred at `x`,`y`: `rows` x `columns` empty cells, or
+    /// the given `cells` (rows of values; a formula starts with `=`), or
+    /// `csv` (comma- or tab-separated text). Cells are typed as a person
+    /// types them: `1240`, `£980,000`, `13.7%`, `20/11/2026`, `=SUM(B2:B5)`.
+    AddTable {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        columns: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cells: Option<Vec<Vec<crate::table::CellInput>>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        csv: Option<String>,
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
+        /// Default `ts4` (Ruled). See the `table_style` field of `update`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<crate::table::TableStyle>,
+        /// Default 1.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        header_rows: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        header_columns: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        footer_rows: Option<u8>,
+        /// Default: sized to read well at the given `place` (or 1).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        place: Option<Placement>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<ElementId>,
+    },
+    /// Type into cells: `values` are rows of values written from cell `at`
+    /// ("B2") rightwards and down. The table grows to fit. `null` or ""
+    /// empties a cell.
+    SetCells {
+        id: ElementId,
+        #[serde(default = "d_a1")]
+        at: String,
+        values: Vec<Vec<crate::table::CellInput>>,
+    },
+    /// Insert `count` empty rows before row `index` (0-based; the row
+    /// count adds at the end). Formulas follow their cells.
+    InsertRows {
+        id: ElementId,
+        index: usize,
+        #[serde(default = "d_one")]
+        count: usize,
+    },
+    DeleteRows {
+        id: ElementId,
+        index: usize,
+        #[serde(default = "d_one")]
+        count: usize,
+    },
+    /// Insert `count` empty columns before column `index` (0-based).
+    InsertColumns {
+        id: ElementId,
+        index: usize,
+        #[serde(default = "d_one")]
+        count: usize,
+    },
+    DeleteColumns {
+        id: ElementId,
+        index: usize,
+        #[serde(default = "d_one")]
+        count: usize,
+    },
+    /// Move `count` rows from `from` to before row `to` (0-based, counted
+    /// before the move). References follow the cells.
+    MoveRows {
+        id: ElementId,
+        from: usize,
+        #[serde(default = "d_one")]
+        count: usize,
+        to: usize,
+    },
+    MoveColumns {
+        id: ElementId,
+        from: usize,
+        #[serde(default = "d_one")]
+        count: usize,
+        to: usize,
+    },
+    /// Merge a range ("A1:C1") into one cell. The content is kept.
+    MergeCells { id: ElementId, range: crate::table::CellRange },
+    /// Unmerge every merged cell the range touches.
+    UnmergeCells { id: ElementId, range: crate::table::CellRange },
+    /// Format a range: fill, text colour, bold, italic, alignment, number
+    /// format, borders. Unset fields stay; `clear` removes all formatting
+    /// from the range first.
+    FormatCells {
+        id: ElementId,
+        range: crate::table::CellRange,
+        #[serde(default)]
+        format: crate::table::CellFormat,
+        #[serde(default, skip_serializing_if = "is_false")]
+        clear: bool,
+    },
+    /// A column's width (local units) and type (`automatic`, `text`,
+    /// `number`, `currency`, `percentage`, `date_time`, `tick_box`) with
+    /// its number format.
+    SetColumn {
+        id: ElementId,
+        column: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<crate::table::DataFormat>,
+    },
+    /// A row's smallest height (local units); rows grow to fit their text.
+    SetRow { id: ElementId, row: usize, height: f64 },
+    /// Sort the body rows by a column, by the column's type. Header and
+    /// footer rows stay; empty cells go last.
+    SortTable {
+        id: ElementId,
+        column: usize,
+        #[serde(default, skip_serializing_if = "is_false")]
+        descending: bool,
+    },
 }
 
 fn is_false(b: &bool) -> bool {
@@ -602,6 +727,12 @@ fn is_false(b: &bool) -> bool {
 
 fn yes() -> bool {
     true
+}
+fn d_one() -> usize {
+    1
+}
+fn d_a1() -> String {
+    "A1".into()
 }
 fn d_frame_w() -> f64 {
     800.0
@@ -856,7 +987,31 @@ pub struct ElementPatch {
     pub start: Option<f64>,
     /// Trim end, seconds; negative clears it (play to the end).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub end: Option<f64>,
+    pub end: Option<f64>,    // table
+    /// Tables: `ts1` Banner, `ts2` Banded, `ts3` Grid, `ts4` Ruled (the
+    /// default), `ts6` Accent, `ts7` Side Header, `ts8` Boxed, `ts9` Soft,
+    /// `ts10` Dark, `ts11` Ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_style: Option<crate::table::TableStyle>,
+    /// Tables: 0 to 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_rows: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_columns: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer_rows: Option<u8>,
+    /// Tables: text size relative to the theme's body text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f64>,
+    /// Tables: alternating row colour (null: as the style has it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banded: Option<bool>,
+    /// Tables: gridlines (horizontal, vertical, outline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gridlines: Option<crate::table::Gridlines>,
+    /// Tables: show the table's name above it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_name: Option<bool>,
 }
 
 /// Session commands: camera, selection, tools, presenting. Not undoable.
@@ -1002,6 +1157,14 @@ pub enum Query {
     },
     /// Memory and speed: heap in use, cache sizes, frame times, repaints.
     Perf,
+    /// A table's cells: what each shows and, for formulas, what was typed;
+    /// plus its columns, merges and settings. `range` ("A1:D10") limits
+    /// the cells returned.
+    Table {
+        id: ElementId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        range: Option<crate::table::CellRange>,
+    },
 }
 
 /// Result of a [`Query`].

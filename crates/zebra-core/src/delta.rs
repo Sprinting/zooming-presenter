@@ -44,7 +44,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use similar::{capture_diff_slices, Algorithm, DiffOp};
 
-use crate::model::{Document, Element, ElementId, PathStep};
+use crate::model::{Document, Element, ElementId, ElementKind, PathStep};
 
 /// One undoable change.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +60,11 @@ pub struct Change {
     pub patch: Patch,
     pub z_order: Vec<Splice<ElementId>>,
     pub path: Vec<Splice<PathStep>>,
+    /// Tables whose contents changed (their heads are in `patch`).
+    pub tables: Vec<(ElementId, crate::delta_table::TableChange)>,
+    /// Tables added (Some) or removed (None), kept as values rather than
+    /// JSON: rows are shared, so this costs a pointer per row.
+    pub puts: Vec<(ElementId, Option<Box<Element>>)>,
 }
 
 /// Replace `remove` items at `at` (an index in the list *before* the
@@ -103,14 +108,14 @@ impl Change {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.patch.0.is_empty() && self.z_order.is_empty() && self.path.is_empty()
+        self.patch.0.is_empty() && self.z_order.is_empty() && self.path.is_empty() && self.tables.is_empty() && self.puts.is_empty()
     }
     /// Operations in all (a list edit counts one per item moved).
     pub fn op_count(&self) -> usize {
         fn n<T>(v: &[Splice<T>]) -> usize {
             v.iter().map(|s| s.remove + s.insert.len()).sum()
         }
-        self.patch.0.len() + n(&self.z_order) + n(&self.path)
+        self.patch.0.len() + n(&self.z_order) + n(&self.path) + self.tables.len() + self.puts.len()
     }
     /// Ids of the elements this change adds, removes or edits; `None`
     /// when it rewrites the element map as a whole.
@@ -130,13 +135,20 @@ impl Change {
                 ids.insert(t.next()?.decoded().into_owned());
             }
         }
+        ids.extend(self.tables.iter().map(|(id, _)| id.clone()));
+        ids.extend(self.puts.iter().map(|(id, _)| id.clone()));
         Some(ids)
     }
     fn approx_bytes(&self) -> usize {
         let ops: usize = self.patch.0.iter().map(|op| serde_json::to_string(op).map(|s| s.len()).unwrap_or(0)).sum();
         let z: usize = self.z_order.iter().map(|s| 24 + s.insert.iter().map(|i| i.len() + 24).sum::<usize>()).sum();
         let p: usize = self.path.iter().map(|s| 24 + s.insert.iter().map(|i| serde_json::to_string(i).map(|s| s.len()).unwrap_or(0)).sum::<usize>()).sum();
-        ops + z + p
+        let t: usize = self.tables.iter().map(|(id, c)| id.len() + c.approx_bytes()).sum();
+        let puts: usize = self.puts.iter().map(|(id, e)| id.len() + 64 + e.as_ref().map_or(0, |e| match &e.kind {
+            crate::model::ElementKind::Table(t) => t.n_rows() * 16 + t.n_cols() * 64,
+            _ => 256,
+        })).sum();
+        ops + z + p + t + puts
     }
 }
 
@@ -402,11 +414,21 @@ fn diff_sides(a: &Side, b: &Side, ids: &[&ElementId], lists: bool) -> Change {
     // Elements: diff only the ones that differ, and only their heads when
     // their kinds are the same.
     let (mut left, mut right) = (Map::new(), Map::new());
+    let mut tables = vec![];
+    let mut puts = vec![];
     for &id in ids {
         let (x, y) = (a.element(id), b.element(id));
         match (x, y) {
             (Some(x), Some(y)) if x == y => {}
             (Some(x), Some(y)) if x.kind == y.kind => head_ops(id, x, y, &mut ops),
+            // Tables: their contents compared row by row, never as JSON.
+            (Some(x @ Element { kind: ElementKind::Table(tx), .. }), Some(y @ Element { kind: ElementKind::Table(ty), .. })) => {
+                head_ops(id, x, y, &mut ops);
+                tables.push((id.clone(), crate::delta_table::TableChange::between(tx, ty)));
+            }
+            (x, y) if [x, y].iter().flatten().any(|e| matches!(e.kind, ElementKind::Table(_))) => {
+                puts.push((id.clone(), y.map(|e| Box::new(e.clone()))));
+            }
             (x, y) => {
                 if let Some(x) = x {
                     left.insert(id.clone(), to_value(x));
@@ -434,12 +456,12 @@ fn diff_sides(a: &Side, b: &Side, ids: &[&ElementId], lists: bool) -> Change {
     }
     let z_order = if lists && a.z_order != b.z_order { splices(a.z_order, b.z_order, |s| s.as_str()) } else { vec![] };
     let path = if lists && a.path != b.path { splices(a.path, b.path, |s: &PathStep| serde_json::to_string(s).unwrap_or_default()) } else { vec![] };
-    Change { patch: Patch(ops), z_order, path }
+    Change { patch: Patch(ops), z_order, path, tables, puts }
 }
 
 /// The edit script for an ordered list, from Myers' diff (a layer brought
 /// to the front is one removal and one insertion, not a rewrite).
-fn splices<'a, T: Clone, K: Eq + std::hash::Hash + Ord>(a: &'a [T], b: &'a [T], key: impl Fn(&'a T) -> K) -> Vec<Splice<T>> {
+pub(crate) fn splices<'a, T: Clone, K: Eq + std::hash::Hash + Ord>(a: &'a [T], b: &'a [T], key: impl Fn(&'a T) -> K) -> Vec<Splice<T>> {
     // The usual edit touches one end or one run: trim what both lists
     // share at the ends before diffing, so the diff sees only the middle.
     let pre = a.iter().zip(b).take_while(|(x, y)| key(x) == key(y)).count();
@@ -479,7 +501,7 @@ fn splices_fit<T>(list: &[T], splices: &[Splice<T>]) -> bool {
 /// Apply `splices` (which must fit, see [`splices_fit`]) to `list` in
 /// place. Kept items are moved, not copied: undoing an edit in a
 /// 200,000-element deck clones only what the splices insert.
-fn splice_in_place<T: Clone>(list: &mut Vec<T>, splices: &[Splice<T>]) {
+pub(crate) fn splice_in_place<T: Clone>(list: &mut Vec<T>, splices: &[Splice<T>]) {
     if let [s] = splices {
         // The usual case: one run (an add, a delete, bring to front).
         list.splice(s.at..s.at + s.remove, s.insert.iter().cloned());
@@ -509,7 +531,33 @@ pub fn apply(doc: &mut Document, change: &Change) -> Result<(), String> {
     if !splices_fit(&doc.path, &change.path) {
         return Err("the path isn't the one this step was made from".into());
     }
+    for (id, t) in &change.tables {
+        match doc.elements.get(id).map(|e| &e.kind) {
+            Some(ElementKind::Table(d)) if t.fits(d) => {}
+            _ => return Err(format!("table '{id}' isn't the one this step was made from")),
+        }
+    }
+    for (id, put) in &change.puts {
+        if put.is_some() == doc.elements.contains_key(id) {
+            return Err(format!("element '{id}' isn't as this step expects"));
+        }
+    }
     apply_patch(doc, &change.patch)?;
+    for (id, t) in &change.tables {
+        if let Some(ElementKind::Table(d)) = doc.elements.get_mut(id).map(|e| &mut e.kind) {
+            t.apply(d);
+        }
+    }
+    for (id, put) in &change.puts {
+        match put {
+            Some(e) => {
+                doc.elements.insert(id.clone(), (**e).clone());
+            }
+            None => {
+                doc.elements.remove(id);
+            }
+        }
+    }
     if !change.z_order.is_empty() {
         splice_in_place(&mut doc.z_order, &change.z_order);
     }

@@ -405,6 +405,14 @@ fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             }
         }
     });
+    let tb = w::toolbar_item(ui, Icon::Table, &crate::t!("toolbar-table"), ToolbarState { menu: true, ..st() }).on_hover_text(&crate::t!("toolbar-table-tip"));
+    egui::Popup::menu(&tb).style(crate::widgets::menu_style).width(300.0).show(|ui| {
+        ui.add_space(4.0);
+        if let Some(s) = crate::table_ui::style_grid(ui, app, None, 288.0) {
+            crate::table_ui::insert_table(app, s);
+            ui.close();
+        }
+    });
     let md = w::toolbar_item(ui, Icon::Media, &crate::t!("toolbar-media"), ToolbarState { menu: true, ..st() }).on_hover_text(&crate::t!("toolbar-media-tip"));
     egui::Popup::menu(&md).style(crate::widgets::menu_style).width(200.0).show(|ui| {
         if menu_icon_row(ui, Icon::Image, &crate::t!("toolbar-media-image"), false).clicked() {

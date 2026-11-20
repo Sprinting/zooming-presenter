@@ -652,6 +652,8 @@ theme-editor-colour-1 = Colour 1
 theme-editor-colour-2 = Colour 2
 theme-editor-colour-3 = Colour 3
 theme-editor-colour-4 = Colour 4
+theme-editor-colour-5 = Colour 5
+theme-editor-colour-6 = Colour 6
 theme-editor-section-fonts = Fonts
 theme-editor-font-title = Title
 theme-editor-font-subtitle = Subtitle
@@ -1666,3 +1668,130 @@ import-error-all-hidden = All the slides you chose are hidden.
 import-error-encrypted = The file is protected with a password.
 import-error-no-engine = Zebra's PDF reader is missing. Reinstall Zebra.
 import-error-read = The file can't be read.
+
+## Tables
+
+toolbar-table = Table
+toolbar-table-tip =
+    Add a table in a style
+    Or paste cells from Numbers or Excel on the canvas
+action-insert-table = Table
+inspector-tab-table = Table
+inspector-tab-cell = Cell
+inspector-kind-table = Table
+table-limit-rows = A table can have up to { $count } rows. Nothing was changed.
+table-limit-columns = A table can have up to { $count } columns. Nothing was changed.
+table-limit-cells = A table can have up to { $count } cells. Nothing was changed.
+table-limit-input = A cell can hold up to { $count } characters. Nothing was changed.
+table-limit-formula = A formula can be up to { $count } characters long. Nothing was changed.
+table-limit-paste = That's more than { $mb } MB of cells to paste. Nothing was changed.
+table-too-big = That would make the table too big. Nothing was changed.
+table-formula-hint = Click cells to add them. Return accepts, Esc cancels.
+table-formula-cancel = Cancel
+table-formula-accept = Accept
+table-add-row-above = Add Row Above
+table-add-row-below = Add Row Below
+table-add-column-before = Add Column Before
+table-add-column-after = Add Column After
+table-delete-row = Delete Row
+table-delete-column = Delete Column
+table-merge-cells = Merge Cells
+table-unmerge-cells = Unmerge Cells
+table-sort-ascending = Sort Ascending
+table-sort-descending = Sort Descending
+table-style-banner = Banner
+table-style-banded = Banded
+table-style-grid = Grid
+table-style-ruled = Ruled
+table-style-accent = Accent
+table-style-side-header = Side Header
+table-style-boxed = Boxed
+table-style-soft = Soft
+table-style-dark = Dark
+table-style-ledger = Ledger
+table-section-styles = Table Styles
+table-section-headers = Headers & Footer
+table-header-rows = Header Rows
+table-header-columns = Header Columns
+table-footer-rows = Footer Rows
+table-name = Table Name
+table-name-hint = Table name
+table-alternating-rows = Alternating Row Colour
+table-section-gridlines = Gridlines
+table-gridlines-all = All Gridlines
+table-gridlines-horizontal = Row Lines
+table-gridlines-vertical = Column Lines
+table-gridlines-outline = Table Outline
+table-font-size = Table Font Size
+table-font-size-theme = Theme
+table-format-automatic = Automatic
+table-format-number = Number
+table-format-currency = Currency
+table-format-percentage = Percentage
+table-format-date-time = Date & Time
+table-format-text = Text
+table-format-tick-box = Tick Box
+table-negative-red = { $example } in Red
+table-section-data-format = Data Format
+table-decimals = Decimals
+table-negative-numbers = Negative Numbers
+table-thousands = Thousands Separator
+table-currency = Currency
+table-section-column-type = Column Type
+table-column-type-whole = { $kind } (Whole Column)
+table-column-type-note = Used for sorting now and filtering later.
+table-section-fill = Fill
+table-fill-style = Table Style
+table-fill-colour = Colour
+table-section-border = Border
+table-border-all = All
+table-border-outer = Outside
+table-border-horizontal = Rows
+table-border-vertical = Columns
+table-border-top = Top
+table-border-bottom = Bottom
+table-line-solid = Solid
+table-line-dashed = Dashed
+table-line-dotted = Dotted
+table-line-none = No Line
+table-section-font = Font
+table-bold = Bold
+table-italic = Italic
+table-section-alignment = Alignment
+table-align-left = Left
+table-align-centre = Centre
+table-align-right = Right
+table-valign-top = Top
+table-valign-middle = Middle
+table-valign-bottom = Bottom
+table-section-text-colour = Text Colour
+table-text-colour-style = Table Style
+element-table = Table
+history-add-table = Add Table
+history-edit-cell = Edit Cell
+history-edit-cells = Edit Cells
+history-add-rows = { $count ->
+    [one] Add Row
+   *[other] Add { $count } Rows
+}
+history-delete-rows = { $count ->
+    [one] Delete Row
+   *[other] Delete { $count } Rows
+}
+history-add-columns = { $count ->
+    [one] Add Column
+   *[other] Add { $count } Columns
+}
+history-delete-columns = { $count ->
+    [one] Delete Column
+   *[other] Delete { $count } Columns
+}
+history-move-rows = Move Row
+history-move-columns = Move Column
+history-merge-cells = Merge Cells
+history-unmerge-cells = Unmerge Cells
+history-format-cells = Format Cells
+history-change-column = Change Column
+history-change-row = Change Row
+history-sort-table = Sort
+app-error-too-big = That would make the table too big. Nothing was changed.
