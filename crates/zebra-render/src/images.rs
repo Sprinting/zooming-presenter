@@ -42,6 +42,11 @@ use zebra_core::AssetBytes;
 
 /// One decoded mip level of an image (premultiplied RGBA8). Also used for
 /// video frames.
+///
+/// The pixels are held once: vello_cpu's [`vello_cpu::Pixmap`] owns them,
+/// and the [`ImageData`](vello_cpu::peniko::ImageData) the GPU draws from
+/// shares that buffer instead of holding a second copy (a capture of an
+/// 8000² picture held 512 MB, not 256).
 pub struct ImageLevel {
     /// Asset key (for PDF export, which embeds the original file).
     pub asset: String,
@@ -49,12 +54,20 @@ pub struct ImageLevel {
     pub height: u32,
     /// For vello (GPU). The blob id is stable, so vello's atlas caches it.
     pub data: vello_cpu::peniko::ImageData,
-    /// For vello_cpu, made on first CPU render only (captures), so the
-    /// windowed app doesn't hold every picture twice.
-    pixmap: OnceLock<Arc<vello_cpu::Pixmap>>,
+    /// For vello_cpu: the same pixels as `data`.
+    pixmap: Arc<vello_cpu::Pixmap>,
     /// A frame of a moving picture (GIF, video): the next frame is the same
     /// picture, not a new one (see `GpuRenderer::needs_another_frame`).
     pub moving: bool,
+}
+
+/// A pixmap's pixels as the bytes of a peniko blob.
+struct PixmapBytes(Arc<vello_cpu::Pixmap>);
+
+impl AsRef<[u8]> for PixmapBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.0.data_as_u8_slice()
+    }
 }
 
 impl std::fmt::Debug for ImageLevel {
@@ -78,11 +91,33 @@ impl ImageLevel {
     }
 
     /// From premultiplied RGBA8 rows (`width * height * 4` bytes).
-    pub fn from_premultiplied(asset: &str, width: u32, height: u32, px: Vec<u8>) -> ImageLevel {
+    pub fn from_premultiplied(asset: &str, width: u32, height: u32, mut px: Vec<u8>) -> ImageLevel {
         use vello_cpu::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
-        debug_assert_eq!(px.len(), (width * height * 4) as usize);
-        let data = ImageData { data: Blob::from(px), format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::AlphaPremultiplied, width, height };
-        ImageLevel { asset: asset.to_string(), width, height, data, pixmap: OnceLock::new(), moving: false }
+        debug_assert_eq!(px.len() as u64, width as u64 * height as u64 * 4);
+        let fits = width <= u16::MAX as u32 && height <= u16::MAX as u32 && px.len() as u64 == width as u64 * height as u64 * 4;
+        let (pixmap, blob) = if fits {
+            // The pixmap takes the buffer as 4-byte pixels, which needs a
+            // capacity that is a multiple of 4.
+            if !px.capacity().is_multiple_of(4) {
+                px = px.as_slice().to_vec();
+            }
+            let meta = vello_cpu::PixelMetadata { alpha_type: ImageAlphaType::AlphaPremultiplied, may_have_transparency: true };
+            let pixmap = Arc::new(vello_cpu::Pixmap::from_parts(px, width as u16, height as u16, meta));
+            let blob = Blob::new(Arc::new(PixmapBytes(pixmap.clone())));
+            (pixmap, blob)
+        } else {
+            // Bigger than vello_cpu can hold (decoders refuse these well
+            // before): the CPU renderer draws nothing for it.
+            (Arc::new(vello_cpu::Pixmap::new(1, 1)), Blob::from(px))
+        };
+        let data = ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::AlphaPremultiplied, width, height };
+        ImageLevel { asset: asset.to_string(), width, height, data, pixmap, moving: false }
+    }
+
+    /// A video's frame (premultiplied RGBA8): marked moving, so a playing
+    /// video's next frame is not a new picture to the GPU renderer.
+    pub fn video_frame(asset: &str, width: u32, height: u32, px: Vec<u8>) -> ImageLevel {
+        Self::from_premultiplied(asset, width, height, px).as_moving()
     }
 
     /// Marked as a frame of a moving picture ([`ImageLevel::moving`]).
@@ -90,26 +125,14 @@ impl ImageLevel {
         ImageLevel { moving: true, ..self }
     }
 
+    /// The pixels for vello_cpu (shared with `data`, not a copy).
     pub fn pixmap(&self) -> Arc<vello_cpu::Pixmap> {
-        self.pixmap
-            .get_or_init(|| {
-                Arc::new(vello_cpu::Pixmap::from_parts(
-                    self.data.data.data().to_vec(),
-                    self.width.min(u16::MAX as u32) as u16,
-                    self.height.min(u16::MAX as u32) as u16,
-                    vello_cpu::PixelMetadata {
-                        alpha_type: vello_cpu::peniko::ImageAlphaType::AlphaPremultiplied,
-                        may_have_transparency: true,
-                    },
-                ))
-            })
-            .clone()
+        self.pixmap.clone()
     }
 
-    /// Bytes held (pixels, plus the CPU copy if one was made).
+    /// Bytes held.
     pub fn bytes(&self) -> usize {
-        let px = self.width as usize * self.height as usize * 4;
-        if self.pixmap.get().is_some() { px * 2 } else { px }
+        self.width as usize * self.height as usize * 4
     }
 }
 
