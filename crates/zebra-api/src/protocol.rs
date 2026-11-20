@@ -395,7 +395,7 @@ pub fn parse(method: &str, params: &Value) -> Result<Parsed, RpcError> {
             Call::CopyTo { ids, to, at, offset }
         }
         "import" => {
-            const EX: &str = r#"example: {"path":"/Users/me/deck.pdf"} imports every page; add "from":2,"to":5 for some"#;
+            const EX: &str = r#"example: {"path":"/Users/me/deck.pdf"} imports every page of a PDF or slide of a PowerPoint (.pptx) file; add "from":2,"to":5 for some"#;
             let path = abs_path(p.get("path"), "import")?.ok_or_else(|| RpcError::invalid("`import` needs {\"path\": \"/abs/deck.pdf\"}").hint(EX))?;
             let page = |k: &str| -> Result<Option<usize>, RpcError> {
                 match p.get(k) {
