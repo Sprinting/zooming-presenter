@@ -10,7 +10,48 @@ use crate::model::{Asset, AssetBytes, Document};
 pub const EXTENSION: &str = "zebra";
 
 pub fn to_json(doc: &Document) -> String {
-    serde_json::to_string_pretty(doc).expect("document serialises")
+    let json = serde_json::to_string_pretty(doc).unwrap_or_else(|e| unreachable!("document types serialise: {e}"));
+    // Saved as the lowest version that holds what's in it, so a file that
+    // doesn't use anything new still opens in older builds.
+    // `format_version` is the document's first field.
+    let need = required_version(doc);
+    let head = format!("{{\n  \"format_version\": {},", doc.format_version);
+    match json.strip_prefix(&head) {
+        Some(rest) if need != doc.format_version => format!("{{\n  \"format_version\": {need},{rest}"),
+        _ => json,
+    }
+}
+
+/// The lowest format version that holds everything in `doc`. Each check
+/// names what needs it; a build that knows less refuses the file rather
+/// than dropping what it doesn't know.
+pub fn required_version(doc: &Document) -> u32 {
+    use crate::model::ElementKind;
+    let new_slot = |c: &Option<String>| c.as_deref().is_some_and(|c| c == "theme:shape5" || c == "theme:shape6");
+    let mut v = 1;
+    // 2: tables.
+    if doc.elements.values().any(|e| matches!(e.kind, ElementKind::Table(_))) {
+        v = v.max(2);
+    }
+    // 2: theme colours shape5 and shape6, in a theme of the document's or
+    // used by an element.
+    if doc.themes.iter().any(|t| t.shapes.len() > 4 && t.shapes[4..].iter().any(|c| !c.is_empty())) {
+        v = v.max(2);
+    }
+    let uses_new_slot = |e: &crate::model::Element| match &e.kind {
+        ElementKind::Text(t) => new_slot(&t.color) || t.spans.iter().any(|s| new_slot(&s.format.color)),
+        ElementKind::Shape(s) => new_slot(&s.fill) || new_slot(&s.stroke),
+        ElementKind::Frame(f) => new_slot(&f.color),
+        ElementKind::Ink(i) => new_slot(&Some(i.color.clone())),
+        ElementKind::Icon(i) => new_slot(&Some(i.color.clone())),
+        ElementKind::Connector(c) => new_slot(&Some(c.color.clone())),
+        ElementKind::Image(i) => i.symbol.as_ref().is_some_and(|s| new_slot(&s.color) || new_slot(&s.color2)),
+        ElementKind::Video(_) | ElementKind::Table(_) => false,
+    };
+    if doc.elements.values().any(uses_new_slot) {
+        v = v.max(2);
+    }
+    v.min(crate::FORMAT_VERSION)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

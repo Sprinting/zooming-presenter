@@ -133,12 +133,98 @@ pub fn steps(doc: &Document) -> ZResult<()> {
 pub fn repair_json(v: &mut serde_json::Value) {
     let Some(els) = v.get_mut("elements").and_then(|e| e.as_object_mut()) else { return };
     for e in els.values_mut() {
+        if let Some(k) = e.get_mut("kind").filter(|k| k.get("type").and_then(|t| t.as_str()) == Some("table")) {
+            repair_table_json(k);
+        }
         for (part, key, default) in [("transform", "x", 0.0), ("transform", "y", 0.0), ("transform", "rotation", 0.0), ("transform", "scale", 1.0), ("size", "w", 100.0), ("size", "h", 100.0)] {
             if let Some(n) = e.get_mut(part).and_then(|p| p.get_mut(key)) {
                 if n.is_null() {
                     *n = serde_json::json!(default);
                 }
             }
+        }
+    }
+}
+
+/// A table as read from a file, made readable: anything that isn't what
+/// a table holds is replaced by a default or dropped, and the grid is cut
+/// to the limits before it becomes cells (a file with ten million cells
+/// keeps the first 100,000). [`repair`] then makes it rectangular.
+fn repair_table_json(k: &mut serde_json::Value) {
+    use crate::table::{Cell, CellRange, Column, Gridlines, RangeFormat, Row, TableStyle, MAX_CELLS, MAX_COLUMNS, MAX_ROWS};
+    use serde::Deserialize;
+    use serde_json::{json, Value};
+    let Some(o) = k.as_object_mut() else { return };
+    let ok = |v: &Value, f: fn(&Value) -> bool| f(v);
+    // Cells: rows of cells, at most the limits.
+    let mut cells = match o.remove("cells") {
+        Some(Value::Array(rows)) => rows,
+        _ => vec![],
+    };
+    cells.truncate(MAX_ROWS);
+    let mut count = 0usize;
+    let mut keep = cells.len();
+    for (i, row) in cells.iter_mut().enumerate() {
+        if !row.is_array() {
+            *row = json!([]);
+        }
+        let r = row.as_array_mut().map(std::mem::take).unwrap_or_default();
+        let mut r: Vec<Value> = r.into_iter().take(MAX_COLUMNS).collect();
+        for c in r.iter_mut() {
+            if Cell::deserialize(&*c).is_err() {
+                // A cell with a value or format that doesn't read keeps its input.
+                let input = c.get("input").and_then(|x| x.as_str()).map(str::to_string);
+                *c = json!(input.unwrap_or_default());
+            }
+        }
+        count += r.len().max(1);
+        *row = Value::Array(r);
+        if count > MAX_CELLS {
+            keep = i;
+            break;
+        }
+    }
+    cells.truncate(keep.max(1).min(cells.len()));
+    o.insert("cells".into(), Value::Array(cells));
+    // Columns and rows: each readable, or a default ([`repair`] sizes them).
+    let list = |o: &mut serde_json::Map<String, Value>, key: &str, max: usize, good: fn(&Value) -> bool, default: Value| {
+        let mut v = match o.remove(key) {
+            Some(Value::Array(v)) => v,
+            _ => vec![],
+        };
+        v.truncate(max);
+        for x in v.iter_mut() {
+            if !good(x) {
+                *x = default.clone();
+            }
+        }
+        o.insert(key.into(), Value::Array(v));
+    };
+    list(o, "columns", MAX_COLUMNS, |x| Column::deserialize(x).is_ok(), json!({"width": 100}));
+    list(o, "rows", MAX_ROWS, |x| Row::deserialize(x).is_ok(), json!({"height": 48}));
+    // Lists whose bad entries go.
+    for (key, good) in [("merges", (|x: &Value| CellRange::deserialize(x).is_ok()) as fn(&Value) -> bool), ("cell_formats", |x: &Value| RangeFormat::deserialize(x).is_ok())] {
+        if let Some(v) = o.get_mut(key) {
+            match v.as_array_mut() {
+                Some(a) => a.retain(|x| good(x)),
+                None => *v = json!([]),
+            }
+        }
+    }
+    // Settings that don't read go back to their defaults.
+    let checks: [(&str, fn(&Value) -> bool); 8] = [
+        ("header_rows", |x| x.as_u64().is_some_and(|n| n <= 255)),
+        ("header_columns", |x| x.as_u64().is_some_and(|n| n <= 255)),
+        ("footer_rows", |x| x.as_u64().is_some_and(|n| n <= 255)),
+        ("style", |x| TableStyle::deserialize(x).is_ok()),
+        ("font_size", |x| x.as_f64().is_some()),
+        ("banded", |x| x.is_null() || x.is_boolean()),
+        ("gridlines", |x| x.is_null() || Gridlines::deserialize(x).is_ok()),
+        ("show_name", |x| x.is_boolean()),
+    ];
+    for (key, good) in checks {
+        if o.get(key).is_some_and(|x| !ok(x, good)) {
+            o.remove(key);
         }
     }
 }

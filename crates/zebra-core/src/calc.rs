@@ -34,6 +34,54 @@ pub fn has_formulas(t: &TableData) -> bool {
     t.cells.iter().flatten().any(|c| c.is_formula())
 }
 
+/// Functions Zebra never runs, whatever the formula engine offers: ones
+/// that would reach the network, files or other programs in spreadsheet
+/// apps (none of these exist in IronCalc 0.9.1, which has no network or
+/// file access; listed so an upgrade can't bring them in unnoticed), and
+/// INFO, which reads facts about the computer into a shared document.
+pub const BLOCKED_FUNCTIONS: &[&str] = &[
+    "WEBSERVICE", "FILTERXML", "IMPORTDATA", "IMPORTXML", "IMPORTHTML", "IMPORTRANGE", "IMPORTFEED", "IMAGE", "RTD", "CALL", "REGISTER.ID",
+    "DDE", "EXEC", "SHELL", "INFO", "STOCKHISTORY", "GOOGLEFINANCE", "PY",
+];
+
+/// The first blocked function a formula calls (a name followed by `(`,
+/// outside string literals), if any.
+pub fn blocked_function(formula: &str) -> Option<&'static str> {
+    let b = formula.as_bytes();
+    let mut in_str = false;
+    let mut i = 0;
+    while i < b.len() {
+        let ch = b[i];
+        if ch == b'"' {
+            in_str = !in_str;
+            i += 1;
+            continue;
+        }
+        let starts_name = ch.is_ascii_alphabetic() || ch == b'_';
+        if in_str || !starts_name || (i > 0 && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_' || b[i - 1] == b'.')) {
+            i += 1;
+            continue;
+        }
+        let s = i;
+        while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'.') {
+            i += 1;
+        }
+        let mut j = i;
+        while j < b.len() && b[j] == b' ' {
+            j += 1;
+        }
+        if b.get(j) == Some(&b'(') {
+            let name = formula[s..i].to_ascii_uppercase();
+            // Excel writes newer functions as _xlfn.NAME.
+            let name = name.strip_prefix("_XLFN.").unwrap_or(&name);
+            if let Some(f) = BLOCKED_FUNCTIONS.iter().find(|f| **f == name) {
+                return Some(f);
+            }
+        }
+    }
+    None
+}
+
 /// The cached sheets, one per table element.
 #[derive(Default)]
 pub struct Calc {
@@ -61,10 +109,13 @@ impl Calc {
         if !has_formulas(t) {
             self.forget(id);
             let mut changed = false;
-            for c in t.cells.iter_mut().flatten() {
-                if c.value.is_some() || c.format.is_some() {
-                    c.value = None;
-                    c.format = None;
+            for row in t.cells.iter_mut() {
+                // Only rows that hold a stale value are written (and so copied).
+                if row.iter().any(|c| c.value.is_some() || c.format.is_some()) {
+                    for c in row.iter_mut() {
+                        c.value = None;
+                        c.format = None;
+                    }
                     changed = true;
                 }
             }
@@ -86,6 +137,26 @@ impl Calc {
         self.sheets.remove(id);
         #[cfg(target_arch = "wasm32")]
         let _ = id;
+    }
+
+    /// Keep only the sheets of tables `keep` says still exist.
+    pub fn retain(&mut self, keep: impl Fn(&str) -> bool) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.sheets.retain(|id, _| keep(id));
+        #[cfg(target_arch = "wasm32")]
+        let _ = keep;
+    }
+
+    /// How many sheets are held.
+    pub fn len(&self) -> usize {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.sheets.len();
+        #[cfg(target_arch = "wasm32")]
+        0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn clear(&mut self) {
@@ -293,10 +364,11 @@ mod imp {
     use ironcalc_base::Model;
     use std::sync::OnceLock;
 
-    /// A table's sheet and the inputs it was last given.
+    /// A table's sheet and the rows it was last given (shared with the
+    /// table, so keeping them costs a pointer per row).
     pub struct Sheet {
         model: Model<'static>,
-        inputs: Vec<Vec<String>>,
+        rows: Vec<crate::table::CellRow>,
     }
 
     /// The Mac's time zone (for `TODAY()` and `NOW()`): /etc/localtime
@@ -304,7 +376,7 @@ mod imp {
     fn time_zone() -> &'static str {
         static TZ: OnceLock<&'static str> = OnceLock::new();
         TZ.get_or_init(|| {
-            let from_env = std::env::var("TZ").ok().filter(|s| !s.is_empty() && !s.starts_with(':'));
+            let from_env = std::env::var("TZ").ok().filter(|s| !s.is_empty() && !s.starts_with(':') && s.len() < 64);
             let from_link = std::fs::read_link("/etc/localtime").ok().and_then(|p| {
                 let s = p.to_string_lossy().into_owned();
                 s.split_once("zoneinfo/").map(|(_, z)| z.to_string())
@@ -320,64 +392,98 @@ mod imp {
 
     pub fn new_model() -> Model<'static> {
         // en-GB: dates read and show day first, £ is the currency.
-        Model::new_empty("table", "en-GB", time_zone(), "en").or_else(|_| Model::new_empty("table", "en", "UTC", "en")).expect("IronCalc builds an empty sheet")
+        match Model::new_empty("table", "en-GB", time_zone(), "en") {
+            Ok(m) => m,
+            Err(_) => Model::new_empty("table", "en", "UTC", "en").unwrap_or_else(|e| unreachable!("IronCalc's own English locale: {e}")),
+        }
     }
 
+    /// What IronCalc is given for an input. A lone "=" is text, not a
+    /// broken formula; a formula calling something Zebra doesn't allow
+    /// (see [`blocked_function`]) never reaches IronCalc.
     fn input_for(s: &str) -> String {
-        // A lone "=" is text, not a broken formula.
-        if s.trim() == "=" { format!("'{s}") } else { s.to_string() }
+        if s.trim() == "=" {
+            return format!("'{s}");
+        }
+        if crate::table::is_formula(s) && blocked_function(s).is_some() {
+            // Cells that use it see an error; the cell itself shows #NAME?
+            // (see `read_value`).
+            return "=NA()".into();
+        }
+        s.to_string()
     }
 
     pub fn recalc(sheets: &mut HashMap<String, Sheet>, id: &str, t: &mut TableData) -> bool {
-        let sheet = sheets.entry(id.to_string()).or_insert_with(|| Sheet { model: new_model(), inputs: vec![] });
+        let sheet = sheets.entry(id.to_string()).or_insert_with(|| Sheet { model: new_model(), rows: vec![] });
         let m = &mut sheet.model;
-        let rows = t.n_rows().max(sheet.inputs.len());
+        let empty = crate::table::CellRow::new(vec![]);
+        let rows = t.n_rows().max(sheet.rows.len());
         for r in 0..rows {
-            let cols = t.cells.get(r).map_or(0, |x| x.len()).max(sheet.inputs.get(r).map_or(0, |x| x.len()));
-            for c in 0..cols {
-                let now = t.cells.get(r).and_then(|x| x.get(c)).map(|x| x.input.as_str()).unwrap_or("");
-                let was = sheet.inputs.get(r).and_then(|x| x.get(c)).map(|x| x.as_str()).unwrap_or("");
-                if now == was {
+            let now = t.cells.get(r).unwrap_or(&empty);
+            let was = sheet.rows.get(r).unwrap_or(&empty);
+            if now.same(was) {
+                continue;
+            }
+            for c in 0..now.len().max(was.len()) {
+                let n = now.get(c).map(|x| x.input.as_str()).unwrap_or("");
+                let w = was.get(c).map(|x| x.input.as_str()).unwrap_or("");
+                if n == w {
                     continue;
                 }
                 let (row, col) = (r as i32 + 1, c as i32 + 1);
-                if now.is_empty() {
+                if n.is_empty() {
                     if let Ok(ws) = m.workbook.worksheet_mut(0) {
                         let _ = ws.cell_clear_contents(row, col);
                     }
                 } else {
-                    let _ = m.set_user_input(0, row, col, input_for(now));
+                    let _ = m.set_user_input(0, row, col, input_for(n));
                 }
             }
         }
-        sheet.inputs = t.cells.iter().map(|row| row.iter().map(|c| c.input.clone()).collect()).collect();
         m.evaluate();
         let mut changed = false;
         for (r, row) in t.cells.iter_mut().enumerate() {
-            for (c, cell) in row.iter_mut().enumerate() {
-                let (value, format) = if cell.is_formula() {
-                    let (ri, ci) = (r as i32 + 1, c as i32 + 1);
-                    let v = match m.get_cell_value_by_index(0, ri, ci) {
-                        Ok(IcValue::Number(v)) => CellValue::Number(v),
-                        Ok(IcValue::Boolean(b)) => CellValue::Bool(b),
-                        Ok(IcValue::String(s)) if matches!(m.get_cell_type(0, ri, ci), Ok(IcType::ErrorValue)) => CellValue::Error { error: s },
-                        Ok(IcValue::String(s)) => CellValue::Text(s),
-                        Ok(IcValue::None) | Err(_) => CellValue::Text(String::new()),
+            // Work out the row's values first; write (and so copy the row)
+            // only when one differs.
+            let new: Vec<(usize, Option<CellValue>, Option<String>)> = row
+                .iter()
+                .enumerate()
+                .filter_map(|(c, cell)| {
+                    let (value, format) = if !cell.is_formula() {
+                        (None, None)
+                    } else if blocked_function(&cell.input).is_some() {
+                        (Some(CellValue::Error { error: "#NAME?".into() }), None)
+                    } else {
+                        read_value(m, r, c)
                     };
-                    let fmt = m.get_style_for_cell(0, ri, ci).ok().map(|s| s.num_fmt).filter(|f| !f.eq_ignore_ascii_case("general") && !f.is_empty());
-                    let fmt = if matches!(v, CellValue::Number(_)) { fmt } else { None };
-                    (Some(v), fmt)
-                } else {
-                    (None, None)
-                };
-                if cell.value != value || cell.format != format {
-                    cell.value = value;
-                    cell.format = format;
-                    changed = true;
+                    (cell.value != value || cell.format != format).then_some((c, value, format))
+                })
+                .collect();
+            if !new.is_empty() {
+                changed = true;
+                for (c, value, format) in new {
+                    row[c].value = value;
+                    row[c].format = format;
                 }
             }
         }
+        sheet.rows = t.cells.clone();
         changed
+    }
+
+    fn read_value(m: &Model<'static>, r: usize, c: usize) -> (Option<CellValue>, Option<String>) {
+        let (ri, ci) = (r as i32 + 1, c as i32 + 1);
+        let v = match m.get_cell_value_by_index(0, ri, ci) {
+            Ok(IcValue::Number(v)) if v.is_finite() => CellValue::Number(v),
+            Ok(IcValue::Number(_)) => CellValue::Error { error: "#NUM!".into() },
+            Ok(IcValue::Boolean(b)) => CellValue::Bool(b),
+            Ok(IcValue::String(s)) if matches!(m.get_cell_type(0, ri, ci), Ok(IcType::ErrorValue)) => CellValue::Error { error: s },
+            Ok(IcValue::String(s)) => CellValue::Text(s.chars().take(crate::table::MAX_INPUT).collect()),
+            Ok(IcValue::None) | Err(_) => CellValue::Text(String::new()),
+        };
+        let fmt = m.get_style_for_cell(0, ri, ci).ok().map(|s| s.num_fmt).filter(|f| !f.eq_ignore_ascii_case("general") && !f.is_empty());
+        let fmt = if matches!(v, CellValue::Number(_)) { fmt } else { None };
+        (Some(v), fmt)
     }
 
     /// New formula texts, at their new (row, column), for the formulas of

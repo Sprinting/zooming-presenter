@@ -4,7 +4,22 @@
 //! same undo step as the edit.
 use super::*;
 use crate::calc::{reshape, Reshape};
-use crate::table::{CellFormat, CellInput, CellRange, RangeFormat, TableData, MAX_COLUMNS, MAX_HEADERS, MAX_ROWS};
+use crate::table::{CellFormat, CellInput, CellRange, Limit, RangeFormat, TableData, MAX_HEADERS};
+
+/// An input over a limit, as the API reports it.
+fn too_big(l: Limit) -> ZError {
+    ZError::new("too_big", l.message()).hint("nothing was changed")
+}
+
+/// The first input over a limit, if any.
+fn check_inputs<'a>(inputs: impl IntoIterator<Item = &'a String>) -> ZResult<()> {
+    for s in inputs {
+        if let Some(l) = Limit::of_input(s) {
+            return Err(too_big(l));
+        }
+    }
+    Ok(())
+}
 
 impl Editor {
     pub(super) fn apply_table(&mut self, cmd: Command, out: &mut Outcome) -> ZResult<()> {
@@ -15,7 +30,7 @@ impl Editor {
                 let grid: Option<Vec<Vec<String>>> = match (cells, csv) {
                     (Some(_), Some(_)) => return Err(ZError::invalid("give `cells` or `csv`, not both")),
                     (Some(c), None) => Some(c.into_iter().map(|r| r.into_iter().map(CellInput::into_input).collect()).collect()),
-                    (None, Some(s)) => Some(crate::table::parse_delimited(&s)),
+                    (None, Some(s)) => Some(crate::table::parse_delimited(&s).map_err(too_big)?),
                     (None, None) => None,
                 };
                 let grid_rows = grid.as_ref().map_or(0, |g| g.len());
@@ -23,8 +38,11 @@ impl Editor {
                 let nr = rows.unwrap_or(0).max(grid_rows);
                 let nc = columns.unwrap_or(0).max(grid_cols);
                 let (nr, nc) = if grid.is_none() && rows.is_none() && columns.is_none() { (4, 4) } else { (nr.max(1), nc.max(1)) };
-                if nr > MAX_ROWS || nc > MAX_COLUMNS {
-                    return Err(ZError::invalid(format!("a table has at most {MAX_ROWS} rows and {MAX_COLUMNS} columns")));
+                if let Some(l) = Limit::of_size(nr, nc) {
+                    return Err(too_big(l));
+                }
+                if let Some(g) = &grid {
+                    check_inputs(g.iter().flatten())?;
                 }
                 let mut t = TableData::new(nr, nc, body);
                 if let Some(g) = &grid {
@@ -56,11 +74,13 @@ impl Editor {
                     group: None,
                     kind: ElementKind::Table(t),
                 };
-                measure_text(&*self.measure, &theme, &mut e);
                 if let Some(p) = place {
+                    // Placing needs the size (measured again once in).
+                    measure_text(&*self.measure, &theme, &mut e);
                     self.place(&mut e, &p, scale.is_none())?;
                 }
-                self.insert_element(e, out)?
+                // Inserting works it out and measures it (`table_settled`).
+                return self.insert_element(e, out).map(|_| ());
             }
             Command::SetCells { id, at, values } => {
                 let (r0, c0) = crate::table::parse_cell(&at).ok_or_else(|| ZError::invalid(format!("'{at}' is not a cell like B2")))?;
@@ -69,10 +89,12 @@ impl Editor {
                 if rows == 0 || cols == 0 {
                     return Err(ZError::invalid("values is empty").hint("rows of values: [[\"North\", 1240]]"));
                 }
-                if r0 + rows > MAX_ROWS || c0 + cols > MAX_COLUMNS {
-                    return Err(ZError::invalid(format!("a table has at most {MAX_ROWS} rows and {MAX_COLUMNS} columns")));
-                }
+                let values: Vec<Vec<String>> = values.into_iter().map(|r| r.into_iter().map(CellInput::into_input).collect()).collect();
+                check_inputs(values.iter().flatten())?;
                 let t = self.table_mut(&id)?;
+                if let Some(l) = Limit::of_size(t.n_rows().max(r0.saturating_add(rows)), t.n_cols().max(c0.saturating_add(cols))) {
+                    return Err(too_big(l));
+                }
                 // Grow (formulas see the new rows as typing on would).
                 if c0 + cols > t.n_cols() {
                     let n = t.n_cols();
@@ -83,19 +105,21 @@ impl Editor {
                 // on: they go at the end.
                 let body_end = t.body_rows().end;
                 let (at, need) = if r0 < body_end && t.footer_rows > 0 { (body_end, (r0 + rows).saturating_sub(body_end)) } else { (t.n_rows(), (r0 + rows).saturating_sub(t.n_rows())) };
+                if let Some(l) = Limit::of_size(t.n_rows() + need, t.n_cols()) {
+                    return Err(too_big(l));
+                }
                 if need > 0 {
                     reshape(t, &Reshape::InsertRows { at, count: need }).map_err(ZError::invalid)?;
                 }
                 for (dr, row) in values.into_iter().enumerate() {
-                    for (dc, v) in row.into_iter().enumerate() {
+                    for (dc, input) in row.into_iter().enumerate() {
                         let (r, c) = (r0 + dr, c0 + dc);
                         if t.anchor(r, c) != (r, c) {
                             continue; // under a merged cell
                         }
-                        let cell = &mut t.cells[r][c];
-                        let input = v.into_input();
-                        if cell.input != input {
-                            *cell = crate::table::Cell::new(input);
+                        // Compared first: writing copies the row.
+                        if t.cells[r][c].input != input {
+                            t.cells[r][c] = crate::table::Cell::new(input);
                         }
                     }
                 }
@@ -109,8 +133,8 @@ impl Editor {
                 if count == 0 {
                     return Err(ZError::invalid("count must be at least 1"));
                 }
-                if t.n_rows() + count > MAX_ROWS {
-                    return Err(ZError::invalid(format!("a table has at most {MAX_ROWS} rows")));
+                if let Some(l) = Limit::of_size(t.n_rows().saturating_add(count), t.n_cols()) {
+                    return Err(too_big(l));
                 }
                 reshape(t, &Reshape::InsertRows { at: index, count }).map_err(ZError::invalid)?;
                 id
@@ -123,16 +147,16 @@ impl Editor {
                 if count == 0 {
                     return Err(ZError::invalid("count must be at least 1"));
                 }
-                if t.n_cols() + count > MAX_COLUMNS {
-                    return Err(ZError::invalid(format!("a table has at most {MAX_COLUMNS} columns")));
+                if let Some(l) = Limit::of_size(t.n_rows(), t.n_cols().saturating_add(count)) {
+                    return Err(too_big(l));
                 }
                 reshape(t, &Reshape::InsertColumns { at: index, count }).map_err(ZError::invalid)?;
                 id
             }
             Command::DeleteRows { id, index, count } => {
                 let t = self.table_mut(&id)?;
-                if count == 0 || index + count > t.n_rows() {
-                    return Err(ZError::invalid(format!("rows {index} to {} are not all in the table ({} rows)", index + count.max(1) - 1, t.n_rows())));
+                if count == 0 || index.saturating_add(count) > t.n_rows() {
+                    return Err(ZError::invalid(format!("rows {index} to {} are not all in the table ({} rows)", index.saturating_add(count.max(1) - 1), t.n_rows())));
                 }
                 if count == t.n_rows() {
                     return Err(ZError::invalid("a table keeps at least one row").hint("delete the table instead"));
@@ -142,8 +166,8 @@ impl Editor {
             }
             Command::DeleteColumns { id, index, count } => {
                 let t = self.table_mut(&id)?;
-                if count == 0 || index + count > t.n_cols() {
-                    return Err(ZError::invalid(format!("columns {index} to {} are not all in the table ({} columns)", index + count.max(1) - 1, t.n_cols())));
+                if count == 0 || index.saturating_add(count) > t.n_cols() {
+                    return Err(ZError::invalid(format!("columns {index} to {} are not all in the table ({} columns)", index.saturating_add(count.max(1) - 1), t.n_cols())));
                 }
                 if count == t.n_cols() {
                     return Err(ZError::invalid("a table keeps at least one column").hint("delete the table instead"));
@@ -154,7 +178,7 @@ impl Editor {
             Command::MoveRows { id, from, count, to } => {
                 let t = self.table_mut(&id)?;
                 let n = t.n_rows();
-                if count == 0 || from + count > n || to > n {
+                if count == 0 || from.saturating_add(count) > n || to > n {
                     return Err(ZError::invalid(format!("rows out of range ({n} rows, 0-based)")));
                 }
                 reshape(t, &Reshape::MoveRows { from, count, to }).map_err(ZError::invalid)?;
@@ -163,7 +187,7 @@ impl Editor {
             Command::MoveColumns { id, from, count, to } => {
                 let t = self.table_mut(&id)?;
                 let n = t.n_cols();
-                if count == 0 || from + count > n || to > n {
+                if count == 0 || from.saturating_add(count) > n || to > n {
                     return Err(ZError::invalid(format!("columns out of range ({n} columns, 0-based)")));
                 }
                 reshape(t, &Reshape::MoveColumns { from, count, to }).map_err(ZError::invalid)?;
@@ -268,7 +292,13 @@ impl Editor {
         if let ElementKind::Table(t) = &mut e.kind {
             calc.recalc(id, t);
         }
-        measure_text(&*self.measure, theme, e);
+        // Rows that are the very rows they were before the edit keep their
+        // measured heights: a cell edit measures one row, not the table.
+        let before = self.journal.as_ref().and_then(|j| j.before(id)).and_then(|b| match &b.kind {
+            ElementKind::Table(t) => Some(t),
+            _ => None,
+        });
+        measure_table(&*self.measure, theme, e, before);
     }
 }
 
@@ -340,14 +370,13 @@ fn fit_columns(m: &dyn TextMeasure, theme: &Theme, t: &mut TableData) {
     let body = theme.text_style(TextStyle::Body).size;
     let l = t.layout(body);
     let usual = (body * crate::table::COLUMN_EMS).round();
-    let looks: Vec<_> = (0..t.n_cols()).map(|c| t.column_look(c)).collect();
     for c in 0..t.n_cols() {
         let mut widest: f64 = 0.0;
         for r in 0..t.n_rows().min(200) {
             if t.merge_at(r, c).is_some() {
                 continue;
             }
-            let s = t.shown(r, c, looks[c].as_ref());
+            let s = t.shown(r, c, None);
             let longest = s.text.split('\n').max_by_key(|l| l.chars().count()).unwrap_or("");
             if longest.is_empty() {
                 continue;
@@ -361,8 +390,19 @@ fn fit_columns(m: &dyn TextMeasure, theme: &Theme, t: &mut TableData) {
 }
 
 /// Fit a table's rows to their text and its box to its rows and columns.
-pub(super) fn measure_table(m: &dyn TextMeasure, theme: &Theme, e: &mut Element) {
+///
+/// With `prev` (the table before an edit, same theme): rows that are the
+/// same rows in memory as there keep the height measured then, when the
+/// columns and everything that changes how text sets (merges, header
+/// rows, formats, text size) are the same.
+pub(super) fn measure_table(m: &dyn TextMeasure, theme: &Theme, e: &mut Element, prev: Option<&TableData>) {
     let ElementKind::Table(t) = &mut e.kind else { return };
+    let reuse: std::collections::HashMap<u64, (&crate::table::CellRow, f64, f64)> = match prev {
+        Some(p) if p.same_meta(t) && p.columns.len() == t.columns.len() && p.columns.iter().zip(&t.columns).all(|(a, b)| a.width == b.width) => {
+            p.cells.iter().zip(&p.rows).map(|(c, r)| (c.id(), (c, r.fit, r.height))).collect()
+        }
+        _ => Default::default(),
+    };
     let body = theme.text_style(TextStyle::Body).size;
     let l = t.layout(body);
     let fs = t.font_size;
@@ -371,10 +411,15 @@ pub(super) fn measure_table(m: &dyn TextMeasure, theme: &Theme, e: &mut Element)
     // A character is rarely wider than this many ems: text shorter than
     // the column by that measure fits on one line without measuring it.
     let em_max = 0.62 * l.font;
-    let looks: Vec<_> = (0..t.n_cols()).map(|c| t.column_look(c)).collect();
     let n = t.n_rows();
     let mut fits = vec![0.0f64; n];
     for (r, fit) in fits.iter_mut().enumerate() {
+        if let Some((row, f, h)) = reuse.get(&t.cells[r].id()) {
+            if row.same(&t.cells[r]) && *h == t.rows[r].height {
+                *fit = *f;
+                continue;
+            }
+        }
         let mut need: f64 = 0.0;
         for c in 0..t.n_cols() {
             let span = t.span(r, c);
@@ -385,7 +430,9 @@ pub(super) fn measure_table(m: &dyn TextMeasure, theme: &Theme, e: &mut Element)
             if cell.is_empty() {
                 continue;
             }
-            let s = t.shown(r, c, looks[c].as_ref());
+            // A column's look only changes how numbers show; numbers
+            // take one line whatever their look.
+            let s = t.shown(r, c, None);
             let bold = t.bold_at(r, c);
             let lh = if bold { line_b } else { line_r };
             if s.numeric || s.tick.is_some() || s.error.is_some() {
@@ -402,10 +449,13 @@ pub(super) fn measure_table(m: &dyn TextMeasure, theme: &Theme, e: &mut Element)
             };
             need = need.max(h);
         }
-        *fit = if need > 0.0 { (need + 2.0 * l.pad_y).ceil() } else { 0.0 };
+        let need = if need > 0.0 { (need + 2.0 * l.pad_y).ceil() } else { 0.0 };
+        *fit = if need > t.rows[r].height { need } else { 0.0 };
     }
     for (row, fit) in t.rows.iter_mut().zip(fits) {
-        row.fit = if fit > row.height { fit } else { 0.0 };
+        if row.fit != fit {
+            row.fit = fit;
+        }
     }
     let (w, h) = t.size(body);
     e.size = Size { w, h };

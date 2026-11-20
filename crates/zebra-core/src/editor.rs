@@ -124,6 +124,13 @@ pub struct HistoryEntry {
     steps: usize,
 }
 
+impl HistoryEntry {
+    /// Rough heap size of what this step keeps for undo and redo.
+    pub fn approx_bytes(&self) -> usize {
+        self.deltas.iter().map(|d| d.approx_bytes()).sum()
+    }
+}
+
 /// History wording a person reads (Edit menu, Activity panel, status
 /// bar). The app supplies it through [`Editor::labeler`] so it can be
 /// translated; without one, the English of [`command_label`] is used.
@@ -635,6 +642,7 @@ impl Editor {
         }
         let journal = self.journal.take().expect("journal started above");
         self.index.end_journal();
+        self.drop_stale_sheets();
         self.check_index();
         self.settle_view();
 
@@ -794,6 +802,7 @@ impl Editor {
             return Err(ZError::new("internal", format!("undo failed: {e}")));
         }
         self.reindex_after(h.deltas.iter().map(|d| &d.backward));
+        self.drop_stale_sheets();
         let label = h.label.clone();
         let ids = h.ids.clone();
         self.redo.push(h);
@@ -810,6 +819,7 @@ impl Editor {
             return Err(ZError::new("internal", format!("redo failed: {e}")));
         }
         self.reindex_after(h.deltas.iter().map(|d| &d.forward));
+        self.drop_stale_sheets();
         let label = h.label.clone();
         let ids = h.ids.clone();
         self.undo.push(h);
@@ -818,6 +828,22 @@ impl Editor {
     }
 
     /// Bring the spatial index up to date after `changes` were applied.
+    /// Formula sheets of tables that are gone (deleted, or undone) are
+    /// dropped. A table that comes back (undo of a delete) keeps the
+    /// values it had; its sheet is built again the next time it is edited.
+    fn drop_stale_sheets(&mut self) {
+        let doc = &self.doc;
+        let calc = self.calc.get_mut().unwrap_or_else(|p| p.into_inner());
+        if !calc.is_empty() {
+            calc.retain(|id| doc.elements.get(id).is_some_and(|e| matches!(e.kind, ElementKind::Table(_))));
+        }
+    }
+
+    /// Formula sheets held (for tests and the perf query).
+    pub fn formula_sheets(&self) -> usize {
+        self.calc.lock().map(|c| c.len()).unwrap_or(0)
+    }
+
     fn reindex_after<'a>(&mut self, changes: impl Iterator<Item = &'a crate::delta::Change>) {
         let mut z = vec![];
         for c in changes {
@@ -996,7 +1022,10 @@ impl Editor {
             crate::rich::normalize(t);
         }
         validate_element(&e, &self.doc)?;
-        measure_text(&*self.measure, &self.theme(), &mut e);
+        let is_table = matches!(e.kind, ElementKind::Table(_));
+        if !is_table {
+            measure_text(&*self.measure, &self.theme(), &mut e);
+        }
         // Frames go behind the lowest element they enclose, so drawing a frame
         // around content keeps the content visible.
         let pos = if e.is_frame() { self.frame_insert_pos(&e) } else { self.doc.z_order.len() };
@@ -1004,6 +1033,12 @@ impl Editor {
         self.z_mut().insert(pos, id.clone());
         self.doc.elements.insert(id.clone(), e);
         self.index.z_inserted(&self.doc, pos);
+        if is_table {
+            // Its formulas worked out and its rows measured, however it
+            // came in (add_table, add_element, paste, duplicate).
+            let theme = self.theme();
+            self.table_settled(&id, &theme);
+        }
         out.created.push(id.clone());
         Ok(id)
     }
@@ -3215,7 +3250,7 @@ fn default_size(k: &ElementKind) -> (f64, f64) {
 /// Recompute a text element's box from its content.
 pub fn measure_text(m: &dyn TextMeasure, theme: &Theme, e: &mut Element) {
     if matches!(e.kind, ElementKind::Table(_)) {
-        return table_cmds::measure_table(m, theme, e);
+        return table_cmds::measure_table(m, theme, e, None);
     }
     if let ElementKind::Text(t) = &e.kind {
         if t.fixed_width {

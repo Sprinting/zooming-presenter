@@ -16,6 +16,9 @@
 //! editor through [`crate::calc`] around these.
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -27,6 +30,47 @@ pub const MAX_HEADERS: u8 = 5;
 /// Most rows and columns a table can have.
 pub const MAX_ROWS: usize = 10_000;
 pub const MAX_COLUMNS: usize = 256;
+/// Most cells a table can have (rows x columns).
+pub const MAX_CELLS: usize = 100_000;
+/// Longest input a cell takes, in characters (Excel's limit).
+pub const MAX_INPUT: usize = 32_767;
+/// Longest formula, in characters (Excel's limit).
+pub const MAX_FORMULA: usize = 8_192;
+
+/// Why an input can't go in a cell, or None when it can.
+pub fn input_problem(s: &str) -> Option<InputProblem> {
+    // Bytes bound characters from above: most inputs skip the count.
+    if s.len() <= MAX_FORMULA {
+        return None;
+    }
+    let n = s.chars().count();
+    if is_formula(s) && n > MAX_FORMULA {
+        Some(InputProblem::FormulaTooLong)
+    } else if n > MAX_INPUT {
+        Some(InputProblem::TooLong)
+    } else {
+        None
+    }
+}
+
+/// See [`input_problem`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputProblem {
+    TooLong,
+    FormulaTooLong,
+}
+
+/// Whether a `rows` x `cols` table is within the limits.
+pub fn fits_limits(rows: usize, cols: usize) -> bool {
+    rows >= 1 && cols >= 1 && rows <= MAX_ROWS && cols <= MAX_COLUMNS && rows.saturating_mul(cols) <= MAX_CELLS
+}
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// A number no other row or column has had in this run of the app.
+pub(crate) fn fresh_id() -> u64 {
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 fn is_false(b: &bool) -> bool {
     !*b
@@ -54,7 +98,91 @@ fn d_header_rows() -> u8 {
 }
 
 /// Rows of cells: what a table holds, and (later) a chart's own data.
-pub type Grid = Vec<Vec<Cell>>;
+pub type Grid = Vec<CellRow>;
+
+/// One row of cells.
+///
+/// The cells are shared between copies of a table (the undo journal's
+/// copy of what an edit touched, a renderer's snapshot) until one of the
+/// copies changes the row: copying a table copies a pointer per row, and
+/// changing a cell copies just its row ([`DerefMut`] does that). The `id`
+/// stays with the row however it moves, so an undo step can tell rows
+/// inserted, deleted or reordered from rows edited ([`crate::delta`]).
+/// It is not saved.
+#[derive(Debug, Clone)]
+pub struct CellRow {
+    id: u64,
+    cells: Arc<Vec<Cell>>,
+}
+
+impl CellRow {
+    pub fn new(cells: Vec<Cell>) -> CellRow {
+        CellRow { id: fresh_id(), cells: Arc::new(cells) }
+    }
+    /// `n` empty cells.
+    pub fn empty(n: usize) -> CellRow {
+        CellRow::new(vec![Cell::default(); n])
+    }
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+    /// The same cells in memory (not just equal ones).
+    pub fn same(&self, o: &CellRow) -> bool {
+        Arc::ptr_eq(&self.cells, &o.cells)
+    }
+    /// Replace the cells, keeping the row's id.
+    pub fn set(&mut self, cells: Vec<Cell>) {
+        self.cells = Arc::new(cells);
+    }
+}
+
+impl Deref for CellRow {
+    type Target = Vec<Cell>;
+    fn deref(&self) -> &Vec<Cell> {
+        &self.cells
+    }
+}
+
+impl DerefMut for CellRow {
+    fn deref_mut(&mut self) -> &mut Vec<Cell> {
+        Arc::make_mut(&mut self.cells)
+    }
+}
+
+impl<'a> IntoIterator for &'a CellRow {
+    type Item = &'a Cell;
+    type IntoIter = std::slice::Iter<'a, Cell>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.cells.iter()
+    }
+}
+
+impl PartialEq for CellRow {
+    fn eq(&self, o: &CellRow) -> bool {
+        self.same(o) || *self.cells == *o.cells
+    }
+}
+
+impl Serialize for CellRow {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.cells.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for CellRow {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(CellRow::new(Vec::<Cell>::deserialize(d)?))
+    }
+}
+
+impl JsonSchema for CellRow {
+    fn schema_name() -> Cow<'static, str> {
+        "CellRow".into()
+    }
+    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        Vec::<Cell>::json_schema(g)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TableData {
@@ -239,7 +367,7 @@ impl CellInput {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Column {
     /// Local units.
     pub width: f64,
@@ -247,6 +375,25 @@ pub struct Column {
     /// they have no format of their own, and how sorting compares them.
     #[serde(flatten)]
     pub format: DataFormat,
+    /// Stays with the column however it moves (see [`CellRow`]). Not saved.
+    #[serde(skip, default = "fresh_id")]
+    #[schemars(skip)]
+    pub(crate) id: u64,
+}
+
+impl Column {
+    pub fn new(width: f64) -> Column {
+        Column { width, format: DataFormat::default(), id: fresh_id() }
+    }
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
+impl PartialEq for Column {
+    fn eq(&self, o: &Column) -> bool {
+        self.width == o.width && self.format == o.format
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -667,6 +814,64 @@ table_styles! {
     Ledger => "ts11", "Ledger",
 }
 
+/// Everything in a table but its cells, columns and rows: what an undo
+/// step keeps whole when it changes (it is small).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableMeta {
+    pub merges: Vec<CellRange>,
+    pub header_rows: u8,
+    pub header_columns: u8,
+    pub footer_rows: u8,
+    pub style: TableStyle,
+    pub cell_formats: Vec<RangeFormat>,
+    pub font_size: f64,
+    pub banded: Option<bool>,
+    pub gridlines: Option<Gridlines>,
+    pub show_name: bool,
+}
+
+impl TableData {
+    pub fn meta(&self) -> TableMeta {
+        TableMeta {
+            merges: self.merges.clone(),
+            header_rows: self.header_rows,
+            header_columns: self.header_columns,
+            footer_rows: self.footer_rows,
+            style: self.style,
+            cell_formats: self.cell_formats.clone(),
+            font_size: self.font_size,
+            banded: self.banded,
+            gridlines: self.gridlines,
+            show_name: self.show_name,
+        }
+    }
+    /// Same as `o.meta()`, without copying either.
+    pub fn same_meta(&self, o: &TableData) -> bool {
+        self.merges == o.merges
+            && self.header_rows == o.header_rows
+            && self.header_columns == o.header_columns
+            && self.footer_rows == o.footer_rows
+            && self.style == o.style
+            && self.cell_formats == o.cell_formats
+            && (self.font_size == o.font_size || self.font_size.is_nan() && o.font_size.is_nan())
+            && self.banded == o.banded
+            && self.gridlines == o.gridlines
+            && self.show_name == o.show_name
+    }
+    pub fn set_meta(&mut self, m: TableMeta) {
+        self.merges = m.merges;
+        self.header_rows = m.header_rows;
+        self.header_columns = m.header_columns;
+        self.footer_rows = m.footer_rows;
+        self.style = m.style;
+        self.cell_formats = m.cell_formats;
+        self.font_size = m.font_size;
+        self.banded = m.banded;
+        self.gridlines = m.gridlines;
+        self.show_name = m.show_name;
+    }
+}
+
 /// Which part of the table a cell is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -804,15 +1009,18 @@ fn parse_number(t: &str) -> Option<Typed> {
         look.decimals = Some(d.min(20) as u8);
     }
     let num: String = format!("{}{}", if digits.is_empty() { "0" } else { &digits }, rest);
-    let mut v: f64 = num.parse().ok()?;
+    // A percentage is read with its point moved, so 13.7% is exactly
+    // what 0.137 is.
+    let shifted = look.percent && !num.contains(['e', 'E']);
+    let mut v: f64 = if shifted { format!("{num}e-2").parse().ok()? } else { num.parse().ok()? };
+    if look.percent && !shifted {
+        v /= 100.0;
+    }
     if !v.is_finite() {
         return None;
     }
     if neg {
         v = -v;
-    }
-    if look.percent {
-        v /= 100.0;
     }
     Some(Typed::Number(v, look))
 }
@@ -965,7 +1173,7 @@ fn general(v: f64) -> String {
         }
         return s;
     }
-    let dec = (9 - mag).clamp(0, 10) as usize;
+    let dec = (8 - mag).clamp(0, 10) as usize;
     let s = format!("{:.*}", dec, v);
     if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s }
 }
@@ -1109,10 +1317,11 @@ impl TableData {
     /// A `rows` x `cols` table of empty cells for theme body text `body`
     /// points high.
     pub fn new(rows: usize, cols: usize, body: f64) -> TableData {
-        let (rows, cols) = (rows.clamp(1, MAX_ROWS), cols.clamp(1, MAX_COLUMNS));
+        let cols = cols.clamp(1, MAX_COLUMNS);
+        let rows = rows.clamp(1, MAX_ROWS.min(MAX_CELLS / cols));
         TableData {
-            cells: vec![vec![Cell::default(); cols]; rows],
-            columns: vec![Column { width: (body * COLUMN_EMS).round(), format: DataFormat::default() }; cols],
+            cells: (0..rows).map(|_| CellRow::empty(cols)).collect(),
+            columns: (0..cols).map(|_| Column::new((body * COLUMN_EMS).round())).collect(),
             rows: vec![Row::new((body * ROW_EMS).round()); rows],
             merges: vec![],
             header_rows: 1.min(rows as u8),
@@ -1348,7 +1557,7 @@ impl TableData {
         let h = height.unwrap_or_else(|| self.rows.get(at.min(self.rows.len().saturating_sub(1))).map(|r| r.height).unwrap_or(48.0));
         let rows_before = self.n_rows();
         for _ in 0..n {
-            self.cells.insert(at, vec![Cell::default(); cols]);
+            self.cells.insert(at, CellRow::empty(cols));
             self.rows.insert(at, Row::new(h));
         }
         let hdr = self.header_rows as usize;
@@ -1389,7 +1598,7 @@ impl TableData {
             }
         }
         for _ in 0..n {
-            self.columns.insert(at, Column { width: w, format: DataFormat::default() });
+            self.columns.insert(at, Column::new(w));
         }
         if at < self.header_columns as usize {
             self.header_columns = (self.header_columns as usize + n).min(MAX_HEADERS as usize) as u8;
@@ -1470,10 +1679,11 @@ impl TableData {
         }
         let old_cells = std::mem::take(&mut self.cells);
         let old_rows = std::mem::take(&mut self.rows);
-        let mut cells: Vec<Option<Vec<Cell>>> = old_cells.into_iter().map(Some).collect();
+        let cols = self.columns.len();
+        let mut cells: Vec<Option<CellRow>> = old_cells.into_iter().map(Some).collect();
         let mut rows: Vec<Option<Row>> = old_rows.into_iter().map(Some).collect();
         for &o in order {
-            self.cells.push(cells[o].take().unwrap_or_default());
+            self.cells.push(cells[o].take().unwrap_or_else(|| CellRow::empty(cols)));
             self.rows.push(rows[o].take().unwrap_or(Row::new(48.0)));
         }
         self.merges = merges;
@@ -1516,12 +1726,11 @@ impl TableData {
             }
         }
         for row in &mut self.cells {
-            let old = std::mem::take(row);
-            let mut old: Vec<Option<Cell>> = old.into_iter().map(Some).collect();
-            *row = order.iter().map(|&o| old[o].take().unwrap_or_default()).collect();
+            let moved: Vec<Cell> = order.iter().map(|&o| row.get(o).cloned().unwrap_or_default()).collect();
+            row.set(moved);
         }
         let mut cols: Vec<Option<Column>> = std::mem::take(&mut self.columns).into_iter().map(Some).collect();
-        self.columns = order.iter().map(|&o| cols[o].take().unwrap_or(Column { width: 200.0, format: DataFormat::default() })).collect();
+        self.columns = order.iter().map(|&o| cols[o].take().unwrap_or_else(|| Column::new(200.0))).collect();
         self.merges = merges;
         self.cell_formats = formats;
         self.compact_formats();
@@ -1705,8 +1914,8 @@ impl TableData {
     /// out of range, unusable sizes, merges outside it or overlapping.
     pub fn check(&self) -> Result<(), String> {
         let (rows, cols) = (self.n_rows(), self.n_cols());
-        if rows == 0 || cols == 0 || rows > MAX_ROWS || cols > MAX_COLUMNS {
-            return Err(format!("a table has 1 to {MAX_ROWS} rows and 1 to {MAX_COLUMNS} columns"));
+        if !fits_limits(rows, cols) {
+            return Err(format!("a table has 1 to {MAX_ROWS} rows, 1 to {MAX_COLUMNS} columns and at most {MAX_CELLS} cells"));
         }
         if self.rows.len() != rows || self.cells.iter().any(|r| r.len() != cols) {
             return Err("every row needs one cell per column, and rows one height each".into());
@@ -1740,17 +1949,29 @@ impl TableData {
     pub fn repair(&mut self, body: f64) -> bool {
         let before = self.clone();
         if self.cells.is_empty() {
-            self.cells.push(vec![]);
+            self.cells.push(CellRow::new(vec![]));
         }
         self.cells.truncate(MAX_ROWS);
         let cols = self.cells.iter().map(|r| r.len()).max().unwrap_or(0).max(self.columns.len()).clamp(1, MAX_COLUMNS);
+        // Over the cell limit: the rows past it go.
+        self.cells.truncate((MAX_CELLS / cols).max(1));
         for row in &mut self.cells {
-            row.resize(cols, Cell::default());
+            if row.len() != cols {
+                row.resize(cols, Cell::default());
+            }
+            if row.iter().any(|c| input_problem(&c.input).is_some()) {
+                for c in row.iter_mut() {
+                    if input_problem(&c.input).is_some() {
+                        let cap = if c.is_formula() { MAX_FORMULA } else { MAX_INPUT };
+                        c.input = c.input.chars().take(cap).collect();
+                    }
+                }
+            }
         }
         let col_w = (body * COLUMN_EMS).round();
         self.columns.truncate(cols);
         while self.columns.len() < cols {
-            self.columns.push(Column { width: col_w, format: DataFormat::default() });
+            self.columns.push(Column::new(col_w));
         }
         for c in &mut self.columns {
             if !(c.width.is_finite() && c.width > 0.0 && c.width <= 1e9) {
@@ -1906,29 +2127,110 @@ pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 // ----------------------------------------------------------------------
 // Tab- and comma-separated text
 
+/// A limit that input went over. The app words each one (ftl); the API
+/// says [`Limit::message`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Limit {
+    Rows,
+    Columns,
+    Cells,
+    /// A cell's input over [`MAX_INPUT`] characters.
+    Input,
+    /// A formula over [`MAX_FORMULA`] characters.
+    Formula,
+    /// Pasted or imported text over [`MAX_PASTE_BYTES`].
+    Bytes,
+}
+
+impl Limit {
+    pub fn message(self) -> String {
+        match self {
+            Limit::Rows => format!("a table has at most {MAX_ROWS} rows"),
+            Limit::Columns => format!("a table has at most {MAX_COLUMNS} columns"),
+            Limit::Cells => format!("a table has at most {MAX_CELLS} cells"),
+            Limit::Input => format!("a cell holds at most {MAX_INPUT} characters"),
+            Limit::Formula => format!("a formula is at most {MAX_FORMULA} characters"),
+            Limit::Bytes => format!("text for a table is at most {} MB", MAX_PASTE_BYTES >> 20),
+        }
+    }
+    /// The limit `rows` x `cols` goes over, if any.
+    pub fn of_size(rows: usize, cols: usize) -> Option<Limit> {
+        if rows > MAX_ROWS {
+            Some(Limit::Rows)
+        } else if cols > MAX_COLUMNS {
+            Some(Limit::Columns)
+        } else if rows.saturating_mul(cols) > MAX_CELLS {
+            Some(Limit::Cells)
+        } else {
+            None
+        }
+    }
+    /// The limit an input goes over, if any.
+    pub fn of_input(s: &str) -> Option<Limit> {
+        input_problem(s).map(|p| match p {
+            InputProblem::TooLong => Limit::Input,
+            InputProblem::FormulaTooLong => Limit::Formula,
+        })
+    }
+}
+
+/// Most text read as a table (a paste, `add_table`'s csv): about what
+/// 100,000 short cells take, with room to spare.
+pub const MAX_PASTE_BYTES: usize = 16 << 20;
+
 /// Rows of fields from tab-separated text (what Numbers and Excel copy),
 /// or comma-separated when there is no tab. Quoted fields may hold the
 /// separator, quotes ("") and line breaks. Short rows are padded.
-pub fn parse_delimited(text: &str) -> Vec<Vec<String>> {
+///
+/// Bounded: text over [`MAX_PASTE_BYTES`] is refused before it is read,
+/// and reading stops at the first row, column, cell or field over the
+/// limits, so a huge paste never becomes a huge grid.
+pub fn parse_delimited(text: &str) -> Result<Vec<Vec<String>>, Limit> {
+    if text.len() > MAX_PASTE_BYTES {
+        return Err(Limit::Bytes);
+    }
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let sep = if text.contains('\t') { '\t' } else { ',' };
     let mut rows: Vec<Vec<String>> = vec![];
     let mut row: Vec<String> = vec![];
     let mut field = String::new();
+    let mut field_chars = 0usize;
+    let mut cells = 0usize;
     let mut quoted = false;
     let mut at_start = true;
     let mut it = text.chars().peekable();
+    // Ends a field: counted against the limits.
+    let mut end_field = |row: &mut Vec<String>, field: &mut String, chars: &mut usize| -> Result<(), Limit> {
+        if let Some(l) = Limit::of_input(field) {
+            return Err(l);
+        }
+        row.push(std::mem::take(field));
+        *chars = 0;
+        cells += 1;
+        if row.len() > MAX_COLUMNS {
+            return Err(Limit::Columns);
+        }
+        if cells > MAX_CELLS {
+            return Err(Limit::Cells);
+        }
+        Ok(())
+    };
     while let Some(ch) = it.next() {
+        if field_chars > MAX_INPUT {
+            return Err(if is_formula(&field) { Limit::Formula } else { Limit::Input });
+        }
         if quoted {
             if ch == '"' {
                 if it.peek() == Some(&'"') {
                     field.push('"');
+                    field_chars += 1;
                     it.next();
                 } else {
                     quoted = false;
                 }
             } else {
                 field.push(ch);
+                field_chars += 1;
             }
             continue;
         }
@@ -1938,30 +2240,41 @@ pub fn parse_delimited(text: &str) -> Vec<Vec<String>> {
                 at_start = false;
             }
             c if c == sep => {
-                row.push(std::mem::take(&mut field));
+                end_field(&mut row, &mut field, &mut field_chars)?;
                 at_start = true;
             }
             '\r' => {}
             '\n' => {
-                row.push(std::mem::take(&mut field));
+                end_field(&mut row, &mut field, &mut field_chars)?;
                 rows.push(std::mem::take(&mut row));
+                if rows.len() > MAX_ROWS {
+                    return Err(Limit::Rows);
+                }
                 at_start = true;
             }
             c => {
                 field.push(c);
+                field_chars += 1;
                 at_start = false;
             }
         }
     }
     if !field.is_empty() || !row.is_empty() {
-        row.push(field);
+        end_field(&mut row, &mut field, &mut field_chars)?;
         rows.push(row);
+        if rows.len() > MAX_ROWS {
+            return Err(Limit::Rows);
+        }
     }
     let w = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    // Ragged rows are padded: the padded grid must fit too.
+    if let Some(l) = Limit::of_size(rows.len(), w) {
+        return Err(l);
+    }
     for r in &mut rows {
         r.resize(w, String::new());
     }
-    rows
+    Ok(rows)
 }
 
 /// Rows of fields as tab-separated text, quoting fields that need it.
@@ -1991,7 +2304,9 @@ pub fn to_tsv(rows: &[Vec<String>]) -> String {
 /// with a tab in it.
 pub fn looks_tabular(text: &str) -> bool {
     text.contains('\t') && {
-        let rows = parse_delimited(text);
+        // Only the first lines matter: a tab and two fields.
+        let head: String = text.lines().take(2).collect::<Vec<_>>().join("\n");
+        let rows = parse_delimited(&head).unwrap_or_default();
         rows.len() * rows.first().map_or(0, |r| r.len()) >= 2
     }
 }
@@ -2106,7 +2421,7 @@ mod tests {
         t.delete_rows(n - 1, 1);
         assert_eq!(t.footer_rows, 0);
         t.delete_columns(0, 1);
-        assert_eq!(t.merges.len(), 0, "a merge left one column wide goes");
+        assert_eq!(t.merges[0].a1(), "A3:A5", "a merge one column wide stays (it is two rows tall)");
     }
 
     #[test]
@@ -2119,7 +2434,9 @@ mod tests {
         assert_eq!(t.sort_order(0, false), [0, 2, 1, 4, 3, 5], "numbers by value, empty last, header and footer stay");
         assert_eq!(t.sort_order(0, true), [0, 4, 1, 2, 3, 5]);
         t.columns[0].format.kind = CellType::Text;
-        assert_eq!(t.sort_order(0, false), [0, 1, 4, 2, 3, 5], "as text: 10, 100, 9");
+        assert_eq!(t.sort_order(0, false), [0, 2, 1, 4, 3, 5], "as text, in natural order: 9, 10, 100");
+        t.cells[1][0] = Cell::new("b");
+        assert_eq!(t.sort_order(0, false), [0, 2, 4, 1, 3, 5], "numbers as text before letters");
         assert_eq!(natural_cmp("Item 2", "Item 10"), std::cmp::Ordering::Less);
     }
 
@@ -2136,10 +2453,10 @@ mod tests {
 
     #[test]
     fn delimited_text_round_trips() {
-        let rows = parse_delimited("Region\tQ2\nNorth\t\"1,240\"\n\"a\tb\"\t\"say \"\"hi\"\"\"\n");
+        let rows = parse_delimited("Region\tQ2\nNorth\t\"1,240\"\n\"a\tb\"\t\"say \"\"hi\"\"\"\n").unwrap();
         assert_eq!(rows, [vec!["Region", "Q2"], vec!["North", "1,240"], vec!["a\tb", "say \"hi\""]]);
-        assert_eq!(parse_delimited(&to_tsv(&rows)), rows);
-        assert_eq!(parse_delimited("a,b\nc"), [vec!["a", "b"], vec!["c", ""]]);
+        assert_eq!(parse_delimited(&to_tsv(&rows)).unwrap(), rows);
+        assert_eq!(parse_delimited("a,b\nc").unwrap(), [vec!["a", "b"], vec!["c", ""]]);
         assert!(looks_tabular("a\tb"));
         assert!(!looks_tabular("just words"));
     }
