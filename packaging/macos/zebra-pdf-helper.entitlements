@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The PDF helper (Contents/MacOS/zebra-pdf-helper) in a Mac App Store
+     build only. Zebra starts it as a child process, and it inherits the
+     app's sandbox: Apple requires exactly these two entitlements on such a
+     helper ("Embedding a command-line tool in a sandboxed app"); any other
+     can make it trap at launch. Known limit: an inherited sandbox can't be
+     narrower than the app's, so the helper has the app's network access
+     too (an XPC service could drop it; not done yet).
+     Other builds: the app isn't sandboxed and neither is the helper (an
+     inheriting helper with no sandbox to inherit traps), see
+     scripts/bundle-macos.sh. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.app-sandbox</key><true/>
+  <key>com.apple.security.inherit</key><true/>
+</dict>
+</plist>
