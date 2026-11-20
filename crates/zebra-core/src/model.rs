@@ -677,9 +677,9 @@ pub struct ImageData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<SymbolLook>,
     /// Set when the picture is a page of an imported PDF. `asset` is then
-    /// a picture of the page made at import (thumbnails, the web player
-    /// and exports draw that); the app draws the page itself from the PDF,
-    /// so it stays sharp at any zoom.
+    /// a picture of the page made at import (thumbnails and the web
+    /// player draw that); the app draws the page itself from the PDF, so
+    /// it stays sharp at any zoom and in exports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<PageRef>,
 }

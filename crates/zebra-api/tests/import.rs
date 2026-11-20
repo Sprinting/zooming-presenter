@@ -22,11 +22,13 @@ fn engine() -> bool {
             unsafe { std::env::set_var("ZEBRA_PDFIUM", p) };
         }
     }
-    let ok = zebra_import::pdf::available();
-    if !ok {
+    if std::env::var_os("ZEBRA_PDFIUM").is_none() {
         eprintln!("SKIPPED: PDFium not found (scripts/fetch-pdfium.sh linux-x64, or ZEBRA_PDFIUM)");
+        return false;
     }
-    ok
+    assert!(zebra_pdf::helper_path().is_some(), "build the PDF helper first: cargo build -p zebra-pdf --bin zebra-pdf-helper");
+    assert!(zebra_import::pdf::available(), "the PDF helper can't load PDFium");
+    true
 }
 
 fn rpc_err(r: Result<Value, ClientError>) -> zebra_api::RpcError {
@@ -99,6 +101,37 @@ fn import_adds_pages_as_one_undo_step() {
     // Beyond the last page.
     c.call("describe", json!({})).unwrap();
     assert_eq!(rpc_err(c.call("import", json!({"path": pdf, "from": 9}))).kind(), "io");
+
+    // M1: a PDF of more than 200 pages needs `to`, and at most 2,000
+    // pages come in at a time; nothing is drawn before the refusal.
+    let atlas = dir.join("Atlas.pdf");
+    std::fs::write(&atlas, zebra_pdf::samples::many_pages(30_000)).unwrap();
+    c.call("describe", json!({})).unwrap();
+    for ask in [json!({"path": atlas}), json!({"path": atlas, "from": 1}), json!({"path": atlas, "from": 1, "to": 2001})] {
+        let e = rpc_err(c.call("import", ask.clone()));
+        assert_eq!(e.kind(), "too_many_pages", "{ask}: {e}");
+        assert_eq!(e.data["pages"], 30_000);
+        assert!(e.message.contains("30000 pages") && e.message.contains("2000"), "{e}");
+        assert!(e.hint_text().unwrap().contains(r#""to":200"#), "{e:?}");
+    }
+    let out = c.call("import", json!({"path": atlas, "from": 29_998, "to": 30_000})).unwrap();
+    assert_eq!(out["pages"], 3, "{out}");
+
+    // The page PDFium spends 12 GB on: a placeholder and a note, the
+    // headless server still standing.
+    let slow = dir.join("slow.pdf");
+    std::fs::write(&slow, zebra_pdf::samples::slow_page()).unwrap();
+    c.call("describe", json!({})).unwrap();
+    let out = c.call("import", json!({"path": slow})).unwrap();
+    assert_eq!(out["pages"], 1, "{out}");
+    let notes = out["notes"].as_array().unwrap();
+    assert!(notes.iter().any(|n| n["note"] == "placeholder" && n["count"] == 1), "{out}");
+    // Again this session: the page is given up on at once.
+    c.call("describe", json!({})).unwrap();
+    let t = std::time::Instant::now();
+    let out = c.call("import", json!({"path": slow})).unwrap();
+    assert!(out["notes"].as_array().unwrap().iter().any(|n| n["note"] == "placeholder"), "{out}");
+    assert!(t.elapsed() < std::time::Duration::from_secs(2), "{:?}", t.elapsed());
 }
 
 #[test]
