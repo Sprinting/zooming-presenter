@@ -161,6 +161,8 @@ pub struct ZebraApp {
     /// Cells copied from a table: the text put on the clipboard and the
     /// cells' inputs, so pasting them back into a table keeps formulas.
     pub table_clip: Option<crate::table_ui::TableClip>,
+    /// The Chart Data window, while it is open.
+    pub chart_data: Option<crate::chart_ui::DataWindow>,
     pub paste_count: u32,
     pub recent: Vec<PathBuf>,
     pub toast: Option<Toast>,
@@ -431,6 +433,7 @@ impl ZebraApp {
             clipboard: Default::default(),
             clipboard_marker: None,
             table_clip: None,
+            chart_data: None,
             paste_count: 0,
             recent,
             toast: None,
@@ -908,6 +911,11 @@ impl ZebraApp {
                 }
             }
             InsertTable => crate::table_ui::insert_table(self, zebra_core::table::TableStyle::default()),
+            InsertChart(t) => {
+                if !crate::chart_ui::chart_from_table(self, t) {
+                    crate::chart_ui::insert_chart(self, t);
+                }
+            }
             InsertImage => {
                 let c = self.canvas_center_world();
                 crate::pickers::ask(self, crate::pickers::Pick::InsertImage(c));
@@ -1736,6 +1744,7 @@ impl ZebraApp {
         if self.editor.view.mode == Mode::Present {
             crate::present::ui(self, ui);
         } else {
+            crate::chart_ui::escape(self, &ctx);
             self.handle_shortcuts(&ctx);
             crate::panels::layout(self, ui);
             // A title typed in the inspector, then a click on the canvas:
@@ -1748,6 +1757,7 @@ impl ZebraApp {
             }
             crate::presenting::playback_window(self, &ctx);
             crate::theme_editor::window(self, &ctx);
+            crate::chart_ui::window(self, &ctx);
             crate::welcome::layout_gallery(self, &ctx);
             crate::welcome::diagram_gallery(self, &ctx);
             crate::credits::window(self, &ctx);

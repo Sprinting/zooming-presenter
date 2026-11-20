@@ -122,6 +122,7 @@ pub fn error(e: &zebra_core::ZError) -> String {
         "not_empty" => t!("app-error-not-empty"),
         "not_found" => t!("app-error-not-found"),
         "too_big" | "too_large" => t!("app-error-too-big"),
+        "linked" => t!("app-error-linked"),
         zebra_core::beta::CODE => t!("app-error-beta-off"),
         _ => t!("app-error-other"),
     }
@@ -162,6 +163,21 @@ fn command(c: &Command) -> String {
         Command::Duplicate { .. } => t!("history-duplicate"),
         Command::ZOrder { .. } => t!("history-change-order"),
         Command::AddTable { .. } => t!("history-add-table"),
+        Command::AddChart { .. } => t!("history-add-chart"),
+        Command::SetChartData { .. } => t!("history-edit-chart-data"),
+        Command::FormatChart { format, .. } => {
+            // As zebra-core's label: a type or a style alone says so.
+            let only = |set: bool| set && *format == zebra_core::command::ChartFormat { chart_type: format.chart_type, look: format.look, ..Default::default() };
+            if only(format.chart_type.is_some() && format.look.is_none()) {
+                t!("history-change-chart-type")
+            } else if only(format.look.is_some() && format.chart_type.is_none()) {
+                t!("history-change-chart-style")
+            } else {
+                t!("history-format-chart")
+            }
+        }
+        Command::LinkChart { .. } => t!("history-link-chart"),
+        Command::UnlinkChart { .. } => t!("history-unlink-chart"),
         Command::SetCells { values, .. } if values.len() * values.first().map_or(0, |r| r.len()) <= 1 => t!("history-edit-cell"),
         Command::SetCells { .. } => t!("history-edit-cells"),
         Command::InsertRows { count, .. } => {

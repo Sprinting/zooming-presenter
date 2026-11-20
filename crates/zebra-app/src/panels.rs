@@ -413,6 +413,8 @@ fn centre_group(app: &mut ZebraApp, ui: &mut Ui, p: &Palette) {
             ui.close();
         }
     });
+    let ch = w::toolbar_item(ui, Icon::Chart, &crate::t!("toolbar-chart"), ToolbarState { menu: true, ..st() }).on_hover_text(&crate::t!("toolbar-chart-tip"));
+    egui::Popup::menu(&ch).style(crate::widgets::menu_style).width(316.0).show(|ui| crate::chart_ui::toolbar_menu(ui, app));
     let md = w::toolbar_item(ui, Icon::Media, &crate::t!("toolbar-media"), ToolbarState { menu: true, ..st() }).on_hover_text(&crate::t!("toolbar-media-tip"));
     egui::Popup::menu(&md).style(crate::widgets::menu_style).width(200.0).show(|ui| {
         if menu_icon_row(ui, Icon::Image, &crate::t!("toolbar-media-image"), false).clicked() {

@@ -36,6 +36,8 @@ pub enum Icon {
     Shapes,
     /// A table: a grid with a header row.
     Table,
+    /// A chart: three columns on a base line.
+    Chart,
     Media,
     Theme,
     Share,
@@ -85,7 +87,7 @@ pub enum Icon {
 pub const ALL: &[Icon] = &[
     Icon::Select, Icon::Hand, Icon::Text, Icon::Frame(FrameStyle::Bracket), Icon::Frame(FrameStyle::Circle), Icon::Frame(FrameStyle::Rectangle),
     Icon::Frame(FrameStyle::Invisible), Icon::Rect, Icon::Ellipse, Icon::Line, Icon::Arrow, Icon::Pen, Icon::Image, Icon::Undo, Icon::Redo,
-    Icon::Plus, Icon::Minus, Icon::Home, Icon::Zoom, Icon::AddStep, Icon::Play, Icon::Shapes, Icon::Table, Icon::Media, Icon::Theme, Icon::Share,
+    Icon::Plus, Icon::Minus, Icon::Home, Icon::Zoom, Icon::AddStep, Icon::Play, Icon::Shapes, Icon::Table, Icon::Chart, Icon::Media, Icon::Theme, Icon::Share,
     Icon::Sparkles, Icon::Format, Icon::SidebarLeft, Icon::ChevronDown, Icon::ChevronRight, Icon::ChevronLeft, Icon::UpDown, Icon::Check, Icon::Close,
     Icon::Gear, Icon::Lock, Icon::Unlock, Icon::Trash, Icon::Note, Icon::Video, Icon::Path, Icon::AlignLeft, Icon::AlignCenter,
     Icon::AlignRight, Icon::List, Icon::Bold, Icon::Italic, Icon::Underline, Icon::Group, Icon::Activity, Icon::Pause, Icon::Warning, Icon::Keyboard,
@@ -212,6 +214,12 @@ pub fn paint_icon(painter: &Painter, r: Rect, icon: Icon, c: Color32) {
             painter.add(line(&[(-8.5, 2.2), (8.5, 2.2)]));
             painter.add(line(&[(-2.8, -2.6), (-2.8, 7.0)]));
             painter.add(line(&[(2.8, -2.6), (2.8, 7.0)]));
+        }
+        Icon::Chart => {
+            painter.add(line(&[(-8.5, 7.5), (8.5, 7.5)]));
+            painter.add(rr(-6.8, -1.0, -2.6, 7.5, 0.6));
+            painter.add(rr(-2.1, -7.5, 2.1, 7.5, 0.6));
+            painter.add(rr(2.6, -4.0, 6.8, 7.5, 0.6));
         }
         Icon::Image | Icon::Media => {
             painter.add(rr(-8.5, -6.5, 8.5, 6.5, 2.0));

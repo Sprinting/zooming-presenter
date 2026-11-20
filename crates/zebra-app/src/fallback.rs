@@ -127,6 +127,15 @@ pub fn paint(
                 painter.line_segment([local(-hw, -hh), local(hw, hh)], Stroke::new(1.0, Color32::from_gray(190)));
                 painter.line_segment([local(hw, -hh), local(-hw, hh)], Stroke::new(1.0, Color32::from_gray(190)));
             }
+            ElementKind::Chart(c) => {
+                // A box with the chart's title: the drawing is zebra-render's.
+                painter.add(Shape::convex_polygon(quad(), col("theme:background"), Stroke::new(1.0, col("theme:frame").gamma_multiply(0.4))));
+                let size = 14.0 * px;
+                if (3.0..400.0).contains(&size) {
+                    let galley = painter.layout_no_wrap(crate::chart_ui::fallback_label(c), egui::FontId::proportional(size), col("theme:body"));
+                    painter.galley(w2s(e.transform.center()) - galley.size() / 2.0, galley, Color32::PLACEHOLDER);
+                }
+            }
             ElementKind::Table(t) => {
                 // The grid and the text of up to 400 cells: enough to see
                 // what's there. The real drawing is zebra-render's.

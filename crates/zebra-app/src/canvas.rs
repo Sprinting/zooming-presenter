@@ -736,7 +736,7 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
                 }
                 Some(_) => {}
                 None => {
-                    if !(tool == Tool::Select && crate::table_ui::double_click(app, p)) {
+                    if !(tool == Tool::Select && (crate::table_ui::double_click(app, p) || crate::chart_ui::double_click(app, p))) {
                         double_click(app, p)
                     }
                 }

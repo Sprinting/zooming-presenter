@@ -53,6 +53,7 @@ pub fn spec() -> Vec<(String, Vec<Item>)> {
                 A(SetTool(Tool::Arrow)),
                 A(SetTool(Tool::Pen)),
                 A(InsertTable),
+                Sub(crate::t!("menu-chart"), zebra_core::chart::ChartType::ALL.iter().map(|t| A(InsertChart(*t))).collect()),
                 Sep,
                 A(InsertImage),
                 A(InsertVideo),
@@ -244,6 +245,10 @@ pub fn state(app: &ZebraApp, a: &Action) -> ItemState {
         }
         SetTool(t) => {
             checked = Some(app.editor.view.tool == *t);
+            true
+        }
+        InsertChart(t) => {
+            title = crate::chart_ui::type_name(*t);
             true
         }
         SetFrameStyle(s) => {
