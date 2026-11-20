@@ -11,6 +11,10 @@
 //! drawn, and the waker asks for a repaint once it lands. Captures and PDF
 //! export decode synchronously so their output is complete.
 //!
+//! Made pictures (tiles of a PDF page, drawn by the PDF helper, which may
+//! take up to its deadline on a bad page) have a worker of their own: a
+//! slow page never holds up the pictures, and never the UI thread.
+//!
 //! Animated GIFs decode every frame at the chosen level, capped at
 //! [`GIF_BUDGET`] bytes per GIF by stepping down a level.
 //!
@@ -252,7 +256,10 @@ struct Shared {
     /// never evicted.
     generation: AtomicU64,
     waker: Mutex<Option<Waker>>,
+    /// Pictures to decode (two workers).
     jobs: OnceLock<Mutex<Sender<Job>>>,
+    /// Pictures to make (one worker: PDF pages are drawn one at a time).
+    made: OnceLock<Mutex<Sender<Job>>>,
 }
 
 struct Job {
@@ -288,6 +295,7 @@ impl Default for ImageCache {
                 generation: AtomicU64::new(1),
                 waker: Mutex::new(None),
                 jobs: OnceLock::new(),
+                made: OnceLock::new(),
             }),
         }
     }
@@ -449,15 +457,16 @@ impl ImageCache {
     }
 
     fn enqueue(&self, job: Job) {
-        let tx = self.shared.jobs.get_or_init(|| {
+        // Two decode workers: enough to keep up with a pan across a photo
+        // deck without competing with the UI thread for cores.
+        let (cell, name, workers) = if job.make.is_some() { (&self.shared.made, "zebra-pages", 1) } else { (&self.shared.jobs, "zebra-decode", 2) };
+        let tx = cell.get_or_init(|| {
             let (tx, rx) = channel::<Job>();
             let rx = Arc::new(Mutex::new(rx));
-            // Two workers: enough to keep up with a pan across a photo
-            // deck without competing with the UI thread for cores.
-            for n in 0..2 {
+            for n in 0..workers {
                 let rx = rx.clone();
                 let weak = Arc::downgrade(&self.shared);
-                let _ = std::thread::Builder::new().name(format!("zebra-decode-{n}")).spawn(move || {
+                let _ = std::thread::Builder::new().name(format!("{name}-{n}")).spawn(move || {
                     loop {
                         let job = match rx.lock().unwrap_or_else(|e| e.into_inner()).recv() {
                             Ok(j) => j,
@@ -1078,6 +1087,39 @@ mod tests {
         assert!(c.get_made("tile:fine", false, fine.clone()).is_none());
         wait(4);
         assert!(c.peek("tile:fine").is_some(), "a worker is still decoding");
+    }
+
+    /// A PDF page whose helper hangs (up to its deadline) holds up
+    /// neither the pictures nor whoever asked for the tile.
+    #[test]
+    fn a_hung_tile_holds_up_neither_pictures_nor_the_caller() {
+        let c = ImageCache::default();
+        let go = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        for i in 0..4 {
+            let go = go.clone();
+            let hung: Make = Arc::new(move || {
+                while !go.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Some(ImageLevel::from_rgba("t", 1, 1, vec![0, 0, 0, 255]))
+            });
+            let t0 = std::time::Instant::now();
+            assert!(c.get_made(&format!("tile:hung{i}"), false, hung).is_none());
+            assert!(t0.elapsed().as_millis() < 100, "asking for a tile waited");
+        }
+        let a = png(256, 256);
+        assert!(c.get("photo", "png", &a, (256, 256), 0, false).is_none());
+        let t0 = std::time::Instant::now();
+        while c.get("photo", "png", &a, (256, 256), 0, false).is_none() {
+            assert!(t0.elapsed().as_secs() < 10, "a picture waited behind a hung tile");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        go.store(true, Ordering::SeqCst);
+        let t0 = std::time::Instant::now();
+        while c.peek("tile:hung3").is_none() {
+            assert!(t0.elapsed().as_secs() < 10, "the tiles never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     #[test]

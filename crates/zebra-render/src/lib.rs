@@ -120,8 +120,9 @@ impl Renderer {
         Renderer { fonts: text::Fonts::new(), images: images::ImageCache::default(), page_raster: Default::default(), table_looks: Default::default() }
     }
 
-    /// Give the renderer a way to draw PDF pages (the app has PDFium; the
-    /// web player has none and draws each page's picture).
+    /// Give the renderer a way to draw PDF pages (the app draws them in
+    /// its PDF helper process; the web player has none and draws each
+    /// page's picture).
     pub fn set_page_raster(&self, f: Option<pages::PageRaster>) {
         *self.page_raster.write().unwrap_or_else(|e| e.into_inner()) = f;
     }

@@ -20,10 +20,12 @@ use crate::widgets as w;
 
 /// Where an import is: the sheet shows one of these.
 pub enum Flow {
-    /// Opening the file to count its pages.
-    Reading { path: PathBuf, rx: Receiver<Result<Box<dyn Reader>, ImportError>> },
-    /// Which pages? (`slides`: a PowerPoint file, counted in slides.)
-    Choose { path: PathBuf, reader: Box<dyn Reader>, pages: usize, all: bool, from: f64, to: f64, slides: bool },
+    /// Opening the file to count its pages (`ctl` cancels).
+    Reading { path: PathBuf, rx: Receiver<Result<Box<dyn Reader>, ImportError>>, ctl: Control },
+    /// Which pages? (`slides`: a PowerPoint file, counted in slides.
+    /// `many`: a PDF of more than [`zebra_import::pdf::ASK_ABOVE_PAGES`]
+    /// pages, asked about with a range filled in and no "All pages".)
+    Choose { path: PathBuf, reader: Box<dyn Reader>, pages: usize, all: bool, from: f64, to: f64, slides: bool, many: bool },
     /// Reading the pages.
     Running { path: PathBuf, rx: Receiver<Result<ImportedDeck, ImportError>>, ctl: Control, total: usize, slides: bool },
 }
@@ -53,12 +55,14 @@ pub fn start(app: &mut ZebraApp, path: PathBuf) {
     let (tx, rx) = std::sync::mpsc::channel();
     let ctx = app.ctx.clone();
     let p = path.clone();
+    let ctl = Control::default();
+    let c = ctl.clone();
     let spawned = std::thread::Builder::new().name("zebra-import-open".into()).spawn(move || {
-        let _ = tx.send(zebra_import::open(&p));
+        let _ = tx.send(zebra_import::open_with(&p, &c));
         ctx.request_repaint();
     });
     match spawned {
-        Ok(_) => app.import = Some(Flow::Reading { path, rx }),
+        Ok(_) => app.import = Some(Flow::Reading { path, rx, ctl }),
         Err(e) => failed(app, &path, ImportError::Read(e.to_string())),
     }
 }
@@ -75,6 +79,9 @@ fn failed(app: &mut ZebraApp, path: &Path, e: ImportError) {
         ImportError::TooBig => crate::t!("import-error-too-big"),
         ImportError::NoEngine(_) => crate::t!("import-error-no-engine"),
         ImportError::Read(_) => crate::t!("import-error-read"),
+        ImportError::TooDemanding => crate::t!("import-error-too-demanding"),
+        // Only the API asks for a range this way; the sheet asks itself.
+        ImportError::NeedRange { .. } => crate::t!("import-error-read"),
         ImportError::Cancelled => return,
         ImportError::BetaOff => {
             crate::beta_ui::offer(app, zebra_core::beta::BetaFeature::PptxImport, crate::beta_ui::Pending::Import(path.to_path_buf()));
@@ -115,6 +122,7 @@ pub fn note_lines(notes: &BTreeMap<ImportNote, usize>, slides: &BTreeMap<ImportN
                 (ImportNote::Flip, _) => crate::t!("import-note-flip", count = c),
                 (ImportNote::Gradient, _) => crate::t!("import-note-gradient", count = c),
                 (ImportNote::Other, _) => crate::t!("import-note-other", count = c),
+                (ImportNote::Placeholder, _) => crate::t!("import-note-placeholder", count = c),
             }
         })
         .collect()
@@ -147,11 +155,41 @@ pub fn finish(app: &mut ZebraApp, path: &Path, deck: ImportedDeck) {
     }
 }
 
+/// The page sheet for a file of `pages` pages: every page chosen, or for a
+/// big PDF the first [`zebra_import::pdf::ASK_ABOVE_PAGES`] (M1: it asks
+/// before importing, the range filled in).
+pub fn choose(path: PathBuf, reader: Box<dyn Reader>, pages: usize, slides: bool) -> Flow {
+    let many = !slides && pages > zebra_import::pdf::ASK_ABOVE_PAGES;
+    let to = if many { zebra_import::pdf::ASK_ABOVE_PAGES } else { pages };
+    Flow::Choose { path, reader, pages, all: !many, from: 1.0, to: to as f64, slides, many }
+}
+
+/// The pages a sheet would import (1-based, inclusive). Any number of
+/// pages can be imported at once, as Preview opens any number.
+fn chosen(pages: usize, all: bool, from: f64, to: f64) -> (usize, usize) {
+    let (first, last) = if all { (1, pages) } else { (from.round().max(1.0) as usize, (to.round().max(1.0) as usize).min(pages.max(1))) };
+    (first.min(last), last)
+}
+
+/// `n` with its thousands grouped, as the person's numbers are written:
+/// "30,000".
+pub fn group(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// Check the workers; called every frame while an import is under way.
 fn poll(app: &mut ZebraApp) {
     let Some(flow) = app.import.take() else { return };
     app.import = match flow {
-        Flow::Reading { path, rx } => match rx.try_recv() {
+        Flow::Reading { path, rx, ctl } => match rx.try_recv() {
             Ok(Ok(reader)) => {
                 let pages = reader.page_count();
                 let slides = reader.kind() == "PowerPoint";
@@ -161,13 +199,13 @@ fn poll(app: &mut ZebraApp) {
                     crate::beta_ui::offer(app, zebra_core::beta::BetaFeature::PptxImport, crate::beta_ui::Pending::Import(path));
                     return;
                 }
-                Some(Flow::Choose { path, reader, pages, all: true, from: 1.0, to: pages as f64, slides })
+                Some(choose(path, reader, pages, slides))
             }
             Ok(Err(e)) => {
                 failed(app, &path, e);
                 None
             }
-            Err(TryRecvError::Empty) => Some(Flow::Reading { path, rx }),
+            Err(TryRecvError::Empty) => Some(Flow::Reading { path, rx, ctl }),
             Err(TryRecvError::Disconnected) => {
                 failed(app, &path, ImportError::Read("worker stopped".into()));
                 None
@@ -269,37 +307,56 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
                                 ui.add(egui::Label::new(RichText::new(crate::t!("import-reading")).font(style::ui_font(11.0)).color(p.weak)));
                             });
                         }
-                        Flow::Choose { pages, all, from, to, slides, .. } => {
+                        Flow::Choose { pages, all, from, to, slides, many, .. } => {
                             let n = *pages as i64;
-                            let (count, every) = if *slides {
-                                (crate::t!("import-slide-count", count = n), crate::t!("import-slides-all"))
+                            let opt = w::Num { min: 1.0, max: *pages as f64, width: 62.0, ..Default::default() };
+                            if *many {
+                                // M1: "This PDF has 30,000 pages." / "Import
+                                // pages [1] to [200]", the range editable.
+                                ui.vertical_centered(|ui| {
+                                    let line = crate::t!("import-many-pages", pages = group(*pages));
+                                    ui.add(egui::Label::new(RichText::new(line).font(style::ui_font(11.0)).color(p.text)).wrap().halign(egui::Align::Center));
+                                });
+                                ui.add_space(10.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(crate::t!("import-many-range")).font(style::ui_font(13.0)).color(p.text));
+                                    if w::number_field(ui, from, opt).changed() {
+                                        *to = to.max(*from);
+                                    }
+                                    ui.label(RichText::new(crate::t!("import-pages-to")).font(style::ui_font(13.0)).color(p.text));
+                                    if w::number_field(ui, to, opt).changed() {
+                                        *from = from.min(*to);
+                                    }
+                                });
                             } else {
-                                (crate::t!("import-page-count", count = n), crate::t!("import-pages-all"))
-                            };
-                            ui.vertical_centered(|ui| {
-                                ui.add(egui::Label::new(RichText::new(count).font(style::ui_font(11.0)).color(p.text)));
-                            });
-                            ui.add_space(10.0);
-                            if w::radio(ui, *all, &every).clicked() {
-                                *all = true;
+                                let (count, every) = if *slides {
+                                    (crate::t!("import-slide-count", count = n), crate::t!("import-slides-all"))
+                                } else {
+                                    (crate::t!("import-page-count", count = n), crate::t!("import-pages-all"))
+                                };
+                                ui.vertical_centered(|ui| {
+                                    ui.add(egui::Label::new(RichText::new(count).font(style::ui_font(11.0)).color(p.text)));
+                                });
+                                ui.add_space(10.0);
+                                if w::radio(ui, *all, &every).clicked() {
+                                    *all = true;
+                                }
+                                ui.add_space(2.0);
+                                ui.horizontal(|ui| {
+                                    if w::radio(ui, !*all, &crate::t!("import-pages-from")).clicked() {
+                                        *all = false;
+                                    }
+                                    if w::number_field(ui, from, opt).changed() {
+                                        *all = false;
+                                        *to = to.max(*from);
+                                    }
+                                    ui.label(RichText::new(crate::t!("import-pages-to")).font(style::ui_font(13.0)).color(p.text));
+                                    if w::number_field(ui, to, opt).changed() {
+                                        *all = false;
+                                        *from = from.min(*to);
+                                    }
+                                });
                             }
-                            ui.add_space(2.0);
-                            ui.horizontal(|ui| {
-                                if w::radio(ui, !*all, &crate::t!("import-pages-from")).clicked() {
-                                    *all = false;
-                                }
-                                let n = *pages as f64;
-                                let opt = w::Num { min: 1.0, max: n, width: 62.0, ..Default::default() };
-                                if w::number_field(ui, from, opt).changed() {
-                                    *all = false;
-                                    *to = to.max(*from);
-                                }
-                                ui.label(RichText::new(crate::t!("import-pages-to")).font(style::ui_font(13.0)).color(p.text));
-                                if w::number_field(ui, to, opt).changed() {
-                                    *all = false;
-                                    *from = from.min(*to);
-                                }
-                            });
                         }
                         Flow::Running { ctl, total, slides, .. } => {
                             let done = ctl.done().min(*total);
@@ -348,16 +405,17 @@ pub fn ui(app: &mut ZebraApp, ctx: &egui::Context) {
     match act {
         Do::Nothing => {}
         Do::Cancel => {
-            if let Some(Flow::Running { ctl, .. }) = &app.import {
-                // The worker stops at the next page and its answer is dropped.
+            if let Some(Flow::Running { ctl, .. } | Flow::Reading { ctl, .. }) = &app.import {
+                // The PDF helper is killed at once (within 25 ms), however
+                // deep it is in a page; the worker's answer is dropped.
                 ctl.cancel();
             }
             app.import = None;
         }
         Do::Import => {
             if let Some(Flow::Choose { path, reader, pages, all, from, to, .. }) = app.import.take() {
-                let (first, last) = if all { (1, pages) } else { (from.round().max(1.0) as usize, (to.round() as usize).clamp(1, pages)) };
-                run(app, path, reader, first.min(last), last);
+                let (first, last) = chosen(pages, all, from, to);
+                run(app, path, reader, first, last);
             }
         }
     }

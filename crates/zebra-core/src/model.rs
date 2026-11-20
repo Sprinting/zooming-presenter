@@ -151,6 +151,15 @@ impl AssetBytes {
             AssetBytes::Memory(_) => None,
         }
     }
+    /// An open file holding these bytes and where they are in it (start,
+    /// length), for another process to read without a copy (the PDF
+    /// helper). None for bytes in memory.
+    pub fn file_slice(&self) -> Option<std::io::Result<(std::fs::File, u64, u64)>> {
+        match self {
+            AssetBytes::Mapped { map, start, len } => Some(map.reopen().map(|f| (f, *start as u64, *len as u64))),
+            AssetBytes::Memory(_) => None,
+        }
+    }
     /// The file holding exactly these bytes and nothing else (a spill
     /// file, a media file of an autosave), if there is one: a player can
     /// open it as it is, and an autosave can link to it.
@@ -668,9 +677,9 @@ pub struct ImageData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<SymbolLook>,
     /// Set when the picture is a page of an imported PDF. `asset` is then
-    /// a picture of the page made at import (thumbnails, the web player
-    /// and exports draw that); the app draws the page itself from the PDF,
-    /// so it stays sharp at any zoom.
+    /// a picture of the page made at import (thumbnails and the web
+    /// player draw that); the app draws the page itself from the PDF, so
+    /// it stays sharp at any zoom and in exports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<PageRef>,
 }

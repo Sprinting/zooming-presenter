@@ -1687,6 +1687,14 @@ import-error-too-big = The slides you chose are too big to import.
 import-error-encrypted = The file is protected with a password.
 import-error-no-engine = Zebra's PDF reader is missing. Reinstall Zebra.
 import-error-read = The file can't be read.
+import-error-too-demanding = This PDF needs too much memory or time to open.
+import-many-pages = This PDF has { $pages } pages.
+import-many-range = Import pages
+import-note-placeholder = { $count ->
+    [one] 1 page couldn't be drawn and shows a placeholder.
+   *[other] { $count } pages couldn't be drawn and show a placeholder.
+}
+pdf-note-not-sharper = Some PDF pages can't be drawn sharper.
 
 ## Tables
 

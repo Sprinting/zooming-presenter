@@ -315,6 +315,12 @@ impl Dispatcher {
                         let what = if r.kind() == "PowerPoint" { "slides" } else { "pages" };
                         return Err(zebra_import::ImportError::Read(format!("the file has {pages} {what}; `from` is {}", o.first)));
                     }
+                    // A big PDF only with a range (`to`), as the sheet asks a
+                    // person; any range may be asked for. Nothing is drawn
+                    // before this.
+                    if r.kind() == "PDF" && last.is_none() && pages > zebra_import::pdf::ASK_ABOVE_PAGES {
+                        return Err(zebra_import::ImportError::NeedRange { pages });
+                    }
                     r.read(&o, &zebra_import::Control::default())
                 });
                 let _ = tx.send(JobDone::Import(Box::new(ImportDone { doc, origin, name, deck })));
@@ -754,7 +760,16 @@ fn import_error(e: zebra_import::ImportError) -> RpcError {
         E::Read(_) => "io",
         E::Cancelled => "cancelled",
         E::BetaOff => zebra_core::beta::CODE,
+        E::TooDemanding => "too_demanding",
+        E::NeedRange { .. } => "need_range",
     };
+    if let E::NeedRange { pages } = e {
+        let ask = zebra_import::pdf::ASK_ABOVE_PAGES;
+        let mut r = RpcError::app(code, format!("the PDF has {pages} pages: give \"to\" (and \"from\") to say which to import; any range may be imported"))
+            .hint(format!(r#"example: {{"path":"/abs/deck.pdf","from":1,"to":{}}}"#, ask.min(pages)));
+        r.data["pages"] = json!(pages);
+        return r;
+    }
     let r = RpcError::app(code, e.to_string());
     match e {
         E::NotSupported => r.hint(format!("Zebra imports: {}", zebra_import::EXTENSIONS.join(", "))),
@@ -765,6 +780,7 @@ fn import_error(e: zebra_import::ImportError) -> RpcError {
             Some(h) => r.hint(h),
             None => r,
         },
+        E::TooDemanding => r.hint("the PDF needed more memory or time than Zebra allows a PDF; nothing was imported"),
         _ => r,
     }
 }

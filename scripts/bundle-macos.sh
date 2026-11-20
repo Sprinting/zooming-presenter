@@ -1,7 +1,9 @@
 #!/bin/bash
 # Build Zebra.app with zebractl inside it (Contents/MacOS/zebractl), so an
 # agent can always run it by full path and the app can offer
-# "Install command-line tool".
+# "Install command-line tool", and the PDF helper beside it
+# (Contents/MacOS/zebra-pdf-helper: PDFium runs only there, see
+# crates/zebra-pdf).
 #
 #   scripts/bundle-macos.sh                 # signed "Zebra Dev" (test builds)
 #   ADHOC=1 scripts/bundle-macos.sh         # ad-hoc (no certificate)
@@ -9,7 +11,8 @@
 #   APPSTORE=1 SIGN_ID="Apple Distribution: …" scripts/bundle-macos.sh
 #   DSYM=1 scripts/bundle-macos.sh          # also target/Zebra.app.dSYM
 #
-# APPSTORE=1 signs both binaries with the sandbox + App Group entitlements.
+# APPSTORE=1 signs the app and zebractl with the sandbox + App Group
+# entitlements, and the PDF helper with sandbox inheritance.
 # Needs a Mac (lipo, codesign). Output: target/Zebra.app
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -40,12 +43,12 @@ if ! rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknow
   exit 1
 fi
 export ZEBRA_REQUIRE_WEB_PLAYER=1
-for t in $TARGETS; do cargo build --release --target "$t" -p zebra-app -p zebra-ctl; done
+for t in $TARGETS; do cargo build --release --target "$t" -p zebra-app -p zebra-ctl -p zebra-pdf; done
 
 APP=target/Zebra.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-for bin in zebra zebractl; do
+for bin in zebra zebractl zebra-pdf-helper; do
   lipo -create $(for t in $TARGETS; do echo "target/$t/release/$bin"; done) -output "$APP/Contents/MacOS/$bin"
   if [ "${DSYM:-0}" = 1 ]; then
     for t in $TARGETS; do
@@ -112,6 +115,38 @@ else
 fi
 # Nested code is signed first, with the same identity (library validation).
 codesign --force --options runtime ${SIGN_ID:+--timestamp} --sign "$ID" "$APP/Contents/Frameworks/libpdfium.dylib"
+# The PDF helper, with the same identity as everything else, its own
+# code-signing identifier, and never get-task-allow:
+#  - App Store: the app is sandboxed and the helper, its child, inherits
+#    that sandbox. Apple requires exactly app-sandbox + inherit on it.
+#  - Developer ID: no sandbox to inherit (an inheriting helper would trap
+#    at launch), and the team lets it load PDFium.
+#  - Zebra Dev: as the app, no team, so library validation is off to load
+#    PDFium (Local.entitlements).
+HELPER="$APP/Contents/MacOS/zebra-pdf-helper"
+HELPER_ID=app.zebra.Zebra.pdf-helper
+if [ "${APPSTORE:-0}" = 1 ]; then
+  codesign --force --options runtime --timestamp --sign "$ID" -i "$HELPER_ID" \
+    --entitlements packaging/macos/zebra-pdf-helper.entitlements "$HELPER"
+  HELPER_KEYS="com.apple.security.app-sandbox com.apple.security.inherit"
+else
+  case "$ID" in
+    "Developer ID Application:"*)
+      codesign --force --options runtime --timestamp --sign "$ID" -i "$HELPER_ID" "$HELPER"
+      HELPER_KEYS="" ;;
+    *)
+      codesign --force --options runtime --sign "$ID" -i "$HELPER_ID" --entitlements packaging/macos/Local.entitlements "$HELPER"
+      HELPER_KEYS="com.apple.security.cs.disable-library-validation" ;;
+  esac
+fi
+# Exactly those entitlements, nothing more (an extra one, get-task-allow
+# above all, makes an inheriting helper trap at launch).
+GOT=$(codesign -d --entitlements - --xml "$HELPER" 2>/dev/null | { grep -o '<key>[^<]*</key>' || true; } | sed 's/<[^>]*>//g' | sort | tr '\n' ' ' | sed 's/ $//')
+WANT=$(echo $HELPER_KEYS | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/^ //;s/ $//')
+if [ "$GOT" != "$WANT" ]; then
+  echo "error: zebra-pdf-helper is signed with entitlements [$GOT], expected [$WANT]" >&2
+  exit 1
+fi
 if [ "${APPSTORE:-0}" = 1 ]; then
   codesign --force --options runtime --timestamp --sign "$ID" \
     --entitlements packaging/macos/zebractl.entitlements "$APP/Contents/MacOS/zebractl"

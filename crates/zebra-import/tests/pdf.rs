@@ -3,8 +3,9 @@
 //! page; damaged files give an error, never a panic.
 //!
 //! Needs PDFium: `scripts/fetch-pdfium.sh linux-x64` (or mac-arm64) puts
-//! it in target/pdfium/, or set ZEBRA_PDFIUM. Without it these tests say
-//! so and pass.
+//! it in target/pdfium/, or set ZEBRA_PDFIUM. Without it these tests
+//! fail (ZEBRA_SKIP_PDF=1 skips them, and says so). The PDF helper must
+//! be built first: `cargo build -p zebra-pdf --bin zebra-pdf-helper`.
 use zebra_core::{Editor, Element, ElementKind, Origin, StepTarget};
 use zebra_import::{Control, ImportError, ImportNote, Options};
 
@@ -19,11 +20,17 @@ fn engine() -> bool {
             unsafe { std::env::set_var("ZEBRA_PDFIUM", p) };
         }
     }
-    let ok = zebra_import::pdf::available();
-    if !ok {
+    if std::env::var_os("ZEBRA_PDFIUM").is_none() {
+        assert!(std::env::var_os("ZEBRA_SKIP_PDF").is_some(), "PDFium not found: run scripts/fetch-pdfium.sh for this platform or set ZEBRA_PDFIUM (ZEBRA_SKIP_PDF=1 skips the PDF tests)");
         eprintln!("SKIPPED: PDFium not found (run scripts/fetch-pdfium.sh linux-x64 or set ZEBRA_PDFIUM)");
+        return false;
     }
-    ok
+    // PDFium is here, so the PDF tests must run: the helper has to be
+    // built (it is another package's program, which `cargo test -p
+    // zebra-import` doesn't build).
+    assert!(zebra_pdf::helper_path().is_some(), "build the PDF helper first: cargo build -p zebra-pdf --bin zebra-pdf-helper");
+    assert!(zebra_import::pdf::available(), "the PDF helper can't load PDFium");
+    true
 }
 
 fn cmd(j: serde_json::Value) -> zebra_core::Command {
@@ -268,5 +275,36 @@ fn damaged_files_give_an_error_not_a_panic() {
         }
     }
     assert!(matches!(zebra_import::open(std::path::Path::new("/nonexistent/file.pdf")), Err(ImportError::Read(_))));
-    assert_eq!(ImportNote::ALL.len(), 17);
+    assert_eq!(ImportNote::ALL.len(), 18);
+}
+
+/// PDFs for `cargo run -p zebra-pdf --example bench` (the helper against
+/// in-process drawing): a text-and-shapes deck and a deck of big photos,
+/// 20 pages each, written to `ZEBRA_BENCH_OUT`.
+#[test]
+#[ignore]
+fn write_bench_pdfs() {
+    let Some(out) = std::env::var_os("ZEBRA_BENCH_OUT").map(std::path::PathBuf::from) else { return };
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("text-20.pdf"), many_pages_pdf(20)).unwrap();
+    let r = zebra_render::Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    let mut seed = 1u32;
+    let mut cmds = vec![];
+    for i in 0..20 {
+        let img = image::RgbImage::from_fn(3000, 2000, |x, y| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            image::Rgb([(x / 12) as u8, (y / 8) as u8, (seed >> 24) as u8])
+        });
+        let mut jpg = vec![];
+        image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg).unwrap();
+        let key = ed.add_asset(jpg).unwrap();
+        let x = i as f64 * 2000.0;
+        cmds.push(cmd(serde_json::json!({"op":"add_frame","style":"invisible","x":x,"y":0,"w":800,"h":600,"add_to_path":true})));
+        cmds.push(cmd(serde_json::json!({"op":"add_element","element":{"x":x,"y":0,"w":780,"h":520,"kind":{"type":"image","asset":key,"alt":""}}})));
+        cmds.push(cmd(serde_json::json!({"op":"add_text","text":format!("Photo {i}"),"style":"title","x":x,"y":-260})));
+    }
+    ed.apply_batch(cmds, Some("photos".into()), Origin::Human).unwrap();
+    std::fs::write(out.join("photos-20.pdf"), r.export_pdf(&ed).unwrap()).unwrap();
 }

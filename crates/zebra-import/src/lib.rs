@@ -56,6 +56,16 @@ pub enum ImportError {
     /// is one, see `zebra_core::beta`).
     #[error("importing PowerPoint is a beta feature, and beta features are off")]
     BetaOff,
+    /// The PDF needs more memory or time than Zebra gives it to open it
+    /// (its helper was stopped while opening it). Pages that need too
+    /// much come in as placeholders instead.
+    #[error("the PDF needs too much memory or time to read")]
+    TooDemanding,
+    /// An agent asked for every page of a PDF with more than
+    /// [`pdf::ASK_ABOVE_PAGES`] without saying which (`to`), as the
+    /// import sheet asks a person; `pages`: how many the file has.
+    #[error("the file has {pages} pages; say which to import")]
+    NeedRange { pages: usize },
 }
 
 /// Progress and cancel, shared with whoever started the import.
@@ -119,9 +129,15 @@ pub trait Reader: Send {
 /// is streamed out of it, so importing costs disk (one copy of each
 /// medium, in the document's own spill files), not memory.
 pub fn open(path: &Path) -> Result<Box<dyn Reader>, ImportError> {
+    open_with(path, &Control::default())
+}
+
+/// [`open`], stopped early when `ctl` is cancelled (counting a big PDF's
+/// pages can take a while).
+pub fn open_with(path: &Path, ctl: &Control) -> Result<Box<dyn Reader>, ImportError> {
     let map = zebra_core::io::map_document(path).map_err(|e| ImportError::Read(e.to_string()))?;
     let title = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-    open_source(map.into(), title)
+    open_source_with(map.into(), title, ctl)
 }
 
 /// Open a file's bytes; `title` names the import (the file name without
@@ -132,8 +148,12 @@ pub fn open_bytes(bytes: Vec<u8>, title: String) -> Result<Box<dyn Reader>, Impo
 
 /// Open a file's bytes, in memory or mapped.
 pub fn open_source(bytes: zebra_core::AssetBytes, title: String) -> Result<Box<dyn Reader>, ImportError> {
+    open_source_with(bytes, title, &Control::default())
+}
+
+fn open_source_with(bytes: zebra_core::AssetBytes, title: String, ctl: &Control) -> Result<Box<dyn Reader>, ImportError> {
     if zebra_core::import::is_pdf(&bytes) {
-        return Ok(Box::new(pdf::PdfReader::new(bytes, title)?));
+        return Ok(Box::new(pdf::PdfReader::new(bytes, title, ctl)?));
     }
     if pptx::is_pptx(&bytes) {
         return Ok(Box::new(pptx::PptxReader::new(bytes, title)?));

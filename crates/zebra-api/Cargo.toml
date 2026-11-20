@@ -38,5 +38,6 @@ core-foundation = "0.10"
 sha2 = "0.10"
 
 [dev-dependencies]
+zebra-pdf.workspace = true
 # Thumbnails for the stand-in web server in tests/web_video_api.rs.
 image.workspace = true

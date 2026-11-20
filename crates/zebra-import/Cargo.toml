@@ -10,9 +10,9 @@ zebra-core.workspace = true
 image.workspace = true
 thiserror.workspace = true
 
-# PDF pages through PDFium (BSD-3), loaded at run time from the app bundle
-# (Contents/Frameworks/libpdfium.dylib); scripts/fetch-pdfium.sh gets it.
-pdfium-render = { version = "0.9.5", default-features = false, features = ["pdfium_8125", "image_025", "thread_safe"] }
+# PDF pages through PDFium, which only ever runs in the separate helper
+# process zebra-pdf starts (zebra-pdf-helper), never in Zebra's own.
+zebra-pdf.workspace = true
 
 # PowerPoint slides through BetterOffice (Apache-2.0): its parser and the
 # DrawingML colour and theme helpers, without the editing and drawing
@@ -32,6 +32,7 @@ flate2 = "1"
 zip.workspace = true
 
 [dev-dependencies]
+libc.workspace = true
 memmap2 = "0.9"
 zebra-render = { path = "../zebra-render", default-features = false }
 serde_json.workspace = true
