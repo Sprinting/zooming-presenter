@@ -1028,7 +1028,8 @@ impl Document {
     pub fn frame_contents(&self, frame_id: &str) -> Vec<ElementId> {
         let Some(f) = self.elements.get(frame_id) else { return vec![] };
         let groups = self.group_members();
-        self.ordered().filter(|e| frame_holds_with(f, e, |g| groups.get(g).into_iter().flatten().copied())).map(|e| e.id.clone()).collect()
+        let mut memo = GroupVerdicts::default();
+        self.ordered().filter(|e| frame_holds_memo(f, e, |g| groups.get(g).into_iter().flatten().copied(), &mut memo)).map(|e| e.id.clone()).collect()
     }
     /// The frame an element belongs to: the smallest frame that holds it
     /// ([`frame_holds`], [`Element::drawn_area`]), then the lowest in the
@@ -1227,17 +1228,49 @@ pub fn frame_holds_with<'a, I: IntoIterator<Item = &'a Element>>(frame: &Element
         return false;
     }
     match e.group.as_deref() {
-        Some(g) => {
-            let mut any = false;
-            for m in members(g) {
-                if m.id == frame.id || !holds_alone(frame, m) {
-                    return false;
-                }
-                any = true;
-            }
-            // `members` left `e` out: judge it alone.
-            any || holds_alone(frame, e)
+        Some(g) => group_verdict(frame, members(g)).unwrap_or_else(|| holds_alone(frame, e)),
+        None => holds_alone(frame, e),
+    }
+}
+
+/// Whether `frame` holds a whole group, or None when `members` is empty.
+fn group_verdict<'a>(frame: &Element, members: impl IntoIterator<Item = &'a Element>) -> Option<bool> {
+    let mut any = false;
+    for m in members {
+        if m.id == frame.id || !holds_alone(frame, m) {
+            return Some(false);
         }
+        any = true;
+    }
+    any.then_some(true)
+}
+
+/// Group verdicts already worked out in one query, by (frame id, group id):
+/// a frame holds every member of a group or none, so asking for each
+/// member again was quadratic in the group's size.
+#[derive(Default)]
+pub struct GroupVerdicts<'a>(std::collections::HashMap<(&'a str, &'a str), bool>);
+
+/// [`frame_holds_with`], judging each group once per `memo`.
+pub fn frame_holds_memo<'a, I: IntoIterator<Item = &'a Element>>(
+    frame: &'a Element,
+    e: &'a Element,
+    members: impl FnOnce(&'a str) -> I,
+    memo: &mut GroupVerdicts<'a>,
+) -> bool {
+    if !frame.is_frame() || frame.id == e.id {
+        return false;
+    }
+    let Some(g) = e.group.as_deref() else { return holds_alone(frame, e) };
+    if let Some(&v) = memo.0.get(&(frame.id.as_str(), g)) {
+        return v;
+    }
+    match group_verdict(frame, members(g)) {
+        Some(v) => {
+            memo.0.insert((frame.id.as_str(), g), v);
+            v
+        }
+        // `members` left `e` out: judge it alone.
         None => holds_alone(frame, e),
     }
 }
