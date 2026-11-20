@@ -98,12 +98,13 @@ pub enum ImportNote {
     SmartArt,
     /// Tables were left out.
     Table,
-    /// Equations were left out.
+    /// Equations with no picture of them in the file were left out.
     Equation,
     /// Videos and sounds that could not be taken out of the file, or that
     /// won't play on a Mac (WMV, AVI…), came in as their poster pictures.
     Media,
-    /// Embedded objects came in as the picture the file keeps of them.
+    /// Embedded objects (and charts and equations PowerPoint saves a
+    /// picture of beside them) came in as that picture.
     AsPicture,
     /// Shapes Zebra has no match for (custom shapes, curved connectors…)
     /// were left out; their text came in.

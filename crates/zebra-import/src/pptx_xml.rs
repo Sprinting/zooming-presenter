@@ -66,6 +66,9 @@ pub(crate) enum StandIn {
     Chart,
     /// Another graphic frame (an add-in's content, a new kind of object).
     Graphic,
+    /// An equation (`a14:m`, Office Math); its fallback is a shape filled
+    /// with a picture of it.
+    Equation,
 }
 
 /// The strike-through a text body says, at each level of its cascade
@@ -229,6 +232,9 @@ fn timing(t: &Elem, out: &mut BTreeMap<u32, MediaTiming>) {
 /// import notes.
 fn stand_in(choice: &Elem) -> Option<StandIn> {
     let content = choice.children.first()?;
+    if content.descendants().iter().any(|d| matches!(d.local(), "m" | "oMath" | "oMathPara")) {
+        return Some(StandIn::Equation);
+    }
     if content.local() != "graphicFrame" {
         return None;
     }

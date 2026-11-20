@@ -451,6 +451,41 @@ def metafiles(prs):
     return swaps
 
 
+A14 = "http://schemas.microsoft.com/office/drawing/2010/main"
+OMML = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def equations(prs):
+    """Equations as PowerPoint saves them: Office Math in a choice that
+    needs a14, and a shape filled with a picture of it as the fallback;
+    one whose fallback has no picture; and one bare in a paragraph."""
+    s = blank(prs)
+    _, rid = s.part.get_or_add_image_part(png(60, 20, (250, 250, 250)))
+    math = (f'<a14:m><m:oMathPara xmlns:m="{OMML}"><m:oMath><m:r><a:rPr lang="en-GB" i="1"><a:latin typeface="Cambria Math"/></a:rPr>'
+            '<m:t>E=m</m:t></m:r><m:sSup><m:e><m:r><m:t>c</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup></m:oMath></m:oMathPara></a14:m>')
+
+    def sp(sid, y, fill, body):
+        return (f'<p:sp><p:nvSpPr><p:cNvPr id="{sid}" name="TextBox {sid}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+                f'<p:spPr><a:xfrm><a:off x="{Inches(1)}" y="{Inches(y)}"/><a:ext cx="{Inches(3)}" cy="{Inches(1)}"/></a:xfrm>'
+                f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{fill}</p:spPr>'
+                f'<p:txBody><a:bodyPr wrap="none"><a:spAutoFit/></a:bodyPr><a:lstStyle/><a:p>{body}</a:p></p:txBody></p:sp>')
+
+    def alternate(sid, y, fallback_fill):
+        return etree.fromstring(
+            f'<mc:AlternateContent xmlns:mc="{MC}" xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}">'
+            f'<mc:Choice xmlns:a14="{A14}" Requires="a14">{sp(sid, y, "<a:noFill/>", math)}</mc:Choice>'
+            f'<mc:Fallback>{sp(sid, y, fallback_fill, "<a:r><a:rPr lang=\"en-GB\"><a:noFill/></a:rPr><a:t> </a:t></a:r>")}</mc:Fallback>'
+            '</mc:AlternateContent>'
+        )
+
+    tree = s.shapes._spTree
+    tree.append(alternate(40, 1, f'<a:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>'))
+    tree.append(alternate(41, 3, "<a:noFill/>"))
+    bare = etree.fromstring(f'<p:sp xmlns:p="{P}" xmlns:a="{A}" xmlns:a14="{A14}">' + sp(42, 5, "<a:noFill/>", '<a:r><a:t>Energy: </a:t></a:r>' + math)[6:])
+    tree.append(bare)
+
+
 def extras(out):
     """What the follow-ups to the first import cover (spec 17b)."""
     prs = Presentation()
@@ -474,6 +509,8 @@ def extras(out):
     media(prs)
     # 6. EMF and WMF.
     swaps = metafiles(prs)
+    # 7. Equations.
+    equations(prs)
     prs.save(out)
     repack(out, {**sounds(out), **swaps})
 

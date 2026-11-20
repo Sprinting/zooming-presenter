@@ -312,6 +312,22 @@ fn emf_and_wmf_pictures_are_drawn_as_svg() {
 }
 
 #[test]
+fn equations_are_found_and_noted() {
+    let ed = editor();
+    let deck = read("extras.pptx", &ed);
+    let page = &deck.pages[6];
+    // PowerPoint's picture of the first equation comes in where it was;
+    // the second has none and the third is bare in a paragraph whose
+    // other words come in: both left out.
+    let pictures: Vec<&Element> = page.items.iter().map(|i| &i.element).filter(|e| matches!(e.kind, ElementKind::Image(_))).collect();
+    assert_eq!(pictures.len(), 1);
+    assert!((pictures[0].transform.x - 250.0).abs() < 0.01 && (pictures[0].transform.y - 150.0).abs() < 0.01, "{:?}", pictures[0].transform);
+    assert_eq!(texts(&page.items.iter().map(|i| &i.element).collect::<Vec<_>>()), ["Energy: "]);
+    assert_eq!(deck.notes.get(&ImportNote::Equation), Some(&2), "{:?}", deck.notes);
+    assert_eq!(deck.notes.get(&ImportNote::AsPicture), Some(&1), "{:?}", deck.notes);
+}
+
+#[test]
 fn on_the_canvas_slides_are_frames_with_steps_and_one_undo_removes_them() {
     let mut ed = editor();
     ed.apply(serde_json::from_value(serde_json::json!({"op":"add_frame","id":"f1","x":0,"y":0,"w":800,"h":600,"add_to_path":true})).unwrap(), Origin::Human).unwrap();

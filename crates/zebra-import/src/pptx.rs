@@ -36,7 +36,7 @@ use zebra_core::{
     Align, Crop, Dash, Element, ElementKind, ImageData, ImageMask, ListKind, MediaKind, ParaFormat, ShapeData, ShapeKind, Size, Soundtrack, SpanFormat, TextData, TextSpan, TextStyle, Transform, VideoData,
 };
 
-use crate::pptx_xml::{part_info, MediaRef, PartInfo, ShapeInfo, StyleKind, TextStrike};
+use crate::pptx_xml::{part_info, MediaRef, PartInfo, ShapeInfo, StandIn, StyleKind, TextStrike};
 use crate::{Control, ImportError, Options, Reader};
 
 /// Long side of a slide on the canvas, world units (the same as a PDF's
@@ -498,12 +498,21 @@ impl<'a> SlideReader<'a> {
         };
         let mut at = place(t, parents);
         let nodes = [Some(node), lay, mas];
+        // An equation comes in as the picture PowerPoint keeps of it (the
+        // shape the parser reads), else is left out; either way, noted.
+        let equation = self.shape_info(self.part, s.base.id).and_then(|i| i.stands_in) == Some(StandIn::Equation);
         // A shape filled with a picture is that picture.
         if let Some(path) = s.picture_fill.as_ref().and_then(|p| p.media_part_path.clone()) {
             let alt = s.base.description.clone().unwrap_or_default();
             let crop = s.picture_fill.as_ref().map(|p| p.crop.clone()).unwrap_or_default();
-            self.picture(&path, &crop, &s.geometry, at, alt, group);
+            let came = self.picture(&path, &crop, &s.geometry, at, alt, group);
+            if equation {
+                self.note(if came { ImportNote::AsPicture } else { ImportNote::Equation });
+            }
         } else {
+            if equation {
+                self.note(ImportNote::Equation);
+            }
             let custom = !s.has_preset_geometry && !s.paths.is_empty();
             let line = matches!(s.geometry.as_str(), "line" | "straightConnector1");
             let kind = (!custom && !line).then(|| shape_kind(&s.geometry)).flatten();
