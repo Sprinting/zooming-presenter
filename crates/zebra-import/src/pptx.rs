@@ -7,7 +7,9 @@
 //! - the master's and layout's own objects, then the slide's;
 //! - text boxes and placeholders as Zebra text: the source's paragraphs
 //!   and line breaks, bullets and numbering by level, alignment, and runs'
-//!   bold, italic, underline, colour, links and sizes. Fonts are never
+//!   bold, italic, underline, strike-through, colour, links and sizes
+//!   (strike-through read from the part's XML, which BetterOffice's model
+//!   leaves it out of). Fonts are never
 //!   copied: every box takes a style of the document's theme by its size
 //!   (sizes are ranked deck-wide into title, subtitle and body, as the PDF
 //!   prototype did) and keeps its size on the slide through its scale;
@@ -28,6 +30,7 @@ use pptx_parse::{
 use zebra_core::import::{asset_from, BoxAnchor, ImportNote, ImportedDeck, ImportedItem, ImportedPage, SourceBox};
 use zebra_core::{Align, Crop, Dash, Element, ElementKind, ImageData, ImageMask, ListKind, ParaFormat, ShapeData, ShapeKind, Size, SpanFormat, TextData, TextSpan, TextStyle, Transform};
 
+use crate::pptx_xml::{part_info, PartInfo, StyleKind, TextStrike};
 use crate::{Control, ImportError, Options, Reader};
 
 /// Long side of a slide on the canvas, world units (the same as a PDF's
@@ -96,6 +99,7 @@ impl Reader for PptxReader {
         let mut pending = vec![];
         let mut media = BTreeMap::new();
         let mut counted = BTreeSet::new();
+        let mut infos = BTreeMap::new();
         for i in crate::page_range(opts, pkg.slides.len()) {
             if ctl.cancelled() {
                 return Err(ImportError::Cancelled);
@@ -106,7 +110,14 @@ impl Reader for PptxReader {
                 ctl.page_done();
                 continue;
             }
-            let mut r = SlideReader::new(pkg, slide, k, (sw, sh), &mut deck, &mut media, &mut counted);
+            let (layout, master) = slide_parts(pkg, slide);
+            let parts = [Some(pkg.presentation.part_path.as_str()), Some(slide.part_path.as_str()), layout.map(|l| l.part_path.as_str()), master.map(|m| m.part_path.as_str())];
+            for part in parts.into_iter().flatten() {
+                if !infos.contains_key(part) {
+                    infos.insert(part.to_string(), part_info(pkg, part));
+                }
+            }
+            let mut r = SlideReader::new(pkg, slide, k, (sw, sh), &mut deck, &mut media, &mut counted, &infos);
             r.read();
             let SlideReader { items, pending: texts, .. } = r;
             let page = deck.pages.len();
@@ -124,6 +135,13 @@ impl Reader for PptxReader {
         rank_text(&mut deck, &pending, opts, k);
         Ok(deck)
     }
+}
+
+/// A slide's layout and master.
+fn slide_parts<'p>(pkg: &'p PptxPackage, slide: &Slide) -> (Option<&'p SlideLayout>, Option<&'p SlideMaster>) {
+    let layout = slide.layout_part_path.as_deref().and_then(|p| pkg.layouts.iter().find(|l| l.part_path == p)).or_else(|| pkg.layouts.first());
+    let master = pptx_parse::master_for_layout(pkg, layout).or_else(|| pkg.masters.first());
+    (layout, master)
 }
 
 /// A text box read from a slide, waiting for the deck-wide size ranking.
@@ -254,6 +272,9 @@ struct Cascade<'a> {
     master: Option<&'a TextBody>,
     placeholder: Option<&'a Placeholder>,
     style_color: Option<&'a ColorValue>,
+    /// The strike-through `primary`, `layout` and `master` say (which
+    /// the parser's model leaves out).
+    strike: [Option<&'a TextStrike>; 3],
 }
 
 struct SlideReader<'a> {
@@ -278,9 +299,12 @@ struct SlideReader<'a> {
     counted: &'a mut BTreeSet<String>,
     /// Reading something whose notes are counted already.
     quiet: bool,
+    /// What the parser's model leaves out of each part, by part path.
+    infos: &'a BTreeMap<String, PartInfo>,
 }
 
 impl<'a> SlideReader<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         pkg: &'a PptxPackage,
         slide: &'a Slide,
@@ -289,9 +313,9 @@ impl<'a> SlideReader<'a> {
         deck: &'a mut ImportedDeck,
         media: &'a mut BTreeMap<String, Option<String>>,
         counted: &'a mut BTreeSet<String>,
+        infos: &'a BTreeMap<String, PartInfo>,
     ) -> Self {
-        let layout = slide.layout_part_path.as_deref().and_then(|p| pkg.layouts.iter().find(|l| l.part_path == p)).or_else(|| pkg.layouts.first());
-        let master = pptx_parse::master_for_layout(pkg, layout).or_else(|| pkg.masters.first());
+        let (layout, master) = slide_parts(pkg, slide);
         let theme = pptx_parse::slide_theme(pkg, Some(&slide.part_path), layout.map(|l| l.part_path.as_str()));
         let scheme = master
             .and_then(|m| m.theme_part_path.as_deref())
@@ -299,7 +323,7 @@ impl<'a> SlideReader<'a> {
             .or_else(|| pkg.themes.first())
             .map(|t| t.format_scheme.clone())
             .unwrap_or_default();
-        SlideReader { pkg, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false }
+        SlideReader { pkg, slide, layout, master, theme, scheme, k, size, deck, media, items: vec![], pending: vec![], groups: 0, part: &slide.part_path, counted, quiet: false, infos }
     }
 
     fn note(&mut self, n: ImportNote) {
@@ -696,6 +720,11 @@ impl<'a> SlideReader<'a> {
             master: inherited.1.and_then(node_text),
             placeholder: s.base.placeholder.as_ref(),
             style_color: s.style.as_ref().and_then(|st| st.font_color.as_ref()),
+            strike: [
+                self.text_strike(self.part, s.base.id),
+                inherited.0.zip(self.layout).and_then(|(n, l)| self.text_strike(&l.part_path, n.id())),
+                inherited.1.zip(self.master).and_then(|(n, m)| self.text_strike(&m.part_path, n.id())),
+            ],
         };
         let bodies = [c.primary, c.layout, c.master];
         let pick = |f: &dyn Fn(&TextBody) -> Option<i64>| bodies.iter().flatten().find_map(|b| f(b));
@@ -751,6 +780,7 @@ impl<'a> SlideReader<'a> {
             bold: bool,
             italic: bool,
             underline: bool,
+            strike: bool,
             color: String,
             link: Option<String>,
         }
@@ -779,7 +809,9 @@ impl<'a> SlideReader<'a> {
             }
             let has_runs = p.runs.iter().any(|r| !r.line_break && !r.text.is_empty());
             paras.push((level as u8, if has_runs { list } else { ListKind::None }, align));
-            for r in &p.runs {
+            let para_strike = self.strike_default(c, pi, level as usize);
+            let run_strike = c.strike[0].and_then(|t| t.paras.get(pi));
+            for (ri, r) in p.runs.iter().enumerate() {
                 if r.line_break {
                     // A line break inside a paragraph: Zebra starts a new
                     // paragraph, without a bullet of its own.
@@ -808,6 +840,7 @@ impl<'a> SlideReader<'a> {
                     bold: rp.bold.unwrap_or(false),
                     italic: rp.italic.unwrap_or(false),
                     underline: rp.underline.as_deref().is_some_and(|u| u != "none"),
+                    strike: run_strike.and_then(|p| p.1.get(ri).copied().flatten()).or(para_strike).unwrap_or(false),
                     color,
                     link,
                 });
@@ -850,7 +883,7 @@ impl<'a> SlideReader<'a> {
                     bold: (r.bold != bold).then_some(r.bold),
                     italic: (r.italic != italic).then_some(r.italic),
                     underline: r.underline.then_some(true),
-                    strike: None,
+                    strike: r.strike.then_some(true),
                     color: (r.color != color).then(|| r.color.to_ascii_lowercase()),
                     link: r.link.clone(),
                     size: ((r.pt / base_pt - 1.0).abs() > 0.02).then_some(r.pt / base_pt),
@@ -861,6 +894,44 @@ impl<'a> SlideReader<'a> {
         let mut data = TextData { text, style: TextStyle::Body, bold, italic, align: box_align, bullets: false, color: Some(color.to_ascii_lowercase()), fixed_width: true, spans, paras };
         zebra_core::rich::normalize(&mut data);
         Some((data, base_pt, n))
+    }
+
+    /// The strike-through part `part`'s shape `id` says (None when it
+    /// says none).
+    fn text_strike(&self, part: &str, id: u32) -> Option<&'a TextStrike> {
+        let infos: &'a BTreeMap<String, PartInfo> = self.infos;
+        infos.get(part)?.shapes.get(&id)?.text.as_ref()
+    }
+
+    /// Whether paragraph `index` at `level`'s runs strike through unless
+    /// they say otherwise: the cascade of [`Self::paragraph_properties`].
+    fn strike_default(&self, c: &Cascade, index: usize, level: usize) -> Option<bool> {
+        let level = level.min(8);
+        let mut out = None;
+        let mut set = |v: Option<bool>| {
+            if v.is_some() {
+                out = v;
+            }
+        };
+        if let Some(info) = self.master.and_then(|m| self.infos.get(&m.part_path)) {
+            set(info.styles[style_kind(c.placeholder) as usize][level]);
+        }
+        if c.placeholder.is_none() {
+            if let Some(info) = self.infos.get(&self.pkg.presentation.part_path) {
+                set(info.default);
+                set(info.styles[StyleKind::Other as usize][level]);
+            }
+        }
+        for (t, own) in [(c.strike[2], false), (c.strike[1], false), (c.strike[0], true)] {
+            let Some(t) = t else { continue };
+            set(t.default);
+            set(t.levels[level]);
+            let p = if own { t.paras.get(index) } else { t.paras.get(index).or_else(|| t.paras.get(level)) };
+            if let Some(p) = p {
+                set(p.0);
+            }
+        }
+        out
     }
 
     /// The URL a run's link relationship points at (web and mail links
@@ -1057,13 +1128,23 @@ fn find_placeholder<'n>(nodes: &'n [ShapeNode], ph: &Placeholder) -> Option<&'n 
     })
 }
 
+/// The master's text style a placeholder of this kind takes (text
+/// outside placeholders: other).
+fn style_kind(ph: Option<&Placeholder>) -> StyleKind {
+    match ph.map(|p| p.placeholder_type.as_deref().unwrap_or("body")) {
+        Some("title" | "ctrTitle") => StyleKind::Title,
+        Some("body" | "obj" | "subTitle") => StyleKind::Body,
+        _ => StyleKind::Other,
+    }
+}
+
 /// The master's title, body or other text style at `level` for a
 /// placeholder of this kind (text outside placeholders: other).
 fn master_style<'m>(m: &'m SlideMaster, ph: Option<&Placeholder>, level: u32) -> Option<&'m ParagraphProperties> {
-    let styles = match ph.map(|p| p.placeholder_type.as_deref().unwrap_or("body")) {
-        Some("title" | "ctrTitle") => &m.text_styles.title,
-        Some("body" | "obj" | "subTitle") => &m.text_styles.body,
-        _ => &m.text_styles.other,
+    let styles = match style_kind(ph) {
+        StyleKind::Title => &m.text_styles.title,
+        StyleKind::Body => &m.text_styles.body,
+        StyleKind::Other => &m.text_styles.other,
     };
     styles.get(level as usize).or_else(|| styles.first())
 }

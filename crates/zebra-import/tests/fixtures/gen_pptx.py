@@ -231,6 +231,28 @@ def master_shape(master, sid, name, prst, box, fill):
     master.shapes._spTree.append(sp)
 
 
+def strike(s):
+    """Strike-through, which python-pptx can't set: on runs, and from a
+    text box's list style (a run can turn it off)."""
+    tb = s.shapes.add_textbox(Inches(1), Inches(2.5), Inches(8), Inches(1))
+    p = tb.text_frame.paragraphs[0]
+    for text, how in [("plain ", None), ("single", "sngStrike"), (" and ", None), ("double", "dblStrike")]:
+        r = p.add_run()
+        r.text = text
+        if how:
+            r.font._rPr.set("strike", how)
+    tb = s.shapes.add_textbox(Inches(1), Inches(4), Inches(8), Inches(1))
+    lst = tb.text_frame._txBody.find(qn("a:lstStyle"))
+    lvl = etree.SubElement(lst, qn("a:lvl1pPr"))
+    etree.SubElement(lvl, qn("a:defRPr")).set("strike", "sngStrike")
+    p = tb.text_frame.paragraphs[0]
+    for text, how in [("struck ", None), ("not this", "noStrike")]:
+        r = p.add_run()
+        r.text = text
+        if how:
+            r.font._rPr.set("strike", how)
+
+
 def extras(out):
     """What the follow-ups to the first import cover (spec 17b)."""
     prs = Presentation()
@@ -248,6 +270,8 @@ def extras(out):
         s = blank(prs)
         tb = s.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
         tb.text_frame.text = f"Extras {n + 1}"
+        if n == 0:
+            strike(s)
     prs.save(out)
 
 

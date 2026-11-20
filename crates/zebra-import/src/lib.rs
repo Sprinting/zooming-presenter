@@ -18,6 +18,7 @@ use zebra_core::Theme;
 
 pub mod pdf;
 pub mod pptx;
+mod pptx_xml;
 
 /// The file types File › Import… offers (lower case, no dot).
 pub const EXTENSIONS: &[&str] = &["pdf", "pptx"];

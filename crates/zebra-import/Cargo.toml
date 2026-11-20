@@ -19,6 +19,10 @@ pdfium-render = { version = "0.9.5", default-features = false, features = ["pdfi
 # engine the `betteroffice-pptx` facade bundles (about 3 MB less).
 betteroffice-pptx-parse = "=0.5.1"
 betteroffice-drawingml = "=0.5.1"
+# What BetterOffice's model leaves out (strike-through, media timing, the
+# stand-ins mc:AlternateContent holds), read from the part XML with the XML
+# reader the parser already brings in.
+quick-xml = { version = "0.41", features = ["encoding"] }
 
 [dev-dependencies]
 zebra-render = { path = "../zebra-render", default-features = false }

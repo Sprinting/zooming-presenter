@@ -206,6 +206,21 @@ fn what_the_master_shows_on_every_slide_is_noted_once() {
 }
 
 #[test]
+fn strike_through_comes_in() {
+    let ed = editor();
+    let deck = read("extras.pptx", &ed);
+    let struck = |t: &TextData| -> Vec<(usize, usize)> { t.spans.iter().filter(|s| s.format.strike == Some(true)).map(|s| (s.start, s.end)).collect() };
+    // On runs: single and double.
+    let t = text(&deck, 0, "plain ");
+    assert_eq!(t.text, "plain single and double");
+    assert_eq!(struck(t), [(6, 12), (17, 23)]);
+    // From the box's list style, but not where a run says noStrike.
+    let t = text(&deck, 0, "struck ");
+    assert_eq!(struck(t), [(0, 7)]);
+    assert!(text(&deck, 0, "Extras 1").spans.iter().all(|s| s.format.strike.is_none()));
+}
+
+#[test]
 fn on_the_canvas_slides_are_frames_with_steps_and_one_undo_removes_them() {
     let mut ed = editor();
     ed.apply(serde_json::from_value(serde_json::json!({"op":"add_frame","id":"f1","x":0,"y":0,"w":800,"h":600,"add_to_path":true})).unwrap(), Origin::Human).unwrap();
