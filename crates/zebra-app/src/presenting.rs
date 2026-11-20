@@ -601,8 +601,10 @@ fn presenter_keys(app: &mut ZebraApp, ctx: &egui::Context) {
 
 /// Typing a step number while presenting, as in Keynote: digits open the
 /// "Go to step" field, Return jumps, Esc or Delete-to-empty closes it.
-/// Returns true when the event was used (so Return doesn't also step on and
-/// Esc doesn't leave the show).
+/// The arrows, Page Up/Down, Space, Home, End and a clicker's blank-screen
+/// keys close the field and then act as usual, so a digit typed by mistake
+/// never stops a presenter with a clicker. Returns true when the event was
+/// used (so Return doesn't also step on and Esc doesn't leave the show).
 pub fn jump_key(app: &mut ZebraApp, ev: &egui::Event) -> bool {
     let n = app.editor.doc.path.len();
     match ev {
@@ -616,6 +618,13 @@ pub fn jump_key(app: &mut ZebraApp, ev: &egui::Event) -> bool {
             true
         }
         egui::Event::Key { key, pressed: true, modifiers, .. } if app.stage.jump.is_some() && !modifiers.command => {
+            if matches!(
+                key,
+                Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::PageUp | Key::PageDown | Key::Space | Key::Home | Key::End | Key::B | Key::W | Key::Period
+            ) {
+                app.stage.jump = None;
+                return false;
+            }
             match key {
                 Key::Enter => {
                     let typed = app.stage.jump.take().and_then(|b| b.parse::<usize>().ok());
@@ -627,6 +636,9 @@ pub fn jump_key(app: &mut ZebraApp, ev: &egui::Event) -> bool {
                 Key::Backspace => {
                     if let Some(b) = app.stage.jump.as_mut() {
                         b.pop();
+                        if b.is_empty() {
+                            app.stage.jump = None;
+                        }
                     }
                 }
                 _ => {}
