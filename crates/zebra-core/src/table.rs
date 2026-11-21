@@ -16,7 +16,6 @@
 //! editor through [`crate::calc`] around these.
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -38,10 +37,11 @@ pub const MAX_COLUMNS: usize = 1_000;
 /// (an empty cell is about 100 bytes held, 150 being parsed).
 pub const CELL_COST: u64 = 256;
 
-/// Most cells a table can have: what fits in the memory a document may
-/// take ([`crate::io::memory_budget`], half the Mac's memory). Numbers has
-/// no cell limit of its own beyond its row and column limits; Zebra keeps
-/// every cell, so this is where memory stops it, with a message.
+/// Most filled cells a table can have: what fits in the memory a
+/// document may take ([`crate::io::memory_budget`]). Empty cells cost
+/// nothing (as in Numbers), so a 1,000,000 x 1,000 table of a few filled
+/// cells fits; Numbers has no cell limit of its own beyond its row and
+/// column limits, so this is where memory stops it, with a message.
 pub fn max_cells() -> usize {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -82,7 +82,20 @@ pub enum InputProblem {
 
 /// Whether a `rows` x `cols` table is within the limits.
 pub fn fits_limits(rows: usize, cols: usize) -> bool {
-    rows >= 1 && cols >= 1 && rows <= MAX_ROWS && cols <= MAX_COLUMNS && rows.saturating_mul(cols) <= max_cells()
+    rows >= 1 && cols >= 1 && rows <= MAX_ROWS && cols <= MAX_COLUMNS && fits_memory(rows, cols)
+}
+
+/// Whether the rows and columns of a `rows` x `cols` table fit in memory
+/// (its empty cells take none).
+pub fn fits_memory(rows: usize, cols: usize) -> bool {
+    (rows as u64).saturating_mul(ROW_BYTES).saturating_add((cols as u64).saturating_mul(COLUMN_BYTES)) <= file_budget()
+}
+
+/// Most rows a table of `cols` columns can have in memory, at most
+/// [`MAX_ROWS`].
+fn max_rows(cols: usize) -> usize {
+    let left = file_budget().saturating_sub((cols as u64).saturating_mul(COLUMN_BYTES));
+    usize::try_from(left / ROW_BYTES).unwrap_or(usize::MAX).min(MAX_ROWS)
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -122,77 +135,447 @@ pub type Grid = Vec<CellRow>;
 
 /// One row of cells.
 ///
+/// Only cells with something in them are kept (sorted by column), so an
+/// empty cell costs nothing, as in Numbers: a 1,000,000 x 1,000 table that
+/// is mostly empty fits in memory (plan-21nov/27). Reading a cell that
+/// isn't kept gives an empty one.
+///
 /// The cells are shared between copies of a table (the undo journal's
 /// copy of what an edit touched, a renderer's snapshot) until one of the
 /// copies changes the row: copying a table copies a pointer per row, and
-/// changing a cell copies just its row ([`DerefMut`] does that). The `id`
-/// stays with the row however it moves, so an undo step can tell rows
-/// inserted, deleted or reordered from rows edited ([`crate::delta`]).
-/// It is not saved.
+/// changing a cell copies just its row. The `id` stays with the row
+/// however it moves, so an undo step can tell rows inserted, deleted or
+/// reordered from rows edited ([`crate::delta`]). It is not saved.
 #[derive(Debug, Clone)]
 pub struct CellRow {
     id: u64,
-    cells: Arc<Vec<Cell>>,
+    /// Columns in the row (filled or not).
+    len: usize,
+    /// The filled cells, by column, ascending.
+    cells: Arc<Vec<(u32, Cell)>>,
+}
+
+/// What one column of a table costs in memory, about (its width, type and
+/// a place in every layout).
+const COLUMN_BYTES: u64 = 64;
+
+/// What a cell that isn't kept reads as.
+pub static EMPTY_CELL: Cell = Cell { input: String::new(), value: None, format: None, spans: Vec::new() };
+
+/// Kept: it isn't the plain empty cell.
+fn kept(c: &Cell) -> bool {
+    *c != EMPTY_CELL
 }
 
 impl CellRow {
     pub fn new(cells: Vec<Cell>) -> CellRow {
-        CellRow { id: fresh_id(), cells: Arc::new(cells) }
+        let len = cells.len();
+        let filled = cells.into_iter().enumerate().filter(|(_, c)| kept(c)).map(|(i, c)| (i as u32, c)).collect();
+        CellRow { id: fresh_id(), len, cells: Arc::new(filled) }
     }
     /// `n` empty cells.
     pub fn empty(n: usize) -> CellRow {
-        CellRow::new(vec![Cell::default(); n])
+        CellRow { id: fresh_id(), len: n, cells: Arc::new(Vec::new()) }
+    }
+    /// A row of `len` columns holding `filled` (column, cell) pairs, in any
+    /// order: later pairs for one column win, columns past `len` are left
+    /// out.
+    pub fn from_filled(len: usize, filled: impl IntoIterator<Item = (usize, Cell)>) -> CellRow {
+        let mut v: Vec<(u32, Cell)> = filled.into_iter().filter(|(c, cell)| *c < len && kept(cell)).map(|(c, cell)| (c as u32, cell)).collect();
+        v.reverse();
+        v.sort_by_key(|(c, _)| *c);
+        v.dedup_by_key(|(c, _)| *c);
+        CellRow { id: fresh_id(), len, cells: Arc::new(v) }
     }
     pub fn id(&self) -> u64 {
         self.id
     }
     /// The same cells in memory (not just equal ones).
     pub fn same(&self, o: &CellRow) -> bool {
-        Arc::ptr_eq(&self.cells, &o.cells)
+        Arc::ptr_eq(&self.cells, &o.cells) && self.len == o.len
+    }
+    /// Where the cells are in memory, with the row's length: equal for two
+    /// rows while they share cells (for caches keyed by row contents).
+    pub fn identity(&self) -> (usize, usize) {
+        (Arc::as_ptr(&self.cells) as usize, self.len)
     }
     /// Replace the cells, keeping the row's id.
     pub fn set(&mut self, cells: Vec<Cell>) {
-        self.cells = Arc::new(cells);
+        let r = CellRow::new(cells);
+        self.len = r.len;
+        self.cells = r.cells;
+    }
+    /// Columns in the row.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    /// Filled cells kept (what the row costs).
+    pub fn filled_count(&self) -> usize {
+        self.cells.len()
+    }
+    fn find(&self, c: usize) -> Result<usize, usize> {
+        self.cells.binary_search_by_key(&(c as u32), |(k, _)| *k)
+    }
+    /// Cell `c`, or None past the row's end.
+    pub fn get(&self, c: usize) -> Option<&Cell> {
+        if c >= self.len {
+            return None;
+        }
+        Some(self.find(c).map_or(&EMPTY_CELL, |i| &self.cells[i].1))
+    }
+    /// Cell `c` to change (kept from now on), or None past the row's end.
+    pub fn get_mut(&mut self, c: usize) -> Option<&mut Cell> {
+        if c >= self.len {
+            return None;
+        }
+        let i = match self.find(c) {
+            Ok(i) => i,
+            Err(i) => {
+                Arc::make_mut(&mut self.cells).insert(i, (c as u32, Cell::default()));
+                i
+            }
+        };
+        Some(&mut Arc::make_mut(&mut self.cells)[i].1)
+    }
+    /// Every cell, left to right (empty ones too).
+    pub fn iter(&self) -> RowIter<'_> {
+        RowIter { row: self, col: 0, next: 0 }
+    }
+    /// The filled cells with their columns, left to right.
+    pub fn filled(&self) -> impl DoubleEndedIterator<Item = (usize, &Cell)> + ExactSizeIterator {
+        self.cells.iter().map(|(c, cell)| (*c as usize, cell))
+    }
+    /// The filled cells to change, with their columns.
+    pub fn filled_mut(&mut self) -> impl Iterator<Item = (usize, &mut Cell)> {
+        Arc::make_mut(&mut self.cells).iter_mut().map(|(c, cell)| (*c as usize, cell))
+    }
+    /// Every cell as a plain list (costs one cell per column).
+    pub fn to_vec(&self) -> Vec<Cell> {
+        self.iter().cloned().collect()
+    }
+    /// Drop kept cells that are empty again.
+    pub fn prune(&mut self) {
+        if self.cells.iter().any(|(_, c)| !kept(c)) {
+            Arc::make_mut(&mut self.cells).retain(|(_, c)| kept(c));
+        }
+    }
+    /// Put `cell` at column `at`, moving the cells from there right.
+    pub fn insert(&mut self, at: usize, cell: Cell) {
+        let at = at.min(self.len);
+        let v = Arc::make_mut(&mut self.cells);
+        let i = v.partition_point(|(c, _)| (*c as usize) < at);
+        for (c, _) in v[i..].iter_mut() {
+            *c += 1;
+        }
+        if kept(&cell) {
+            v.insert(i, (at as u32, cell));
+        }
+        self.len += 1;
+    }
+    /// Put `n` empty cells at column `at`.
+    pub fn insert_empty(&mut self, at: usize, n: usize) {
+        let at = at.min(self.len);
+        if self.cells.iter().any(|(c, _)| *c as usize >= at) {
+            for (c, _) in Arc::make_mut(&mut self.cells).iter_mut().filter(|(c, _)| *c as usize >= at) {
+                *c += n as u32;
+            }
+        }
+        self.len += n;
+    }
+    /// Take columns `range` out, moving the cells after it left.
+    pub fn remove_cols(&mut self, range: std::ops::Range<usize>) {
+        let (a, b) = (range.start.min(self.len), range.end.min(self.len));
+        if a >= b {
+            return;
+        }
+        let n = (b - a) as u32;
+        if self.cells.iter().any(|(c, _)| *c as usize >= a) {
+            let v = Arc::make_mut(&mut self.cells);
+            v.retain(|(c, _)| !((a..b).contains(&(*c as usize))));
+            for (c, _) in v.iter_mut().filter(|(c, _)| *c as usize >= b) {
+                *c -= n;
+            }
+        }
+        self.len -= b - a;
+    }
+    /// Make the row `n` columns long: new ones are empty, cells past `n`
+    /// go.
+    pub fn resize(&mut self, n: usize) {
+        if n < self.len && self.cells.last().is_some_and(|(c, _)| *c as usize >= n) {
+            Arc::make_mut(&mut self.cells).retain(|(c, _)| (*c as usize) < n);
+        }
+        self.len = n;
+    }
+    /// Add `cell` at the end.
+    pub fn push(&mut self, cell: Cell) {
+        if kept(&cell) {
+            Arc::make_mut(&mut self.cells).push((self.len as u32, cell));
+        }
+        self.len += 1;
+    }
+    /// Move each filled cell from column `c` to `to(c)` (a reordering of
+    /// the row's columns), keeping the row's id.
+    pub fn remap(&mut self, to: impl Fn(usize) -> usize) {
+        if self.cells.is_empty() {
+            return;
+        }
+        let v = Arc::make_mut(&mut self.cells);
+        for (c, _) in v.iter_mut() {
+            *c = to(*c as usize) as u32;
+        }
+        v.sort_by_key(|(c, _)| *c);
+    }
+    /// The cell at `c` taken out, leaving it empty.
+    pub fn take(&mut self, c: usize) -> Cell {
+        match self.find(c) {
+            Ok(i) if c < self.len => Arc::make_mut(&mut self.cells).remove(i).1,
+            _ => Cell::default(),
+        }
     }
 }
 
-impl Deref for CellRow {
-    type Target = Vec<Cell>;
-    fn deref(&self) -> &Vec<Cell> {
-        &self.cells
+/// Every cell of a [`CellRow`], empty ones included.
+pub struct RowIter<'a> {
+    row: &'a CellRow,
+    col: usize,
+    next: usize,
+}
+
+impl<'a> Iterator for RowIter<'a> {
+    type Item = &'a Cell;
+    fn next(&mut self) -> Option<&'a Cell> {
+        if self.col >= self.row.len {
+            return None;
+        }
+        let c = self.col;
+        self.col += 1;
+        match self.row.cells.get(self.next) {
+            Some((k, cell)) if *k as usize == c => {
+                self.next += 1;
+                Some(cell)
+            }
+            _ => Some(&EMPTY_CELL),
+        }
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.row.len - self.col;
+        (n, Some(n))
     }
 }
 
-impl DerefMut for CellRow {
-    fn deref_mut(&mut self) -> &mut Vec<Cell> {
-        Arc::make_mut(&mut self.cells)
-    }
-}
+impl ExactSizeIterator for RowIter<'_> {}
 
 impl<'a> IntoIterator for &'a CellRow {
     type Item = &'a Cell;
-    type IntoIter = std::slice::Iter<'a, Cell>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.cells.iter()
+    type IntoIter = RowIter<'a>;
+    fn into_iter(self) -> RowIter<'a> {
+        self.iter()
+    }
+}
+
+impl std::ops::Index<usize> for CellRow {
+    type Output = Cell;
+    fn index(&self, c: usize) -> &Cell {
+        match self.get(c) {
+            Some(cell) => cell,
+            None => panic!("column {c} is past the row's {} columns", self.len),
+        }
+    }
+}
+
+impl std::ops::IndexMut<usize> for CellRow {
+    fn index_mut(&mut self, c: usize) -> &mut Cell {
+        let len = self.len;
+        match self.get_mut(c) {
+            Some(cell) => cell,
+            None => panic!("column {c} is past the row's {len} columns"),
+        }
     }
 }
 
 impl PartialEq for CellRow {
     fn eq(&self, o: &CellRow) -> bool {
-        self.same(o) || *self.cells == *o.cells
+        self.len == o.len && (Arc::ptr_eq(&self.cells, &o.cells) || self.filled().filter(|(_, c)| kept(c)).eq(o.filled().filter(|(_, c)| kept(c))))
     }
 }
 
+/// In a file: a plain list of cells when most are filled (every cell, as
+/// versions before 4 wrote it), else `{"n": columns, "c": [[column, cell],
+/// ...]}` with only the filled ones (version 4).
 impl Serialize for CellRow {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        self.cells.serialize(s)
+        use serde::ser::{SerializeMap, SerializeSeq};
+        let filled = self.cells.iter().filter(|(_, c)| kept(c)).count();
+        if filled * 2 >= self.len {
+            let mut seq = s.serialize_seq(Some(self.len))?;
+            for c in self.iter() {
+                seq.serialize_element(c)?;
+            }
+            seq.end()
+        } else {
+            struct Filled<'a>(&'a CellRow);
+            impl Serialize for Filled<'_> {
+                fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                    s.collect_seq(self.0.cells.iter().filter(|(_, c)| kept(c)).map(|(k, c)| (k, c)))
+                }
+            }
+            let mut m = s.serialize_map(Some(if filled > 0 { 2 } else { 1 }))?;
+            m.serialize_entry("n", &self.len)?;
+            if filled > 0 {
+                m.serialize_entry("c", &Filled(self))?;
+            }
+            m.end()
+        }
+    }
+}
+
+/// A row as a file has it: every cell, or `{"n": columns, "c": [[column,
+/// cell], ...], "k": rows}` with only the filled ones, `k` rows alike
+/// (empty rows in a run are written once).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RowForm {
+    Dense(Vec<Cell>),
+    Sparse {
+        n: usize,
+        #[serde(default)]
+        c: Vec<(usize, Cell)>,
+        #[serde(default)]
+        k: Option<u64>,
+    },
+}
+
+/// What a file may make in memory, in bytes.
+fn file_budget() -> u64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    return crate::io::memory_budget();
+    #[cfg(target_arch = "wasm32")]
+    {
+        1u64 << 31
+    }
+}
+
+/// What one row of a table costs in memory, about (its cells' place, its
+/// height and a place in every layout), as [`COLUMN_BYTES`] for columns.
+const ROW_BYTES: u64 = 96;
+
+fn too_big<E: serde::de::Error>(what: &str) -> E {
+    E::custom(format!("{what} needs more memory than this Mac has"))
+}
+
+impl RowForm {
+    /// The row, and how many times it repeats.
+    fn row<E: serde::de::Error>(self) -> Result<(CellRow, u64), E> {
+        match self {
+            RowForm::Dense(v) => Ok((CellRow::new(v), 1)),
+            // A column past `n` widens the row: nothing in a file is
+            // dropped (the table's repair evens the rows out).
+            RowForm::Sparse { n, c, k } => {
+                let len = c.iter().map(|(col, _)| col.saturating_add(1)).max().unwrap_or(0).max(n);
+                // The table gets a column (its width and type) for each:
+                // a row claiming more than memory holds is refused, as an
+                // oversized file is.
+                if len as u64 > file_budget() / COLUMN_BYTES {
+                    return Err(too_big(&format!("a table row of {len} columns")));
+                }
+                Ok((CellRow::from_filled(len, c), k.unwrap_or(1).max(1)))
+            }
+        }
     }
 }
 
 impl<'de> Deserialize<'de> for CellRow {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        Ok(CellRow::new(Vec::<Cell>::deserialize(d)?))
+        Ok(RowForm::deserialize(d)?.row()?.0)
     }
+}
+
+/// A table's rows of cells, runs of empty rows written once.
+fn ser_grid<S: serde::Serializer>(g: &Grid, s: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    #[derive(Serialize)]
+    struct Run {
+        n: usize,
+        k: usize,
+    }
+    let mut seq = s.serialize_seq(None)?;
+    let mut i = 0;
+    while i < g.len() {
+        let empty = |r: &CellRow| r.filled().all(|(_, c)| !kept(c));
+        if empty(&g[i]) {
+            let n = g[i].len();
+            let k = g[i..].iter().take_while(|r| r.len() == n && empty(r)).count();
+            if k > 1 {
+                seq.serialize_element(&Run { n, k })?;
+                i += k;
+                continue;
+            }
+        }
+        seq.serialize_element(&g[i])?;
+        i += 1;
+    }
+    seq.end()
+}
+
+fn de_grid<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Grid, D::Error> {
+    let forms = Vec::<RowForm>::deserialize(d)?;
+    let mut out: Grid = Vec::new();
+    let mut total: u64 = 0;
+    for f in forms {
+        let (row, k) = f.row()?;
+        total = total.saturating_add(k);
+        if total.saturating_mul(ROW_BYTES) > file_budget() {
+            return Err(too_big(&format!("a table of {total} rows")));
+        }
+        for _ in 1..k {
+            out.push(CellRow::empty(row.len()));
+        }
+        out.push(row);
+    }
+    Ok(out)
+}
+
+/// Row heights, runs of alike rows written `[count, row]`.
+fn ser_rows<S: serde::Serializer>(rows: &[Row], s: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut seq = s.serialize_seq(None)?;
+    let mut i = 0;
+    while i < rows.len() {
+        let k = rows[i..].iter().take_while(|r| **r == rows[i]).count();
+        if k > 1 {
+            seq.serialize_element(&(k, rows[i]))?;
+        } else {
+            seq.serialize_element(&rows[i])?;
+        }
+        i += k;
+    }
+    seq.end()
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RowsForm {
+    One(Row),
+    Run(u64, Row),
+}
+
+fn de_rows<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Row>, D::Error> {
+    let forms = Vec::<RowsForm>::deserialize(d)?;
+    let total: u64 = forms.iter().map(|f| if let RowsForm::Run(k, _) = f { *k } else { 1 }).fold(0u64, |a, b| a.saturating_add(b));
+    if total.saturating_mul(ROW_BYTES) > file_budget() {
+        return Err(too_big(&format!("a table of {total} rows")));
+    }
+    let mut out = Vec::with_capacity(total as usize);
+    for f in forms {
+        match f {
+            RowsForm::One(r) => out.push(r),
+            RowsForm::Run(k, r) => out.extend(std::iter::repeat_n(r, k as usize)),
+        }
+    }
+    Ok(out)
 }
 
 impl JsonSchema for CellRow {
@@ -207,10 +590,14 @@ impl JsonSchema for CellRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TableData {
     /// Rows of cells, top to bottom; every row has one cell per column.
+    #[serde(serialize_with = "ser_grid", deserialize_with = "de_grid")]
+    #[schemars(with = "Vec<CellRow>")]
     pub cells: Grid,
     /// Width and type of each column, left to right.
     pub columns: Vec<Column>,
     /// Height of each row, top to bottom.
+    #[serde(serialize_with = "ser_rows", deserialize_with = "de_rows")]
+    #[schemars(with = "Vec<Row>")]
     pub rows: Vec<Row>,
     /// Merged ranges ("A1:C1"). The top-left cell holds the content.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1343,7 +1730,7 @@ impl TableData {
     /// points high.
     pub fn new(rows: usize, cols: usize, body: f64) -> TableData {
         let cols = cols.clamp(1, MAX_COLUMNS);
-        let rows = rows.clamp(1, MAX_ROWS.min(max_cells() / cols));
+        let rows = rows.clamp(1, max_rows(cols).max(1));
         TableData {
             cells: (0..rows).map(|_| CellRow::empty(cols)).collect(),
             columns: (0..cols).map(|_| Column::new((body * COLUMN_EMS).round())).collect(),
@@ -1581,10 +1968,8 @@ impl TableData {
         let cols = self.n_cols();
         let h = height.unwrap_or_else(|| self.rows.get(at.min(self.rows.len().saturating_sub(1))).map(|r| r.height).unwrap_or(48.0));
         let rows_before = self.n_rows();
-        for _ in 0..n {
-            self.cells.insert(at, CellRow::empty(cols));
-            self.rows.insert(at, Row::new(h));
-        }
+        self.cells.splice(at..at, (0..n).map(|_| CellRow::empty(cols)));
+        self.rows.splice(at..at, (0..n).map(|_| Row::new(h)));
         let hdr = self.header_rows as usize;
         if at < hdr {
             self.header_rows = (hdr + n).min(MAX_HEADERS as usize) as u8;
@@ -1618,13 +2003,9 @@ impl TableData {
         let at = at.min(self.n_cols());
         let w = width.unwrap_or_else(|| self.columns.get(at.min(self.columns.len().saturating_sub(1))).map(|c| c.width).unwrap_or(200.0));
         for row in &mut self.cells {
-            for _ in 0..n {
-                row.insert(at, Cell::default());
-            }
+            row.insert_empty(at, n);
         }
-        for _ in 0..n {
-            self.columns.insert(at, Column::new(w));
-        }
+        self.columns.splice(at..at, (0..n).map(|_| Column::new(w)));
         if at < self.header_columns as usize {
             self.header_columns = (self.header_columns as usize + n).min(MAX_HEADERS as usize) as u8;
         }
@@ -1638,7 +2019,7 @@ impl TableData {
         }
         let n = n.min(total - at);
         for row in &mut self.cells {
-            row.drain(at..at + n);
+            row.remove_cols(at..at + n);
         }
         self.columns.drain(at..at + n);
         let in_hdr = (at..at + n).filter(|c| *c < self.header_columns as usize).count();
@@ -1751,8 +2132,7 @@ impl TableData {
             }
         }
         for row in &mut self.cells {
-            let moved: Vec<Cell> = order.iter().map(|&o| row.get(o).cloned().unwrap_or_default()).collect();
-            row.set(moved);
+            row.remap(|c| new_of[c]);
         }
         let mut cols: Vec<Option<Column>> = std::mem::take(&mut self.columns).into_iter().map(Some).collect();
         self.columns = order.iter().map(|&o| cols[o].take().unwrap_or_else(|| Column::new(200.0))).collect();
@@ -1826,7 +2206,7 @@ impl TableData {
         for r in range.r0..=range.r1 {
             for c in range.c0..=range.c1 {
                 if (r, c) != (range.r0, range.c0) {
-                    self.cells[r][c] = Cell::default();
+                    self.cells[r].take(c);
                 }
             }
         }
@@ -1939,7 +2319,7 @@ impl TableData {
     /// grow to (a table read from a file may be bigger, and is kept whole).
     pub fn check_size(&self) -> Result<(), String> {
         if !fits_limits(self.n_rows(), self.n_cols()) {
-            return Err(format!("a table has 1 to {MAX_ROWS} rows and 1 to {MAX_COLUMNS} columns, and as many cells as fit in memory ({} here)", max_cells()));
+            return Err(format!("a table has 1 to {MAX_ROWS} rows and 1 to {MAX_COLUMNS} columns, as far as memory allows"));
         }
         Ok(())
     }
@@ -1992,7 +2372,7 @@ impl TableData {
         let cols = self.cells.iter().map(|r| r.len()).max().unwrap_or(0).max(self.columns.len()).max(1);
         for row in &mut self.cells {
             if row.len() != cols {
-                row.resize(cols, Cell::default());
+                row.resize(cols);
             }
         }
         let col_w = (body * COLUMN_EMS).round();
@@ -2172,7 +2552,7 @@ impl Limit {
         match self {
             Limit::Rows => format!("a table has at most {MAX_ROWS} rows"),
             Limit::Columns => format!("a table has at most {MAX_COLUMNS} columns"),
-            Limit::Cells => format!("the table would need more memory than this Mac has (at most {} cells here)", max_cells()),
+            Limit::Cells => "the table would need more memory than this Mac has".to_string(),
             Limit::Input => format!("a cell holds at most {MAX_INPUT} characters"),
             Limit::Formula => format!("a formula is at most {MAX_FORMULA} characters"),
         }
@@ -2183,7 +2563,7 @@ impl Limit {
             Some(Limit::Rows)
         } else if cols > MAX_COLUMNS {
             Some(Limit::Columns)
-        } else if rows.saturating_mul(cols) > max_cells() {
+        } else if !fits_memory(rows, cols) {
             Some(Limit::Cells)
         } else {
             None

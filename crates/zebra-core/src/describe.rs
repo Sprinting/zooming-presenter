@@ -548,7 +548,7 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                             ElementKind::Text(t) => t.text.to_lowercase(),
                             ElementKind::Image(i) => i.alt.to_lowercase(),
                             ElementKind::Video(v) => v.alt.to_lowercase(),
-                            ElementKind::Table(t) => t.cells.iter().flatten().map(|c| c.input.to_lowercase()).collect::<Vec<_>>().join("\n"),
+                            ElementKind::Table(t) => t.cells.iter().flat_map(|r| r.filled()).map(|(_, c)| c.input.to_lowercase()).collect::<Vec<_>>().join("\n"),
                             ElementKind::Chart(c) => {
                                 let p = c.plot(d);
                                 std::iter::once(c.title.to_lowercase()).chain(p.categories.iter().chain(p.series.iter().map(|s| &s.name)).map(|s| s.to_lowercase())).collect::<Vec<_>>().join("\n")

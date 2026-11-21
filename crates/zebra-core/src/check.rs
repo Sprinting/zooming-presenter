@@ -213,17 +213,44 @@ fn repair_table_json(k: &mut serde_json::Value) {
         Some(Value::Array(rows)) => rows,
         _ => vec![],
     };
+    // A cell with a value or format that doesn't read keeps its input.
+    let fix_cell = |c: &mut Value| {
+        if Cell::deserialize(&*c).is_err() {
+            let input = c.get("input").and_then(|x| x.as_str()).map(str::to_string);
+            *c = json!(input.unwrap_or_default());
+        }
+    };
     for row in cells.iter_mut() {
+        // Version 4's filled cells only: {"n": columns, "c": [[column,
+        // cell], ...], "k": rows}.
+        if let Some(o) = row.as_object_mut() {
+            if !o.get("n").is_some_and(|n| n.is_u64()) {
+                o.insert("n".into(), json!(0));
+            }
+            if o.get("k").is_some_and(|k| !k.is_u64()) {
+                o.remove("k");
+            }
+            let mut pairs = match o.remove("c") {
+                Some(Value::Array(v)) => v,
+                _ => vec![],
+            };
+            // A pair that isn't [column, cell] has nowhere to go.
+            pairs.retain(|p| p.as_array().is_some_and(|a| a.len() == 2 && a[0].is_u64()));
+            for p in pairs.iter_mut() {
+                if let Some(c) = p.get_mut(1) {
+                    fix_cell(c);
+                }
+            }
+            o.insert("c".into(), Value::Array(pairs));
+            o.retain(|k, _| matches!(k.as_str(), "n" | "c" | "k"));
+            continue;
+        }
         if !row.is_array() {
             *row = json!([]);
         }
         if let Some(r) = row.as_array_mut() {
             for c in r.iter_mut() {
-                if Cell::deserialize(&*c).is_err() {
-                    // A cell with a value or format that doesn't read keeps its input.
-                    let input = c.get("input").and_then(|x| x.as_str()).map(str::to_string);
-                    *c = json!(input.unwrap_or_default());
-                }
+                fix_cell(c);
             }
         }
     }
@@ -245,7 +272,8 @@ fn repair_table_json(k: &mut serde_json::Value) {
         o.insert(key.into(), Value::Array(v));
     };
     list(o, "columns", |x| Column::deserialize(x).is_ok(), json!({"width": 100}));
-    list(o, "rows", |x| Row::deserialize(x).is_ok(), json!({"height": 48}));
+    // Rows: a row, or a run of alike rows `[count, row]` (version 4).
+    list(o, "rows", |x| Row::deserialize(x).is_ok() || <(u64, Row)>::deserialize(x).is_ok(), json!({"height": 48}));
     // Lists whose bad entries go.
     for (key, good) in [("merges", (|x: &Value| CellRange::deserialize(x).is_ok()) as fn(&Value) -> bool), ("cell_formats", |x: &Value| RangeFormat::deserialize(x).is_ok())] {
         if let Some(v) = o.get_mut(key) {

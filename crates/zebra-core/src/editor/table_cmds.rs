@@ -440,11 +440,17 @@ fn fit_columns(m: &dyn TextMeasure, theme: &Theme, t: &mut TableData) {
 /// rows, formats, text size) are the same.
 pub(super) fn measure_table(m: &dyn TextMeasure, theme: &Theme, e: &mut Element, prev: Option<&TableData>) {
     let ElementKind::Table(t) = &mut e.kind else { return };
-    let reuse: std::collections::HashMap<u64, (&crate::table::CellRow, f64, f64)> = match prev {
-        Some(p) if p.same_meta(t) && p.columns.len() == t.columns.len() && p.columns.iter().zip(&t.columns).all(|(a, b)| a.width == b.width) => {
-            p.cells.iter().zip(&p.rows).map(|(c, r)| (c.id(), (c, r.fit, r.height))).collect()
-        }
-        _ => Default::default(),
+    let prev = prev.filter(|p| p.same_meta(t) && p.columns.len() == t.columns.len() && p.columns.iter().zip(&t.columns).all(|(a, b)| a.width == b.width));
+    // Each row's row before the edit (by id), or None for a new row: the
+    // same place when no row came or went (a cell edit).
+    let aligned = prev.is_some_and(|p| p.cells.len() == t.cells.len() && p.cells.iter().zip(&t.cells).all(|(a, b)| a.id() == b.id()));
+    let was: Vec<Option<usize>> = match prev {
+        Some(p) if !aligned => rows_before(&p.cells, &t.cells),
+        _ => vec![],
+    };
+    let reuse = |r: usize| {
+        let i = if aligned { r } else { was.get(r).copied().flatten()? };
+        Some((prev?.cells.get(i)?, prev?.rows.get(i)?))
     };
     let body = theme.text_style(TextStyle::Body).size;
     let l = t.layout(body);
@@ -457,27 +463,28 @@ pub(super) fn measure_table(m: &dyn TextMeasure, theme: &Theme, e: &mut Element,
     let n = t.n_rows();
     let mut fits = vec![0.0f64; n];
     for (r, fit) in fits.iter_mut().enumerate() {
-        if let Some((row, f, h)) = reuse.get(&t.cells[r].id()) {
+        if let Some((row, &crate::table::Row { fit: f, height: h, .. })) = reuse(r) {
             // The same row, or one whose formulas were only rewritten
             // (references moved by an insert above): it shows the same.
             let shows_same = || {
                 row.len() == t.cells[r].len()
-                    && row.iter().zip(t.cells[r].iter()).all(|(a, b)| {
-                        if a.is_formula() && b.is_formula() { a.value == b.value && a.format == b.format } else { a == b }
+                    && row.filled_count() == t.cells[r].filled_count()
+                    && row.filled().zip(t.cells[r].filled()).all(|((ca, a), (cb, b))| {
+                        ca == cb && if a.is_formula() && b.is_formula() { a.value == b.value && a.format == b.format } else { a == b }
                     })
             };
-            if *h == t.rows[r].height && (row.same(&t.cells[r]) || shows_same()) {
-                *fit = *f;
+            if h == t.rows[r].height && (row.same(&t.cells[r]) || shows_same()) {
+                *fit = f;
                 continue;
             }
         }
         let mut need: f64 = 0.0;
-        for c in 0..t.n_cols() {
+        // Only filled cells take room (an empty one is a plain line).
+        for (c, cell) in t.cells[r].filled() {
             let span = t.span(r, c);
             if (span.r0, span.c0) != (r, c) || span.rows() > 1 {
                 continue; // drawn by its anchor; tall merges don't grow rows
             }
-            let cell = &t.cells[r][c];
             if cell.is_empty() {
                 continue;
             }
@@ -510,4 +517,32 @@ pub(super) fn measure_table(m: &dyn TextMeasure, theme: &Theme, e: &mut Element,
     }
     let (w, h) = t.size(body);
     e.size = Size { w, h };
+}
+
+/// Where each row of `now` was in `before`, matched by row id. Rows keep
+/// their order through most edits (a cell edit, rows put in or taken
+/// out), so one walk down both lines them up; a new row has an id above
+/// every old one. Rows that moved (a sort) are found by id.
+fn rows_before(before: &[crate::table::CellRow], now: &[crate::table::CellRow]) -> Vec<Option<usize>> {
+    let newest = before.iter().map(|r| r.id()).max().unwrap_or(0);
+    let mut out = Vec::with_capacity(now.len());
+    let mut j = 0;
+    for r in now {
+        if r.id() > newest {
+            out.push(None);
+            continue;
+        }
+        // Rows between were taken out, or this one moved down.
+        while j < before.len() && before[j].id() != r.id() {
+            j += 1;
+        }
+        if j == before.len() {
+            // Moved up: out of line.
+            let at: std::collections::HashMap<u64, usize> = before.iter().enumerate().map(|(i, r)| (r.id(), i)).collect();
+            return now.iter().map(|r| at.get(&r.id()).copied()).collect();
+        }
+        out.push(Some(j));
+        j += 1;
+    }
+    out
 }

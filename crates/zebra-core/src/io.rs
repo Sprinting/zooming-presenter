@@ -59,6 +59,11 @@ pub fn required_version(doc: &Document) -> u32 {
     if doc.elements.values().any(|e| matches!(e.kind, ElementKind::Chart(_))) {
         v = v.max(3);
     }
+    // 4: tables (and charts' data) keep only their filled cells, and runs
+    // of alike rows once.
+    if doc.elements.values().any(|e| matches!(e.kind, ElementKind::Table(_) | ElementKind::Chart(_))) {
+        v = v.max(4);
+    }
     v.min(crate::FORMAT_VERSION)
 }
 
