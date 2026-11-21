@@ -275,7 +275,7 @@ fn damaged_files_give_an_error_not_a_panic() {
         }
     }
     assert!(matches!(zebra_import::open(std::path::Path::new("/nonexistent/file.pdf")), Err(ImportError::Read(_))));
-    assert_eq!(ImportNote::ALL.len(), 20);
+    assert_eq!(ImportNote::ALL.len(), 21);
 }
 
 /// PDFs for `cargo run -p zebra-pdf --example bench` (the helper against

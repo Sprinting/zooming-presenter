@@ -120,10 +120,13 @@ pub fn rasterize(svg: &[u8], style: &SvgStyle, w: u32, h: u32) -> Option<Vec<u8>
     }
     let (dx, dy) = ((w as f64 - size.width() as f64 * k) / 2.0, (h as f64 - size.height() as f64 * k) / 2.0);
     let t = tiny_skia::Transform::from_row(k as f32, 0.0, 0.0, k as f32, dx as f32, dy as f32);
-    if !affordable(&tree, t, w, h) {
-        return None;
+    if affordable(&tree, t, w, h) {
+        resvg::render(&tree, t, &mut pm.as_mut());
+    } else {
+        // Only the parts too costly to draw are left out (B5): the rest
+        // draws as it would.
+        draw_parts(tree.root(), t, &mut pm.as_mut(), w, h);
     }
-    resvg::render(&tree, t, &mut pm.as_mut());
     let mut px = pm.take();
     if style.sticker {
         sticker(&mut px, w as usize, h as usize, (w.max(h) as f64 * 0.028).max(1.5));
@@ -146,31 +149,68 @@ const MAX_FILTER_AREA: f32 = 16384.0 * 16384.0;
 /// Masks and clip paths are drawn canvas-sized, so the raster cap bounds
 /// them.
 const MAX_TILE_AREA: f32 = 8192.0 * 8192.0;
-/// Most nodes in one SVG (clip paths, masks and patterns included).
-const MAX_NODES: usize = 100_000;
-
 /// Whether `tree` drawn with `t` into `w`x`h` pixels stays cheap enough to
-/// draw at all. A 277-byte SVG with `feMorphology radius=100000` pinned a
-/// core for minutes (hostile-input audit H5); such pictures are drawn as
-/// the "unreadable picture" placeholder instead.
+/// draw whole. A 277-byte SVG with `feMorphology radius=100000` pinned a
+/// core for minutes (hostile-input audit H5). There is no limit on how
+/// many nodes an SVG has: it is drawn on a picture worker, never the
+/// screen's thread, however long it takes.
 fn affordable(tree: &usvg::Tree, t: tiny_skia::Transform, w: u32, h: u32) -> bool {
-    let mut c = Cost { nodes: 0, canvas: w as f64 * h as f64, w: w as f64, h: h as f64 };
-    c.group(tree.root(), t) && c.nodes <= MAX_NODES
+    Cost::new(w, h).group(tree.root(), t)
+}
+
+/// Draw what of `g`'s children is cheap enough, each where it would be
+/// drawn with the whole picture. A part that isn't is left out: a path
+/// whole; a group whole when it has effects of its own (opacity, a clip,
+/// a mask, a filter), since drawing its children without them would draw
+/// something else; a plain group part by part.
+fn draw_parts(g: &usvg::Group, t: tiny_skia::Transform, pm: &mut tiny_skia::PixmapMut, w: u32, h: u32) {
+    let parent = t.pre_concat(g.abs_transform());
+    for n in g.children() {
+        if Cost::new(w, h).node(n, t) {
+            if let Some(b) = n.abs_layer_bounding_box() {
+                // resvg draws a node at its box's corner: put it back.
+                resvg::render_node(n, parent.pre_translate(b.x(), b.y()), pm);
+            }
+        } else if let usvg::Node::Group(c) = n {
+            if !c.should_isolate() {
+                draw_parts(c, t, pm, w, h);
+            }
+        }
+    }
 }
 
 struct Cost {
-    nodes: usize,
     canvas: f64,
     w: f64,
     h: f64,
 }
 
 impl Cost {
+    fn new(w: u32, h: u32) -> Cost {
+        Cost { canvas: w as f64 * h as f64, w: w as f64, h: h as f64 }
+    }
+
+    /// One node and what it holds (clip paths, masks, patterns and
+    /// filter images hold trees too).
+    fn node(&mut self, n: &usvg::Node, t: tiny_skia::Transform) -> bool {
+        let ok = match n {
+            usvg::Node::Group(c) => self.group(c, t),
+            usvg::Node::Path(p) => {
+                let at = t.pre_concat(p.abs_transform());
+                if !p.data().bounds().transform(at).is_some_and(|b| near(b.left()) && near(b.right()) && near(b.top()) && near(b.bottom())) {
+                    return false;
+                }
+                let paints = p.fill().map(|f| f.paint()).into_iter().chain(p.stroke().map(|s| s.paint()));
+                paints.into_iter().all(|paint| tile_ok(paint, at))
+            }
+            _ => true,
+        };
+        let mut sub_ok = true;
+        n.subroots(|sub| sub_ok = sub_ok && self.group(sub, t));
+        ok && sub_ok
+    }
+
     fn group(&mut self, g: &usvg::Group, t: tiny_skia::Transform) -> bool {
-        self.nodes += 1;
-        if self.nodes > MAX_NODES {
-            return false;
-        }
         let (sx, sy) = t.pre_concat(g.abs_transform()).get_scale();
         for f in g.filters() {
             let r = f.rect();
@@ -197,31 +237,7 @@ impl Cost {
                 }
             }
         }
-        for n in g.children() {
-            let ok = match n {
-                usvg::Node::Group(c) => self.group(c, t),
-                usvg::Node::Path(p) => {
-                    self.nodes += 1;
-                    let at = t.pre_concat(p.abs_transform());
-                    if !p.data().bounds().transform(at).is_some_and(|b| near(b.left()) && near(b.right()) && near(b.top()) && near(b.bottom())) {
-                        return false;
-                    }
-                    let paints = p.fill().map(|f| f.paint()).into_iter().chain(p.stroke().map(|s| s.paint()));
-                    self.nodes <= MAX_NODES && paints.into_iter().all(|paint| tile_ok(paint, at))
-                }
-                _ => {
-                    self.nodes += 1;
-                    self.nodes <= MAX_NODES
-                }
-            };
-            // Clip paths, masks, patterns and filter images hold trees too.
-            let mut sub_ok = true;
-            n.subroots(|sub| sub_ok = sub_ok && self.group(sub, t));
-            if !(ok && sub_ok) {
-                return false;
-            }
-        }
-        true
+        g.children().iter().all(|n| self.node(n, t))
     }
 }
 
@@ -480,13 +496,27 @@ mod tests {
     }
 
     /// Hostile-input audit H5: this 8 KB SVG (feMorphology radius 100000)
-    /// pinned a core for minutes. Now it is refused at once.
+    /// pinned a core for minutes. Now its costly part is left out at once.
     #[test]
-    fn a_morphology_bomb_is_refused_quickly() {
+    fn a_morphology_bomb_is_left_out_quickly() {
         let svg = include_bytes!("../tests/data/blur.svg");
         let t = std::time::Instant::now();
-        assert!(rasterize(svg, &SvgStyle::default(), 400, 400).is_none());
+        let _ = rasterize(svg, &SvgStyle::default(), 400, 400);
         assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
+    }
+
+    /// B5: one costly part no longer makes the whole picture unreadable:
+    /// it alone is left out, and the rest draws where it would.
+    #[test]
+    fn only_the_costly_part_is_left_out() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><filter id="bomb"><feMorphology radius="100000"/></filter><rect width="50" height="100" fill="#0000ff"/><g><rect x="50" width="50" height="100" fill="red" filter="url(#bomb)"/><rect x="60" y="10" width="10" height="10" fill="#00ff00"/></g><g opacity="0.5"><rect x="0" y="90" width="10" height="10" fill="red"/><path d="M0 0 L1e12 1e12 L0 1e12 Z"/></g></svg>"##;
+        let t = std::time::Instant::now();
+        let px = rasterize(svg, &SvgStyle::default(), 100, 100).unwrap();
+        assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
+        assert_eq!(at(&px, 100, 20, 50), [0, 0, 255, 255], "the plain part draws");
+        assert_eq!(at(&px, 100, 65, 15), [0, 255, 0, 255], "a plain group draws what it can");
+        assert_eq!(at(&px, 100, 90, 50)[3], 0, "the costly filter is left out");
+        assert_eq!(at(&px, 100, 5, 95), [0, 0, 255, 255], "a group with effects of its own goes whole");
     }
 
     /// Ordinary filters still draw, a big blur too (box blurs cost the same
@@ -499,11 +529,12 @@ mod tests {
     }
 
     /// Audit T-C2: a pattern tile of 5,000,000 units (and a fuzzed EMF's
-    /// conversion) made resvg allocate terabytes and abort.
+    /// conversion) made resvg allocate terabytes and abort. They are left
+    /// out (nothing else in them draws), and never abort.
     #[test]
-    fn huge_pattern_tiles_are_refused() {
+    fn huge_pattern_tiles_are_left_out() {
         for svg in [&include_bytes!("../tests/data/pattern-bomb.svg")[..], &include_bytes!("../tests/data/emf-pattern-bomb.svg")[..]] {
-            assert!(rasterize(svg, &SvgStyle::default(), 400, 400).is_none());
+            let _ = rasterize(svg, &SvgStyle::default(), 400, 400);
         }
         let ok = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><pattern id="p" patternUnits="userSpaceOnUse" width="10" height="10"><rect width="5" height="5" fill="red"/></pattern></defs><rect width="100" height="100" fill="url(#p)"/></svg>"#;
         let px = rasterize(ok, &SvgStyle::default(), 400, 400).unwrap();
@@ -511,26 +542,29 @@ mod tests {
     }
 
     /// Audit T-C3: paths reaching ~1e9 px made tiny-skia panic (one of
-    /// them again while unwinding, which aborts).
+    /// them again while unwinding, which aborts). They are left out.
     #[test]
-    fn far_flung_paths_are_refused() {
+    fn far_flung_paths_are_left_out() {
         for svg in [
             &include_bytes!("../tests/data/tinyskia-curve.svg")[..],
             &include_bytes!("../tests/data/tinyskia-rect.svg")[..],
             &include_bytes!("../tests/data/meta-crash-22912.svg")[..],
         ] {
-            assert!(rasterize(svg, &SvgStyle::default(), 480, 320).is_none());
+            let _ = rasterize(svg, &SvgStyle::default(), 480, 320);
         }
     }
 
+    /// B5: more than 100,000 nodes was "unreadable". Any number draws (on
+    /// a picture worker, never the screen's thread).
     #[test]
-    fn too_many_nodes_are_refused() {
+    fn many_nodes_draw() {
         let mut svg = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">"#);
-        for _ in 0..100_001 {
+        for _ in 0..150_000 {
             svg.push_str(r#"<rect width="1" height="1"/>"#);
         }
         svg.push_str("</svg>");
-        assert!(rasterize(svg.as_bytes(), &SvgStyle::default(), 10, 10).is_none());
+        let px = rasterize(svg.as_bytes(), &SvgStyle::default(), 10, 10).unwrap();
+        assert_eq!(at(&px, 10, 0, 0)[3], 255);
     }
 
     #[test]

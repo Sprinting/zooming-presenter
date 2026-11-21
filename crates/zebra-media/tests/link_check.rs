@@ -420,8 +420,8 @@ fn a_download_can_be_cancelled() {
 }
 
 /// Hostile answers to a check: a redirect loop, an answer that never
-/// ends, a thumbnail that claims to be enormous. Each ends quickly with
-/// a message, reading only a bounded part of what is sent.
+/// ends, a thumbnail that claims to be enormous. Each ends quickly,
+/// reading only a bounded part of what is sent.
 #[test]
 fn hostile_answers_are_bounded() {
     let s = server();
@@ -431,7 +431,10 @@ fn hostile_answers_are_bounded() {
     assert_eq!(c.check(&format!("{}/endless.mp4", s.base)).unwrap().kind, LinkKind::File, "only its start is read");
     assert_eq!(c.check("https://youtu.be/endlessVid1"), Err(LinkError::NotFound), "512 KB of an endless lookup isn't an answer");
     assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
-    assert_eq!(c.check("https://youtu.be/hugeThumb01"), Err(LinkError::NotVideo), "a thumbnail too big to decode");
+    // A thumbnail too big for memory is no poster; the link still comes in
+    // (B10), with the lookup's own thumbnail.
+    let huge = c.check("https://youtu.be/hugeThumb01").unwrap();
+    assert_eq!((huge.kind, huge.width, huge.height), (LinkKind::Youtube, 48, 28));
     // Empty and silly input never reaches the network.
     for bad in ["", "   ", "https://", "\u{0}", "https://exa mple.com/v.mp4"] {
         assert_eq!(c.check(bad), Err(LinkError::NotLink), "{bad:?}");

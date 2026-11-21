@@ -571,8 +571,9 @@ pub fn parse_capture(p: &Value) -> Result<CaptureReq, RpcError> {
         match p.get(k) {
             None | Some(Value::Null) => Ok(None),
             Some(v) => match v.as_u64() {
-                Some(n) if (16..=8192).contains(&n) => Ok(Some(n as u32)),
-                _ => Err(RpcError::invalid(format!("{k} must be an integer between 16 and 8192"))),
+                // No upper limit but memory (checked with both sides known).
+                Some(n) if n >= 16 && n <= i32::MAX as u64 => Ok(Some(n as u32)),
+                _ => Err(RpcError::invalid(format!("{k} must be an integer of 16 or more"))),
             },
         }
     };

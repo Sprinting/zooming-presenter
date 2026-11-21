@@ -1722,6 +1722,14 @@ import-note-placeholder = { $count ->
     [one] 1 page couldn't be drawn and shows a placeholder.
    *[other] { $count } pages couldn't be drawn and show a placeholder.
 }
+import-note-notes = { $count ->
+    [one] The speaker notes on slide { $slides } couldn't be read.
+   *[other] The speaker notes on slides { $slides } couldn't be read.
+}
+import-note-notes-count = { $count ->
+    [one] The speaker notes on 1 slide couldn't be read.
+   *[other] The speaker notes on { $count } slides couldn't be read.
+}
 pdf-note-not-sharper = Some PDF pages can't be drawn sharper.
 
 ## Tables

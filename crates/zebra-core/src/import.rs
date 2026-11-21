@@ -144,6 +144,9 @@ pub enum ImportNote {
     /// PDF pages that couldn't be drawn (too much memory or time, or
     /// PDFium couldn't open them) came in as grey placeholders.
     Placeholder,
+    /// Slides whose speaker notes couldn't be read (damaged, or more than
+    /// memory holds) came in without them.
+    Notes,
 }
 
 /// Most formatted spans an imported text box keeps (the text renderer
@@ -151,7 +154,7 @@ pub enum ImportNote {
 pub const MAX_IMPORT_SPANS: usize = 60_000;
 
 impl ImportNote {
-    pub const ALL: [ImportNote; 20] = [
+    pub const ALL: [ImportNote; 21] = [
         ImportNote::PageSkipped,
         ImportNote::HiddenSlide,
         ImportNote::Chart,
@@ -172,6 +175,7 @@ impl ImportNote {
         ImportNote::Simplified,
         ImportNote::Design,
         ImportNote::Placeholder,
+        ImportNote::Notes,
     ];
 
     /// English, for the API and the undo history of agents.
@@ -197,6 +201,7 @@ impl ImportNote {
             ImportNote::Other => ("other object left out", "other objects left out"),
             ImportNote::Simplified => ("slide with formatting simplified", "slides with formatting simplified"),
             ImportNote::Design => ("slide design that couldn't be read", "slide designs that couldn't be read"),
+            ImportNote::Notes => ("slide's speaker notes couldn't be read", "slides' speaker notes couldn't be read"),
         };
         format!("{n} {}", if n == 1 { one } else { many })
     }

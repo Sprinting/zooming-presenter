@@ -182,6 +182,9 @@ impl Reader for PptxReader {
                 pending.extend(texts.into_iter().map(|t| (page, t)));
                 let name = slide_title(slide).unwrap_or_else(|| (opts.slide_name)(i + 1));
                 deck.pages.push(ImportedPage { w: sw as f64 * k, h: sh as f64 * k, name, items, notes: slide.notes.trim().to_string(), slide: true, voiceover });
+                if self.package.notes_broken(&slide.part_path) {
+                    deck.note_slide(ImportNote::Notes, i + 1);
+                }
                 ctl.page_done();
                 // The slide's own part info isn't needed again.
                 infos.remove(&slide.part_path);
@@ -1089,7 +1092,7 @@ impl<'a> SlideReader<'a> {
                 }
             };
         }
-        let Some(mut bytes) = self.src.read(path, crate::pptx_media::MAX_CONVERTED) else {
+        let Some(mut bytes) = self.src.read(path, crate::pptx_media::max_converted()) else {
             self.note(if metafile { ImportNote::Metafile } else { ImportNote::Picture });
             return None;
         };
@@ -1497,12 +1500,12 @@ pub fn web_link(url: &str) -> Option<String> {
 /// None when it can't be drawn.
 fn metafile_svg(bytes: &[u8]) -> Option<Vec<u8>> {
     use std::io::Read;
-    /// A compressed metafile bigger than this is refused.
-    const MAX: u64 = 64 << 20;
+    // A compressed metafile unpacking past what memory allows is left out.
+    let max = crate::pptx_media::max_converted();
     let mut plain = vec![];
     let bytes = if bytes.starts_with(&[0x1f, 0x8b]) {
-        flate2::read::GzDecoder::new(bytes).take(MAX + 1).read_to_end(&mut plain).ok()?;
-        (plain.len() as u64 <= MAX).then_some(plain.as_slice())?
+        flate2::read::GzDecoder::new(bytes).take(max + 1).read_to_end(&mut plain).ok()?;
+        (plain.len() as u64 <= max).then_some(plain.as_slice())?
     } else {
         bytes
     };

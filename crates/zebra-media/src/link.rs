@@ -26,8 +26,11 @@ use zebra_core::LinkKind;
 const HEAD_BYTES: u64 = 64 * 1024;
 /// Most of a playlist or an oEmbed answer that is read.
 const TEXT_BYTES: u64 = 512 * 1024;
-/// Most of a thumbnail that is read.
-const IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+/// Most of a thumbnail that is read: what memory allows (a thumbnail is
+/// usually well under 1 MB; reading stops at the check's deadline too).
+fn image_bytes() -> u64 {
+    zebra_core::io::memory_budget() / 16
+}
 /// A download that receives nothing for this long has stalled.
 pub const DOWNLOAD_IDLE: Duration = Duration::from_secs(30);
 /// Space a download leaves free on the disk, and below which it stops.
@@ -326,11 +329,11 @@ impl Checker {
         Ok(Checked { kind: if live { LinkKind::Live } else { LinkKind::Stream }, width: w, height: h, duration, poster: None, title: None })
     }
 
-    /// A thumbnail at `url`, when it is a picture of a sensible size.
-    /// Err(NotVideo) for one too big to decode safely.
+    /// A thumbnail at `url`, when it is a picture whose pixels fit in
+    /// memory. One that doesn't is no poster; the link still comes in.
     fn thumbnail(&self, url: &str, deadline: Instant) -> Result<Option<image::DynamicImage>, LinkError> {
-        match self.get(url, IMAGE_BYTES, false, deadline) {
-            Ok(b) if b.head.status < 400 => decode_thumbnail(&b.body),
+        match self.get(url, image_bytes(), false, deadline) {
+            Ok(b) if b.head.status < 400 => Ok(decode_thumbnail(&b.body)),
             Err(LinkError::Http) => Err(LinkError::Http),
             _ => Ok(None),
         }
@@ -685,34 +688,28 @@ pub fn parse_oembed(body: &[u8]) -> Option<OEmbed> {
     })
 }
 
-/// Decode a thumbnail, refusing one too big to be a thumbnail (more than
-/// 8192 pixels a side or `weblink::POSTER_MAX_PIXELS` in all): its size
-/// is read from the header before anything is decoded, and the decoder
-/// is held to it. Ok(None) when it isn't a picture.
-pub fn decode_thumbnail(bytes: &[u8]) -> Result<Option<image::DynamicImage>, LinkError> {
-    let Ok(fmt) = image::guess_format(bytes) else { return Ok(None) };
+/// Decode a thumbnail of any size whose pixels fit in memory
+/// (`weblink::poster_fits`): its size is read from the header before
+/// anything is decoded, and the decoder is held to it. Ok(None) when it
+/// isn't a picture, or is too big for memory (no poster: the link still
+/// comes in, B10).
+pub fn decode_thumbnail(bytes: &[u8]) -> Option<image::DynamicImage> {
+    let fmt = image::guess_format(bytes).ok()?;
     if !matches!(fmt, image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP) {
-        return Ok(None);
+        return None;
     }
     let reader = || image::ImageReader::with_format(std::io::Cursor::new(bytes), fmt);
-    let Ok((w, h)) = reader().into_dimensions() else { return Ok(None) };
-    if w == 0 || h == 0 {
-        return Ok(None);
-    }
+    let (w, h) = reader().into_dimensions().ok()?;
     if !weblink::poster_fits(w, h) {
-        return Err(LinkError::NotVideo);
+        return None;
     }
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(weblink::POSTER_MAX_SIDE);
-    limits.max_image_height = Some(weblink::POSTER_MAX_SIDE);
-    limits.max_alloc = Some(weblink::POSTER_MAX_PIXELS * 4 + (16 << 20));
+    limits.max_image_width = Some(w);
+    limits.max_image_height = Some(h);
+    limits.max_alloc = Some((w as u64) * (h as u64) * 4 + (16 << 20));
     let mut r = reader();
     r.limits(limits);
-    match r.decode() {
-        Ok(i) => Ok(Some(i)),
-        Err(image::ImageError::Limits(_)) => Err(LinkError::NotVideo),
-        Err(_) => Ok(None),
-    }
+    r.decode().ok()
 }
 
 /// A poster as JPEG (what goes in the deck).
@@ -828,23 +825,22 @@ mod tests {
     }
 
     /// A thumbnail's size is read from its header before it is decoded;
-    /// one past the limits is refused, whatever the bytes claim.
+    /// one whose pixels don't fit in memory is no poster (the link still
+    /// comes in), whatever the bytes claim. Big ones that fit come in.
     #[test]
     fn thumbnails_are_size_checked_before_decoding() {
-        assert_eq!(decode_thumbnail(&png(64, 36)).unwrap().map(|i| (i.width(), i.height())), Some((64, 36)));
-        assert_eq!(decode_thumbnail(&png(8193, 1)).unwrap_err(), LinkError::NotVideo);
-        // A header that claims a huge picture over a few bytes of data:
-        // past 8192 a side, and (8000 x 8000) under it but past the count.
-        for (w, h) in [(60000u32, 60000u32), (8000, 8000)] {
-            assert_eq!(decode_thumbnail(&lying_png(w, h)).unwrap_err(), LinkError::NotVideo, "{w}x{h}");
-        }
-        // Within the limits but a lie all the same: no poster, no panic.
-        assert!(decode_thumbnail(&lying_png(4000, 3000)).unwrap().is_none());
+        let size = |b: &[u8]| decode_thumbnail(b).map(|i| (i.width(), i.height()));
+        assert_eq!(size(&png(64, 36)), Some((64, 36)));
+        assert_eq!(size(&png(9000, 2)), Some((9000, 2)), "past the old 8,192 a side");
+        // A header that claims more than memory holds over a few bytes.
+        assert!(decode_thumbnail(&lying_png(2_000_000_000, 2_000_000_000)).is_none());
+        // A lie that fits: no poster, no panic.
+        assert!(decode_thumbnail(&lying_png(4000, 3000)).is_none());
         // Empty, truncated, not a picture, a format not taken: no poster.
-        assert!(decode_thumbnail(b"").unwrap().is_none());
-        assert!(decode_thumbnail(&png(64, 36)[..40]).unwrap().is_none());
-        assert!(decode_thumbnail(b"<html>").unwrap().is_none());
-        assert!(decode_thumbnail(b"GIF89a\x01\0\x01\0\0\0\0;").unwrap().is_none());
+        assert!(decode_thumbnail(b"").is_none());
+        assert!(decode_thumbnail(&png(64, 36)[..40]).is_none());
+        assert!(decode_thumbnail(b"<html>").is_none());
+        assert!(decode_thumbnail(b"GIF89a\x01\0\x01\0\0\0\0;").is_none());
     }
 
     #[test]

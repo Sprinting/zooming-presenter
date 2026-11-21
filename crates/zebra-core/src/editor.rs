@@ -3846,30 +3846,20 @@ fn apply_patch(e: &mut Element, p: &ElementPatch) -> ZResult<()> {
     Ok(())
 }
 
-/// Most of a web video's poster, as bytes (`poster_base64` is a third
-/// more).
-pub const WEB_POSTER_MAX_BYTES: usize = 8 * 1024 * 1024;
-
-/// `poster_base64` as bytes, refused before decoding when it is too long.
+/// `poster_base64` as bytes.
 fn decode_web_poster(b64: &str) -> ZResult<Vec<u8>> {
-    if b64.len() > WEB_POSTER_MAX_BYTES.div_ceil(3) * 4 + 4 {
-        return Err(ZError::new("too_large", "poster_base64 is over 8 MB").hint("use a JPEG or PNG under 8 MB").about(crate::error::About::Poster));
-    }
     base64::engine::general_purpose::STANDARD
         .decode(b64)
         .map_err(|e| ZError::invalid(format!("poster_base64 is not valid base64: {e}")))
 }
 
-/// A web video's poster within its limits: at most 8 MB, and a picture
-/// within `weblink::poster_fits`, read from its header before anything is
-/// decoded.
+/// A web video's poster: a picture of any size whose pixels fit in
+/// memory (`weblink::poster_fits`), read from its header before anything
+/// is decoded. It is drawn scaled, as any picture.
 fn web_poster_fits(bytes: &[u8]) -> ZResult<()> {
-    if bytes.len() > WEB_POSTER_MAX_BYTES {
-        return Err(ZError::new("too_large", "the poster is over 8 MB").hint("use a JPEG or PNG under 8 MB").about(crate::error::About::Poster));
-    }
     let (_, w, h) = image_info(bytes)?;
     if !crate::weblink::poster_fits(w, h) {
-        return Err(ZError::new("too_large", format!("the poster is {w}x{h}; it can be at most 8192 pixels a side and 40 million in all")).hint("use a smaller picture").about(crate::error::About::Poster));
+        return Err(ZError::new("too_large", format!("the poster is {w}x{h} pixels, which needs more memory than this Mac has")).hint("use a smaller picture").about(crate::error::About::Poster));
     }
     Ok(())
 }

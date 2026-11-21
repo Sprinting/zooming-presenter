@@ -14,6 +14,9 @@ use zebra_core::import::{ImportedDeck, MAX_IMPORT_SPANS};
 use zebra_core::{Editor, ElementKind, Origin, TextData};
 use zebra_import::{Control, ImportError, ImportNote, Options};
 
+/// The tests here measure this process's heap or change the memory
+/// budget, so they run one at a time (all of them: any test running
+/// beside one that measures would count in its heap).
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 const MB: u64 = 1 << 20;
 
@@ -297,6 +300,7 @@ fn a_broken_slide_is_left_out_and_the_rest_comes_in() {
 /// part's own size cap is its bound, not its packing ratio.
 #[test]
 fn a_tightly_packed_slide_comes_in() {
+    let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let run = r#"<a:r><a:rPr lang="en-GB" sz="1800"/><a:t>x</a:t></a:r>"#;
     let one = s(slide(&text_box(2, &format!("<a:p>{}</a:p>", run.repeat(40_000)))));
     let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -570,6 +574,7 @@ fn a_two_gigabyte_non_deck_is_refused_without_reading_it() {
 
 #[test]
 fn notes_are_one_summary() {
+    let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     // Every note an import can give has English for the API.
     let _ = BTreeMap::<ImportNote, usize>::new();
     for n in ImportNote::ALL {
@@ -695,4 +700,78 @@ fn charts_with_missing_parts_or_bad_values_come_in() {
     ed.import_deck(&deck, "Import".into(), Origin::Human).unwrap();
     let id = ed.doc.elements.values().find(|e| e.kind.type_name() == "chart").unwrap().id.clone();
     assert!(r.capture(&ed, &zebra_render::CaptureTarget::Element { id }, 400, 300).is_ok());
+}
+
+/// H5: speaker notes that can't be read (damaged, missing, or more than
+/// memory holds) were left out without a word. The slide comes in, and
+/// a note names it; big notes that fit come in whole.
+#[test]
+fn notes_that_cant_be_read_are_named() {
+    let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let parts = unpack(&fixture("deck16x9.pptx"));
+    let notes4 = parts.iter().find(|(n, _)| n == "ppt/notesSlides/notesSlide4.xml").unwrap().1.clone();
+    let at = notes4.windows(2).position(|w| w == b"?>").unwrap() + 2;
+    // A comment of 9 MB in slide 4's notes: valid, big.
+    let big = [&notes4[..at], format!("<!-- {} -->", "x".repeat(9 << 20)).as_bytes(), &notes4[at..]].concat();
+    let bytes = pack(&patch(&parts, &[("ppt/notesSlides/notesSlide2.xml", b"<p:notes><oops".to_vec()), ("ppt/notesSlides/notesSlide4.xml", big)], &["ppt/notesSlides/notesSlide3.xml"]));
+    let d = read(bytes.clone()).unwrap();
+    let notes: Vec<&str> = d.pages.iter().map(|p| p.notes.as_str()).collect();
+    assert_eq!(notes[..4], ["Opening notes", "", "", "Pictures and shapes"]);
+    assert_eq!(d.slides.get(&ImportNote::Notes), Some(&vec![2, 3]));
+    assert_eq!(ImportNote::Notes.english(2), "2 slides' speaker notes couldn't be read");
+    // Past what memory holds (here made 8 MB of XML's worth): named too.
+    zebra_core::io::set_memory_budget(Some((8 << 20) * 55));
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            zebra_core::io::set_memory_budget(None);
+        }
+    }
+    let _reset = Reset;
+    let d = read(bytes).unwrap();
+    assert_eq!(d.pages.len(), 7, "every slide still comes in");
+    assert_eq!(d.pages[3].notes, "");
+    assert_eq!(d.slides.get(&ImportNote::Notes), Some(&vec![2, 3, 4]));
+}
+
+/// B9: EMF and WMF pictures over 64 MB were left out. One of 70 MB (a
+/// big comment record before its drawing) comes in drawn, as a small one
+/// does; only what memory can't hold is left out, with a note.
+#[test]
+fn a_big_emf_comes_in_drawn() {
+    let _g = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let parts = unpack(&fixture("extras.pptx"));
+    let emf = parts.iter().find(|(n, _)| n == "ppt/media/image4.emf").unwrap().1.clone();
+    let pad = 70usize << 20;
+    let mut comment = Vec::with_capacity(pad + 12);
+    comment.extend_from_slice(&70u32.to_le_bytes()); // EMR_COMMENT
+    comment.extend_from_slice(&((pad + 12) as u32).to_le_bytes());
+    comment.extend_from_slice(&(pad as u32).to_le_bytes());
+    comment.resize(pad + 12, 0);
+    let mut big = emf[..88].to_vec();
+    let size = u32::from_le_bytes(big[48..52].try_into().unwrap()) + comment.len() as u32;
+    let records = u32::from_le_bytes(big[52..56].try_into().unwrap()) + 1;
+    big[48..52].copy_from_slice(&size.to_le_bytes());
+    big[52..56].copy_from_slice(&records.to_le_bytes());
+    big.extend_from_slice(&comment);
+    big.extend_from_slice(&emf[88..]);
+    let bytes = pack(&patch(&parts, &[("ppt/media/image4.emf", big)], &[]));
+    let d = read(bytes.clone()).unwrap();
+    let svg = d.pages[5].items.iter().find_map(|i| match &i.element.kind {
+        ElementKind::Image(img) => Some(String::from_utf8_lossy(&d.assets[&img.asset].bytes).to_ascii_lowercase()),
+        _ => None,
+    });
+    assert!(svg.is_some_and(|s| s.contains("#e0c040")), "the big EMF is drawn");
+    assert_eq!(d.notes.get(&ImportNote::Metafile), Some(&1), "only the broken one is noted");
+    // Past what memory holds (here 1 GB of budget: 64 MB to convert): noted.
+    zebra_core::io::set_memory_budget(Some(1 << 30));
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            zebra_core::io::set_memory_budget(None);
+        }
+    }
+    let _reset = Reset;
+    let d = read(bytes).unwrap();
+    assert_eq!(d.notes.get(&ImportNote::Metafile), Some(&2));
 }

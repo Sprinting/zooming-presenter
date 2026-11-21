@@ -273,11 +273,19 @@ fn hostile_web_videos_are_refused() {
     let e = add(&mut ed, json!({"url":"https://me:secret@cdn.example.com/talk.mp4"})).unwrap_err();
     assert_eq!((e.code, e.message.as_str()), ("password_in_link", "Links with a password in them can't be used."));
 
-    // Over 8 MB of poster: refused before it is decoded.
+    // No size limit on a poster but memory (B10): a small file that
+    // claims more pixels than memory holds is refused before it is
+    // decoded; 12 MB of something that isn't a picture is refused as that.
+    let e = add(&mut ed, json!({"poster_base64": b64(&lying_png(2_000_000_000, 2_000_000_000))})).unwrap_err();
+    assert_eq!(e.code, "too_large");
+    assert!(e.message.contains("memory"), "{}", e.message);
     let big = "A".repeat(12 * 1024 * 1024);
-    assert_eq!(add(&mut ed, json!({"poster_base64": big})).unwrap_err().code, "too_large");
-    // A small file that claims to be 60000 pixels a side.
-    assert_eq!(add(&mut ed, json!({"poster_base64": b64(&lying_png(60000, 60000))})).unwrap_err().code, "too_large");
+    assert_ne!(add(&mut ed, json!({"poster_base64": big})).unwrap_err().code, "too_large");
+    // A big real one (past the old 8,192 a side and 40 million pixels)
+    // comes in as it is.
+    let out = add(&mut ed, json!({"poster_base64": b64(&png(10_000, 4_500))})).unwrap();
+    assert!(video(&ed, &out.created[0]).poster.is_some());
+    ed.undo(Origin::Human).unwrap();
     assert!(add(&mut ed, json!({"poster_base64": "not base64!"})).is_err());
     assert!(add(&mut ed, json!({"poster_base64": b64(b"")})).is_ok(), "an empty poster is no poster");
     ed.undo(Origin::Human).unwrap();

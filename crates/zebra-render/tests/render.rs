@@ -321,3 +321,32 @@ fn tiny_text_is_drawn_as_bars() {
     assert_eq!(kinds(4.0 / size), (1, 0), "4 px: still text");
     assert_eq!(kinds(2.0 / size), (0, 2), "2 px: a bar per line");
 }
+
+/// B6: captures were at most 8,192 pixels a side. A bigger one is drawn
+/// in tiles and comes out the same as one piece would, seams included.
+#[test]
+fn captures_past_8192_are_drawn_in_tiles() {
+    let r = Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    add(&mut ed, "bar", 0.0, 0.0, 6000.0, 100.0, 1.0, 0.0, shape(ShapeKind::Rectangle, Some("#ff0000"), None, 0.0));
+    add(&mut ed, "dot", 0.0, 0.0, 10.0, 10.0, 1.0, 45.0, shape(ShapeKind::Ellipse, Some("#0000ff"), None, 0.0));
+    let (w, h) = (12_000u32, 9_000u32);
+    let cam = Camera { cx: 0.0, cy: 0.0, zoom: 2.0, rotation: 0.0 };
+    let img = decode(&r.capture(&ed, &CaptureTarget::Camera { camera: cam }, w, h).unwrap());
+    assert_eq!(img.dimensions(), (w, h));
+    let red = [255, 0, 0, 255];
+    // Across the seam at x = 8,192 (and on both sides of the bar's edge).
+    for x in [100, 8_190, 8_191, 8_192, 8_193, 11_900] {
+        assert!(close(px(&img, x, 4_500), red, 2), "x {x}: {:?}", px(&img, x, 4_500));
+    }
+    assert!(close(px(&img, 6_000, 3_300), [255, 255, 255, 255], 2), "above the bar");
+    assert!(close(px(&img, 6_000, 4_500), [0, 0, 255, 255], 2), "the dot in the middle");
+    // The same picture drawn in one piece, at the size of one tile: the
+    // middle matches.
+    let one = decode(&r.capture(&ed, &CaptureTarget::Camera { camera: cam }, 8_000, 6_000).unwrap());
+    assert!(close(px(&one, 4_000, 3_000), [0, 0, 255, 255], 2));
+    // Past memory: refused with a reason, nothing drawn.
+    let e = r.capture(&ed, &CaptureTarget::Camera { camera: cam }, 2_000_000_000, 2_000_000_000).unwrap_err();
+    assert!(e.message.contains("memory"), "{}", e.message);
+}

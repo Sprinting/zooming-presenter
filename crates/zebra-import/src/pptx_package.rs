@@ -117,6 +117,9 @@ pub struct Package {
     checked: Mutex<HashMap<String, Checked>>,
     /// Layouts, masters and themes that couldn't be read.
     broken_design: Mutex<BTreeSet<String>>,
+    /// Slides (by part) whose speaker notes are missing, damaged or more
+    /// than memory holds.
+    broken_notes: Mutex<BTreeSet<String>>,
 }
 
 impl Package {
@@ -137,7 +140,7 @@ impl Package {
             return Err(damaged);
         }
         let content_types = src.read_part(CONTENT_TYPES, max_xml()).filter(|b| check(b)).unwrap_or_else(default_content_types);
-        Ok(Package { src, presentation, presentation_xml, content_types, slides, checked: Mutex::new(HashMap::new()), broken_design: Mutex::new(BTreeSet::new()) })
+        Ok(Package { src, presentation, presentation_xml, content_types, slides, checked: Mutex::new(HashMap::new()), broken_design: Mutex::new(BTreeSet::new()), broken_notes: Mutex::new(BTreeSet::new()) })
     }
 
     /// The file's media.
@@ -154,6 +157,11 @@ impl Package {
     /// Layouts, masters and themes found broken so far.
     pub fn broken_designs(&self) -> usize {
         self.broken_design.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
+    /// Whether slide `part`'s speaker notes couldn't be read.
+    pub fn notes_broken(&self, part: &str) -> bool {
+        self.broken_notes.lock().unwrap_or_else(|e| e.into_inner()).contains(part)
     }
 
     /// Read slides `range` (0-based), a batch at a time: `each` gets every
@@ -264,9 +272,13 @@ impl Package {
                     continue;
                 }
                 let design = r.is("/slideLayout") || r.is("/slideMaster") || r.is("/theme");
+                let notes = from_slide && r.is("/notesSlide");
                 if !self.src.has(to) {
                     if design {
                         self.broken_design.lock().unwrap_or_else(|e| e.into_inner()).insert(to.clone());
+                    }
+                    if notes {
+                        self.broken_notes.lock().unwrap_or_else(|e| e.into_inner()).insert(part.clone());
                     }
                     continue;
                 }
@@ -286,6 +298,9 @@ impl Package {
                     Checked::Bad | Checked::TooBig => {
                         if design {
                             self.broken_design.lock().unwrap_or_else(|e| e.into_inner()).insert(to.clone());
+                        }
+                        if notes {
+                            self.broken_notes.lock().unwrap_or_else(|e| e.into_inner()).insert(part.clone());
                         }
                     }
                 }
