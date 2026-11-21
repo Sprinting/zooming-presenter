@@ -1301,6 +1301,29 @@ pub struct NumLook {
     pub decimals: Option<u8>,
 }
 
+/// How a column's plain numbers are written, counted by look.
+#[derive(Default)]
+struct LookTally(HashMap<(Option<String>, bool), (usize, NumLook)>);
+
+impl LookTally {
+    fn add(&mut self, cell: &Cell) {
+        if cell.is_formula() {
+            return;
+        }
+        if let Typed::Number(_, l) = parse_input(&cell.input) {
+            let e = self.0.entry((l.currency.clone(), l.percent)).or_insert((0, NumLook::default()));
+            e.0 += 1;
+            e.1.currency = l.currency.clone();
+            e.1.percent = l.percent;
+            e.1.thousands |= l.thousands;
+            e.1.decimals = e.1.decimals.max(l.decimals);
+        }
+    }
+    fn most(self) -> Option<NumLook> {
+        self.0.into_values().max_by_key(|(n, _)| *n).map(|(_, l)| l)
+    }
+}
+
 /// A cell's value read for showing and sorting.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Typed {
@@ -1864,22 +1887,28 @@ impl TableData {
     /// what an Automatic formula result in that column shows like (a total
     /// under amounts in pounds shows in pounds).
     pub fn column_look(&self, c: usize) -> Option<NumLook> {
-        let mut looks: HashMap<(Option<String>, bool), (usize, NumLook)> = HashMap::new();
+        let mut tally = LookTally::default();
         for r in self.header_rows as usize..self.n_rows() {
-            let Some(cell) = self.cell(r, c) else { continue };
-            if cell.is_formula() {
-                continue;
-            }
-            if let Typed::Number(_, l) = parse_input(&cell.input) {
-                let e = looks.entry((l.currency.clone(), l.percent)).or_insert((0, NumLook::default()));
-                e.0 += 1;
-                e.1.currency = l.currency.clone();
-                e.1.percent = l.percent;
-                e.1.thousands |= l.thousands;
-                e.1.decimals = e.1.decimals.max(l.decimals);
+            if let Some(cell) = self.cell(r, c) {
+                tally.add(cell);
             }
         }
-        looks.into_values().max_by_key(|(n, _)| *n).map(|(_, l)| l)
+        tally.most()
+    }
+
+    /// [`TableData::column_look`] of every column, in one pass over the
+    /// filled cells: a 1,000,000 x 1,000 table with a few filled cells
+    /// steps over its rows once, not once per column (Mac pass M4).
+    pub fn column_looks(&self) -> Vec<Option<NumLook>> {
+        let mut tallies: Vec<LookTally> = (0..self.n_cols()).map(|_| LookTally::default()).collect();
+        for row in self.cells.iter().skip(self.header_rows as usize) {
+            for (c, cell) in row.filled() {
+                if let Some(t) = tallies.get_mut(c) {
+                    t.add(cell);
+                }
+            }
+        }
+        tallies.into_iter().map(LookTally::most).collect()
     }
 
     /// What (r, c) shows. `look`: [`TableData::column_look`] of its
@@ -2294,7 +2323,7 @@ impl TableData {
 
     /// What a range shows, as rows of text (for copying out and for agents).
     pub fn shown_rows(&self, range: &CellRange) -> Vec<Vec<String>> {
-        let looks: Vec<Option<NumLook>> = (0..self.n_cols()).map(|c| self.column_look(c)).collect();
+        let looks = self.column_looks();
         (range.r0..=range.r1)
             .map(|r| {
                 (range.c0..=range.c1)

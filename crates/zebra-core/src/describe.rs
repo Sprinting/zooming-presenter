@@ -348,7 +348,7 @@ pub fn chart_lines(p: &crate::chart::Plot, max: usize) -> Vec<String> {
 /// cell is one short line, not a page of separators). Row numbers are the
 /// table's own, so positions still read true.
 pub fn table_lines(t: &crate::table::TableData, max_rows: usize) -> Vec<String> {
-    let looks: Vec<_> = (0..t.n_cols()).map(|c| t.column_look(c)).collect();
+    let looks = t.column_looks();
     let mut out = vec![];
     let n = t.n_rows();
     let (mut shown_rows, mut more, mut empty) = (0usize, 0usize, 0usize);
@@ -728,5 +728,32 @@ mod tests {
         let lines = super::table_lines(&t, 20);
         assert_eq!(lines.len(), 22);
         assert_eq!(lines[20], "… 12 more rows (table query)");
+    }
+
+    /// M4 (Mac pass 21 Nov): describe took 5.5 s on a 1,000,000-row
+    /// sparse table: each column's number look walked every row. Only
+    /// filled cells are read now, so it takes about as long as the rows
+    /// take to step over, whatever the column count.
+    #[test]
+    fn describing_a_huge_sparse_table_reads_only_its_filled_cells() {
+        use crate::table::{Cell, CellRow, TableData};
+        let mut t = TableData::new(1_000_000, 1000, 18.0);
+        t.cells[2] = CellRow::from_filled(1000, [(3, Cell::new("£1,250.50"))]);
+        t.cells[3] = CellRow::from_filled(1000, [(3, Cell::new("£10"))]);
+        t.cells[4] = CellRow::from_filled(1000, [(3, Cell::new("=D3+D4"))]);
+        crate::calc::Calc::new().recalc("t", &mut t);
+        let t0 = std::time::Instant::now();
+        let lines = super::table_lines(&t, 20);
+        let took = t0.elapsed();
+        // The formula's total shows like the column's amounts.
+        assert_eq!(lines[..3], ["3:  |  |  | £1,250.50", "4:  |  |  | £10", "5:  |  |  | £1,260.50 =D3+D4"], "{lines:?}");
+        assert_eq!(lines[3], "(999997 empty rows not listed)");
+        let looks = t.column_looks();
+        assert_eq!(looks.len(), 1000);
+        assert_eq!(looks[3], t.column_look(3));
+        assert_eq!(looks[3].as_ref().and_then(|l| l.currency.as_deref()), Some("£"));
+        assert_eq!(looks[0], None);
+        // Before: about 1,000 x 1,000,000 cell reads (minutes in a test build).
+        assert!(took < std::time::Duration::from_secs(3), "took {took:?}");
     }
 }
