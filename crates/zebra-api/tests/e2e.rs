@@ -654,3 +654,30 @@ fn my_themes_and_my_templates_and_the_sample() {
     c.call("apply", json!({"command":{"op":"apply_template","template":"saved:Quarterly"}})).unwrap();
     h.stop().unwrap();
 }
+
+/// Test drive O4: a connection that never says `hello` is dropped after
+/// `HELLO_TIMEOUT`; one that has said it may stay quiet for longer.
+#[test]
+fn a_silent_connection_is_dropped_but_a_known_one_may_wait() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let h = start(Permission::Full);
+    let t = std::time::Instant::now();
+    let mut silent = std::os::unix::net::UnixStream::connect(&h.socket).unwrap();
+    silent.set_read_timeout(Some(zebra_api::HELLO_TIMEOUT * 3)).unwrap();
+    let mut b = [0u8; 16];
+    assert_eq!(silent.read(&mut b).unwrap(), 0, "closed by the server");
+    let waited = t.elapsed();
+    assert!(waited >= zebra_api::HELLO_TIMEOUT && waited < zebra_api::HELLO_TIMEOUT * 2, "{waited:?}");
+    // Past the deadline, a client that said hello still gets answers.
+    let mut known = std::os::unix::net::UnixStream::connect(&h.socket).unwrap();
+    writeln!(known, "{}", json!({"jsonrpc":"2.0","id":1,"method":"hello","params":{"name":"slow","token":h.token}})).unwrap();
+    let mut r = BufReader::new(known.try_clone().unwrap());
+    let mut line = String::new();
+    r.read_line(&mut line).unwrap();
+    assert!(line.contains("\"result\""), "{line}");
+    std::thread::sleep(zebra_api::HELLO_TIMEOUT + Duration::from_secs(1));
+    writeln!(known, "{}", json!({"jsonrpc":"2.0","id":2,"method":"ping"})).unwrap();
+    line.clear();
+    r.read_line(&mut line).unwrap();
+    assert!(line.contains("\"id\":2"), "{line}");
+}

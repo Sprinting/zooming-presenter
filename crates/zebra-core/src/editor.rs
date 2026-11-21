@@ -123,6 +123,9 @@ pub struct HistoryEntry {
     /// Commands in this entry, counting grouped agent steps ("3 changes").
     #[serde(skip)]
     steps: usize,
+    /// [`HistoryEntry::approx_bytes`] when the entry last changed.
+    #[serde(skip)]
+    bytes: usize,
 }
 
 impl HistoryEntry {
@@ -130,6 +133,16 @@ impl HistoryEntry {
     pub fn approx_bytes(&self) -> usize {
         self.deltas.iter().map(|d| d.approx_bytes()).sum()
     }
+}
+
+/// What undo may keep, in bytes: like Keynote, as many steps as memory
+/// allows (it was 500 steps however small: B12). Past this the oldest go.
+pub fn undo_budget() -> u64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    return crate::io::memory_budget() / 4;
+    // The web player keeps no undo worth bounding.
+    #[cfg(target_arch = "wasm32")]
+    u64::MAX
 }
 
 /// History wording a person reads (Edit menu, Activity panel, status
@@ -374,6 +387,7 @@ impl Editor {
         }
         let b = self.undo.pop().expect("two entries");
         let a = self.undo.last_mut().expect("two entries");
+        a.bytes += b.bytes;
         a.deltas.extend(b.deltas);
         a.ids.extend(b.ids);
         dedup(&mut a.ids);
@@ -719,18 +733,33 @@ impl Editor {
             h.revision = self.revision;
             h.ids.extend(ids.iter().cloned());
             dedup(&mut h.ids);
+            h.bytes += delta.approx_bytes();
             h.deltas.push(delta);
         } else {
-            self.undo.push(HistoryEntry { label: label.clone(), origin: origin.clone(), revision: self.revision, time: now, ids: ids.clone(), deltas: vec![delta], mergeable: allow_merge, steps });
-            if self.undo.len() > 500 {
-                self.undo.remove(0);
-            }
+            let bytes = delta.approx_bytes();
+            self.undo.push(HistoryEntry { label: label.clone(), origin: origin.clone(), revision: self.revision, time: now, ids: ids.clone(), deltas: vec![delta], mergeable: allow_merge, steps, bytes });
         }
+        self.trim_undo();
         self.activity.push_back(Activity { time: now, origin: origin.clone(), label: label.clone(), ids: ids.clone() });
         while self.activity.len() > 300 {
             self.activity.pop_front();
         }
         self.events.push(Event::DocumentChanged { revision: self.revision, origin, label, ids });
+    }
+
+    /// Drop the oldest undo steps past [`undo_budget`] (the newest always
+    /// stays, however big).
+    fn trim_undo(&mut self) {
+        let budget = undo_budget();
+        let mut total: u64 = self.undo.iter().map(|h| h.bytes as u64).sum();
+        let mut cut = 0;
+        while total > budget && cut + 1 < self.undo.len() {
+            total -= self.undo[cut].bytes as u64;
+            cut += 1;
+        }
+        if cut > 0 {
+            self.undo.drain(..cut);
+        }
     }
 
     /// What a batch left behind must hold the invariants in [`crate::check`].

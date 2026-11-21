@@ -127,3 +127,29 @@ fn a_long_socket_path_does_not_slow_calls() {
     h.stop().unwrap();
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// `zebractl commands | head -1`: the reader stops early and zebractl ends
+/// quietly instead of panicking on the broken pipe (test drive T8).
+#[cfg(unix)]
+#[test]
+fn output_into_a_closed_pipe_ends_quietly() {
+    use std::io::Read;
+    use std::os::unix::process::ExitStatusExt;
+    for _ in 0..5 {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_zebractl")).arg("commands").stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+        // Read one byte, then stop reading, as `head -c 1` does.
+        let mut one = [0u8; 1];
+        child.stdout.as_mut().unwrap().read_exact(&mut one).unwrap();
+        drop(child.stdout.take());
+        let mut err = String::new();
+        child.stderr.take().unwrap().read_to_string(&mut err).unwrap();
+        let status = child.wait().unwrap();
+        assert!(!err.contains("panicked"), "{err}");
+        assert!(status.success() || status.signal() == Some(libc_sigpipe()), "{status:?} {err}");
+    }
+}
+
+#[cfg(unix)]
+fn libc_sigpipe() -> i32 {
+    13
+}

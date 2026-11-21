@@ -1031,13 +1031,39 @@ impl Element {
     }
 }
 
+/// `s` cut to at most `n` characters as a person sees them (an emoji
+/// with its joiners, a letter with its accents, count as one), ending in
+/// `…` when cut. Never splits a character.
 pub fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_string()
-    } else {
-        let mut t: String = s.chars().take(n - 1).collect();
-        t.push('…');
-        t
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut g = s.grapheme_indices(true);
+    match g.nth(n) {
+        None => s.to_string(),
+        Some(_) if n == 0 => String::new(),
+        Some(_) => {
+            let end = s.grapheme_indices(true).nth(n - 1).map_or(s.len(), |(i, _)| i);
+            format!("{}…", &s[..end])
+        }
+    }
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate;
+
+    #[test]
+    fn truncate_never_splits_what_a_person_sees_as_one_character() {
+        assert_eq!(truncate("North", 5), "North");
+        assert_eq!(truncate("Northern", 5), "Nort…");
+        // A family emoji (four people and three joiners) is one character.
+        let fam = "👨\u{200d}👩\u{200d}👧\u{200d}👦";
+        assert_eq!(truncate(&format!("{fam}{fam}{fam}"), 2), format!("{fam}…"));
+        // Devanagari with a virama, and e with a combining acute.
+        let r = truncate("क्षत्रिय", 2);
+        assert!(r.ends_with('…') && "क्षत्रिय".starts_with(r.trim_end_matches('…')) && !r.trim_end_matches('…').ends_with('\u{94d}'), "{r}");
+        assert_eq!(truncate("e\u{301}e\u{301}e\u{301}", 2), "e\u{301}…");
+        assert_eq!(truncate("abc", 0), "");
+        assert_eq!(truncate("", 0), "");
     }
 }
 

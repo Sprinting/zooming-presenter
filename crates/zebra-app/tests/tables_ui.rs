@@ -166,6 +166,14 @@ fn formulas_work_out_and_errors_show() {
     let (_, t) = the_table(&h);
     assert!(matches!(&t.cells[4][0].value, Some(zebra_core::table::CellValue::Error { error }) if error == "#DIV/0!"));
     shot(&mut h, "error-cell.png");
+    // Resting the pointer on it says what went wrong, in one line.
+    let p = cell(&h, 4, 0);
+    assert_eq!(table_ui::error_tip(h.state(), p).as_deref(), Some("This formula divides by zero."));
+    assert_eq!(table_ui::error_tip(h.state(), cell(&h, 3, 0)), None, "a good formula has no tip");
+    h.input_mut().events.push(egui::Event::PointerMoved(p));
+    h.run_steps(30);
+    assert!(h.query_by_label_contains("divides by zero").is_some(), "the tip shows");
+    shot(&mut h, "error-tip.png");
     // One undo step per cell.
     h.state_mut().editor.undo(H).unwrap();
     assert_eq!(input(&h, 4, 0), "");

@@ -123,7 +123,7 @@ pub struct GlyphRunData {
     pub glyphs: Vec<PGlyph>,
     /// Index into [`TextLayout::formats`] when this run has its own
     /// formatting (colour, link...).
-    pub format: Option<u16>,
+    pub format: Option<u32>,
 }
 
 /// An underline or strike-through line, in layout space.
@@ -134,7 +134,7 @@ pub struct Decoration {
     /// Centre of the line.
     pub y: f32,
     pub thickness: f32,
-    pub format: u16,
+    pub format: u32,
 }
 
 /// A clickable link area, in layout space.
@@ -831,8 +831,9 @@ const BULLETS: [&str; 3] = ["\u{2022}", "\u{25E6}", "\u{25AA}"];
 /// list marker and alignment) and stacks them.
 /// Style changes pushed to parley for one paragraph, under its 65,535.
 const MAX_STYLE_PUSHES: usize = 60_000;
-/// Spans a text can format: a span's brush holds its index + 1 in a u16.
-const MAX_BRUSH_SPANS: usize = u16::MAX as usize - 1;
+/// Spans a text can format: a span's brush holds its index + 1 in a u32
+/// (it held a u16, so spans past 65,534 lost their formatting: B14).
+const MAX_BRUSH_SPANS: usize = u32::MAX as usize - 1;
 
 fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
     let t = data_of(key);
@@ -899,7 +900,7 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
         }
         let pchars = p.text[p.marker_len..].chars().count();
         // parley holds at most 65,535 styles in a paragraph, and a span's
-        // brush holds its index in a u16: past either, the characters keep
+        // brush holds its index in a u32: past either, the characters keep
         // the box's own style. Sorted spans (normalized, as open and every
         // edit leave them) start at the first that reaches this paragraph.
         let first = if spans_sorted { t.spans.partition_point(|s| s.end <= p.char0) } else { 0 };
@@ -912,13 +913,15 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
             if a >= z {
                 continue;
             }
-            if pushes + 4 > MAX_STYLE_PUSHES {
+            // What this span pushes: its brush and each property it sets.
+            let f = &s.format;
+            let need = 1 + [f.bold.is_some(), f.italic.is_some(), f.size.is_some()].iter().filter(|x| **x).count();
+            if pushes + need > MAX_STYLE_PUSHES {
                 break;
             }
-            pushes += 4;
+            pushes += need;
             let body = &p.text[p.marker_len..];
             let r = p.marker_len + rich::byte_at(body, a - p.char0)..p.marker_len + rich::byte_at(body, z - p.char0);
-            let f = &s.format;
             if let Some(v) = f.bold {
                 let w = zebra_core::theme::bold_weight(key.weight, Some(v));
                 b.push(StyleProperty::FontWeight(FontWeight::new(w as f32)), r.clone());
@@ -929,8 +932,8 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
             if let Some(k) = f.size {
                 b.push(StyleProperty::FontSize(size * k as f32), r.clone());
             }
-            let n = (si + 1) as u16;
-            b.push(StyleProperty::Brush([n as u8, (n >> 8) as u8, 0, 0]), r);
+            let n = (si + 1) as u32;
+            b.push(StyleProperty::Brush(n.to_le_bytes()), r);
         }
         for (r, fams) in extra.iter().take(MAX_STYLE_PUSHES.saturating_sub(pushes)) {
             let list: Vec<FontFamilyName> =
@@ -1024,7 +1027,7 @@ fn do_layout(g: &mut Inner, key: &Key, size: f32) -> TextLayout {
                     continue;
                 }
                 let brush = gr.style().brush;
-                let fi = u16::from(brush[0]) | (u16::from(brush[1]) << 8);
+                let fi = u32::from_le_bytes(brush);
                 let format = (fi > 0).then(|| fi - 1);
                 if let Some(f) = format.and_then(|i| formats.get(i as usize).map(|f| (i, f))) {
                     let (i, f) = f;

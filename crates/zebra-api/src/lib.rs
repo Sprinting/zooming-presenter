@@ -48,6 +48,7 @@ mod server;
 pub mod strict;
 
 pub use dispatch::EVENT_NAMES;
+pub use server::HELLO_TIMEOUT;
 pub use protocol::RpcError;
 pub use zebra_core::editor::Event;
 

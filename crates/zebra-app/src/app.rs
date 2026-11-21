@@ -98,6 +98,9 @@ pub struct ZebraApp {
     pub placement: crate::window_frames::Placement,
     /// `editor.loads` when `after_load` last ran.
     pub seen_loads: u64,
+    /// The document's file when Open Recent last heard of it (an agent's
+    /// open or Save As changes it behind the window's back).
+    pub seen_path: Option<PathBuf>,
     /// When decoded pictures were last trimmed.
     pub last_image_trim: f64,
     pub renderer: Arc<Renderer>,
@@ -387,6 +390,7 @@ impl ZebraApp {
             open_size: None,
             placement: Default::default(),
             seen_loads: 0,
+            seen_path: None,
             last_image_trim: 0.0,
             open_elsewhere: vec![],
             renderer: renderer.clone(),
@@ -1500,6 +1504,20 @@ impl ZebraApp {
         self.recovered = None;
         self.autosaved_rev = self.editor.revision;
         self.seen_loads = self.editor.loads;
+        // Whoever opened it (the person or an agent), it goes in Open
+        // Recent, as every document Keynote opens does.
+        self.note_recent();
+    }
+
+    /// Put the document's file at the top of Open Recent when it is new
+    /// to this window: opened, or saved under a new name, by anyone.
+    pub fn note_recent(&mut self) {
+        if self.editor.file_path != self.seen_path {
+            self.seen_path = self.editor.file_path.clone();
+            if let Some(p) = self.seen_path.clone() {
+                self.push_recent(p);
+            }
+        }
     }
 
     pub fn push_recent(&mut self, p: PathBuf) {
@@ -1709,6 +1727,8 @@ impl ZebraApp {
         if self.editor.loads != self.seen_loads {
             self.after_load();
         }
+        // An agent's Save As.
+        self.note_recent();
         // Menu → text field copy/paste, delivered to this window's input.
         if !self.inject.is_empty() {
             let mut ev = std::mem::take(&mut self.inject);

@@ -118,6 +118,30 @@ pub fn cell_at(app: &ZebraApp, id: &str, p: Pos2) -> Option<(usize, usize)> {
     Some((l.row_at(y), l.col_at(x)))
 }
 
+/// One line on what went wrong in the formula cell under a screen point
+/// (the cell shows `#DIV/0!` and a red triangle).
+pub fn error_tip(app: &ZebraApp, p: Pos2) -> Option<String> {
+    let id = crate::canvas::hit(app, p, false)?;
+    let (_, t) = table(app, &id)?;
+    let (r, c) = cell_at(app, &id, p)?;
+    let (r, c) = t.merge_at(r, c).map_or((r, c), |m| (m.r0, m.c0));
+    let error = t.shown(r, c, None).error?;
+    Some(match error.as_str() {
+        "#DIV/0!" => crate::t!("table-error-div"),
+        "#REF!" => crate::t!("table-error-ref"),
+        "#NAME?" => crate::t!("table-error-name"),
+        "#VALUE!" => crate::t!("table-error-value"),
+        "#N/A" => crate::t!("table-error-na"),
+        "#NUM!" => crate::t!("table-error-num"),
+        "#NULL!" => crate::t!("table-error-null"),
+        "#CIRC!" => crate::t!("table-error-circ"),
+        "#SPILL!" => crate::t!("table-error-spill"),
+        "#ERROR!" => crate::t!("table-error-syntax"),
+        "#N/IMPL" => crate::t!("table-error-nimpl"),
+        _ => crate::t!("table-error-other"),
+    })
+}
+
 /// Keep the cell selection in step with the document: gone when the
 /// table is no longer the one thing selected, clamped when it shrank.
 pub fn sync(app: &mut ZebraApp) {

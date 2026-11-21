@@ -462,6 +462,13 @@ fn read_cells(path: &std::path::Path) -> Result<String> {
 }
 
 fn main() {
+    // Output piped into `head` that stops reading ends zebractl quietly,
+    // as it does any Unix tool (Rust ignores SIGPIPE, so println! panicked).
+    // SAFETY: restores the default action before any other thread exists.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = Cli::parse();
     for v in zebra_api::discovery::ignored_overrides() {
         eprintln!("zebractl: {v} is ignored by this build (only developer builds use it)");
