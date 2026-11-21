@@ -341,6 +341,7 @@ fn safe_ext(ext: &str) -> String {
 /// platform player. None for a file Zebra can't read: one such file
 /// doesn't stop the document opening, what showed it draws as a missing
 /// picture.
+#[cfg(not(target_arch = "wasm32"))]
 fn sniff_asset(ext: &str, data: AssetBytes) -> Option<Asset> {
     let (ext, w, h) = match ext.to_ascii_lowercase().as_str() {
         // Embedded theme fonts.

@@ -489,6 +489,19 @@ fn chart_data(cs: &ChartSpace, body: f64) -> Option<(ChartData, bool)> {
             }
         })
         .collect();
+    // A pie's or donut's wedges take their own colours (PowerPoint varies
+    // them through the deck's accents, or the file sets each one): Zebra
+    // keeps a wedge's colour where a series' would be.
+    if matches!(t, ChartType::Pie | ChartType::Donut) {
+        if let Some((s, _)) = all.first() {
+            let n = s.categories.len().max(s.values.len());
+            let hex = |h: &str| Some(h.trim().to_ascii_lowercase()).filter(|h| h.starts_with('#') && (h.len() == 7 || h.len() == 9) && h[1..].chars().all(|ch| ch.is_ascii_hexdigit())).map(|h| h[..7].to_string());
+            let points = s.points.as_deref().unwrap_or_default();
+            c.series = (0..n)
+                .map(|i| SeriesFormat { color: points.iter().find(|p| p.index.is_some_and(|x| x == i as f64)).and_then(|p| hex(&p.color)), ..Default::default() })
+                .collect();
+        }
+    }
     if c.series.iter().all(|f| f.is_empty()) {
         c.series.clear();
     }

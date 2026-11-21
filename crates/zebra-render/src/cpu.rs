@@ -82,6 +82,8 @@ fn render_tile(list: &DisplayList, x0: u32, y0: u32, w: u32, h: u32) -> Pixmap {
             }
             Item::PushOpacity(a) => ctx.push_opacity_layer(*a),
             Item::PopOpacity | Item::PopClip => ctx.pop_layer(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Item::PdfPage { .. } => {}
             Item::PushClip(path) => ctx.push_clip_layer(path),
         }
     }

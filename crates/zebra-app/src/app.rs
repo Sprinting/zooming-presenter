@@ -101,6 +101,8 @@ pub struct ZebraApp {
     /// The document's file when Open Recent last heard of it (an agent's
     /// open or Save As changes it behind the window's back).
     pub seen_path: Option<PathBuf>,
+    /// `Editor::saves_done` when last tidied after a save.
+    seen_saves: u64,
     /// When decoded pictures were last trimmed.
     pub last_image_trim: f64,
     pub renderer: Arc<Renderer>,
@@ -391,6 +393,7 @@ impl ZebraApp {
             placement: Default::default(),
             seen_loads: 0,
             seen_path: None,
+            seen_saves: 0,
             last_image_trim: 0.0,
             open_elsewhere: vec![],
             renderer: renderer.clone(),
@@ -1520,6 +1523,18 @@ impl ZebraApp {
         }
     }
 
+    /// After a save that worked: this window's Untitled autosave goes (the
+    /// document has a file now), and the file's own autosave too unless
+    /// edits made during the save still need it.
+    fn tidy_after_save(&mut self) {
+        self.seen_saves = self.editor.saves_done;
+        let Some(f) = self.editor.file_path.clone() else { return };
+        crate::files::remove_autosave_untitled(self);
+        if !self.editor.dirty() {
+            crate::files::remove_autosave(&f);
+        }
+    }
+
     pub fn push_recent(&mut self, p: PathBuf) {
         self.recent.retain(|r| r != &p);
         self.recent.insert(0, p);
@@ -1574,8 +1589,7 @@ impl ZebraApp {
         for s in self.editor.take_saved(|s| s.by == H) {
             match s.result {
                 Ok(()) => {
-                    crate::files::remove_autosave(&s.path);
-                    crate::files::remove_autosave_untitled(self);
+                    self.tidy_after_save();
                     self.push_recent(s.path);
                 }
                 Err(e) => {
@@ -1729,6 +1743,13 @@ impl ZebraApp {
         }
         // An agent's Save As.
         self.note_recent();
+        // A save by anyone (an agent's too) makes the autosaves of what
+        // was saved unneeded: an Untitled one left would come back as a
+        // second copy after a relaunch.
+        if self.editor.saves_done != self.seen_saves {
+            self.seen_saves = self.editor.saves_done;
+            self.tidy_after_save();
+        }
         // Menu → text field copy/paste, delivered to this window's input.
         if !self.inject.is_empty() {
             let mut ev = std::mem::take(&mut self.inject);

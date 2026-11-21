@@ -278,6 +278,9 @@ pub struct Editor {
     pub(crate) saving: Option<crate::saving::SaveJob>,
     /// Finished saves not yet taken by whoever started them.
     pub(crate) saved: Vec<crate::saving::Saved>,
+    /// Saves that worked, by anyone (the person or an agent): a host
+    /// tidies its autosaves when the count changes.
+    pub saves_done: u64,
     /// The step the editor camera was last sent to by `goto_step`, from
     /// anyone (an agent too), with a count of such trips: a host scrolls
     /// its step list to it when the count changes.
@@ -323,6 +326,7 @@ impl Editor {
             journal: None,
             saving: None,
             saved: vec![],
+            saves_done: 0,
             calc: Default::default(),
         }
     }
@@ -1358,7 +1362,17 @@ impl Editor {
                 };
                 let a = &self.doc.assets[&key];
                 let (pw, ph) = (a.width as f64, a.height as f64);
-                let scale = width.map(|w| w / pw).unwrap_or(1.0);
+                // A picture shows at its pixel size; an SVG (kept SVG_PX
+                // pixels wide to stay sharp) at the size it asks for, as
+                // Keynote places one.
+                let natural = if a.ext == "svg" {
+                    let (w, h) = crate::symbols::svg_shown_size(&a.bytes);
+                    w.max(h) / pw.max(ph)
+                } else {
+                    1.0
+                };
+                let natural = if natural.is_finite() && natural > 0.0 { natural } else { 1.0 };
+                let scale = width.map(|w| w / pw).unwrap_or(natural);
                 let e = Element {
                     id: id.unwrap_or_default(),
                     transform: Transform { x, y, scale, rotation: 0.0 },

@@ -10,6 +10,8 @@
 //! the references in formulas follow the cells they point at
 //! ([`reshape`]). The web player has no IronCalc: it draws the values the
 //! file saved, and nothing here runs there.
+// The formula helpers serve IronCalc only, which the web player hasn't.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
 use std::collections::HashMap;
 
 use crate::table::{CellValue, TableData};

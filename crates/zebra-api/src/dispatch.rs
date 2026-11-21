@@ -173,6 +173,12 @@ impl Dispatcher {
                     self.flush_events(server, docs);
                     reply(server, job.client, &job.id, r);
                 }
+                Ok(JobDone::Open(done)) => {
+                    let job = self.jobs.remove(j);
+                    let r = Self::finish_open(docs, *done);
+                    self.flush_events(server, docs);
+                    reply(server, job.client, &job.id, r);
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => j += 1,
                 Err(_) => {
                     let job = self.jobs.remove(j);
@@ -390,6 +396,33 @@ impl Dispatcher {
             }
             return;
         }
+        // Opening reads the file and measures every text on a worker (a
+        // big document takes seconds), as the person's File › Open does;
+        // the window stays responsive and the reply goes when it's in.
+        if let (Call::Open { .. }, false) = (&p.call, self.headless) {
+            let allowed = need_full(editor.view.agent_permission, "open").and_then(|_| check_agent_allowed(editor));
+            if let Err(e) = allowed {
+                return reply(server, p.client, &p.id, Err(e));
+            }
+            let Call::Open { path, force } = p.call else { unreachable!() };
+            if editor.dirty() && !force {
+                return reply(server, p.client, &p.id, Err(unsaved_for_open()));
+            }
+            let measure = self.renderer.measure();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let waker = server.inner.shared.waker.clone();
+            let (d, at) = (doc.clone(), editor.revision);
+            let spawned = std::thread::Builder::new().name("zebra-open".into()).spawn(move || {
+                let prepared = zebra_core::io::load(&path).map(|doc| Editor::prepare(doc, &*measure, &|_| {}));
+                let _ = tx.send(JobDone::Open(Box::new(OpenDone { doc: d, path, force, at, prepared })));
+                waker();
+            });
+            match spawned {
+                Ok(_) => self.jobs.push(Job { client: p.client, id: p.id, rx }),
+                Err(e) => reply(server, p.client, &p.id, Err(RpcError::app("io", format!("cannot start a thread to open the file: {e}")))),
+            }
+            return;
+        }
         let heavy = matches!(&p.call, Call::Capture(_))
             || matches!(&p.call, Call::Export { format: ExportFormat::Png | ExportFormat::Pdf | ExportFormat::Html, .. });
         if heavy && !self.headless {
@@ -591,8 +624,7 @@ impl Dispatcher {
                 need_full(perm, "open")?;
                 check_agent_allowed(editor)?;
                 if editor.dirty() && !force {
-                    return Err(RpcError::app("unsaved_changes", "the current document has unsaved changes")
-                        .hint("save first, or pass \"force\": true to discard them"));
+                    return Err(unsaved_for_open());
                 }
                 let doc = zebra_core::io::load(&path)?;
                 editor.load(doc, Some(path.clone()));
@@ -737,6 +769,21 @@ pub(crate) enum JobDone {
     Web(Box<WebDone>),
     /// A file read for `import`, to add to its document.
     Import(Box<ImportDone>),
+    /// A document read and measured for `open`, to swap in.
+    Open(Box<OpenDone>),
+}
+
+pub(crate) struct OpenDone {
+    doc: String,
+    path: std::path::PathBuf,
+    force: bool,
+    /// The document's revision when the call came.
+    at: u64,
+    prepared: zebra_core::ZResult<zebra_core::Prepared>,
+}
+
+fn unsaved_for_open() -> RpcError {
+    RpcError::app("unsaved_changes", "the current document has unsaved changes").hint("save first, or pass \"force\": true to discard them")
 }
 
 pub(crate) struct ImportDone {
@@ -823,6 +870,21 @@ impl Dispatcher {
             o.insert("notes".into(), json!(notes));
         }
         Ok(v)
+    }
+
+    fn finish_open(docs: &mut dyn Documents, done: OpenDone) -> Result<Value, RpcError> {
+        let prepared = done.prepared?;
+        // Another window may have opened the file meanwhile.
+        open_elsewhere(docs, &done.doc, &done.path)?;
+        let Some(editor) = docs.editor(&done.doc) else { return Err(RpcError::app("not_found", "the document was closed while the file was read")) };
+        need_full(editor.view.agent_permission, "open")?;
+        check_agent_allowed(editor)?;
+        // Changed while the file was read: those changes are unsaved now.
+        if editor.revision != done.at && editor.dirty() && !done.force {
+            return Err(unsaved_for_open());
+        }
+        editor.load_prepared(prepared, Some(done.path.clone()));
+        Ok(json!({ "ok": true, "path": done.path, "revision": editor.revision }))
     }
 }
 

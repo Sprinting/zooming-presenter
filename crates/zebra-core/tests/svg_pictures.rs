@@ -56,3 +56,22 @@ fn only_files_that_are_svgs_are_taken() {
         assert!(r.is_err(), "{:?}", String::from_utf8_lossy(not));
     }
 }
+
+/// Found in the 21 Nov cloud pass: a 400 x 300 SVG came in 4096 wide (the
+/// pixel size it is kept at). Keynote places an SVG at the size it asks
+/// for; so does Zebra now, still drawn from 4096 pixels.
+#[test]
+fn an_svg_is_placed_at_the_size_it_asks_for() {
+    let mut ed = Editor::default();
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300"/></svg>"#;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(svg);
+    ed.apply(cmd(json!({"op": "add_image", "data_base64": b64, "x": 0, "y": 0})), Origin::Human).unwrap();
+    let e = ed.doc.elements.values().next().unwrap();
+    let (w, h) = e.world_size();
+    assert!((w - 400.0).abs() < 0.01 && (h - 300.0).abs() < 0.01, "{w} x {h}");
+    assert_eq!(picture(&ed).width, 4096);
+    // Asked for a width: that width.
+    ed.apply(cmd(json!({"op": "add_image", "data_base64": b64, "x": 0, "y": 0, "width": 100})), Origin::Human).unwrap();
+    let widths: Vec<f64> = ed.doc.elements.values().map(|e| e.world_size().0.round()).collect();
+    assert!(widths.contains(&100.0), "{widths:?}");
+}

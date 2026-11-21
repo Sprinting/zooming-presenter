@@ -15,7 +15,142 @@ use zebra_core::{Editor, ZError};
 use crate::display::{DisplayList, Item, Rgba};
 use crate::{Renderer, SceneOptions};
 
+/// An imported PDF read for its pages to go into an exported PDF as
+/// themselves (B7: Keynote and Preview keep a placed PDF as vectors).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug)]
+pub struct Source(krilla::pdf::PdfDocument);
+
+/// Stack for the export's thread: reading and copying a hostile PDF's
+/// objects may go deep (a stack overflow can't be caught).
+#[cfg(not(target_arch = "wasm32"))]
+const EXPORT_STACK: usize = 256 << 20;
+
+/// The PDF behind `key`, if page `index` of it can go into an exported
+/// PDF as itself: read once per PDF (a file the reader can't read, or
+/// that makes it panic, is drawn as pictures instead). A page the page
+/// engine can't draw (too slow, too much memory: the canvas shows its
+/// picture, a grey placeholder) isn't copied either: the export shows
+/// what the canvas shows, not a page that may hang the reader's viewer.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn embeddable(r: &Renderer, key: &str, pdf: &zebra_core::Asset, index: usize, size: (f64, f64)) -> Option<Source> {
+    let src = {
+        let mut known = r.pdf_sources.lock().unwrap_or_else(|e| e.into_inner());
+        let got = known.entry(key.to_string()).or_insert_with(|| {
+            let data = Arc::new(pdf.bytes.clone());
+            let (pages, p) = deep(move || krilla::pdf::Pdf::new(data).ok().map(|p| (p.pages().len(), Arc::new(p)))).flatten()?;
+            Some((pages, Source(krilla::pdf::PdfDocument::new(p))))
+        });
+        match got {
+            Some((pages, src)) if index < *pages => src.clone(),
+            _ => return None,
+        }
+    };
+    drawable(r, key, pdf, index as u32, size).then_some(src)
+}
+
+/// Whether the page engine draws page `index` (a small test drawing, once
+/// per page). With no page engine (tests, tools) every page counts.
+#[cfg(not(target_arch = "wasm32"))]
+fn drawable(r: &Renderer, key: &str, pdf: &zebra_core::Asset, index: u32, (w, h): (f64, f64)) -> bool {
+    let Some(raster) = r.page_raster() else { return true };
+    let id = (key.to_string(), index);
+    if let Some(&d) = r.pdf_drawable.lock().unwrap_or_else(|e| e.into_inner()).get(&id) {
+        return d;
+    }
+    const TEST_PX: u32 = 64;
+    let ph = if w > 0.0 && h > 0.0 { ((TEST_PX as f64) * h / w).round().clamp(1.0, (TEST_PX * 64) as f64) as u32 } else { TEST_PX };
+    let req = crate::pages::PageRequest { pdf: key.to_string(), bytes: pdf.bytes.clone(), index, page_px: (TEST_PX, ph), rect: (0, 0, TEST_PX, ph) };
+    let d = raster(&req).is_some();
+    r.pdf_drawable.lock().unwrap_or_else(|e| e.into_inner()).insert(id, d);
+    d
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn export(r: &Renderer, editor: &Editor) -> Result<Vec<u8>, ZError> {
+    let has_pages = editor.doc.elements.values().any(|e| matches!(&e.kind, zebra_core::ElementKind::Image(i) if i.page.as_ref().is_some_and(|p| editor.doc.assets.contains_key(&p.pdf))));
+    if !has_pages {
+        return export_once(r, editor, true).map_err(Failed::into_error);
+    }
+    // Imported PDF pages go in as themselves (B7). Reading and copying a
+    // PDF's objects may go deep on a hostile file, and a stack overflow
+    // can't be caught: that runs on a thread with a deep stack, from a
+    // copy of the document (the editor stays on its own thread).
+    let mut snap = Editor::new(editor.doc.clone());
+    snap.view = editor.view.clone();
+    snap.measure = r.measure();
+    deep(move || export_vector(r, &snap)).unwrap_or_else(|| Err(ZError::new("export_failed", "PDF export failed")))
+}
+
+/// A PDF the writer can't copy (too new a version, objects it can't
+/// follow) is marked and the export made again with it drawn as pictures;
+/// if anything panics, every page is drawn as pictures.
+#[cfg(not(target_arch = "wasm32"))]
+fn export_vector(r: &Renderer, editor: &Editor) -> Result<Vec<u8>, ZError> {
+    let mut tries = 0;
+    loop {
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| export_once(r, editor, false)));
+        match run {
+            Ok(Ok(bytes)) => return Ok(bytes),
+            Ok(Err(Failed::Other(e))) => return Err(e),
+            Ok(Err(Failed::Pdf(doc))) if tries < 64 => {
+                tries += 1;
+                let mut known = r.pdf_sources.lock().unwrap_or_else(|e| e.into_inner());
+                for v in known.values_mut() {
+                    if v.as_ref().is_some_and(|(_, s)| s.0 == doc) {
+                        *v = None;
+                    }
+                }
+            }
+            Ok(Err(Failed::Pdf(_))) | Err(_) => {
+                return match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| export_once(r, editor, true))) {
+                    Ok(r) => r.map_err(Failed::into_error),
+                    Err(_) => Err(ZError::new("export_failed", "PDF export failed")),
+                };
+            }
+        }
+    }
+}
+
+/// Run `f` on a thread with a deep stack (reading and copying a hostile
+/// PDF's objects may go deep, and a stack overflow can't be caught), its
+/// panic caught. None when it panicked or the thread couldn't start.
+#[cfg(not(target_arch = "wasm32"))]
+fn deep<T: Send>(f: impl FnOnce() -> T + Send) -> Option<T> {
+    std::thread::scope(|sc| {
+        let h = std::thread::Builder::new()
+            .name("zebra-pdf-pages".into())
+            .stack_size(EXPORT_STACK)
+            .spawn_scoped(sc, move || std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok())
+            .ok()?;
+        h.join().ok().flatten()
+    })
+}
+
+/// The web player has no PDF export to speak of: pages as pictures.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn export(r: &Renderer, editor: &Editor) -> Result<Vec<u8>, ZError> {
+    export_once(r, editor, true).map_err(Failed::into_error)
+}
+
+enum Failed {
+    /// An embedded PDF the writer couldn't copy.
+    #[cfg(not(target_arch = "wasm32"))]
+    Pdf(krilla::pdf::PdfDocument),
+    Other(ZError),
+}
+
+impl Failed {
+    fn into_error(self) -> ZError {
+        match self {
+            Failed::Other(e) => e,
+            #[cfg(not(target_arch = "wasm32"))]
+            Failed::Pdf(_) => ZError::new("export_failed", "PDF export failed: a PDF page couldn't be copied"),
+        }
+    }
+}
+
+fn export_once(r: &Renderer, editor: &Editor, raster_pages: bool) -> Result<Vec<u8>, Failed> {
     let vp = [editor.view.viewport.x.max(1.0), editor.view.viewport.y.max(1.0)];
     let mut pages: Vec<(zebra_core::Camera, SceneOptions)> = vec![];
     if editor.doc.path.is_empty() {
@@ -23,12 +158,13 @@ pub(crate) fn export(r: &Renderer, editor: &Editor) -> Result<Vec<u8>, ZError> {
             Some(b) => zebra_core::Camera::fit_rect(&b, editor.view.viewport, 0.06),
             None => zebra_core::Camera::default(),
         };
-        pages.push((cam, SceneOptions { presenting: true, ..Default::default() }));
+        pages.push((cam, SceneOptions { presenting: true, raster_pages, ..Default::default() }));
     } else {
         for i in 0..editor.doc.path.len() {
             let opts = SceneOptions {
                 presenting: true,
                 hidden: editor.hidden_builds_at(i, usize::MAX),
+                raster_pages,
                 ..Default::default()
             };
             pages.push((crate::cpu::camera_for_step(editor, i, vp), opts));
@@ -38,7 +174,7 @@ pub(crate) fn export(r: &Renderer, editor: &Editor) -> Result<Vec<u8>, ZError> {
     let mut doc = Document::new();
     doc.set_metadata(krilla::metadata::Metadata::new().title(editor.doc.title.clone()));
     let mut res = Resources::default();
-    let size = Size::from_wh(vp[0] as f32, vp[1] as f32).ok_or_else(|| ZError::new("invalid", "bad page size"))?;
+    let size = Size::from_wh(vp[0] as f32, vp[1] as f32).ok_or_else(|| Failed::Other(ZError::new("invalid", "bad page size")))?;
     for (cam, opts) in &pages {
         let list = crate::display::build_with(r, editor, cam, vp, 1.0, opts, true);
         let mut page = doc.start_page_with(krilla::page::PageSettings::new(size));
@@ -47,7 +183,12 @@ pub(crate) fn export(r: &Renderer, editor: &Editor) -> Result<Vec<u8>, ZError> {
         s.finish();
         page.finish();
     }
-    doc.finish().map_err(|e| ZError::new("export_failed", format!("PDF export failed: {e:?}")))
+    // Copying embedded pages happens here.
+    doc.finish().map_err(|e| match e {
+        #[cfg(not(target_arch = "wasm32"))]
+        krilla::error::KrillaError::Pdf(d, ..) => Failed::Pdf(d),
+        e => Failed::Other(ZError::new("export_failed", format!("PDF export failed: {e:?}"))),
+    })
 }
 
 #[derive(Default)]
@@ -70,9 +211,17 @@ struct Resources {
 /// Pixels per point text in a font the PDF can't carry is drawn at (about
 /// 300 dots per inch on paper).
 const TEXT_PICTURE_SCALE: f64 = 300.0 / 72.0;
-/// Most pixels one run of such text is drawn with (a huge heading at a
-/// close zoom is drawn coarser rather than taking all memory).
-const TEXT_PICTURE_PIXELS: f64 = (64u64 << 20) as f64;
+/// Most pixels one run of such text is drawn with: what a document may
+/// take in memory ([`zebra_core::io::memory_budget`]), at 4 bytes a pixel
+/// and twice over (the drawing and the PDF's copy). A huge heading at a
+/// close zoom is drawn coarser rather than taking more; never cut.
+fn text_picture_pixels() -> f64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    let budget = zebra_core::io::memory_budget();
+    #[cfg(target_arch = "wasm32")]
+    let budget = 1u64 << 31;
+    (budget / 8).max(1 << 20) as f64
+}
 
 /// A run of text in a font the PDF may not carry (Apple's, or one that
 /// doesn't say it is open), drawn as a picture where it stands (fonts in
@@ -96,8 +245,9 @@ fn text_as_picture(s: &mut Surface<'_>, layout: &crate::text::TextLayout, ri: us
     }
     let on_page = crate::display::affine_scale(transform);
     let mut k = on_page * TEXT_PICTURE_SCALE;
-    if bw * bh * k * k > TEXT_PICTURE_PIXELS {
-        k = (TEXT_PICTURE_PIXELS / (bw * bh)).sqrt();
+    let most = text_picture_pixels();
+    if bw * bh * k * k > most {
+        k = (most / (bw * bh)).sqrt();
     }
     let (pw, ph) = ((bw * k).ceil().max(1.0) as u32, (bh * k).ceil().max(1.0) as u32);
     let one = crate::text::TextLayout { runs: vec![run.clone()], decorations: vec![], links: vec![], ..layout.clone() };
@@ -333,6 +483,14 @@ fn draw_list(s: &mut Surface<'_>, list: &DisplayList, editor: &Editor, res: &mut
                 }
             }
             Item::PopClip => s.pop(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Item::PdfPage { source, index, size, transform } => {
+                if let Some(sz) = Size::from_wh(size.0 as f32, size.1 as f32) {
+                    s.push_transform(&tf(transform));
+                    s.draw_pdf_page(&source.0, sz, *index);
+                    s.pop();
+                }
+            }
         }
     }
 }

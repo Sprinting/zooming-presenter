@@ -337,19 +337,24 @@ pub fn list() -> Vec<Instance> {
             if !pid_alive(inst.pid) {
                 // A killed or crashed instance leaves its socket behind.
                 // Only ever delete an actual socket, whatever the stale
-                // file says.
+                // file says, and never one a live app listens on now (a
+                // later launch given the same --api-socket path).
                 use std::os::unix::fs::FileTypeExt;
-                if fs::symlink_metadata(&inst.socket).is_ok_and(|m| m.file_type().is_socket()) {
+                if fs::symlink_metadata(&inst.socket).is_ok_and(|m| m.file_type().is_socket())
+                    && std::os::unix::net::UnixStream::connect(&inst.socket).is_err()
+                {
                     let _ = fs::remove_file(&inst.socket);
                 }
             }
             continue;
         }
-        if !out.iter().any(|o| o.socket == inst.socket) {
-            out.push(inst);
-        }
+        out.push(inst);
     }
+    // Newest first; one instance per socket, the newest (an older file
+    // naming the same path belongs to a process whose pid came back).
     out.sort_by(|a, b| b.started_at.cmp(&a.started_at).then(b.pid.cmp(&a.pid)));
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|i| seen.insert(i.socket.clone()));
     out
 }
 

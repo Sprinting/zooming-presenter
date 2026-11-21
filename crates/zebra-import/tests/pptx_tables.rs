@@ -91,6 +91,12 @@ fn charts_come_in_editable_with_their_values_and_colours() {
     use ChartType::*;
     // The 3D column comes in flat; 100% stacked bar as stacked bar (noted).
     assert_eq!(types, [StackedBar, Line, StackedArea, Radar, StackedBar, Column, PercentColumn, Pie, Donut, Scatter, Bubble]);
+    // A pie's wedges keep their colours (PowerPoint varies them through
+    // the deck's accents), as does the donut's.
+    for pie in [cs[7], cs[8]] {
+        let colours: Vec<_> = pie.series.iter().map(|s| s.color.as_deref()).collect();
+        assert_eq!(colours, [Some("#4f81bd"), Some("#c0504d"), Some("#9bbb59")], "{:?}", pie.chart_type);
+    }
     let c = cs[0];
     assert_eq!(inputs(&c.data), [["", "Q2", "Q3"], ["North", "1240", "1410"], ["South", "980", "1050"], ["East", "760", "702"]]);
     assert_eq!((c.title.as_str(), c.legend, c.axis_min, c.axis_max), ("Stacked", true, Some(0.0), Some(3000.0)));

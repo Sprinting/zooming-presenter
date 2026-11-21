@@ -254,3 +254,106 @@ fn tiles_are_made_on_the_workers_and_the_half_zoom_ones_fill_in() {
     assert!(images(&l).len() >= 2, "{:?}", images(&l));
     settle(20.0);
 }
+
+/// A one-page PDF (200 x 100 points) holding a filled rectangle, with
+/// `page_extra` added to its page dictionary.
+fn tiny_pdf(version: &str, page_extra: &str) -> Vec<u8> {
+    let content = "0.1 0.2 0.3 rg 10 10 100 50 re f";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << >> {page_extra}>>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut out = format!("%PDF-{version}\n").into_bytes();
+    let mut at = vec![];
+    for (i, o) in objs.iter().enumerate() {
+        at.push(out.len());
+        out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).bytes());
+    for a in at {
+        out.extend(format!("{a:010} 00000 n \n").bytes());
+    }
+    out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).bytes());
+    out
+}
+
+/// The deck with its PDF replaced by `pdf` and the page at index 0.
+fn deck_of(r: &Renderer, pdf: Vec<u8>) -> Editor {
+    let mut ed = deck_with(r, 512);
+    ed.doc.assets.get_mut(PDF).unwrap().bytes = pdf.into();
+    for e in ed.doc.elements.values_mut() {
+        if let ElementKind::Image(i) = &mut e.kind {
+            i.page.as_mut().unwrap().index = 0;
+        }
+    }
+    ed
+}
+
+/// B7: in a PDF export an imported page goes in as itself (a form with
+/// its own drawing), as Keynote and Preview keep a placed PDF; nothing is
+/// drawn as a picture for it.
+#[test]
+fn pdf_export_keeps_an_imported_page_as_vectors() {
+    let r = Renderer::new();
+    let asked = Arc::new(Mutex::new(vec![]));
+    r.set_page_raster(Some(green(asked.clone())));
+    let ed = deck_of(&r, tiny_pdf("1.4", ""));
+    let pdf = r.export_pdf(&ed).unwrap();
+    let text = String::from_utf8_lossy(&pdf);
+    // Only the small test drawing (does the page engine draw it?).
+    assert!(asked.lock().unwrap().iter().all(|q| q.page_px.0 == 64), "the page was drawn as a picture");
+    assert!(text.contains("/Subtype /Form") || text.contains("/Subtype/Form"), "no form for the page");
+    assert!(!text.contains("/Subtype /Image") && !text.contains("/Subtype/Image"), "a picture went in");
+    // A turned page goes in too.
+    let ed = deck_of(&r, tiny_pdf("1.4", "/Rotate 90 "));
+    let text = String::from_utf8_lossy(&r.export_pdf(&ed).unwrap()).to_string();
+    assert!(text.contains("/Subtype /Form") || text.contains("/Subtype/Form"));
+}
+
+/// A page the page engine can't draw (the canvas shows its grey
+/// placeholder picture) isn't copied into the export: the export shows the
+/// picture, as the canvas does, and the page is tried once.
+#[test]
+fn pdf_export_leaves_out_a_page_the_engine_cant_draw() {
+    let r = Renderer::new();
+    let tries = Arc::new(Mutex::new(0));
+    let t = tries.clone();
+    r.set_page_raster(Some(Arc::new(move |_q: &PageRequest| {
+        *t.lock().unwrap() += 1;
+        None
+    })));
+    let ed = deck_of(&r, tiny_pdf("1.4", ""));
+    for _ in 0..2 {
+        let text = String::from_utf8_lossy(&r.export_pdf(&ed).unwrap()).to_string();
+        assert!(!text.contains("/Subtype /Form") && !text.contains("/Subtype/Form"), "the page was copied");
+        assert!(text.contains("/Subtype /Image") || text.contains("/Subtype/Image"), "no picture");
+    }
+    // One test drawing and one full-size try; the failure is remembered.
+    assert_eq!(*tries.lock().unwrap(), 2);
+}
+
+/// A page the writer can't copy is drawn from the PDF as before: a PDF
+/// 2.0 file (newer than the exported PDF), a damaged one, a page that
+/// isn't there.
+#[test]
+fn pdf_export_draws_pages_it_cant_copy() {
+    for (pdf, index) in [(tiny_pdf("2.0", ""), 0u32), (b"%PDF-1.4 stand-in".to_vec(), 0), (tiny_pdf("1.4", ""), 5)] {
+        let r = Renderer::new();
+        let asked = Arc::new(Mutex::new(vec![]));
+        r.set_page_raster(Some(green(asked.clone())));
+        let mut ed = deck_of(&r, pdf);
+        for e in ed.doc.elements.values_mut() {
+            if let ElementKind::Image(i) = &mut e.kind {
+                i.page.as_mut().unwrap().index = index;
+            }
+        }
+        let out = r.export_pdf(&ed).unwrap();
+        assert!(out.starts_with(b"%PDF"));
+        // Once at export size (besides the small test drawing).
+        assert_eq!(asked.lock().unwrap().iter().filter(|q| q.page_px.0 != 64).count(), 1, "drawn from the PDF instead");
+        assert!(String::from_utf8_lossy(&out).contains(&format!("/Width {EXPORT_PAGE_PX}")));
+    }
+}

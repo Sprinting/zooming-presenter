@@ -62,6 +62,11 @@ pub enum Item {
     /// path (image crops and masks).
     PushClip(BezPath),
     PopClip,
+    /// A page of an imported PDF, embedded as itself (vectors, text) by
+    /// the PDF export; `transform` maps the page box, `size` points with
+    /// its top-left at 0,0, to device. Only PDF export makes these.
+    #[cfg(not(target_arch = "wasm32"))]
+    PdfPage { source: crate::pdf::Source, index: usize, size: (f64, f64), transform: Affine },
 }
 
 pub use crate::images::ImageLevel;
@@ -447,11 +452,19 @@ impl Ctx<'_> {
         use crate::images::TILE_PREFIX;
         use crate::pages::{tile_for, PageRequest, MAX_PAGE_PX, MAX_TILE_PIXELS};
         let mut out = vec![];
-        let Some(raster) = self.r.page_raster() else { return out };
         let Some(pdf) = self.editor.doc.assets.get(&page.pdf) else { return out };
         if !(fw > 0.0 && fh > 0.0) {
             return out;
         }
+        // PDF export: the page itself, as Keynote and Preview keep a
+        // placed PDF (B7); drawn from the PDF only when it can't be.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.full_res_images && !self.o.raster_pages {
+            if let Some(source) = crate::pdf::embeddable(self.r, &page.pdf, pdf, page.index as usize, (fw, fh)) {
+                return vec![Item::PdfPage { source, index: page.index as usize, size: (fw, fh), transform: *whole }];
+            }
+        }
+        let Some(raster) = self.r.page_raster() else { return out };
         let on_screen = fw * affine_scale(whole);
         if !on_screen.is_finite() {
             return out;
