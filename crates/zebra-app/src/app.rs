@@ -799,6 +799,9 @@ impl ZebraApp {
                 self.after_load();
             }
             Open => crate::pickers::ask(self, crate::pickers::Pick::Open),
+            // Every window's list follows (the shell shares it) and so do
+            // the saved settings; the files are not touched.
+            ClearRecent => self.recent.clear(),
             OpenPath(p) => self.open_path(&p),
             ReopenAutosave(p) => {
                 if !self.reopen_autosave(&p) {
@@ -2235,7 +2238,7 @@ pub fn works_under_a_sheet(a: &Action) -> bool {
     use Action::*;
     matches!(
         a,
-        New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | ReopenAutosave(_) | Close | Quit | Settings | About | Acknowledgements | PauseAgents | StopAgents
+        New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | ReopenAutosave(_) | ClearRecent | Close | Quit | Settings | About | Acknowledgements | PauseAgents | StopAgents
     )
 }
 

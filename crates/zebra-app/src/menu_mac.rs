@@ -48,7 +48,8 @@ struct Bar {
     ids: HashMap<String, Action>,
     entries: Vec<Entry>,
     recent: Submenu,
-    recent_shown: Vec<std::path::PathBuf>,
+    /// What Open Recent lists now (None: not built yet).
+    recent_shown: Option<Vec<std::path::PathBuf>>,
     /// Our submenus in the order `menus::sub_titles` lists their titles.
     subs: Vec<Submenu>,
     app_menu: Option<Submenu>,
@@ -232,7 +233,7 @@ impl Bar {
             ids: HashMap::new(),
             entries: vec![],
             recent: Submenu::new(crate::t!("menu-open-recent"), true),
-            recent_shown: vec![],
+            recent_shown: None,
             subs: vec![],
             app_menu: None,
             window: None,
@@ -315,6 +316,8 @@ impl Bar {
             sub.set_text(native(&title));
         }
         self.recent.set_text(native(&crate::t!("menu-open-recent")));
+        // Clear Menu is rebuilt in the new language.
+        self.recent_shown = None;
         if let Some(s) = &self.app_menu {
             s.set_text(native(&crate::t!("menu-mac-app")));
         }
@@ -417,24 +420,40 @@ pub fn poll(app: &mut ZebraApp, ctx: &egui::Context) {
     BAR.with(|b| {
         let mut b = b.borrow_mut();
         let Some(m) = b.as_mut() else { return };
-        // Keep Open Recent in sync.
-        if m.recent_shown != app.recent {
+        // Keep Open Recent in sync: the documents, then Clear Menu (built
+        // the first time even when there are none, for its dimmed Clear Menu).
+        if m.recent_shown.as_ref() != Some(&app.recent) {
             for item in m.recent.items() {
                 if let Some(mi) = item.as_menuitem() {
                     let _ = m.recent.remove(mi);
+                } else if let Some(sep) = item.as_predefined_menuitem() {
+                    let _ = m.recent.remove(sep);
                 }
             }
             m.ids.retain(|k, _| !k.starts_with("zebra.recent."));
-            for p in app.recent.iter() {
-                // The id names the file, not its place in the list: a click
-                // still waiting when the list is rebuilt opens what was clicked.
-                let id = format!("zebra.recent.{}", recent_key(p));
-                let name = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
-                let mi = MenuItem::with_id(id.clone(), native(&name), true, None);
-                let _ = m.recent.append(&mi);
-                m.ids.insert(id, Action::OpenPath(p.clone()));
+            for e in crate::menus::recent_entries(&app.recent) {
+                match e {
+                    crate::menus::RecentEntry::File(p) => {
+                        // The id names the file, not its place in the list: a click
+                        // still waiting when the list is rebuilt opens what was clicked.
+                        let id = format!("zebra.recent.{}", recent_key(&p));
+                        let name = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
+                        let mi = MenuItem::with_id(id.clone(), native(&name), true, None);
+                        let _ = m.recent.append(&mi);
+                        m.ids.insert(id, Action::OpenPath(p));
+                    }
+                    crate::menus::RecentEntry::Separator => {
+                        let _ = m.recent.append(&PredefinedMenuItem::separator());
+                    }
+                    crate::menus::RecentEntry::Clear { enabled } => {
+                        let id = "zebra.recent.clear".to_string();
+                        let mi = MenuItem::with_id(id.clone(), native(&crate::t!("menu-clear-recent")), enabled, None);
+                        let _ = m.recent.append(&mi);
+                        m.ids.insert(id, Action::ClearRecent);
+                    }
+                }
             }
-            m.recent_shown = app.recent.clone();
+            m.recent_shown = Some(app.recent.clone());
         }
         m.sync(app);
     });

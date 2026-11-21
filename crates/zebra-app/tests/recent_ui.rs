@@ -42,5 +42,32 @@ fn files_an_agent_opens_or_saves_go_in_open_recent() {
     app.editor.load(zebra_core::Document::default(), None);
     h.run_steps(2);
     assert_eq!(h.state().recent, vec![b, a]);
+    drop(h);
+    open_recent_ends_with_clear_menu_which_empties_it();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// M13 (Mac pass 21 Nov): Open Recent had no Clear Menu. As in Keynote it
+/// ends with a separator and Clear Menu, which empties the list (the files
+/// stay); with nothing to clear it is there, dimmed. (Run from the test
+/// above: this binary's data folder is set once.)
+fn open_recent_ends_with_clear_menu_which_empties_it() {
+    use zebra_app::menus::{RecentEntry, recent_entries};
+    let (a, b) = (std::path::PathBuf::from("/x/a.zebra"), std::path::PathBuf::from("/x/b.zebra"));
+    assert_eq!(
+        recent_entries(&[a.clone(), b.clone()]),
+        vec![RecentEntry::File(a.clone()), RecentEntry::File(b.clone()), RecentEntry::Separator, RecentEntry::Clear { enabled: true }]
+    );
+    assert_eq!(recent_entries(&[]), vec![RecentEntry::Clear { enabled: false }]);
+
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_step_dt(0.02)
+        .build_eframe(|cc| ZebraApp::new(&cc.egui_ctx, None, None, AppOptions { demo: Some("empty".into()), ..Default::default() }));
+    h.run_steps(2);
+    h.state_mut().recent = vec![a, b];
+    h.state_mut().queued.push(zebra_app::actions::Action::ClearRecent);
+    h.run_steps(2);
+    assert!(h.state().recent.is_empty());
+    assert_eq!(zebra_app::actions::Action::ClearRecent.label(), "Clear Menu");
 }
