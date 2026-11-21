@@ -193,6 +193,45 @@ fn a_pasted_picture_is_read_off_the_window_thread() {
     assert_eq!(h.state().editor.doc.elements.len(), 2, "own copy pasted");
 }
 
+/// M22 (Mac pass, 21 Nov): a slow paste showed nothing for 13 s. Like
+/// Keynote, an insert or paste that takes time shows "Inserting Media…"
+/// with Cancel (log row 64); a quick one shows nothing. Cancel drops the
+/// picture when it arrives, and its scratch file with it.
+#[test]
+fn a_slow_paste_shows_inserting_media_and_cancels() {
+    use egui_kittest::kittest::Queryable;
+    use zebra_app::media_ui::{SHEET_AFTER, inserting_sheet_up, paste_picture_with};
+    let mut h = harness();
+    // Quick: no sheet.
+    paste_picture_with(h.state_mut(), || Some((8, 8, vec![9; 8 * 8 * 4])));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().editor.doc.elements.is_empty() && std::time::Instant::now() < until {
+        assert!(!inserting_sheet_up(h.state()), "no sheet for a quick paste");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().editor.doc.elements.len(), 1);
+    // Slow: the sheet comes up after SHEET_AFTER; Cancel drops it.
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    paste_picture_with(h.state_mut(), move || {
+        let _ = wait.recv();
+        Some((64, 32, vec![200; 64 * 32 * 4]))
+    });
+    h.run_steps(1);
+    assert!(!inserting_sheet_up(h.state()));
+    std::thread::sleep(SHEET_AFTER + std::time::Duration::from_millis(100));
+    h.run_steps(2);
+    assert!(inserting_sheet_up(h.state()), "the sheet is up");
+    h.get_by_label("Inserting Media…");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(!inserting_sheet_up(h.state()), "Cancel took the sheet down");
+    go.send(()).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    h.run_steps(3);
+    assert_eq!(h.state().editor.doc.elements.len(), 1, "the cancelled picture never came in");
+}
+
 /// A3 (cloud pass): every non-table "too big" read "That would make the
 /// table too big." Each error the person sees says what it is about.
 #[test]

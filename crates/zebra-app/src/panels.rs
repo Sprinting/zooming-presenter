@@ -192,6 +192,7 @@ pub fn layout(app: &mut ZebraApp, ui: &mut Ui) {
     floating(app, &ctx, rect, &p);
     crate::sheets::ui(app, &ctx);
     crate::opening::ui(app, &ctx);
+    crate::media_ui::inserting_ui(app, &ctx);
     crate::import_ui::ui(app, &ctx);
     crate::web_video_ui::ui(app, &ctx);
     crate::shape_library::ui(app, &ctx, &p);

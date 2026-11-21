@@ -2820,7 +2820,7 @@ impl Editor {
             let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).filter(|e| !e.is_empty() && e.len() <= 8 && e.bytes().all(|b| b.is_ascii_alphanumeric())).unwrap_or_else(|| "bin".into());
             // What it is, from its first bytes, before any of it is
             // copied: a disk image or a log named .png costs 256 KB.
-            let (_, head) = crate::media::read_head(p).map_err(ioe)?;
+            let (meta, head) = crate::media::read_head(p).map_err(ioe)?;
             let unknown = || ZError::invalid("unrecognised media format").hint("use PNG, JPEG, HEIC, TIFF, BMP, WebP, GIF, SVG, MP4, MOV, MP3, M4A, AAC or WAV");
             let kind = crate::media::sniff_kind(&head).ok_or_else(unknown)?;
             // A picture where a video or sound was asked for (or the other
@@ -2834,13 +2834,13 @@ impl Editor {
             // picture whose pixels can't be scaled down within bounds,
             // told from its header before anything is copied.
             if kind == MediaKind::Image {
-                picture_fits(&head)?;
+                picture_fits_in(&head, Some(meta.len()))?;
             }
             let (key, bytes) = crate::media::spill_file(p, &ext).map_err(ioe)?;
             // The copy is what is kept: check its header too (the file may
             // have changed while it was copied).
             if kind == MediaKind::Image {
-                picture_fits(&bytes)?;
+                picture_fits_whole(&bytes)?;
             }
             let info = crate::media::info(&bytes)?;
             check(&info)?;
@@ -2857,7 +2857,7 @@ impl Editor {
         let info = crate::media::info(&bytes)?;
         check(&info)?;
         if info.kind == MediaKind::Image {
-            picture_fits(&bytes)?;
+            picture_fits_whole(&bytes)?;
         }
         let key = content_key(&bytes);
         if !self.doc.assets.contains_key(&key) {
@@ -2895,6 +2895,13 @@ impl Editor {
     /// Store image bytes as an asset; returns the key.
     pub fn add_asset(&mut self, bytes: Vec<u8>) -> ZResult<String> {
         let (ext, w, h) = image_info(&bytes)?;
+        // A header claiming more pixels than the bytes could hold (M17)
+        // is turned away here too: pastes and inline adds come this way.
+        if let Some(head) = crate::media::picture_header(&bytes) {
+            if crate::media::header_lies(&head, bytes.len() as u64) {
+                picture_fits_whole(&bytes)?;
+            }
+        }
         let key = content_key(&bytes);
         if !self.doc.assets.contains_key(&key) {
             let bytes = crate::media::spill(bytes, &key, &ext);
@@ -3986,12 +3993,20 @@ pub(crate) fn content_key(bytes: &[u8]) -> String {
     crate::media::content_key(bytes)
 }
 
-/// (ext, width, height) of an image's bytes.
+/// [`picture_fits_in`] for the whole file (`bytes` is all of it).
+fn picture_fits_whole(bytes: &[u8]) -> ZResult<()> {
+    picture_fits_in(bytes, Some(bytes.len() as u64))
+}
+
 /// A picture Zebra can show: one whose header says its pixels can be
-/// scaled down within bounds (see `media::PictureHeader::fits`). Its file
-/// size doesn't matter.
-fn picture_fits(head: &[u8]) -> ZResult<()> {
+/// scaled down within bounds (see `media::PictureHeader::fits`), and,
+/// when the file's length is known, one whose file could hold that many
+/// pixels (M17). Its file size alone doesn't matter.
+fn picture_fits_in(head: &[u8], file_len: Option<u64>) -> ZResult<()> {
     match crate::media::picture_header(head) {
+        Some(h) if file_len.is_some_and(|n| crate::media::header_lies(&h, n)) => Err(ZError::new("damaged", format!("this picture says it is {}x{} pixels, but its file is far too small to hold them", h.width, h.height))
+            .hint("it is probably damaged; open it in Preview and save it again")
+            .about(crate::error::About::Picture)),
         Some(h) if !h.fits() && h.format == crate::media::PictureFormat::Gif => Err(ZError::new("too_big", format!("this GIF is {}x{} pixels, which needs more memory than this Mac has", h.width, h.height))
             .hint("save it smaller")
             .about(crate::error::About::Picture)),

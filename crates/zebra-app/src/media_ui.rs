@@ -64,7 +64,7 @@ pub struct Media {
     autoplayed: HashSet<ElementId>,
     /// Videos being inserted (poster made on a worker first) and pasted
     /// pictures being encoded.
-    inserting: Vec<Receiver<Inserted>>,
+    inserting: Vec<Pending>,
     pub crop: Option<CropEdit>,
     reported: HashSet<String>,
     /// Background work that ends with a message (exports).
@@ -91,11 +91,91 @@ pub struct Media {
 
 enum Inserted {
     Video(Insert),
-    /// A pasted picture, as PNG, and where it goes.
-    Picture(Vec<u8>, Vec2),
+    /// A pasted picture, as a PNG scratch file (added by path, then
+    /// removed), and where it goes.
+    Picture(PathBuf, Vec2),
     /// The system clipboard held no picture after all: paste Zebra's own
     /// copied objects, as Paste does when the clipboard has nothing newer.
     NoPicture,
+}
+
+/// Background insert or paste. Past [`SHEET_AFTER`] it shows the
+/// "Inserting Media…" sheet with a bar and Cancel, as Keynote does for an
+/// insert that takes time (log row 64); a quick one shows nothing.
+struct Pending {
+    rx: Receiver<Inserted>,
+    since: std::time::Instant,
+    /// How far the work is, 0..=1000, set by the worker at each stage.
+    stage: Arc<std::sync::atomic::AtomicU32>,
+}
+
+/// How long an insert or paste runs before its sheet shows (Kartik's
+/// call, 21 Nov).
+pub const SHEET_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// A channel and stage for a worker, and what adds it to the window's
+/// pending work once the worker has started.
+fn pending() -> (std::sync::mpsc::Sender<Inserted>, Arc<std::sync::atomic::AtomicU32>, impl FnOnce(&mut ZebraApp)) {
+    let (tx, rx) = channel();
+    let stage = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let p = Pending { rx, since: std::time::Instant::now(), stage: stage.clone() };
+    (tx, stage, move |app: &mut ZebraApp| {
+        app.media.inserting.push(p);
+        app.ctx.request_repaint();
+    })
+}
+
+fn set_stage(stage: &std::sync::atomic::AtomicU32, f: f32) {
+    stage.store((f.clamp(0.0, 1.0) * 1000.0) as u32, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A pasted picture's result the window no longer wants (Cancel): its
+/// scratch file goes.
+fn discard(i: Inserted) {
+    if let Inserted::Picture(file, _) = i {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
+/// The "Inserting Media…" sheet is up: what the document would do waits,
+/// as under any sheet.
+pub fn inserting_sheet_up(app: &ZebraApp) -> bool {
+    app.media.inserting.iter().any(|p| p.since.elapsed() >= SHEET_AFTER)
+}
+
+/// The "Inserting Media…" sheet, over the window, once an insert or paste
+/// has taken [`SHEET_AFTER`]. Cancel drops what is still coming.
+pub fn inserting_ui(app: &mut ZebraApp, ctx: &egui::Context) {
+    let Some(oldest) = app.media.inserting.iter().map(|p| p.since).min() else { return };
+    let waited = oldest.elapsed();
+    if waited < SHEET_AFTER {
+        ctx.request_repaint_after(SHEET_AFTER - waited);
+        return;
+    }
+    let progress = app.media.inserting.iter().map(|p| p.stage.load(std::sync::atomic::Ordering::Relaxed)).min().unwrap_or(0) as f32 / 1000.0;
+    let p = crate::style::Palette::of(ctx);
+    let mut cancel = false;
+    egui::Modal::new(app.uid("inserting-media")).frame(crate::style::sheet_frame(&p)).show(ctx, |ui| {
+        ui.set_width(280.0);
+        ui.label(egui::RichText::new(crate::t!("media-inserting")).strong());
+        ui.add_space(8.0);
+        ui.add(egui::ProgressBar::new(progress).desired_height(6.0));
+        ui.add_space(8.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(crate::t!("sheet-cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                cancel = true;
+            }
+        });
+    });
+    if cancel {
+        // The workers finish on their own; what they send then goes
+        // nowhere, and a pasted picture's scratch file with it.
+        for p in app.media.inserting.drain(..) {
+            while let Ok(i) = p.rx.try_recv() {
+                discard(i);
+            }
+        }
+    }
 }
 
 struct Insert {
@@ -412,7 +492,7 @@ pub fn tick(app: &mut ZebraApp) {
 
     // Finished inserts.
     let mut done = vec![];
-    app.media.inserting.retain(|rx| match rx.try_recv() {
+    app.media.inserting.retain(|p| match p.rx.try_recv() {
         Ok(i) => {
             done.push(i);
             false
@@ -423,7 +503,7 @@ pub fn tick(app: &mut ZebraApp) {
     for i in done {
         match i {
             Inserted::Video(i) => finish_insert_video(app, i),
-            Inserted::Picture(png, at) => app.insert_image_bytes(png, at, crate::t!("media-pasted-image")),
+            Inserted::Picture(file, at) => app.insert_pasted_file(&file, at, crate::t!("media-pasted-image")),
             Inserted::NoPicture => app.paste_own(),
         }
     }
@@ -717,16 +797,17 @@ fn make_poster_then(app: &mut ZebraApp, p: &std::path::Path, at: Vec2, replace: 
     let width = app.editor.view.viewport.x / app.editor.view.camera.zoom * 0.5;
     let backend = app.media.backend.clone();
     let path = p.to_path_buf();
-    let (tx, rx) = channel();
+    let (tx, stage, add) = pending();
     let ctx = app.ctx.clone();
     let spawned = std::thread::Builder::new().name("zebra-poster".into()).spawn(move || {
+        set_stage(&stage, 0.3);
         let poster = backend.poster_png(&path, 1.0, 1280).ok();
+        set_stage(&stage, 1.0);
         let _ = tx.send(Inserted::Video(Insert { replace, path, at, width, poster }));
         ctx.request_repaint();
     });
     if spawned.is_ok() {
-        app.media.inserting.push(rx);
-        app.ctx.request_repaint();
+        add(app);
     }
 }
 
@@ -947,21 +1028,29 @@ pub fn paste_from_system(app: &mut ZebraApp) -> bool {
 /// pastes Zebra's own copied objects instead.
 pub fn paste_picture_with(app: &mut ZebraApp, read: impl FnOnce() -> Option<(u32, u32, Vec<u8>)> + Send + 'static) {
     let at = app.canvas_center_world();
-    let (tx, rx) = channel();
+    let (tx, stage, add) = pending();
     let ctx = app.ctx.clone();
     let spawned = std::thread::Builder::new().name("zebra-paste".into()).spawn(move || {
+        // Reading the clipboard (the app that copied may take seconds to
+        // hand it over), then writing the picture.
+        set_stage(&stage, 0.1);
         let got = match read() {
-            Some((w, h, rgba)) => pasted_png(w, h, rgba).map(|png| Inserted::Picture(png, at)),
+            Some((w, h, rgba)) => {
+                set_stage(&stage, 0.5);
+                pasted_png_file(w, h, rgba).map(|file| Inserted::Picture(file, at))
+            }
             None => Some(Inserted::NoPicture),
         };
-        if let Some(i) = got {
-            let _ = tx.send(i);
+        set_stage(&stage, 1.0);
+        if let Some(i) = got
+            && let Err(e) = tx.send(i)
+        {
+            discard(e.0);
         }
         ctx.request_repaint();
     });
     if spawned.is_ok() {
-        app.media.inserting.push(rx);
-        app.ctx.request_repaint();
+        add(app);
     }
 }
 
@@ -969,30 +1058,35 @@ pub fn paste_picture_with(app: &mut ZebraApp, read: impl FnOnce() -> Option<(u32
 /// encoded on a worker: a pasted 20000 x 20000 screenshot would otherwise
 /// hold the window for seconds.
 pub fn paste_rgba(app: &mut ZebraApp, w: u32, h: u32, rgba: Vec<u8>) {
-    paste_with(app, move || pasted_png(w, h, rgba));
+    paste_with(app, move || pasted_png_file(w, h, rgba));
 }
 
 /// [`paste_rgba`] for egui's pasted picture, converted on the worker too.
 pub fn paste_color_image(app: &mut ZebraApp, img: Arc<egui::ColorImage>) {
     paste_with(app, move || {
         let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
-        pasted_png(img.size[0] as u32, img.size[1] as u32, rgba)
+        let (w, h) = (img.size[0] as u32, img.size[1] as u32);
+        drop(img);
+        pasted_png_file(w, h, rgba)
     });
 }
 
-fn paste_with(app: &mut ZebraApp, make: impl FnOnce() -> Option<Vec<u8>> + Send + 'static) {
+fn paste_with(app: &mut ZebraApp, make: impl FnOnce() -> Option<PathBuf> + Send + 'static) {
     let at = app.canvas_center_world();
-    let (tx, rx) = channel();
+    let (tx, stage, add) = pending();
     let ctx = app.ctx.clone();
     let spawned = std::thread::Builder::new().name("zebra-paste".into()).spawn(move || {
-        if let Some(png) = make() {
-            let _ = tx.send(Inserted::Picture(png, at));
+        set_stage(&stage, 0.5);
+        if let Some(file) = make()
+            && let Err(e) = tx.send(Inserted::Picture(file, at))
+        {
+            discard(e.0);
         }
+        set_stage(&stage, 1.0);
         ctx.request_repaint();
     });
     if spawned.is_ok() {
-        app.media.inserting.push(rx);
-        app.ctx.request_repaint();
+        add(app);
     }
 }
 
@@ -1000,13 +1094,63 @@ fn paste_with(app: &mut ZebraApp, make: impl FnOnce() -> Option<Vec<u8>> + Send 
 /// make a picture (a size that doesn't match the data, or zero). It isn't
 /// scaled down: like any picture it comes in whole and shows scaled.
 pub fn pasted_png(w: u32, h: u32, rgba: Vec<u8>) -> Option<Vec<u8>> {
-    if w == 0 || h == 0 || (w as u128) * (h as u128) * 4 != rgba.len() as u128 {
+    let mut png = vec![];
+    encode_png(w, h, &rgba, &mut png)?;
+    Some(png)
+}
+
+/// [`pasted_png`] written straight to a scratch file in Zebra's media
+/// folder (M22): the PNG is never held in memory, and the picture is then
+/// added by path like a dropped file (cloned and mapped), so only the
+/// pixels are ever held, once. The caller removes the file once added; a
+/// crash leaves it named for this process, so the next launch sweeps it.
+/// None (and no file left) if the pixels don't make a picture or the
+/// file can't be written.
+pub fn pasted_png_file(w: u32, h: u32, rgba: Vec<u8>) -> Option<PathBuf> {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    if !pixels_add_up(w, h, &rgba) {
         return None;
     }
-    let img = image::RgbaImage::from_raw(w, h, rgba)?;
-    let mut png = vec![];
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
-    Some(png)
+    let dir = zebra_core::media::spill_dir().unwrap_or_else(|| std::env::temp_dir().join("Zebra-media"));
+    std::fs::create_dir_all(&dir).ok()?;
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = dir.join(format!("{}-paste-{n}.png", std::process::id()));
+    let written = (|| {
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&path).ok()?);
+        encode_png(w, h, &rgba, &mut out)?;
+        out.into_inner().ok()?.sync_all().ok()
+    })();
+    drop(rgba);
+    if written.is_none() {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    Some(path)
+}
+
+fn pixels_add_up(w: u32, h: u32, rgba: &[u8]) -> bool {
+    w != 0 && h != 0 && (w as u128) * (h as u128) * 4 == rgba.len() as u128
+}
+
+/// Rows are filtered and compressed as they go (png's stream writer), so
+/// the encoder holds a few rows, never a second copy of the picture (the
+/// whole-image writer filtered it all into one buffer and compressed that
+/// into another: about 3x the pixels again).
+fn encode_png(w: u32, h: u32, rgba: &[u8], out: impl std::io::Write) -> Option<()> {
+    use std::io::Write;
+    if !pixels_add_up(w, h, rgba) {
+        return None;
+    }
+    let mut e = png::Encoder::new(out, w, h);
+    e.set_color(png::ColorType::Rgba);
+    e.set_depth(png::BitDepth::Eight);
+    let mut writer = e.write_header().ok()?;
+    let mut stream = writer.stream_writer().ok()?;
+    // A row at a time (a row of a 20,000-pixel picture is 80 KB).
+    for row in rgba.chunks(w as usize * 4) {
+        stream.write_all(row).ok()?;
+    }
+    stream.finish().ok()
 }
 
 // ----------------------------------------------------------------------

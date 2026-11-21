@@ -24,7 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -78,7 +78,11 @@ impl AsRef<[u8]> for PixmapBytes {
 
 impl std::fmt::Debug for ImageLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ImageLevel({} {}x{})", self.asset, self.width, self.height)
+        write!(
+            f,
+            "ImageLevel({} {}x{})",
+            self.asset, self.width, self.height
+        )
     }
 }
 
@@ -100,15 +104,25 @@ impl ImageLevel {
     pub fn from_premultiplied(asset: &str, width: u32, height: u32, mut px: Vec<u8>) -> ImageLevel {
         use vello_cpu::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
         debug_assert_eq!(px.len() as u64, width as u64 * height as u64 * 4);
-        let fits = width <= u16::MAX as u32 && height <= u16::MAX as u32 && px.len() as u64 == width as u64 * height as u64 * 4;
+        let fits = width <= u16::MAX as u32
+            && height <= u16::MAX as u32
+            && px.len() as u64 == width as u64 * height as u64 * 4;
         let (pixmap, blob) = if fits {
             // The pixmap takes the buffer as 4-byte pixels, which needs a
             // capacity that is a multiple of 4.
             if !px.capacity().is_multiple_of(4) {
                 px = px.as_slice().to_vec();
             }
-            let meta = vello_cpu::PixelMetadata { alpha_type: ImageAlphaType::AlphaPremultiplied, may_have_transparency: true };
-            let pixmap = Arc::new(vello_cpu::Pixmap::from_parts(px, width as u16, height as u16, meta));
+            let meta = vello_cpu::PixelMetadata {
+                alpha_type: ImageAlphaType::AlphaPremultiplied,
+                may_have_transparency: true,
+            };
+            let pixmap = Arc::new(vello_cpu::Pixmap::from_parts(
+                px,
+                width as u16,
+                height as u16,
+                meta,
+            ));
             let blob = Blob::new(Arc::new(PixmapBytes(pixmap.clone())));
             (pixmap, blob)
         } else {
@@ -116,8 +130,21 @@ impl ImageLevel {
             // before): the CPU renderer draws nothing for it.
             (Arc::new(vello_cpu::Pixmap::new(1, 1)), Blob::from(px))
         };
-        let data = ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::AlphaPremultiplied, width, height };
-        ImageLevel { asset: asset.to_string(), width, height, data, pixmap, moving: false }
+        let data = ImageData {
+            data: blob,
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::AlphaPremultiplied,
+            width,
+            height,
+        };
+        ImageLevel {
+            asset: asset.to_string(),
+            width,
+            height,
+            data,
+            pixmap,
+            moving: false,
+        }
     }
 
     /// A video's frame (premultiplied RGBA8): marked moving, so a playing
@@ -128,7 +155,10 @@ impl ImageLevel {
 
     /// Marked as a frame of a moving picture ([`ImageLevel::moving`]).
     pub fn as_moving(self) -> ImageLevel {
-        ImageLevel { moving: true, ..self }
+        ImageLevel {
+            moving: true,
+            ..self
+        }
     }
 
     /// The pixels for vello_cpu (shared with `data`, not a copy).
@@ -191,7 +221,12 @@ struct PlayState {
 
 impl std::fmt::Debug for Animation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Animation({} frames, {})", self.ends.len(), if self.is_played() { "played" } else { "kept" })
+        write!(
+            f,
+            "Animation({} frames, {})",
+            self.ends.len(),
+            if self.is_played() { "played" } else { "kept" }
+        )
     }
 }
 
@@ -221,7 +256,10 @@ impl Animation {
             return (0, f64::INFINITY);
         }
         let t = t.rem_euclid(total);
-        let i = self.ends.partition_point(|e| *e <= t).min(self.ends.len() - 1);
+        let i = self
+            .ends
+            .partition_point(|e| *e <= t)
+            .min(self.ends.len() - 1);
         (i, self.ends[i] - t)
     }
 
@@ -237,7 +275,10 @@ impl Animation {
     /// within [`AHEAD_BYTES`], at least one, never a whole loop.
     fn ahead(&self, i: usize, frame_bytes: usize) -> usize {
         let n = self.ends.len();
-        let most = (AHEAD_BYTES / frame_bytes.max(1)).max(2).min(n.saturating_sub(1)).max(1);
+        let most = (AHEAD_BYTES / frame_bytes.max(1))
+            .max(2)
+            .min(n.saturating_sub(1))
+            .max(1);
         let dur = |k: usize| self.ends[k] - if k == 0 { 0.0 } else { self.ends[k - 1] };
         let (mut k, mut t) = (1, dur(i % n));
         while k < most && t < AHEAD_SECONDS {
@@ -280,8 +321,16 @@ impl Animation {
                 }
             }
         }
-        let shown = s.shown.as_ref().map(|(_, f)| f.clone()).unwrap_or_else(|| self.first.clone());
-        let to_come = s.queue.iter().filter(|(k, _)| (1..ahead).contains(&fwd(*k))).count();
+        let shown = s
+            .shown
+            .as_ref()
+            .map(|(_, f)| f.clone())
+            .unwrap_or_else(|| self.first.clone());
+        let to_come = s
+            .queue
+            .iter()
+            .filter(|(k, _)| (1..ahead).contains(&fwd(*k)))
+            .count();
         let work = !sync && !s.busy && !s.broken && to_come + 1 < ahead.max(2);
         if work {
             s.busy = true;
@@ -294,7 +343,9 @@ impl Animation {
     /// Decode on from the frame asked for last, about a second ahead (on
     /// a picture worker).
     fn work(&self) {
-        let Frames::Played(p) = &self.frames else { return };
+        let Frames::Played(p) = &self.frames else {
+            return;
+        };
         let n = self.ends.len();
         let (screen, want) = {
             let mut s = lock_play(&p.state);
@@ -370,7 +421,9 @@ impl Animation {
     /// Give back the screen and the frames ahead (nobody has drawn this
     /// GIF for a while); it starts again when it is drawn.
     fn rest(&self) {
-        let Frames::Played(p) = &self.frames else { return };
+        let Frames::Played(p) = &self.frames else {
+            return;
+        };
         let mut s = lock_play(&p.state);
         if !s.busy {
             s.screen = None;
@@ -391,9 +444,15 @@ impl Player {
     }
 
     fn recount(&self, s: &PlayState) {
-        let screen = if s.screen.is_some() || s.busy { self.screen_bytes } else { 0 };
-        let frames: usize = s.queue.iter().map(|(_, f)| f.bytes()).sum::<usize>() + s.shown.as_ref().map_or(0, |(_, f)| f.bytes());
-        self.held.store(self.frame_bytes() + screen + frames, Ordering::Relaxed);
+        let screen = if s.screen.is_some() || s.busy {
+            self.screen_bytes
+        } else {
+            0
+        };
+        let frames: usize = s.queue.iter().map(|(_, f)| f.bytes()).sum::<usize>()
+            + s.shown.as_ref().map_or(0, |(_, f)| f.bytes());
+        self.held
+            .store(self.frame_bytes() + screen + frames, Ordering::Relaxed);
     }
 
     /// Frame `i` decoded on this thread (captures and export): on from the
@@ -464,6 +523,11 @@ pub const MAX_IMAGE_DIM: u32 = 8192;
 const MIN_LEVEL_DIM: u32 = 64;
 /// Default budget for all decoded pictures.
 pub const DEFAULT_BUDGET: usize = 256 << 20;
+/// A picture a worker delivered is kept, whatever the budget, until a
+/// frame has drawn it or this many display lists have gone by without
+/// one doing so (M18: an arrival evicted on landing was asked for again
+/// by the next frame, for ever). Not a limit on anything the person sees.
+const FRESH_PASSES: u64 = 4;
 /// A GIF whose frames all fit in this many bytes at the level drawn (and
 /// [`GIF_WORK`]) is decoded once and kept; a bigger one is decoded as it
 /// plays. Not a limit: every frame plays either way.
@@ -476,8 +540,15 @@ const AHEAD_BYTES: usize = 32 << 20;
 /// Size of `level` for a picture of `w`x`h` pixels.
 pub fn level_size(w: u32, h: u32, level: u8) -> (u32, u32) {
     let m = w.max(h).max(1);
-    let k = if m > MAX_IMAGE_DIM { MAX_IMAGE_DIM as f64 / m as f64 } else { 1.0 } / (1u64 << level) as f64;
-    (((w as f64 * k).round() as u32).max(1), ((h as f64 * k).round() as u32).max(1))
+    let k = if m > MAX_IMAGE_DIM {
+        MAX_IMAGE_DIM as f64 / m as f64
+    } else {
+        1.0
+    } / (1u64 << level) as f64;
+    (
+        ((w as f64 * k).round() as u32).max(1),
+        ((h as f64 * k).round() as u32).max(1),
+    )
 }
 
 /// The smallest level of a `w`x`h` picture.
@@ -508,6 +579,9 @@ type Key = (String, u8);
 struct Entry {
     img: Decoded,
     used: u64,
+    /// The generation a worker's result landed in, until a frame draws
+    /// it: [`evict`] keeps it meanwhile (M18).
+    arrived: Option<u64>,
     /// When it was last drawn, for the idle trim.
     at: Instant,
 }
@@ -604,7 +678,12 @@ impl ImageCache {
 
     pub fn stats(&self) -> CacheStats {
         let i = lock(&self.shared.inner);
-        CacheStats { bytes: i.bytes, budget: self.shared.budget.load(Ordering::Relaxed), entries: i.map.len(), pending: i.pending.len() }
+        CacheStats {
+            bytes: i.bytes,
+            budget: self.shared.budget.load(Ordering::Relaxed),
+            entries: i.map.len(),
+            pending: i.pending.len(),
+        }
     }
 
     pub fn clear(&self) {
@@ -633,7 +712,8 @@ impl ImageCache {
                 a.rest();
             }
         }
-        i.map.retain(|k, e| smallest.get(&k.0) == Some(&k.1) || now.duration_since(e.at) < idle);
+        i.map
+            .retain(|k, e| smallest.get(&k.0) == Some(&k.1) || now.duration_since(e.at) < idle);
         i.bytes = i.map.values().map(|e| e.img.bytes()).sum();
         let more = i.map.iter().any(|(k, _)| smallest.get(&k.0) != Some(&k.1));
         (before - i.bytes, more)
@@ -651,18 +731,43 @@ impl ImageCache {
     /// The picture `asset` at `level`, decoding now (`sync`) or on a worker.
     /// While a worker decodes, returns the nearest cached level instead, or
     /// None if there is none yet.
-    pub fn get(&self, asset: &str, ext: &str, bytes: &AssetBytes, size: (u32, u32), level: u8, sync: bool) -> Option<Decoded> {
+    pub fn get(
+        &self,
+        asset: &str,
+        ext: &str,
+        bytes: &AssetBytes,
+        size: (u32, u32),
+        level: u8,
+        sync: bool,
+    ) -> Option<Decoded> {
         self.get_styled(asset, ext, bytes, size, level, sync, None)
     }
 
     /// An SVG symbol drawn with `style`. Each style is its own cache entry,
     /// keyed `key` (the asset key plus the style).
-    pub fn get_svg(&self, key: &str, bytes: &AssetBytes, size: (u32, u32), level: u8, sync: bool, style: crate::svg::SvgStyle) -> Option<Decoded> {
+    pub fn get_svg(
+        &self,
+        key: &str,
+        bytes: &AssetBytes,
+        size: (u32, u32),
+        level: u8,
+        sync: bool,
+        style: crate::svg::SvgStyle,
+    ) -> Option<Decoded> {
         self.get_styled(key, "svg", bytes, size, level, sync, Some(style))
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn get_styled(&self, asset: &str, ext: &str, bytes: &AssetBytes, size: (u32, u32), level: u8, sync: bool, svg: Option<crate::svg::SvgStyle>) -> Option<Decoded> {
+    fn get_styled(
+        &self,
+        asset: &str,
+        ext: &str,
+        bytes: &AssetBytes,
+        size: (u32, u32),
+        level: u8,
+        sync: bool,
+        svg: Option<crate::svg::SvgStyle>,
+    ) -> Option<Decoded> {
         let g = self.shared.generation.load(Ordering::Relaxed);
         let key: Key = (asset.to_string(), level);
         {
@@ -673,13 +778,22 @@ impl ImageCache {
             if let Some(e) = i.map.get_mut(&key) {
                 e.used = g;
                 e.at = Instant::now();
+                e.arrived = None;
                 return Some(e.img.clone());
             }
             if !sync {
                 if !i.pending.contains(&key) {
                     i.pending.insert(key.clone());
                     drop(i);
-                    self.enqueue(Job { key, ext: ext.to_string(), bytes: bytes.clone(), size, svg, make: None, task: None });
+                    self.enqueue(Job {
+                        key,
+                        ext: ext.to_string(),
+                        bytes: bytes.clone(),
+                        size,
+                        svg,
+                        make: None,
+                        task: None,
+                    });
                     i = lock(&self.shared.inner);
                 }
                 // Nearest cached level: prefer sharper, then blurrier.
@@ -687,16 +801,31 @@ impl ImageCache {
                     .map
                     .iter_mut()
                     .filter(|((a, _), _)| a == asset)
-                    .min_by_key(|((_, l), _)| if *l < level { (0, level - *l) } else { (1, *l - level) });
+                    .min_by_key(|((_, l), _)| {
+                        if *l < level {
+                            (0, level - *l)
+                        } else {
+                            (1, *l - level)
+                        }
+                    });
                 return best.map(|(_, e)| {
                     e.used = g;
                     e.at = Instant::now();
+                    e.arrived = None;
                     e.img.clone()
                 });
             }
         }
-        let out = decode_job(&Job { key: key.clone(), ext: ext.to_string(), bytes: bytes.clone(), size, svg, make: None, task: None });
-        insert(&self.shared, key, out, g)
+        let out = decode_job(&Job {
+            key: key.clone(),
+            ext: ext.to_string(),
+            bytes: bytes.clone(),
+            size,
+            svg,
+            make: None,
+            task: None,
+        });
+        insert(&self.shared, key, out, g, false)
     }
 
     /// The picture `key` made by `make` (now if `sync`, else on a worker:
@@ -712,18 +841,35 @@ impl ImageCache {
             if let Some(e) = i.map.get_mut(&key) {
                 e.used = g;
                 e.at = Instant::now();
+                e.arrived = None;
                 return Some(e.img.clone());
             }
             if !sync {
                 if i.pending.insert(key.clone()) {
                     drop(i);
-                    self.enqueue(Job { key, ext: String::new(), bytes: AssetBytes::from(Vec::new()), size: (0, 0), svg: None, make: Some(make), task: None });
+                    self.enqueue(Job {
+                        key,
+                        ext: String::new(),
+                        bytes: AssetBytes::from(Vec::new()),
+                        size: (0, 0),
+                        svg: None,
+                        make: Some(make),
+                        task: None,
+                    });
                 }
                 return None;
             }
         }
-        let out = decode_job(&Job { key: key.clone(), ext: String::new(), bytes: AssetBytes::from(Vec::new()), size: (0, 0), svg: None, make: Some(make), task: None });
-        insert(&self.shared, key, out, g)
+        let out = decode_job(&Job {
+            key: key.clone(),
+            ext: String::new(),
+            bytes: AssetBytes::from(Vec::new()),
+            size: (0, 0),
+            svg: None,
+            make: Some(make),
+            task: None,
+        });
+        insert(&self.shared, key, out, g, false)
     }
 
     /// A handle for work that makes several pictures at once.
@@ -739,6 +885,7 @@ impl ImageCache {
         let e = i.map.get_mut(&(key.to_string(), 0))?;
         e.used = g;
         e.at = Instant::now();
+        e.arrived = None;
         Some(e.img.clone())
     }
 
@@ -751,7 +898,15 @@ impl ImageCache {
         let (img, work) = anim.frame(i, sync);
         if work {
             let a = anim.clone();
-            self.enqueue(Job { key: (String::new(), 0), ext: String::new(), bytes: AssetBytes::from(Vec::new()), size: (0, 0), svg: None, make: None, task: Some(Box::new(move || a.work())) });
+            self.enqueue(Job {
+                key: (String::new(), 0),
+                ext: String::new(),
+                bytes: AssetBytes::from(Vec::new()),
+                size: (0, 0),
+                svg: None,
+                make: None,
+                task: Some(Box::new(move || a.work())),
+            });
         }
         (img, next)
     }
@@ -759,37 +914,48 @@ impl ImageCache {
     fn enqueue(&self, job: Job) {
         // Two decode workers: enough to keep up with a pan across a photo
         // deck without competing with the UI thread for cores.
-        let (cell, name, workers) = if job.make.is_some() { (&self.shared.made, "zebra-pages", 1) } else { (&self.shared.jobs, "zebra-decode", 2) };
+        let (cell, name, workers) = if job.make.is_some() {
+            (&self.shared.made, "zebra-pages", 1)
+        } else {
+            (&self.shared.jobs, "zebra-decode", 2)
+        };
         let tx = cell.get_or_init(|| {
             let (tx, rx) = channel::<Job>();
             let rx = Arc::new(Mutex::new(rx));
             for n in 0..workers {
                 let rx = rx.clone();
                 let weak = Arc::downgrade(&self.shared);
-                let _ = std::thread::Builder::new().name(format!("{name}-{n}")).spawn(move || {
-                    loop {
-                        let job = match rx.lock().unwrap_or_else(|e| e.into_inner()).recv() {
-                            Ok(j) => j,
-                            Err(_) => return,
-                        };
-                        let Some(shared) = weak.upgrade() else { return };
-                        let mut job = job;
-                        if let Some(task) = job.task.take() {
-                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(task));
-                        } else if job.make.is_some() && made_already(&shared, &job.key) {
-                            // Made along with another (a picture's tiles
-                            // are made together).
-                        } else {
-                            let out = decode_job(&job);
-                            let g = shared.generation.load(Ordering::Relaxed);
-                            insert(&shared, job.key, out, g.saturating_sub(1));
+                let _ = std::thread::Builder::new()
+                    .name(format!("{name}-{n}"))
+                    .spawn(move || {
+                        loop {
+                            let job = match rx.lock().unwrap_or_else(|e| e.into_inner()).recv() {
+                                Ok(j) => j,
+                                Err(_) => return,
+                            };
+                            let Some(shared) = weak.upgrade() else { return };
+                            let mut job = job;
+                            if let Some(task) = job.task.take() {
+                                let _ =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(task));
+                            } else if job.make.is_some() && made_already(&shared, &job.key) {
+                                // Made along with another (a picture's tiles
+                                // are made together).
+                            } else {
+                                let out = decode_job(&job);
+                                let g = shared.generation.load(Ordering::Relaxed);
+                                insert(&shared, job.key, out, g.saturating_sub(1), true);
+                            }
+                            let waker = shared
+                                .waker
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .clone();
+                            if let Some(w) = waker {
+                                w();
+                            }
                         }
-                        let waker = shared.waker.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                        if let Some(w) = waker {
-                            w();
-                        }
-                    }
-                });
+                    });
             }
             Mutex::new(tx)
         });
@@ -817,19 +983,34 @@ impl CacheHandle {
     pub fn put(&self, key: &str, img: ImageLevel) {
         if let Some(s) = self.0.upgrade() {
             let g = s.generation.load(Ordering::Relaxed);
-            insert(&s, (key.to_string(), 0), vec![(0, Decoded::Still(Arc::new(img)))], g);
+            insert(
+                &s,
+                (key.to_string(), 0),
+                vec![(0, Decoded::Still(Arc::new(img)))],
+                g,
+                true,
+            );
         }
     }
 
     /// `key` can't be made (it isn't asked for again).
     pub fn fail(&self, key: &str) {
         if let Some(s) = self.0.upgrade() {
-            insert(&s, (key.to_string(), 0), vec![], 0);
+            insert(&s, (key.to_string(), 0), vec![], 0, true);
         }
     }
 }
 
-fn insert(shared: &Shared, key: Key, out: Vec<(u8, Decoded)>, g: u64) -> Option<Decoded> {
+/// Cache `out` (the levels of `key`) as used in generation `g`. `from_worker`:
+/// it landed from a worker and no frame has drawn it yet, so [`evict`]
+/// keeps it for [`FRESH_PASSES`] (M18).
+fn insert(
+    shared: &Shared,
+    key: Key,
+    out: Vec<(u8, Decoded)>,
+    g: u64,
+    from_worker: bool,
+) -> Option<Decoded> {
     let mut i = lock(&shared.inner);
     i.pending.remove(&key);
     if out.is_empty() {
@@ -844,10 +1025,23 @@ fn insert(shared: &Shared, key: Key, out: Vec<(u8, Decoded)>, g: u64) -> Option<
         }
         if !i.map.contains_key(&k) {
             i.bytes += img.bytes();
-            i.map.insert(k, Entry { img, used: g, at: Instant::now() });
+            let arrived = from_worker.then(|| shared.generation.load(Ordering::Relaxed));
+            i.map.insert(
+                k,
+                Entry {
+                    img,
+                    used: g,
+                    at: Instant::now(),
+                    arrived,
+                },
+            );
         }
     }
-    evict(&mut i, shared.budget.load(Ordering::Relaxed), shared.generation.load(Ordering::Relaxed));
+    evict(
+        &mut i,
+        shared.budget.load(Ordering::Relaxed),
+        shared.generation.load(Ordering::Relaxed),
+    );
     wanted
 }
 
@@ -855,7 +1049,15 @@ fn evict(i: &mut Inner, budget: usize, generation: u64) {
     // Recount: CPU pixmaps made since insertion add to the size.
     i.bytes = i.map.values().map(|e| e.img.bytes()).sum();
     while i.bytes > budget {
-        let Some(k) = i.map.iter().filter(|(_, e)| e.used < generation).min_by_key(|(_, e)| e.used).map(|(k, _)| k.clone()) else {
+        let Some(k) = i
+            .map
+            .iter()
+            .filter(|(_, e)| {
+                e.used < generation && e.arrived.is_none_or(|a| generation >= a + FRESH_PASSES)
+            })
+            .min_by_key(|(_, e)| e.used)
+            .map(|(k, _)| k.clone())
+        else {
             break;
         };
         if let Some(e) = i.map.remove(&k) {
@@ -869,12 +1071,15 @@ fn evict(i: &mut Inner, budget: usize, generation: u64) {
 /// (tiny-skia did on hostile SVGs, audit T-C3) turns the picture into the
 /// placeholder, and the worker thread lives on to decode the next one.
 fn decode_job(job: &Job) -> Vec<(u8, Decoded)> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_job_inner(job))).unwrap_or_default()
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_job_inner(job)))
+        .unwrap_or_default()
 }
 
 fn decode_job_inner(job: &Job) -> Vec<(u8, Decoded)> {
     if let Some(make) = &job.make {
-        return make().map(|l| vec![(job.key.1, Decoded::Still(Arc::new(l)))]).unwrap_or_default();
+        return make()
+            .map(|l| vec![(job.key.1, Decoded::Still(Arc::new(l)))])
+            .unwrap_or_default();
     }
     let (w, h) = job.size;
     let last = last_level(w, h);
@@ -885,9 +1090,13 @@ fn decode_job_inner(job: &Job) -> Vec<(u8, Decoded)> {
         let style = job.svg.unwrap_or_default();
         let make = |l: u8| {
             let (lw, lh) = svg_size(level_size(w, h, l));
-            crate::svg::rasterize(&job.bytes, &style, lw, lh).map(|px| Decoded::Still(Arc::new(ImageLevel::from_premultiplied(asset, lw, lh, px))))
+            crate::svg::rasterize(&job.bytes, &style, lw, lh).map(|px| {
+                Decoded::Still(Arc::new(ImageLevel::from_premultiplied(asset, lw, lh, px)))
+            })
         };
-        let Some(first) = make(level) else { return vec![] };
+        let Some(first) = make(level) else {
+            return vec![];
+        };
         let mut out = vec![(job.key.1, first)];
         if level != last {
             out.extend(make(last).map(|d| (last, d)));
@@ -897,7 +1106,9 @@ fn decode_job_inner(job: &Job) -> Vec<(u8, Decoded)> {
     if job.bytes.starts_with(b"GIF8") {
         // GIFs go through their own decoder only: image's would allocate
         // the whole logical screen once per frame.
-        return decode_gif(asset, &job.bytes, level).map(|a| vec![(job.key.1, a)]).unwrap_or_default();
+        return decode_gif(asset, &job.bytes, level)
+            .map(|a| vec![(job.key.1, a)])
+            .unwrap_or_default();
     }
     decode_still(asset, &job.bytes, job.key.1)
 }
@@ -917,8 +1128,12 @@ pub(crate) fn scaled_png(bytes: &[u8], most: u64) -> Option<Vec<u8>> {
     } {
         level += 1;
     }
-    let img = decode_still("", bytes, level).into_iter().find(|(l, _)| *l == level)?;
-    let Decoded::Still(img) = img.1 else { return None };
+    let img = decode_still("", bytes, level)
+        .into_iter()
+        .find(|(l, _)| *l == level)?;
+    let Decoded::Still(img) = img.1 else {
+        return None;
+    };
     let (iw, ih) = (img.width, img.height);
     let mut px = img.pixmap().data_as_u8_slice().to_vec();
     // Back to straight alpha for the PNG.
@@ -943,15 +1158,24 @@ pub(crate) fn scaled_png(bytes: &[u8], most: u64) -> Option<Vec<u8>> {
 /// upright, as a JPEG (quality 92) or, with any transparency, a PNG.
 /// (extension, file). None if it can't be drawn here.
 pub fn for_web(bytes: &[u8]) -> Option<(&'static str, Vec<u8>)> {
-    let (_, img) = decode_still("", bytes, 0).into_iter().find(|(l, _)| *l == 0)?;
-    let Decoded::Still(img) = img else { return None };
+    let (_, img) = decode_still("", bytes, 0)
+        .into_iter()
+        .find(|(l, _)| *l == 0)?;
+    let Decoded::Still(img) = img else {
+        return None;
+    };
     let (w, h) = (img.width, img.height);
     let mut px = img.pixmap().data_as_u8_slice().to_vec();
     let opaque = px.chunks_exact(4).all(|p| p[3] == 255);
     let mut out = vec![];
     if opaque {
-        let rgb: Vec<u8> = px.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92).encode(&rgb, w, h, image::ExtendedColorType::Rgb8).ok()?;
+        let rgb: Vec<u8> = px
+            .chunks_exact(4)
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92)
+            .encode(&rgb, w, h, image::ExtendedColorType::Rgb8)
+            .ok()?;
         return Some(("jpg", out));
     }
     for p in px.chunks_exact_mut(4) {
@@ -984,7 +1208,9 @@ pub fn for_web(bytes: &[u8]) -> Option<(&'static str, Vec<u8>)> {
 /// picture only gives that much (a scaled JPEG, a PNG's first pass).
 fn decode_still(asset: &str, bytes: &[u8], want: u8) -> Vec<(u8, Decoded)> {
     use zebra_core::media::PictureFormat;
-    let Some(head) = zebra_core::media::picture_header(bytes).filter(|h| h.fits()) else { return vec![] };
+    let Some(head) = zebra_core::media::picture_header(bytes).filter(|h| h.fits()) else {
+        return vec![];
+    };
     let (iw, ih) = (head.width, head.height);
     let last = last_level(iw, ih);
     let level = want.min(last);
@@ -1004,14 +1230,22 @@ fn decode_still(asset: &str, bytes: &[u8], want: u8) -> Vec<(u8, Decoded)> {
     if head.format == PictureFormat::Png {
         let _permit = DecodeBytes::acquire(out_bytes + iw as u64 * 16);
         done = stream_png(bytes, &shrinks, pixels > MAX_WHOLE_PIXELS);
-    } else if head.format == PictureFormat::Jpeg && (pixels > SCALED_JPEG_FROM || iw.max(ih) > WHOLE_JPEG_SIDE) || !head.streams_or_decodes_whole() || cfg!(target_os = "macos") && head.format.mac_draws() {
+    } else if head.format == PictureFormat::Jpeg
+        && (pixels > SCALED_JPEG_FROM || iw.max(ih) > WHOLE_JPEG_SIDE)
+        || !head.streams_or_decodes_whole()
+        || cfg!(target_os = "macos") && head.format.mac_draws()
+    {
         // On the Mac, ImageIO draws it at the level's size, as Keynote
         // does (a JPEG straight from its DCT at a smaller size). Elsewhere
         // (development builds) it decodes whole if it can.
         #[cfg(target_os = "macos")]
         {
             let _permit = DecodeBytes::acquire(out_bytes * 2);
-            let Some((w, h, px)) = crate::imageio::thumbnail(bytes, lw.max(lh), MAX_WHOLE_DECODE_ALLOC) else { return vec![] };
+            let Some((w, h, px)) =
+                crate::imageio::thumbnail(bytes, lw.max(lh), MAX_WHOLE_DECODE_ALLOC)
+            else {
+                return vec![];
+            };
             let mut out = shrinks(w, h);
             for row in px.chunks_exact(w as usize * 4) {
                 for s in out.iter_mut() {
@@ -1029,7 +1263,9 @@ fn decode_still(asset: &str, bytes: &[u8], want: u8) -> Vec<(u8, Decoded)> {
             }
             let mut out = shrinks(iw, ih);
             let _permit = DecodeBytes::acquire(out_bytes + pixels * 4);
-            let Some(img) = decode_limited(bytes) else { return vec![] };
+            let Some(img) = decode_limited(bytes) else {
+                return vec![];
+            };
             if (img.width(), img.height()) != (iw, ih) {
                 return vec![];
             }
@@ -1095,8 +1331,17 @@ pub const WHOLE_JPEG_SIDE: u32 = 16384;
 /// (8 bits a sample) unless `first_pass_only`: then only its first Adam7
 /// pass is read, every 8th pixel each way, so a huge one stays small.
 /// None if it is broken, so the caller can decode it whole instead.
-fn stream_png(bytes: &[u8], make: &dyn Fn(u32, u32) -> Vec<Shrink>, first_pass_only: bool) -> Option<Vec<Shrink>> {
-    let mut d = png::Decoder::new_with_limits(std::io::Cursor::new(bytes), png::Limits { bytes: MAX_DECODE_ALLOC as usize });
+fn stream_png(
+    bytes: &[u8],
+    make: &dyn Fn(u32, u32) -> Vec<Shrink>,
+    first_pass_only: bool,
+) -> Option<Vec<Shrink>> {
+    let mut d = png::Decoder::new_with_limits(
+        std::io::Cursor::new(bytes),
+        png::Limits {
+            bytes: MAX_DECODE_ALLOC as usize,
+        },
+    );
     d.set_transformations(png::Transformations::normalize_to_color8());
     let mut r = d.read_info().ok()?;
     let (w, h) = (r.info().width, r.info().height);
@@ -1148,7 +1393,6 @@ fn stream_png(bytes: &[u8], make: &dyn Fn(u32, u32) -> Vec<Shrink>, first_pass_o
     Some(shrinks)
 }
 
-
 /// The part `rect` (x, y, width, height) of a `w`x`h` picture drawn at
 /// `dw`x`dh` pixels (no bigger than the picture), as premultiplied RGBA
 /// rows: the detail of a picture bigger than [`MAX_IMAGE_DIM`] seen closer
@@ -1159,8 +1403,23 @@ fn stream_png(bytes: &[u8], make: &dyn Fn(u32, u32) -> Vec<Shrink>, first_pass_o
 ///
 /// Sizes are as shown (a photo turned upright); the part is read from the
 /// stored pixels it comes from and turned the same way.
-pub fn picture_region(bytes: &[u8], (w, h): (u32, u32), (dw, dh): (u32, u32), (x, y, rw, rh): (u32, u32, u32, u32)) -> Option<Vec<u8>> {
-    if w == 0 || h == 0 || dw == 0 || dh == 0 || dw > w || dh > h || rw == 0 || rh == 0 || x.checked_add(rw)? > dw || y.checked_add(rh)? > dh {
+pub fn picture_region(
+    bytes: &[u8],
+    (w, h): (u32, u32),
+    (dw, dh): (u32, u32),
+    (x, y, rw, rh): (u32, u32, u32, u32),
+) -> Option<Vec<u8>> {
+    if w == 0
+        || h == 0
+        || dw == 0
+        || dh == 0
+        || dw > w
+        || dh > h
+        || rw == 0
+        || rh == 0
+        || x.checked_add(rw)? > dw
+        || y.checked_add(rh)? > dh
+    {
         return None;
     }
     let head = zebra_core::media::picture_header(bytes)?;
@@ -1185,7 +1444,12 @@ pub fn picture_region(bytes: &[u8], (w, h): (u32, u32), (dw, dh): (u32, u32), (x
 }
 
 /// [`picture_region`] in the stored pixels' own terms.
-fn stored_region(bytes: &[u8], head: &zebra_core::media::PictureHeader, (dw, dh): (u32, u32), (x, y, rw, rh): (u32, u32, u32, u32)) -> Option<Vec<u8>> {
+fn stored_region(
+    bytes: &[u8],
+    head: &zebra_core::media::PictureHeader,
+    (dw, dh): (u32, u32),
+    (x, y, rw, rh): (u32, u32, u32, u32),
+) -> Option<Vec<u8>> {
     use zebra_core::media::PictureFormat;
     let (w, h) = (head.width, head.height);
     if head.format == PictureFormat::Gif || dw > w || dh > h {
@@ -1201,10 +1465,18 @@ fn stored_region(bytes: &[u8], head: &zebra_core::media::PictureHeader, (dw, dh)
     let (sy0, sy1) = span(y, rh, dh, h);
     let (cw, ch) = (sx1 - sx0, sy1 - sy0);
     let mut s = Shrink::new(cw, ch, rw.min(cw), rh.min(ch));
-    let crop = |row: &[u8], c: usize| row.get(sx0 as usize * c..sx1 as usize * c).map(<[u8]>::to_vec);
+    let crop = |row: &[u8], c: usize| {
+        row.get(sx0 as usize * c..sx1 as usize * c)
+            .map(<[u8]>::to_vec)
+    };
     if head.format == PictureFormat::Png && !head.interlaced {
         let _permit = DecodeBytes::acquire(w as u64 * 16 + rw as u64 * rh as u64 * 4);
-        let mut d = png::Decoder::new_with_limits(std::io::Cursor::new(bytes), png::Limits { bytes: MAX_DECODE_ALLOC as usize });
+        let mut d = png::Decoder::new_with_limits(
+            std::io::Cursor::new(bytes),
+            png::Limits {
+                bytes: MAX_DECODE_ALLOC as usize,
+            },
+        );
         d.set_transformations(png::Transformations::normalize_to_color8());
         let mut r = d.read_info().ok()?;
         let c = png_channels(&r)?;
@@ -1221,7 +1493,12 @@ fn stored_region(bytes: &[u8], head: &zebra_core::media::PictureHeader, (dw, dh)
     #[cfg(target_os = "macos")]
     if matches!(head.format, PictureFormat::Jpeg | PictureFormat::WebP) || head.format.mac_draws() {
         let _permit = DecodeBytes::acquire(head.pixels() * 4);
-        if let Some(px) = crate::imageio::region(bytes, (sx0, sy0, cw, ch), (rw.min(cw), rh.min(ch)), gif_memory()) {
+        if let Some(px) = crate::imageio::region(
+            bytes,
+            (sx0, sy0, cw, ch),
+            (rw.min(cw), rh.min(ch)),
+            gif_memory(),
+        ) {
             return Some(px);
         }
     }
@@ -1241,7 +1518,11 @@ fn stored_region(bytes: &[u8], head: &zebra_core::media::PictureHeader, (dw, dh)
         image::DynamicImage::ImageRgba8(b) => (b.as_raw().into(), 4),
         other => (other.to_rgba8().into_raw().into(), 4),
     };
-    for row in raw.chunks_exact(w as usize * c).skip(sy0 as usize).take(ch as usize) {
+    for row in raw
+        .chunks_exact(w as usize * c)
+        .skip(sy0 as usize)
+        .take(ch as usize)
+    {
         s.push(&crop(row, c)?, c);
     }
     Some(s.pixels())
@@ -1266,12 +1547,22 @@ pub type DetailTile = (String, (u32, u32, u32, u32));
 
 /// Make the tiles `tiles` of a `size` picture drawn at `detail`, caching
 /// all but `me`, which is returned.
-pub fn make_tiles(bytes: &[u8], size: (u32, u32), detail: (u32, u32), tiles: &[DetailTile], me: &str, handle: &CacheHandle) -> Option<ImageLevel> {
+pub fn make_tiles(
+    bytes: &[u8],
+    size: (u32, u32),
+    detail: (u32, u32),
+    tiles: &[DetailTile],
+    me: &str,
+    handle: &CacheHandle,
+) -> Option<ImageLevel> {
     let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
     for (_, (x, y, w, h)) in tiles {
         (x0, y0, x1, y1) = (x0.min(*x), y0.min(*y), x1.max(x + w), y1.max(y + h));
     }
-    let Some(px) = (x1 > x0 && y1 > y0).then(|| picture_region(bytes, size, detail, (x0, y0, x1 - x0, y1 - y0))).flatten() else {
+    let Some(px) = (x1 > x0 && y1 > y0)
+        .then(|| picture_region(bytes, size, detail, (x0, y0, x1 - x0, y1 - y0)))
+        .flatten()
+    else {
         for (k, _) in tiles.iter().filter(|(k, _)| k != me) {
             handle.fail(k);
         }
@@ -1335,7 +1626,10 @@ fn svg_size((w, h): (u32, u32)) -> (u32, u32) {
         return (w, h);
     }
     let k = cap as f64 / m as f64;
-    (((w as f64 * k).round() as u32).max(1), ((h as f64 * k).round() as u32).max(1))
+    (
+        ((w as f64 * k).round() as u32).max(1),
+        ((h as f64 * k).round() as u32).max(1),
+    )
 }
 
 /// Most bytes one decoder may allocate for its pixels.
@@ -1365,7 +1659,9 @@ pub fn decode_limits() -> image::Limits {
 /// Decode a still picture under [`decode_limits`]. None if it is
 /// unreadable or too big.
 fn decode_limited(bytes: &[u8]) -> Option<image::DynamicImage> {
-    let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    let mut r = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
     r.limits(decode_limits());
     r.decode().ok()
 }
@@ -1392,12 +1688,26 @@ struct Shrink {
 impl Shrink {
     fn new(sw: u32, sh: u32, dw: u32, dh: u32) -> Shrink {
         let (dw, dh) = (dw.clamp(1, sw.max(1)), dh.clamp(1, sh.max(1)));
-        let col: Vec<u32> = (0..sw).map(|x| (x as u64 * dw as u64 / sw as u64) as u32).collect();
+        let col: Vec<u32> = (0..sw)
+            .map(|x| (x as u64 * dw as u64 / sw as u64) as u32)
+            .collect();
         let mut ncol = vec![0u32; dw as usize];
         for &c in &col {
             ncol[c as usize] += 1;
         }
-        Shrink { sw, sh, dw, dh, col, ncol, acc: vec![0; dw as usize * 4], nrow: 0, oy: 0, y: 0, out: Vec::with_capacity(dw as usize * dh as usize * 4) }
+        Shrink {
+            sw,
+            sh,
+            dw,
+            dh,
+            col,
+            ncol,
+            acc: vec![0; dw as usize * 4],
+            nrow: 0,
+            oy: 0,
+            y: 0,
+            out: Vec::with_capacity(dw as usize * dh as usize * 4),
+        }
     }
 
     /// The next source row: `channels` bytes per pixel (1 grey, 2 grey and
@@ -1488,7 +1798,9 @@ fn gif_memory() -> u64 {
 fn gif_options() -> gif::DecodeOptions {
     let mut o = gif::DecodeOptions::new();
     o.set_color_output(gif::ColorOutput::RGBA);
-    o.set_memory_limit(gif::MemoryLimit::Bytes(std::num::NonZeroU64::new(gif_memory()).unwrap_or(std::num::NonZeroU64::MIN)));
+    o.set_memory_limit(gif::MemoryLimit::Bytes(
+        std::num::NonZeroU64::new(gif_memory()).unwrap_or(std::num::NonZeroU64::MIN),
+    ));
     o
 }
 
@@ -1509,12 +1821,21 @@ impl Screen {
     /// None if it is unreadable, or its screen needs more memory than a
     /// document may take.
     fn open(bytes: &AssetBytes) -> Option<Screen> {
-        let dec = gif_options().read_info(std::io::Cursor::new(bytes.clone())).ok()?;
+        let dec = gif_options()
+            .read_info(std::io::Cursor::new(bytes.clone()))
+            .ok()?;
         let (w, h) = (dec.width() as usize, dec.height() as usize);
         if !gif_fits(w as u32, h as u32) {
             return None;
         }
-        Some(Screen { dec, w, h, canvas: vec![0u8; w * h * 4], saved: vec![], pos: 0 })
+        Some(Screen {
+            dec,
+            w,
+            h,
+            canvas: vec![0u8; w * h * 4],
+            saved: vec![],
+            pos: 0,
+        })
     }
 
     /// Draw the next frame on the screen; with `shrink` (asset, width,
@@ -1527,7 +1848,12 @@ impl Screen {
             _ => return None,
         };
         // The frame's rectangle, clipped to the screen.
-        let (fx, fy, fw, fh) = (f.left as usize, f.top as usize, f.width as usize, f.height as usize);
+        let (fx, fy, fw, fh) = (
+            f.left as usize,
+            f.top as usize,
+            f.width as usize,
+            f.height as usize,
+        );
         let x0 = fx.min(cw);
         let x1 = (fx + fw).min(cw);
         let y0 = fy.min(ch);
@@ -1540,7 +1866,8 @@ impl Screen {
         if dispose == gif::DisposalMethod::Previous {
             self.saved.clear();
             for y in y0..y1 {
-                self.saved.extend_from_slice(&canvas[(y * cw + x0) * 4..(y * cw + x1) * 4]);
+                self.saved
+                    .extend_from_slice(&canvas[(y * cw + x0) * 4..(y * cw + x1) * 4]);
             }
         }
         for y in y0..y1 {
@@ -1568,7 +1895,8 @@ impl Screen {
             gif::DisposalMethod::Previous => {
                 let n = (x1 - x0) * 4;
                 for (i, y) in (y0..y1).enumerate() {
-                    canvas[(y * cw + x0) * 4..(y * cw + x1) * 4].copy_from_slice(&self.saved[i * n..(i + 1) * n]);
+                    canvas[(y * cw + x0) * 4..(y * cw + x1) * 4]
+                        .copy_from_slice(&self.saved[i * n..(i + 1) * n]);
                 }
             }
             _ => {}
@@ -1589,7 +1917,9 @@ fn gif_fits(w: u32, h: u32) -> bool {
 fn gif_timing(bytes: &[u8]) -> Vec<f64> {
     let mut o = gif_options();
     o.skip_frame_decoding(true);
-    let Ok(mut d) = o.read_info(std::io::Cursor::new(bytes)) else { return vec![] };
+    let Ok(mut d) = o.read_info(std::io::Cursor::new(bytes)) else {
+        return vec![];
+    };
     let mut ends = vec![];
     let mut t = 0.0;
     while let Ok(Some(f)) = d.read_next_frame() {
@@ -1616,7 +1946,9 @@ fn decode_gif(asset: &str, bytes: &AssetBytes, level: u8) -> Option<Decoded> {
     let level = level.min(last_level(w, h));
     let (lw, lh) = level_size(w, h, level);
     let level_bytes = lw as usize * lh as usize * 4;
-    let keep_all = n <= 1 || (n.saturating_mul(level_bytes) <= GIF_BUDGET && (n as u64).saturating_mul(area) <= GIF_WORK);
+    let keep_all = n <= 1
+        || (n.saturating_mul(level_bytes) <= GIF_BUDGET
+            && (n as u64).saturating_mul(area) <= GIF_WORK);
     if keep_all {
         let _permit = DecodeBytes::acquire(area * 8 + (n.max(1) * level_bytes) as u64);
         let mut frames: Vec<Arc<ImageLevel>> = vec![];
@@ -1631,7 +1963,11 @@ fn decode_gif(asset: &str, bytes: &AssetBytes, level: u8) -> Option<Decoded> {
             return frames.pop().map(Decoded::Still);
         }
         let first = frames[0].clone();
-        return Some(Decoded::Animated(Arc::new(Animation { ends, first, frames: Frames::All(frames) })));
+        return Some(Decoded::Animated(Arc::new(Animation {
+            ends,
+            first,
+            frames: Frames::All(frames),
+        })));
     }
     let first = Arc::new(screen.step(Some((asset, lw, lh)))??.as_moving());
     let player = Player {
@@ -1639,11 +1975,18 @@ fn decode_gif(asset: &str, bytes: &AssetBytes, level: u8) -> Option<Decoded> {
         bytes: bytes.clone(),
         size: (lw, lh),
         screen_bytes: (area * 8) as usize,
-        state: Mutex::new(PlayState { screen: Some(screen), ..Default::default() }),
+        state: Mutex::new(PlayState {
+            screen: Some(screen),
+            ..Default::default()
+        }),
         held: AtomicUsize::new(0),
     };
     player.recount(&lock_play(&player.state));
-    Some(Decoded::Animated(Arc::new(Animation { ends, first, frames: Frames::Played(player) })))
+    Some(Decoded::Animated(Arc::new(Animation {
+        ends,
+        first,
+        frames: Frames::Played(player),
+    })))
 }
 
 #[cfg(test)]
@@ -1675,15 +2018,25 @@ mod tests {
         let a = png(512, 512);
         for n in 0..6 {
             c.next_generation();
-            let got = c.get(&format!("a{n}"), "png", &a, (512, 512), 0, true).unwrap();
+            let got = c
+                .get(&format!("a{n}"), "png", &a, (512, 512), 0, true)
+                .unwrap();
             assert_eq!(got.width(), 512);
         }
         let s = c.stats();
         assert!(s.bytes <= 3 * 512 * 512 * 4 + 6 * 64 * 64 * 4, "{s:?}");
         // The newest is still there.
         c.next_generation();
-        assert!(lock(&c.shared.inner).map.contains_key(&("a5".to_string(), 0)));
-        assert!(!lock(&c.shared.inner).map.contains_key(&("a0".to_string(), 0)));
+        assert!(
+            lock(&c.shared.inner)
+                .map
+                .contains_key(&("a5".to_string(), 0))
+        );
+        assert!(
+            !lock(&c.shared.inner)
+                .map
+                .contains_key(&("a0".to_string(), 0))
+        );
     }
 
     /// Speed fix 4: pictures nobody draws are given back after a while,
@@ -1693,7 +2046,8 @@ mod tests {
         let c = ImageCache::default();
         let a = png(1024, 1024);
         for n in 0..4 {
-            c.get(&format!("a{n}"), "png", &a, (1024, 1024), 0, true).unwrap();
+            c.get(&format!("a{n}"), "png", &a, (1024, 1024), 0, true)
+                .unwrap();
         }
         let full = c.stats().bytes;
         assert!(full >= 4 * 1024 * 1024 * 4);
@@ -1709,8 +2063,81 @@ mod tests {
         let i = lock(&c.shared.inner);
         assert!(i.map.contains_key(&("a3".to_string(), 0)));
         assert!(!i.map.contains_key(&("a0".to_string(), 0)));
-        assert!(i.map.keys().any(|k| k.0 == "a0"), "the small level stays as a stand-in");
-        assert_eq!(i.bytes, i.map.values().map(|e| e.img.bytes()).sum::<usize>());
+        assert!(
+            i.map.keys().any(|k| k.0 == "a0"),
+            "the small level stays as a stand-in"
+        );
+        assert_eq!(
+            i.bytes,
+            i.map.values().map(|e| e.img.bytes()).sum::<usize>()
+        );
+    }
+
+    /// Wait for `n` waker calls.
+    fn wait_woken(woke: &AtomicUsize, n: usize) {
+        let t0 = std::time::Instant::now();
+        while woke.load(Ordering::SeqCst) < n && t0.elapsed().as_secs() < 20 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(woke.load(Ordering::SeqCst) >= n, "worker never finished");
+    }
+
+    /// M18: over budget, a level a worker delivered was evicted as it
+    /// landed (it was "older" than what the frame drew), so the next frame
+    /// asked for it again, for ever. It must stay until a frame draws it.
+    #[test]
+    fn a_worker_result_is_kept_until_drawn_even_over_budget() {
+        let c = ImageCache::default();
+        let woke = Arc::new(AtomicUsize::new(0));
+        let w2 = woke.clone();
+        c.set_waker(Some(Arc::new(move || {
+            w2.fetch_add(1, Ordering::SeqCst);
+        })));
+        // Room for one 1024² level only.
+        c.set_budget(1024 * 1024 * 4 + 1024);
+        let big = png(1024, 1024);
+        // The frame draws b at full size (it stays current)...
+        c.next_generation();
+        c.get("b", "png", &big, (1024, 1024), 0, true).unwrap();
+        // ...and asks for a at full size on a worker.
+        assert!(c.get("a", "png", &big, (1024, 1024), 0, false).is_none());
+        wait_woken(&woke, 1);
+        // The waker's repaint: a is there to draw, not decoded again.
+        c.next_generation();
+        c.get("b", "png", &big, (1024, 1024), 0, true).unwrap();
+        let got = c
+            .get("a", "png", &big, (1024, 1024), 0, false)
+            .expect("a was evicted as it landed");
+        assert_eq!(got.width(), 1024);
+        assert_eq!(c.stats().pending, 0, "a is not being decoded again");
+    }
+
+    /// The other side of M18's fix: an arrival no frame draws (the view
+    /// moved on) is given back after FRESH_PASSES display lists.
+    #[test]
+    fn an_arrival_nobody_draws_goes_after_a_few_frames() {
+        let c = ImageCache::default();
+        let woke = Arc::new(AtomicUsize::new(0));
+        let w2 = woke.clone();
+        c.set_waker(Some(Arc::new(move || {
+            w2.fetch_add(1, Ordering::SeqCst);
+        })));
+        c.set_budget(1024 * 1024 * 4 + 1024);
+        let big = png(1024, 1024);
+        c.next_generation();
+        assert!(c.get("a", "png", &big, (1024, 1024), 0, false).is_none());
+        wait_woken(&woke, 1);
+        for n in 0..=FRESH_PASSES {
+            c.next_generation();
+            c.get(&format!("b{n}"), "png", &big, (1024, 1024), 0, true)
+                .unwrap();
+        }
+        assert!(
+            !lock(&c.shared.inner)
+                .map
+                .contains_key(&("a".to_string(), 0)),
+            "a undrawn arrival is not kept for ever"
+        );
     }
 
     #[test]
@@ -1727,9 +2154,19 @@ mod tests {
         while woke.load(Ordering::SeqCst) == 0 && t0.elapsed().as_secs() < 10 {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert_eq!(c.get("p", "png", &a, (1024, 512), 1, false).unwrap().width(), 512);
+        assert_eq!(
+            c.get("p", "png", &a, (1024, 512), 1, false)
+                .unwrap()
+                .width(),
+            512
+        );
         // Another level: the cached one stands in while it decodes.
-        assert_eq!(c.get("p", "png", &a, (1024, 512), 0, false).unwrap().width(), 512);
+        assert_eq!(
+            c.get("p", "png", &a, (1024, 512), 0, false)
+                .unwrap()
+                .width(),
+            512
+        );
     }
 
     #[test]
@@ -1742,11 +2179,19 @@ mod tests {
             enc.set_repeat(Repeat::Infinite).unwrap();
             for i in 0..3u8 {
                 let img = image::RgbaImage::from_pixel(40, 30, image::Rgba([i * 80, 0, 0, 255]));
-                enc.encode_frame(Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(200, 1))).unwrap();
+                enc.encode_frame(Frame::from_parts(
+                    img,
+                    0,
+                    0,
+                    Delay::from_numer_denom_ms(200, 1),
+                ))
+                .unwrap();
             }
         }
         let c = ImageCache::default();
-        let Some(Decoded::Animated(a)) = c.get("g", "gif", &out.into(), (40, 30), 0, true) else { panic!("not animated") };
+        let Some(Decoded::Animated(a)) = c.get("g", "gif", &out.into(), (40, 30), 0, true) else {
+            panic!("not animated")
+        };
         assert_eq!(a.len(), 3);
         assert!(!a.is_played(), "a short GIF is kept whole");
         assert!((a.total() - 0.6).abs() < 1e-9);
@@ -1768,7 +2213,10 @@ mod tests {
     #[test]
     fn camera_sized_jpeg_fits_the_limits() {
         let l = decode_limits();
-        assert!(l.max_alloc.unwrap() >= 11648 * 8736 * 3, "a 100 MP JPEG must decode");
+        assert!(
+            l.max_alloc.unwrap() >= 11648 * 8736 * 3,
+            "a 100 MP JPEG must decode"
+        );
         assert!(l.max_alloc.unwrap() >= MAX_WHOLE_PIXELS * 4);
         assert_eq!(l.max_image_width, None);
     }
@@ -1827,7 +2275,10 @@ mod tests {
         assert!(c.get("photo", "png", &a, (256, 256), 0, false).is_none());
         let t0 = std::time::Instant::now();
         while c.get("photo", "png", &a, (256, 256), 0, false).is_none() {
-            assert!(t0.elapsed().as_secs() < 10, "a picture waited behind a hung tile");
+            assert!(
+                t0.elapsed().as_secs() < 10,
+                "a picture waited behind a hung tile"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         go.store(true, Ordering::SeqCst);
@@ -1847,9 +2298,17 @@ mod tests {
     /// Adam7 pass: every 8th pixel each way, exactly.
     #[test]
     fn interlaced_png_first_pass_is_every_8th_pixel() {
-        let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/interlaced-61x37.png")).unwrap();
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/data/interlaced-61x37.png"
+        ))
+        .unwrap();
         let one = |w, h| vec![Shrink::new(w, h, w, h)];
-        let s = stream_png(&bytes, &one, true).unwrap().pop().unwrap().finish("i");
+        let s = stream_png(&bytes, &one, true)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .finish("i");
         assert_eq!((s.width, s.height), (8, 5));
         let px = s.data.data.data();
         for (j, y) in (0..37).step_by(8).enumerate() {
@@ -1859,7 +2318,11 @@ mod tests {
             }
         }
         // Small enough to decode whole: every pixel.
-        let s = stream_png(&bytes, &one, false).unwrap().pop().unwrap().finish("i");
+        let s = stream_png(&bytes, &one, false)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .finish("i");
         assert_eq!((s.width, s.height), (61, 37));
         let at = (36 * 61 + 60) * 4;
         assert_eq!(s.data.data.data()[at..at + 3], fixture_px(60, 36));
@@ -1877,7 +2340,9 @@ mod tests {
             let mut e = png::Encoder::new(&mut out, 20000, 30);
             e.set_color(png::ColorType::Rgb);
             let mut w = e.write_header().unwrap();
-            let row: Vec<u8> = (0..20000u32).flat_map(|x| [if x < 10000 { 200 } else { 20 }, 100, 50]).collect();
+            let row: Vec<u8> = (0..20000u32)
+                .flat_map(|x| [if x < 10000 { 200 } else { 20 }, 100, 50])
+                .collect();
             let mut s = w.stream_writer().unwrap();
             for _ in 0..30 {
                 std::io::Write::write_all(&mut s, &row).unwrap();
@@ -1885,7 +2350,9 @@ mod tests {
             s.finish().unwrap();
         }
         let c = ImageCache::default();
-        let Some(Decoded::Still(l)) = c.get("w", "png", &out.into(), (20000, 30), 0, true) else { panic!("not decoded") };
+        let Some(Decoded::Still(l)) = c.get("w", "png", &out.into(), (20000, 30), 0, true) else {
+            panic!("not decoded")
+        };
         assert_eq!((l.width, l.height), level_size(20000, 30, 0));
         let px = l.data.data.data();
         assert_eq!(px[..4], [200, 100, 50, 255]);

@@ -264,6 +264,52 @@ fn lying_jpeg(w: u16, h: u16, progressive: bool) -> Vec<u8> {
     v
 }
 
+/// M17 (Mac pass, 21 Nov): a 74-byte PNG claiming 200,000 x 200,000
+/// pixels came in as an invisible box and took 2 GB. Kartik's rule (20
+/// Nov): a header claiming an impossible size is refused. A file too
+/// small for its pixels, even at each format's best compression, lies.
+#[test]
+fn a_header_claiming_more_pixels_than_its_file_holds_is_refused() {
+    let _spill = spill_lock();
+    let spill = root("lying-spill");
+    media::set_spill_dir(Some(spill.clone()));
+    let dir = root("lying");
+    let mut ed = Editor::default();
+    for (name, bytes) in [("fake-200k.png", lying_png(200_000, 200_000, false)), ("fake-60k.jpg", lying_jpeg(60_000, 60_000, false))] {
+        let p = dir.join(name);
+        std::fs::write(&p, &bytes).unwrap();
+        let e = ed.apply(cmd(json!({"op":"add_image","path":p,"x":0,"y":0})), Origin::Human).unwrap_err();
+        assert_eq!(e.code, "damaged", "{name}: {e:?}");
+        assert_eq!(e.about, Some(error::About::Picture));
+        // Inline too.
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let e = ed.apply(cmd(json!({"op":"add_image","data_base64":b64,"x":0,"y":0})), Origin::Human).unwrap_err();
+        assert_eq!(e.code, "damaged", "{name} inline: {e:?}");
+    }
+    assert!(ed.doc.assets.is_empty());
+    // The bounds never refuse a real picture, however plain: a solid
+    // 4,000 x 4,000 PNG compressed as hard as it goes.
+    let mut plain = vec![];
+    {
+        use image::ImageEncoder;
+        let enc = image::codecs::png::PngEncoder::new_with_quality(&mut plain, image::codecs::png::CompressionType::Best, image::codecs::png::FilterType::NoFilter);
+        enc.write_image(&vec![255u8; 4000 * 4000], 4000, 4000, image::ExtendedColorType::L8).unwrap();
+    }
+    let h = media::picture_header(&plain).unwrap();
+    assert!(!media::header_lies(&h, plain.len() as u64), "{} bytes", plain.len());
+    let p = dir.join("plain.png");
+    std::fs::write(&p, &plain).unwrap();
+    ed.apply(cmd(json!({"op":"add_image","path":p,"x":0,"y":0})), Origin::Human).unwrap();
+    // Each format's floor.
+    let head = |f, w, h| media::PictureHeader { format: f, width: w, height: h, interlaced: false, orientation: 1 };
+    assert!(media::header_lies(&head(media::PictureFormat::Png, 200_000, 200_000), 74));
+    assert!(!media::header_lies(&head(media::PictureFormat::Png, 200_000, 200_000), 5 << 20));
+    assert!(media::header_lies(&head(media::PictureFormat::Jpeg, 65_000, 65_000), 100));
+    assert!(!media::header_lies(&head(media::PictureFormat::Jpeg, 65_000, 65_000), 774 << 20));
+    assert!(!media::header_lies(&head(media::PictureFormat::Heic, 65_000, 65_000), 10));
+}
+
 /// Kartik, 21 Nov: no file-size cap on pictures (like Keynote). A picture
 /// of any file size comes in; only one whose header says its pixels can't
 /// be scaled down within bounds is refused, before anything is copied.
@@ -283,12 +329,15 @@ fn a_huge_picture_comes_in_and_only_unscalable_ones_are_refused() {
     ed.apply(cmd(json!({"op":"add_image","path":p,"x":0,"y":0})), Origin::Human).unwrap();
     drop(ed);
 
-    // Headers that lie about their size: a PNG 150,000 pixels square (any
-    // height streams) comes in; rows wider than the stream bound, a huge
+    // A PNG 150,000 pixels square (any height streams) whose file could
+    // hold its pixels comes in; rows wider than the stream bound, a huge
     // progressive JPEG, are refused at once, nothing copied.
     let mut ed = Editor::default();
-    let ok = dir.join("lying-150000.png");
-    std::fs::write(&ok, lying_png(150_000, 150_000, false)).unwrap();
+    let ok = dir.join("big-150000.png");
+    let f = std::fs::File::create(&ok).unwrap();
+    (&f).write_all(&lying_png(150_000, 150_000, false)).unwrap();
+    f.set_len(3 << 20).unwrap();
+    drop(f);
     ed.apply(cmd(json!({"op":"add_image","path":ok,"x":0,"y":0})), Origin::Human).unwrap();
     let base = std::fs::read_dir(&spill).map(|d| d.count()).unwrap_or(0);
     // (On the Mac ImageIO draws any JPEG scaled, progressive or not.)
@@ -297,8 +346,13 @@ fn a_huge_picture_comes_in_and_only_unscalable_ones_are_refused() {
         refused.push(("progressive.jpg", lying_jpeg(60_000, 60_000, true)));
     }
     for (name, bytes) in refused {
+        // Padded (sparse) so the file could hold its pixels: these are
+        // refused for their size, not as damaged (M17).
         let p = dir.join(name);
-        std::fs::write(&p, bytes).unwrap();
+        let f = std::fs::File::create(&p).unwrap();
+        (&f).write_all(&bytes).unwrap();
+        f.set_len(4 << 20).unwrap();
+        drop(f);
         let e = ed.apply(cmd(json!({"op":"add_image","path":p,"x":0,"y":0})), Origin::Human).unwrap_err();
         assert_eq!(e.code, "too_big", "{name}: {e:?}");
         assert_eq!(e.about, Some(error::About::Picture));

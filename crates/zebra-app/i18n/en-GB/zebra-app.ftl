@@ -1105,6 +1105,7 @@ web-video-close = Close
 
 
 ## ---- media_ui.rs ----
+media-inserting = Inserting Media…
 media-toast-video-macos-only = Videos play only on macOS. Zebra shows the poster frame instead.
 # $error is the reason from the media player.
 media-error-play-video = Couldn't play the video: { $error }
