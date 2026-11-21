@@ -388,6 +388,7 @@ impl Ctx<'_> {
         if decoded.width() < crate::images::level_size(src.width, src.height, level).0 {
             self.pending.set(true);
         }
+        let still = matches!(decoded, Decoded::Still(_));
         let image = match decoded {
             Decoded::Still(l) => l,
             Decoded::Animated(anim) => match self.o.time {
@@ -405,6 +406,7 @@ impl Ctx<'_> {
         let transform = whole * Affine::scale_non_uniform(fw / image.width as f64, fh / image.height as f64);
         let tiles = match page {
             Some(p) => self.page_tiles(p, &whole, fw, fh, c, src.width),
+            None if still && svg.is_none() => self.detail_tiles(asset, src, &whole, fw, fh, c, image.width),
             None => vec![],
         };
         // An export's page drawn from the PDF covers what is seen of the
@@ -527,6 +529,70 @@ impl Ctx<'_> {
             }
         }
         out.extend(have);
+        out
+    }
+
+    /// A picture bigger than [`crate::images::MAX_IMAGE_DIM`] seen bigger
+    /// than its top level (`pic_w` wide): the visible part drawn again
+    /// from the file at the zoom seen, up to the picture's own pixels, in
+    /// tiles, as a PDF page's are (P6). The tiles on screen still to make
+    /// are made together, from one pass over the file. The top level shows
+    /// under tiles not made yet. Not for PDF export, which embeds the file.
+    #[allow(clippy::too_many_arguments)]
+    fn detail_tiles(&self, asset: &str, src: &zebra_core::Asset, whole: &Affine, fw: f64, fh: f64, c: Crop, pic_w: u32) -> Vec<Item> {
+        use crate::images::{make_tiles, DetailTile, MAX_IMAGE_DIM, TILE_PREFIX};
+        use crate::pages::{page_level, tile_for, MAX_TILE_PIXELS};
+        let mut out = vec![];
+        let (w, h) = (src.width, src.height);
+        // The web player draws in the page's own time: no detail there.
+        if cfg!(target_arch = "wasm32") || w.max(h) <= MAX_IMAGE_DIM || self.full_res_images || !(fw > 0.0 && fh > 0.0) || !matches!(src.ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+            return out;
+        }
+        let on_screen = fw * affine_scale(whole);
+        if !on_screen.is_finite() || on_screen <= pic_w as f64 * 1.05 {
+            return out;
+        }
+        let dw = page_level(on_screen).min(w);
+        if dw <= pic_w {
+            return out;
+        }
+        let dh = ((dw as f64 * h as f64 / w as f64).round() as u32).clamp(1, h);
+        let t = *whole * Affine::scale_non_uniform(fw / dw as f64, fh / dh as f64);
+        let Some((x0, y0, x1, y1)) = self.visible_part(&t, c, dw, dh) else { return out };
+        let (sw, sh) = (self.screen.0 as f64, self.screen.1 as f64);
+        if (x1 - x0) * (y1 - y0) > (4.0 * sw * sh).max(MAX_TILE_PIXELS as f64) {
+            return out;
+        }
+        let ts = tile_for(dw);
+        let tile = ts as f64;
+        let (tx0, ty0) = ((x0 / tile).floor() as u32, (y0 / tile).floor() as u32);
+        let (tx1, ty1) = ((x1 / tile).ceil() as u32, (y1 / tile).ceil() as u32);
+        let mut missing: Vec<DetailTile> = vec![];
+        for ty in ty0..ty1 {
+            for tx in tx0..tx1 {
+                let (x, y) = (tx * ts, ty * ts);
+                let k = format!("{TILE_PREFIX}{asset}@{dw}:{tx},{ty}");
+                match self.r.images.peek(&k) {
+                    Some(Decoded::Still(l)) => out.push(Item::Image { image: l, transform: t * Affine::translate((x as f64, y as f64)) }),
+                    _ if !self.r.images.is_failed(&k) => missing.push((k, (x, y, ts.min(dw - x), ts.min(dh - y)))),
+                    _ => {}
+                }
+            }
+        }
+        if missing.is_empty() {
+            return out;
+        }
+        let all = Arc::new(missing);
+        let handle = self.r.images.handle();
+        let sync = !self.o.async_images;
+        for (k, (x, y, _, _)) in all.iter() {
+            let (all, bytes, handle, me) = (all.clone(), src.bytes.clone(), handle.clone(), k.clone());
+            let make: crate::images::Make = Arc::new(move || make_tiles(&bytes, (w, h), (dw, dh), &all, &me, &handle));
+            match self.r.images.get_made(k, sync, make) {
+                Some(Decoded::Still(l)) => out.push(Item::Image { image: l, transform: t * Affine::translate((*x as f64, *y as f64)) }),
+                _ => self.pending.set(true),
+            }
+        }
         out
     }
 

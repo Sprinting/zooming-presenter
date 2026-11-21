@@ -55,6 +55,7 @@ unsafe extern "C" {
     fn CGImageSourceCreateWithData(data: CFTypeRef, options: CFTypeRef) -> CFTypeRef;
     fn CGImageSourceGetCount(src: CFTypeRef) -> usize;
     fn CGImageSourceCreateThumbnailAtIndex(src: CFTypeRef, index: usize, options: CFTypeRef) -> CFTypeRef;
+    fn CGImageSourceCreateImageAtIndex(src: CFTypeRef, index: usize, options: CFTypeRef) -> CFTypeRef;
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -65,6 +66,8 @@ unsafe extern "C" {
     fn CGImageGetHeight(img: CFTypeRef) -> usize;
     fn CGBitmapContextCreate(data: *mut c_void, w: usize, h: usize, bits: usize, row: usize, cs: CFTypeRef, info: u32) -> CFTypeRef;
     fn CGContextDrawImage(ctx: CFTypeRef, rect: CGRect, img: CFTypeRef);
+    fn CGImageCreateWithImageInRect(img: CFTypeRef, rect: CGRect) -> CFTypeRef;
+    fn CGContextSetInterpolationQuality(ctx: CFTypeRef, q: i32);
 }
 
 /// kCGImageAlphaPremultipliedLast: RGBA, alpha premultiplied.
@@ -141,5 +144,57 @@ pub fn thumbnail(bytes: &[u8], max_side: u32, max_bytes: u64) -> Option<(u32, u3
             }
         }
         Some((w as u32, h as u32, px))
+    }
+}
+
+/// The part `(x, y, w, h)` of the picture in `bytes`, at its own pixels,
+/// drawn by ImageIO at `out_w` x `out_h`, as premultiplied RGBA rows: the
+/// detail of a big JPEG or WebP seen close (P6). ImageIO may decode the
+/// whole picture to draw it, so None unless that fits in `max_bytes`
+/// (or ImageIO can't read it).
+pub fn region(bytes: &[u8], (x, y, w, h): (u32, u32, u32, u32), (out_w, out_h): (u32, u32), max_bytes: u64) -> Option<Vec<u8>> {
+    if bytes.is_empty() || w == 0 || h == 0 || out_w == 0 || out_h == 0 {
+        return None;
+    }
+    // SAFETY: as in `thumbnail`: Core Foundation, ImageIO and Core
+    // Graphics objects made here, each checked for null and released by
+    // `Owned` before this returns; the CFData borrows `bytes`, which
+    // outlives them; the context draws into memory Zebra owns.
+    unsafe {
+        let data = Owned(CFDataCreateWithBytesNoCopy(std::ptr::null(), bytes.as_ptr(), bytes.len() as CFIndex, kCFAllocatorNull));
+        if data.0.is_null() {
+            return None;
+        }
+        let no_cache_keys = [kCGImageSourceShouldCache];
+        let no_cache_vals = [kCFBooleanFalse];
+        let opts = Owned(CFDictionaryCreate(std::ptr::null(), no_cache_keys.as_ptr(), no_cache_vals.as_ptr(), 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
+        let src = Owned(CGImageSourceCreateWithData(data.0, opts.0));
+        if src.0.is_null() || CGImageSourceGetCount(src.0) == 0 {
+            return None;
+        }
+        let img = Owned(CGImageSourceCreateImageAtIndex(src.0, 0, opts.0));
+        if img.0.is_null() {
+            return None;
+        }
+        let (iw, ih) = (CGImageGetWidth(img.0) as u64, CGImageGetHeight(img.0) as u64);
+        if iw * ih * 4 > max_bytes || (x + w) as u64 > iw || (y + h) as u64 > ih {
+            return None;
+        }
+        let part = Owned(CGImageCreateWithImageInRect(img.0, CGRect { origin: CGPoint { x: x as f64, y: y as f64 }, size: CGSize { width: w as f64, height: h as f64 } }));
+        if part.0.is_null() {
+            return None;
+        }
+        let (ow, oh) = (out_w as usize, out_h as usize);
+        let mut px = vec![0u8; ow * oh * 4];
+        let cs = Owned(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+        let ctx = Owned(CGBitmapContextCreate(px.as_mut_ptr() as *mut c_void, ow, oh, 8, ow * 4, cs.0, PREMULTIPLIED_LAST));
+        if ctx.0.is_null() {
+            return None;
+        }
+        // kCGInterpolationHigh.
+        CGContextSetInterpolationQuality(ctx.0, 3);
+        CGContextDrawImage(ctx.0, CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: ow as f64, height: oh as f64 } }, part.0);
+        drop(ctx);
+        Some(px)
     }
 }
