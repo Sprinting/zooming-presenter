@@ -70,6 +70,33 @@ pub fn title_row_from(inset: Option<f64>, zoom: f32) -> f32 {
     }
 }
 
+/// Where in the window a file being dropped now is, in egui points from
+/// the content's top left: where the pointer is as the drop arrives.
+/// winit's `DroppedFile` carries no position, and no mouse moves arrive
+/// during a drag, so egui's pointer is stale then (Mac pass M12: a drop at
+/// the bottom left landed near the top centre). AppKit says where the
+/// pointer is (`NSEvent.mouseLocation`); the drop is handled within a
+/// frame of the release. None where there is no AppKit window.
+pub fn drop_point(app: &crate::app::ZebraApp) -> Option<egui::Pos2> {
+    #[cfg(target_os = "macos")]
+    {
+        imp::drop_point(app)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        None
+    }
+}
+
+/// A point in a content view (AppKit points, origin at the bottom left
+/// unless the view is flipped) in egui points from its top left.
+pub fn view_to_egui(x: f64, y: f64, view_height: f64, flipped: bool, zoom: f32) -> Option<egui::Pos2> {
+    let y = if flipped { y } else { view_height - y };
+    let z = zoom as f64;
+    (x.is_finite() && y.is_finite() && z > 0.0).then(|| egui::pos2((x / z) as f32, (y / z) as f32))
+}
+
 /// Read the system accent colour into `style::accent()`. Returns true if
 /// it changed.
 pub fn refresh_accent() -> bool {
@@ -92,7 +119,7 @@ pub use imp::{NsParent, adopt_root, adopt_window, sync_document, sync_window};
 mod imp {
     use objc2::rc::Retained;
     use objc2::runtime::{NSObjectProtocol, ProtocolObject};
-    use objc2_app_kit::{NSColor, NSColorSpace, NSView, NSWindow, NSWorkspace};
+    use objc2_app_kit::{NSColor, NSColorSpace, NSEvent, NSView, NSWindow, NSWorkspace};
     use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString, NSURL};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -105,6 +132,16 @@ mod imp {
         let view = win.contentView()?;
         let free = win.contentLayoutRect();
         Some(view.frame().size.height - (free.origin.y + free.size.height))
+    }
+
+    /// See [`super::drop_point`].
+    pub fn drop_point(app: &ZebraApp) -> Option<egui::Pos2> {
+        objc2::MainThreadMarker::new()?;
+        let win = app.mac_sync.window.as_ref()?;
+        let view = win.contentView()?;
+        let in_window = win.convertPointFromScreen(NSEvent::mouseLocation());
+        let p = view.convertPoint_fromView(in_window, None);
+        super::view_to_egui(p.x, p.y, view.bounds().size.height, view.isFlipped(), app.ctx.zoom_factor())
     }
 
     pub fn reduce_motion() -> bool {

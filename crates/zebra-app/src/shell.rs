@@ -215,6 +215,12 @@ impl Shell {
     }
 
     fn open_window(&mut self, action: Action) {
+        self.add_window(|w| w.queued.push(action));
+    }
+
+    /// A new document window in front, set up by `setup` before it is
+    /// first shown.
+    fn add_window(&mut self, setup: impl FnOnce(&mut ZebraApp)) {
         let id = format!("d{}", self.next_id);
         self.next_id += 1;
         let from = &self.windows[self.front];
@@ -223,7 +229,7 @@ impl Shell {
         let parent = from.doc_id.clone();
         let mut w = from.new_window(id.clone());
         self.shared.write(&mut w);
-        w.queued.push(action);
+        setup(&mut w);
         self.windows.push(w);
         let i = self.windows.len() - 1;
         self.set_front(i);
@@ -289,6 +295,14 @@ impl Shell {
         self.front = front;
     }
 
+    /// Bring window `i` to the front (out of the Dock if minimised).
+    fn show_window(&mut self, ctx: &egui::Context, i: usize) {
+        self.set_front(i);
+        let vid = if i == 0 { egui::ViewportId::ROOT } else { egui::ViewportId::from_hash_of(("document", self.windows[i].doc_id.as_str())) };
+        ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Focus);
+    }
+
     /// Requests windows left for the shell this frame.
     fn handle_requests(&mut self, ctx: &egui::Context) {
         // New and Open that need a window of their own.
@@ -303,6 +317,25 @@ impl Shell {
         for w in &mut self.windows {
             w.untitled_floor = self.untitled_seq.max(1);
         }
+        // Documents read for windows of their own: a window each, unless
+        // the file came to be open in another meanwhile (that one shows).
+        let mut opened = vec![];
+        for w in &mut self.windows {
+            opened.append(&mut w.opened_for_window);
+        }
+        for (p, prepared) in opened {
+            let same = crate::app::same_file(&p);
+            if let Some(i) = self.windows.iter().position(|w| w.editor.file_path.as_deref().map(crate::app::same_file) == Some(same.clone())) {
+                self.show_window(ctx, i);
+                continue;
+            }
+            // Framed for the size it opens at (that of the window it came from).
+            let viewport = self.windows[self.front].editor.view.viewport;
+            self.add_window(|w| {
+                w.editor.view.viewport = viewport;
+                w.finish_open(&p, Ok(prepared));
+            });
+        }
         let mut spawn = vec![];
         for w in &mut self.windows {
             spawn.append(&mut w.spawn);
@@ -312,10 +345,7 @@ impl Shell {
             if let Action::OpenPath(p) = &a {
                 let p = crate::app::same_file(p);
                 if let Some(i) = self.windows.iter().position(|w| w.editor.file_path.as_deref().map(crate::app::same_file) == Some(p.clone())) {
-                    self.set_front(i);
-                    let vid = if i == 0 { egui::ViewportId::ROOT } else { egui::ViewportId::from_hash_of(("document", self.windows[i].doc_id.as_str())) };
-                    ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Minimized(false));
-                    ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Focus);
+                    self.show_window(ctx, i);
                     continue;
                 }
             }
@@ -587,10 +617,10 @@ impl eframe::App for Shell {
         if self.empty {
             self.logic_empty(ctx);
         }
-        let open: Vec<Option<std::path::PathBuf>> = self.windows.iter().map(|w| w.shown_file().map(crate::app::same_file)).collect();
+        let open: Vec<Vec<std::path::PathBuf>> = self.windows.iter().map(|w| w.files_in_use().into_iter().map(crate::app::same_file).collect()).collect();
         for i in 0..self.windows.len() {
             let w = &mut self.windows[i];
-            w.open_elsewhere = open.iter().enumerate().filter(|(j, _)| *j != i).filter_map(|(_, p)| p.clone()).collect();
+            w.open_elsewhere = open.iter().enumerate().filter(|(j, _)| *j != i).flat_map(|(_, p)| p.iter().cloned()).collect();
             w.viewport = if i == 0 { egui::ViewportId::ROOT } else { egui::ViewportId::from_hash_of(("document", w.doc_id.as_str())) };
             w.logic(ctx);
             self.sync_from(i);

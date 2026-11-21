@@ -16,6 +16,27 @@ pub enum Item {
     Recent,
 }
 
+/// One line of File › Open Recent.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecentEntry {
+    File(std::path::PathBuf),
+    Separator,
+    /// Clear Menu, dimmed when there is nothing to clear.
+    Clear { enabled: bool },
+}
+
+/// What Open Recent lists: the documents, newest first, then a separator
+/// and Clear Menu, as in Keynote (and AppKit's own Open Recent, which
+/// shows only a dimmed Clear Menu when the list is empty).
+pub fn recent_entries(recent: &[std::path::PathBuf]) -> Vec<RecentEntry> {
+    let mut v: Vec<RecentEntry> = recent.iter().cloned().map(RecentEntry::File).collect();
+    if !v.is_empty() {
+        v.push(RecentEntry::Separator);
+    }
+    v.push(RecentEntry::Clear { enabled: !recent.is_empty() });
+    v
+}
+
 pub fn spec() -> Vec<(String, Vec<Item>)> {
     use Action::*;
     use Item::*;
@@ -326,10 +347,21 @@ fn items_ui(app: &mut ZebraApp, ui: &mut egui::Ui, items: &[Item]) {
                     if recent.is_empty() {
                         crate::widgets::menu_row(ui, None, &crate::t!("menu-no-recent-documents"), None, false);
                     }
-                    for p in recent {
-                        let name = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-                        if crate::widgets::menu_item(ui, &name, None).on_hover_text(p.display().to_string()).clicked() {
-                            app.queued.push(Action::OpenPath(p));
+                    for e in recent_entries(&recent) {
+                        match e {
+                            RecentEntry::File(p) => {
+                                let name = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                                if crate::widgets::menu_item(ui, &name, None).on_hover_text(p.display().to_string()).clicked() {
+                                    app.queued.push(Action::OpenPath(p));
+                                }
+                            }
+                            RecentEntry::Separator => crate::widgets::menu_separator(ui),
+                            RecentEntry::Clear { enabled } => {
+                                let r = crate::widgets::menu_row(ui, None, &crate::t!("menu-clear-recent"), None, enabled);
+                                if enabled && r.clicked() {
+                                    app.queued.push(Action::ClearRecent);
+                                }
+                            }
                         }
                     }
                 });

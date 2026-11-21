@@ -80,6 +80,13 @@ pub struct ZebraApp {
     pub spawn: Vec<Action>,
     /// From the shell: the files open in the other windows.
     pub open_elsewhere: Vec<PathBuf>,
+    /// For the shell: documents this window read for windows of their own
+    /// (File › Open, Finder). The window is made only once a document is
+    /// in, so a file that can't be opened leaves just the alert (M10).
+    pub opened_for_window: Vec<(PathBuf, zebra_core::Prepared)>,
+    /// Where a file being dropped now is, in the window (see
+    /// `mac::drop_point`); tests give their own.
+    pub drop_point: fn(&ZebraApp) -> Option<egui::Pos2>,
     /// For the shell: close this window (its document is saved or discarded).
     pub close_me: bool,
     /// For the shell: the person chose Quit.
@@ -396,6 +403,8 @@ impl ZebraApp {
             seen_saves: 0,
             last_image_trim: 0.0,
             open_elsewhere: vec![],
+            opened_for_window: vec![],
+            drop_point: crate::mac::drop_point,
             renderer: renderer.clone(),
             gpu_canvas: wgpu.as_ref().map(zebra_render::gpu::VelloCanvas::new),
             wgpu,
@@ -719,12 +728,24 @@ impl ZebraApp {
 
     fn perform_inner(&mut self, ctx: &Context, a: Action) {
         use Action::*;
+        // ⌘W goes to the front window: Settings or About when one of them is.
+        if a == Close && crate::panels::close_front_panel(self, ctx) {
+            return;
+        }
         // Cells selected in a table: the clipboard, Delete, Esc and Select
         // All act on the cells.
         if crate::table_ui::perform(self, &a) {
             return;
         }
         match a {
+            // A file for a window of its own: read here first, and the
+            // window comes only with the document. Keynote shows just the
+            // alert for a file it can't open (Mac pass M10: an empty
+            // Untitled window was left behind it). A file already open
+            // goes to the shell, which shows its window.
+            OpenPath(ref p) if self.hosted && !self.is_pristine() && !self.open_elsewhere.contains(&same_file(p)) && self.opening.is_none() => {
+                self.open_path_for(p, true);
+            }
             // Like Keynote: a new or opened document gets its own window,
             // unless this one is still an untouched new document.
             New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | OpenPath(_) | ReopenAutosave(_) if self.hosted && !self.is_pristine() => {
@@ -799,6 +820,9 @@ impl ZebraApp {
                 self.after_load();
             }
             Open => crate::pickers::ask(self, crate::pickers::Pick::Open),
+            // Every window's list follows (the shell shares it) and so do
+            // the saved settings; the files are not touched.
+            ClearRecent => self.recent.clear(),
             OpenPath(p) => self.open_path(&p),
             ReopenAutosave(p) => {
                 if !self.reopen_autosave(&p) {
@@ -1343,17 +1367,40 @@ impl ZebraApp {
     /// Open `p` in this window: a big file on a worker thread, with
     /// progress in the window; a small one at once.
     pub fn open_path(&mut self, p: &std::path::Path) {
+        self.open_path_for(p, false);
+    }
+
+    /// Open `p` in this window, or (`for_new_window`) read it for a window
+    /// of its own that the shell makes once it is in.
+    fn open_path_for(&mut self, p: &std::path::Path, for_new_window: bool) {
         if crate::opening::is_big(p) {
-            crate::opening::start(self, p);
+            crate::opening::start(self, p, for_new_window);
             return;
         }
         let r = zebra_core::io::load(p).map(|doc| zebra_core::Editor::prepare(doc, &*self.editor.measure, &|_| {}));
-        self.finish_open(p, r);
+        self.finish_open_for(p, r, for_new_window);
+    }
+
+    /// [`ZebraApp::finish_open`], or for a new window: a document read is
+    /// handed to the shell; one that couldn't be read shows its alert here.
+    pub fn finish_open_for(&mut self, p: &std::path::Path, r: zebra_core::ZResult<zebra_core::Prepared>, for_new_window: bool) {
+        match r {
+            Ok(prepared) if for_new_window => self.opened_for_window.push((p.to_path_buf(), prepared)),
+            r => self.finish_open(p, r),
+        }
     }
 
     /// The file being opened, or the one this window has open.
     pub fn shown_file(&self) -> Option<&std::path::Path> {
         self.opening.as_ref().map(|o| o.path.as_path()).or(self.editor.file_path.as_deref())
+    }
+
+    /// The files this window has open or is opening (for a window of its
+    /// own too): no other window opens them as well.
+    pub fn files_in_use(&self) -> Vec<&std::path::Path> {
+        let mut v: Vec<&std::path::Path> = self.opening.iter().map(|o| o.path.as_path()).chain(self.editor.file_path.as_deref()).collect();
+        v.extend(self.opened_for_window.iter().map(|(p, _)| p.as_path()));
+        v
     }
 
     /// Load `p`, read and prepared, or say why it couldn't be opened.
@@ -2017,7 +2064,9 @@ impl ZebraApp {
             }
             return;
         }
-        let pos = ctx.input(|i| i.pointer.hover_pos());
+        // Where it was dropped (Keynote places it there): the platform's
+        // drop point, else egui's pointer, else the middle of the canvas.
+        let pos = (self.drop_point)(self).or_else(|| ctx.input(|i| i.pointer.hover_pos()));
         let at = pos.map(|p| self.canvas.s2w(&self.editor, p)).unwrap_or_else(|| self.canvas_center_world());
         for (i, f) in files.iter().enumerate() {
             let p = f.path().to_path_buf();
@@ -2235,7 +2284,7 @@ pub fn works_under_a_sheet(a: &Action) -> bool {
     use Action::*;
     matches!(
         a,
-        New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | ReopenAutosave(_) | Close | Quit | Settings | About | Acknowledgements | PauseAgents | StopAgents
+        New | NewFromSample | NewFromTemplate(_) | NewFromTemplateFile(_) | Open | OpenPath(_) | ReopenAutosave(_) | ClearRecent | Close | Quit | Settings | About | Acknowledgements | PauseAgents | StopAgents
     )
 }
 

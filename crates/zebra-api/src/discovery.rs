@@ -298,6 +298,70 @@ pub fn pid_alive(pid: u32) -> bool {
     r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+/// When the process `pid` started, if the system says (macOS:
+/// `proc_pidinfo`; Linux: `/proc`). None when it isn't running or the
+/// system won't tell (the App Store sandbox may refuse other processes).
+pub fn process_started(pid: u32) -> Option<std::time::SystemTime> {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // SAFETY: `info` is a writable proc_bsdinfo of `size` bytes.
+        let n = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+        if n != size || info.pbi_start_tvsec == 0 {
+            return None;
+        }
+        Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(info.pbi_start_tvsec) + std::time::Duration::from_micros(info.pbi_start_tvusec.min(999_999)))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Field 22 of /proc/<pid>/stat: clock ticks after boot. The name
+        // (field 2) may hold spaces and parentheses: count from the last ')'.
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let after = stat.get(stat.rfind(')')? + 1..)?;
+        let ticks: u64 = after.split_whitespace().nth(19)?.parse().ok()?;
+        let boot: u64 = fs::read_to_string("/proc/stat").ok()?.lines().find_map(|l| l.strip_prefix("btime "))?.trim().parse().ok()?;
+        // SAFETY: sysconf has no preconditions.
+        let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        if hz <= 0 {
+            return None;
+        }
+        let ms = (ticks as u128 * 1000 / hz as u128) as u64;
+        Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(boot) + std::time::Duration::from_millis(ms))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        None
+    }
+}
+
+/// Slack for [`made_by_live`]: start times and file times are whole
+/// seconds on some systems.
+const START_SLACK: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Could the process running as `pid` now have written something at
+/// `written`? Only if it is running and started no later than that. A pid
+/// that came back as another process (Mac pass M1: a killed Zebra's pid
+/// was Notes a few days later) started after: no. When the start time or
+/// `written` can't be read, running is enough (as before).
+pub fn made_by_live(pid: u32, written: Option<std::time::SystemTime>) -> bool {
+    if !pid_alive(pid) {
+        return false;
+    }
+    match (process_started(pid), written) {
+        (Some(started), Some(w)) => started <= w + START_SLACK,
+        _ => true,
+    }
+}
+
+/// When a file was last written, if the system says.
+fn written(path: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
 fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
     let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
@@ -332,9 +396,11 @@ pub fn list() -> Vec<Instance> {
         let Ok(text) = fs::read_to_string(&path) else { continue };
         let Ok(mut inst) = serde_json::from_str::<Instance>(&text) else { continue };
         inst.file = path.clone();
-        if !pid_alive(inst.pid) || !inst.socket.exists() {
+        // A pid that came back as another process isn't this instance.
+        let ours = made_by_live(inst.pid, written(&path));
+        if !ours || !inst.socket.exists() {
             let _ = fs::remove_file(&path);
-            if !pid_alive(inst.pid) {
+            if !ours {
                 // A killed or crashed instance leaves its socket behind.
                 // Only ever delete an actual socket, whatever the stale
                 // file says, and never one a live app listens on now (a
@@ -383,7 +449,9 @@ impl Drop for RunningNote {
     }
 }
 
-/// Pids of Zebra apps that are open (with AI control on or off).
+/// Pids of Zebra apps that are open (with AI control on or off). A note
+/// whose pid is gone, or now belongs to a process that started after the
+/// note was written, is stale and swept.
 pub fn running_apps() -> Vec<u32> {
     let mut out = vec![];
     for entry in search_dirs().iter().filter_map(|d| fs::read_dir(d).ok()).flat_map(|rd| rd.flatten()) {
@@ -392,7 +460,10 @@ pub fn running_apps() -> Vec<u32> {
             continue;
         }
         let pid = path.file_stem().and_then(|s| s.to_str()).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-        if pid_alive(pid) {
+        // The note is written once, at launch: a process that started
+        // after it is another app that got the pid of a Zebra that was
+        // killed (Mac pass M1), and the note is stale.
+        if made_by_live(pid, written(&path)) {
             out.push(pid);
         } else {
             let _ = fs::remove_file(&path);

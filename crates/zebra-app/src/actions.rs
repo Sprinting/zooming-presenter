@@ -20,6 +20,8 @@ pub enum Action {
     /// Reopen an untitled document's leftover autosave (Open Anyway after
     /// the last launch quit while opening it).
     ReopenAutosave(std::path::PathBuf),
+    /// File › Open Recent › Clear Menu: forget the recent documents.
+    ClearRecent,
     Save,
     SaveAs,
     ExportPdf,
@@ -146,6 +148,7 @@ impl Action {
             Open => crate::t!("action-open"),
             OpenPath(p) => p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
             ReopenAutosave(_) => crate::t!("sheet-open-anyway"),
+            ClearRecent => crate::t!("menu-clear-recent"),
             Save => crate::t!("action-save"),
             SaveAs => crate::t!("action-save-as"),
             ExportPdf => crate::t!("action-export-pdf"),

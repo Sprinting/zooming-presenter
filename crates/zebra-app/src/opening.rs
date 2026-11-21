@@ -21,6 +21,9 @@ pub const BIG_DOCUMENT: u64 = 1 << 20;
 /// A file being opened.
 pub struct Opening {
     pub path: PathBuf,
+    /// Read for a window of its own, made once the document is in (this
+    /// window keeps its own document).
+    pub for_new_window: bool,
     /// 0..=1000.
     progress: Arc<AtomicU32>,
     rx: Receiver<ZResult<Prepared>>,
@@ -38,7 +41,7 @@ impl Opening {
     pub fn stalled(path: &Path, progress: f32) -> Opening {
         let (tx, rx) = std::sync::mpsc::channel();
         std::mem::forget(tx);
-        Opening { path: path.to_path_buf(), progress: Arc::new(AtomicU32::new((progress * 1000.0) as u32)), rx }
+        Opening { path: path.to_path_buf(), for_new_window: false, progress: Arc::new(AtomicU32::new((progress * 1000.0) as u32)), rx }
     }
 }
 
@@ -47,8 +50,9 @@ pub fn is_big(path: &Path) -> bool {
     zebra_core::io::document_size(path).is_some_and(|n| n >= BIG_DOCUMENT)
 }
 
-/// Start opening `path` on a worker thread.
-pub fn start(app: &mut ZebraApp, path: &Path) {
+/// Start opening `path` on a worker thread (`for_new_window`: see
+/// [`Opening::for_new_window`]).
+pub fn start(app: &mut ZebraApp, path: &Path, for_new_window: bool) {
     let progress = Arc::new(AtomicU32::new(0));
     let (tx, rx) = std::sync::mpsc::channel();
     let measure = app.renderer.measure();
@@ -78,11 +82,11 @@ pub fn start(app: &mut ZebraApp, path: &Path) {
         wake();
     });
     match spawned {
-        Ok(_) => app.opening = Some(Opening { path: path.to_path_buf(), progress, rx }),
+        Ok(_) => app.opening = Some(Opening { path: path.to_path_buf(), for_new_window, progress, rx }),
         // No thread: open it here.
         Err(_) => {
             let r = zebra_core::io::load(path).map(|doc| zebra_core::Editor::prepare(doc, &*app.editor.measure, &|_| {}));
-            app.finish_open(path, r);
+            app.finish_open_for(path, r, for_new_window);
         }
     }
 }
@@ -96,7 +100,7 @@ pub fn poll(app: &mut ZebraApp) {
         Err(TryRecvError::Disconnected) => Err(ZError::new("io", "opening stopped unexpectedly")),
     };
     let o = app.opening.take().expect("checked above");
-    app.finish_open(&o.path, r);
+    app.finish_open_for(&o.path, r, o.for_new_window);
 }
 
 /// The progress panel, over the window (it takes no input meanwhile).

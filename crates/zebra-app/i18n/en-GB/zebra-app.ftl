@@ -887,6 +887,7 @@ menu-resume-agent = Resume Agent
 menu-pause-agent = Pause Agent
 menu-open-recent = Open Recent
 menu-no-recent-documents = No Recent Documents
+menu-clear-recent = Clear Menu
 
 ## ---- end menus.rs ----
 
