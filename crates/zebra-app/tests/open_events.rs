@@ -68,6 +68,20 @@ fn files_from_finder_open_at_launch_and_later() {
     assert_eq!(h.state().windows[2].editor.file_path.as_deref(), Some(c.as_path()));
     assert!(open_events::take().is_empty(), "every file was taken");
 
+    // M10 (Mac pass 21 Nov): a file that can't be opened showed its alert
+    // in a new, empty Untitled window, which stayed. As in Keynote: only the
+    // alert, in the window in front; no new window.
+    let bad = dir.join("garbage.zebra");
+    std::fs::write(&bad, b"not a zebra file").unwrap();
+    let front = h.state().front;
+    open_events::push([bad.clone()]);
+    h.run_steps(4);
+    let s = h.state();
+    assert_eq!(s.windows.len(), 3, "no window for a file that didn't open");
+    assert_eq!(s.front, front);
+    assert!(s.windows[front].sheet_showing(), "the alert is up in the window in front");
+    assert_eq!(s.windows[front].editor.file_path.as_deref(), Some(c.as_path()), "its document is untouched");
+
     // A file sent after the chooser came up on an untouched window opens
     // in that window and the chooser goes.
     let mut h2 = Harness::builder()
