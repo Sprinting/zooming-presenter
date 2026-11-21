@@ -902,6 +902,42 @@ fn decode_job_inner(job: &Job) -> Vec<(u8, Decoded)> {
     decode_still(asset, &job.bytes, job.key.1)
 }
 
+/// `bytes` (a still picture) scaled down to at most `most` pixels, by
+/// the same decoders as any picture (never held at full size where they
+/// can avoid it), as a PNG: for a picture inside an SVG, which resvg
+/// would decode whole. None if it can't be read.
+pub(crate) fn scaled_png(bytes: &[u8], most: u64) -> Option<Vec<u8>> {
+    let head = zebra_core::media::picture_header(&bytes[..bytes.len().min(256 << 10)])?;
+    let (w, h) = (head.width, head.height);
+    let last = last_level(w, h);
+    let mut level = 0;
+    while level < last && {
+        let (lw, lh) = level_size(w, h, level);
+        lw as u64 * lh as u64 > most
+    } {
+        level += 1;
+    }
+    let img = decode_still("", bytes, level).into_iter().find(|(l, _)| *l == level)?;
+    let Decoded::Still(img) = img.1 else { return None };
+    let (iw, ih) = (img.width, img.height);
+    let mut px = img.pixmap().data_as_u8_slice().to_vec();
+    // Back to straight alpha for the PNG.
+    for p in px.chunks_exact_mut(4) {
+        let a = p[3] as u32;
+        if a != 0 && a != 255 {
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+    let mut out = vec![];
+    let mut e = png::Encoder::new(&mut out, iw, ih);
+    e.set_color(png::ColorType::Rgba);
+    e.set_compression(png::Compression::Fast);
+    e.write_header().ok()?.write_image_data(&px).ok()?;
+    Some(out)
+}
+
 /// A still picture at `want` (and its smallest level), sized from its
 /// header before anything is decoded, and never held at full size when it
 /// is big (the rules are `zebra_core::media::PictureHeader::fits`):

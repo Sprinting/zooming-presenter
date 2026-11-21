@@ -2807,7 +2807,7 @@ impl Editor {
             // What it is, from its first bytes, before any of it is
             // copied: a disk image or a log named .png costs 256 KB.
             let (_, head) = crate::media::read_head(p).map_err(ioe)?;
-            let unknown = || ZError::invalid("unrecognised media format").hint("use PNG, JPEG, WebP, GIF, MP4, MOV, MP3, M4A, AAC or WAV");
+            let unknown = || ZError::invalid("unrecognised media format").hint("use PNG, JPEG, WebP, GIF, SVG, MP4, MOV, MP3, M4A, AAC or WAV");
             let kind = crate::media::sniff_kind(&head).ok_or_else(unknown)?;
             // A picture where a video or sound was asked for (or the other
             // way round) is turned away before the copy. Video and audio
@@ -3989,16 +3989,19 @@ fn picture_fits(head: &[u8]) -> ZResult<()> {
 }
 
 pub fn image_info(bytes: &[u8]) -> ZResult<(String, u32, u32)> {
-    if bytes.len() > 4 && (bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml")) {
-        return Err(ZError::invalid("SVG import is not supported yet").hint("convert to PNG"));
+    // An SVG file comes in as a picture (as Keynote takes them), drawn
+    // sharp at any size like a symbol.
+    if crate::symbols::starts_as_svg(bytes) {
+        let (w, h) = crate::symbols::svg_pixels(bytes);
+        return Ok(("svg".into(), w, h));
     }
-    let fmt = image::guess_format(bytes).map_err(|_| ZError::invalid("unrecognised image format").hint("use PNG, JPEG, WebP or GIF"))?;
+    let fmt = image::guess_format(bytes).map_err(|_| ZError::invalid("unrecognised image format").hint("use PNG, JPEG, WebP, GIF or SVG"))?;
     let ext = match fmt {
         image::ImageFormat::Png => "png",
         image::ImageFormat::Jpeg => "jpg",
         image::ImageFormat::WebP => "webp",
         image::ImageFormat::Gif => "gif",
-        _ => return Err(ZError::invalid("unsupported image format").hint("use PNG, JPEG, WebP or GIF")),
+        _ => return Err(ZError::invalid("unsupported image format").hint("use PNG, JPEG, WebP, GIF or SVG")),
     };
     // Read straight from the header where Zebra can (any size), so a huge
     // picture's size never depends on a decoder's own limits.

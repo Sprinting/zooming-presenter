@@ -1178,6 +1178,7 @@ media-recorded = Voice-over added
 ## ---- mac.rs ----
 # Reason given to macOS for keeping the display awake while presenting.
 mac-activity-presenting = Presenting
+mac-activity-working = Importing, saving or working with an agent
 
 ## ---- end mac.rs ----
 

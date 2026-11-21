@@ -126,6 +126,8 @@ mod imp {
         url: Option<std::path::PathBuf>,
         focused: Option<bool>,
         activity: Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
+        /// Why `activity` is held (its string's id).
+        activity_reason: Option<&'static str>,
         /// The NSWindow of a window that has no eframe `Frame` (every
         /// document window but the first).
         pub window: Option<Retained<NSWindow>>,
@@ -199,10 +201,14 @@ mod imp {
     }
 
     /// Push document state to the window; refresh the accent when the app
-    /// becomes active; hold an App Nap activity while presenting.
+    /// becomes active; hold an App Nap activity while presenting, and while
+    /// work goes on in the background: an import, an open, a save, or an
+    /// agent connected (T10: a small PDF took 20 s to import with Zebra
+    /// in the background, as App Nap slowed it).
     pub fn sync_window(app: &mut ZebraApp, frame: Option<&eframe::Frame>) {
         let focused = app.ctx.input(|i| i.viewport().focused);
         let presenting = app.editor.view.mode == zebra_core::Mode::Present;
+        let working = app.import.is_some() || app.opening.is_some() || app.editor.saving().is_some() || app.agent_connected();
         let title = app.window_title();
         let edited = app.editor.dirty();
         let url = app.editor.file_path.clone();
@@ -213,18 +219,29 @@ mod imp {
                 crate::style::apply_visuals(&app.ctx);
             }
         }
-        match (presenting, s.activity.is_some()) {
-            (true, false) => {
-                let reason = NSString::from_str(&crate::t!("mac-activity-presenting"));
-                s.activity = Some(NSProcessInfo::processInfo().beginActivityWithOptions_reason(NSActivityOptions::UserInitiated, &reason));
+        let want = if presenting {
+            Some("presenting")
+        } else if working {
+            Some("working")
+        } else {
+            None
+        };
+        if want != s.activity_reason {
+            if let Some(a) = s.activity.take() {
+                // SAFETY: `a` came from beginActivity on this process.
+                unsafe { NSProcessInfo::processInfo().endActivity(&a) };
             }
-            (false, true) => {
-                if let Some(a) = s.activity.take() {
-                    // SAFETY: `a` came from beginActivity on this process.
-                    unsafe { NSProcessInfo::processInfo().endActivity(&a) };
-                }
+            if let Some(w) = want {
+                // Presenting keeps the display awake too; background work
+                // lets the Mac sleep when idle.
+                let (reason, options) = if w == "presenting" {
+                    (crate::t!("mac-activity-presenting"), NSActivityOptions::UserInitiated)
+                } else {
+                    (crate::t!("mac-activity-working"), NSActivityOptions::UserInitiatedAllowingIdleSystemSleep)
+                };
+                s.activity = Some(NSProcessInfo::processInfo().beginActivityWithOptions_reason(options, &NSString::from_str(&reason)));
             }
-            _ => {}
+            s.activity_reason = want;
         }
         if s.title == title && s.edited == edited && s.url == url {
             return;

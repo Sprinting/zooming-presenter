@@ -29,7 +29,7 @@ pub fn info(bytes: &[u8]) -> ZResult<MediaInfo> {
     }
     let (ext, w, h) = crate::editor::image_info(bytes).map_err(|e| {
         if e.message.starts_with("unrecognised") {
-            ZError::invalid("unrecognised media format").hint("use PNG, JPEG, WebP, GIF, MP4, MOV, MP3, M4A, AAC or WAV")
+            ZError::invalid("unrecognised media format").hint("use PNG, JPEG, WebP, GIF, SVG, MP4, MOV, MP3, M4A, AAC or WAV")
         } else {
             e
         }
@@ -730,6 +730,9 @@ pub fn sniff_kind(head: &[u8]) -> Option<MediaKind> {
     }
     if head.starts_with(b"%PDF-") {
         return Some(MediaKind::Document);
+    }
+    if crate::symbols::starts_as_svg(head) {
+        return Some(MediaKind::Image);
     }
     match image::guess_format(head) {
         Ok(image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP | image::ImageFormat::Gif) => Some(MediaKind::Image),

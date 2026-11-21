@@ -63,22 +63,21 @@ fn recolour(svg: &str, style: &SvgStyle) -> String {
 /// links). The default also opens any file an `<image href>` names, so a
 /// picture someone sent could pull a file from this Mac into an export.
 ///
-/// A picture inside is taken only when its header says it is at most
-/// [`MAX_NESTED_PX`] pixels, and all of them together at most
-/// [`MAX_NESTED_TOTAL_PX`]: resvg decodes it whole, with no limit (a 43 KB
-/// pptx holding a 20000² PNG took 1.5 GB). A picture refused is left out;
-/// the rest of the SVG draws.
+/// resvg decodes a picture inside whole, with no limit (a 43 KB pptx
+/// holding a 20000² PNG took 1.5 GB). One whose header says it is bigger
+/// than [`MAX_NESTED_PX`] is first scaled down by Zebra's own decoders
+/// (which never hold it at full size) to that, and drawn (H6: it used to
+/// be left out without a word). resvg decodes each picture as it draws
+/// it and lets it go, so how many there are doesn't add up in memory. A
+/// picture whose header can't be read is left out; the rest draws.
 fn options() -> usvg::Options<'static> {
     let mut opt = usvg::Options::default();
     opt.image_href_resolver.resolve_string = Box::new(|_, _| None);
     let default = usvg::ImageHrefResolver::default_data_resolver();
-    let taken = std::sync::atomic::AtomicU64::new(0);
     opt.image_href_resolver.resolve_data = Box::new(move |mime, data, o| {
         if let Some(px) = nested_pixels(&data) {
-            let px = px.filter(|px| *px <= MAX_NESTED_PX)?;
-            let before = taken.fetch_add(px, std::sync::atomic::Ordering::Relaxed);
-            if before + px > MAX_NESTED_TOTAL_PX {
-                return None;
+            if px? > MAX_NESTED_PX {
+                return crate::images::scaled_png(&data, MAX_NESTED_PX).map(|png| usvg::ImageKind::PNG(std::sync::Arc::new(png)));
             }
         }
         default(mime, data, o)
@@ -86,11 +85,10 @@ fn options() -> usvg::Options<'static> {
     opt
 }
 
-/// Most pixels one picture inside an SVG may have (the SVG itself is drawn
-/// at most [`MAX_RASTER_SIDE`]², so more adds nothing it can show).
+/// Most pixels a picture inside an SVG is drawn from (the SVG itself is
+/// drawn at most [`MAX_RASTER_SIDE`]², so more adds nothing it can show);
+/// a bigger one is scaled down to this.
 pub const MAX_NESTED_PX: u64 = 16 << 20;
-/// Most pixels all the pictures inside one SVG may have together.
-pub const MAX_NESTED_TOTAL_PX: u64 = 64 << 20;
 
 /// For a raster picture (PNG, JPEG, GIF, WebP…): Some(its pixels, from its
 /// header; None when the header can't be read). None for anything else (a
@@ -459,11 +457,18 @@ mod tests {
         let px = rasterize(svg.as_bytes(), &SvgStyle::default(), 20, 10).unwrap();
         assert_eq!(at(&px, 20, 15, 5), [0, 160, 0, 255]);
         assert_eq!(at(&px, 20, 5, 5)[3], 0);
-        // Many pictures that each fit, but not all together.
+        // Many pictures that each fit: all are taken (each is decoded as
+        // it is drawn, then let go).
         let opt = options();
         let big = std::sync::Arc::new(header(4096));
         let took: Vec<bool> = (0..6).map(|_| (opt.image_href_resolver.resolve_data)("image/png", big.clone(), &opt).is_some()).collect();
-        assert_eq!(took, [true, true, true, true, false, false]);
+        assert_eq!(took, [true; 6]);
+        // A real picture past the size is scaled down and drawn (H6).
+        let mut wide = vec![];
+        image::RgbImage::from_pixel(6000, 3000, image::Rgb([0, 0, 200])).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+        let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><image width="20" height="10" href="data:image/png;base64,{}"/></svg>"#, b64(&wide));
+        let px = rasterize(svg.as_bytes(), &SvgStyle::default(), 20, 10).unwrap();
+        assert_eq!(at(&px, 20, 10, 5), [0, 0, 200, 255]);
         assert!((options().image_href_resolver.resolve_data)("image/png", std::sync::Arc::new(b"\x89PNG\r\n\x1a\n garbage".to_vec()), &opt).is_none());
     }
 
