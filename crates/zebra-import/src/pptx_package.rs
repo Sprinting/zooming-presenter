@@ -128,6 +128,10 @@ impl Package {
         let damaged = ImportError::Damaged("PowerPoint");
         let root = read_rels(&src, "");
         let presentation = root.iter().find(|r| r.is(OFFICE_DOCUMENT)).and_then(|r| r.to.clone()).filter(|p| src.has(p)).unwrap_or_else(|| "ppt/presentation.xml".into());
+        // Too big to read is not damage: say what it is.
+        if src.size(&presentation).is_some_and(|n| n > max_xml()) {
+            return Err(ImportError::NeedsMemory);
+        }
         let presentation_xml = src.read_part(&presentation, max_xml()).filter(|b| check(b)).ok_or(damaged.clone())?;
         let rels = read_rels(&src, &presentation);
         let list = id_list(&presentation_xml, "sldIdLst", "sldId").ok_or(damaged.clone())?;

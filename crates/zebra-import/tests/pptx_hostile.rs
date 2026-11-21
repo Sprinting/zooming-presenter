@@ -482,6 +482,12 @@ fn big_smartart_and_unused_parts_cost_little_memory() {
         assert!(grew < 64 * MB, "{what}: heap +{} MB", grew / MB);
         drop(d);
     }
+    // The presentation's own part past the budget: too big to read, said
+    // so (was "damaged").
+    let mut pres = fixture_part("deck16x9.pptx", "ppt/presentation.xml");
+    pres.extend(vec![b' '; 3 << 20]);
+    let big = pack(&patch(&unpack(&fixture("deck16x9.pptx")), &[("ppt/presentation.xml", pres)], &[]));
+    assert_eq!(read(big).err(), Some(ImportError::NeedsMemory));
     // With the real budget the 6.6 MB part is read, at what its parse costs.
     drop(reset);
     let ((d, smart), grew) = peak(|| {

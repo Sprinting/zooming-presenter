@@ -77,6 +77,7 @@ fn failed(app: &mut ZebraApp, path: &Path, e: ImportError) {
         ImportError::OldPowerPoint => crate::t!("import-error-old-ppt"),
         ImportError::AllHidden => crate::t!("import-error-all-hidden"),
         ImportError::TooBig => crate::t!("import-error-too-big"),
+        ImportError::NeedsMemory => crate::t!("import-error-needs-memory"),
         ImportError::NoEngine(_) => crate::t!("import-error-no-engine"),
         ImportError::Read(_) => crate::t!("import-error-read"),
         ImportError::TooDemanding => crate::t!("import-error-too-demanding"),

@@ -41,10 +41,14 @@ pub enum ImportError {
     /// Every slide asked for is hidden.
     #[error("every slide chosen is hidden")]
     AllHidden,
-    /// Every slide asked for that isn't hidden is over a limit (more than
-    /// 8 MB of XML, or more shapes than can be read).
-    #[error("every slide chosen is too big to import")]
+    /// Every slide asked for that isn't hidden needs more memory to read
+    /// than Zebra may use (`zebra_core::io::memory_budget`).
+    #[error("every slide chosen needs more memory to read than this Mac has")]
     TooBig,
+    /// The presentation's own list of slides needs more memory to read
+    /// than Zebra may use.
+    #[error("the presentation needs more memory to read than this Mac has")]
+    NeedsMemory,
     /// The PDF engine is missing from the app (a broken install).
     #[error("the PDF reader is missing from Zebra ({0})")]
     NoEngine(String),
