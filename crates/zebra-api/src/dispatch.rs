@@ -338,14 +338,16 @@ impl Dispatcher {
             }
             return;
         }
-        // Web video links are checked, and downloads fetched, on a worker
-        // (the network can take seconds); the call runs when that is done.
+        // Web video links are checked, downloads fetched and video posters
+        // made on a worker (the network or a big clip can take seconds);
+        // the call runs when that is done.
         if !p.web_done {
             let tasks = web_tasks(&p.call, editor);
             if !tasks.is_empty() {
                 let seen = self.seen.get(&(doc.clone(), p.origin.display())).copied();
                 // Nothing is fetched for a call that would be refused.
-                let allowed = need_edit(editor.view.agent_permission, "add_web_video")
+                let what = if tasks.iter().all(|t| matches!(t, WebTask::Poster(_))) { "add_video" } else { "add_web_video" };
+                let allowed = need_edit(editor.view.agent_permission, what)
                     .and_then(|_| check_agent_allowed(editor))
                     .and_then(|_| if p.origin.is_agent() { check_read(editor, seen) } else { Ok(()) });
                 if let Err(e) = allowed {
@@ -1010,6 +1012,10 @@ enum WebTask {
     Check(usize),
     /// Download this link for the `download_video` at this index.
     Download(usize, String),
+    /// Make the poster of the `add_video` or `replace_video` by path at
+    /// this index, as the person's Insert does (Mac pass M7: an agent's
+    /// video had none).
+    Poster(usize),
 }
 
 fn commands_of(call: &mut Call) -> &mut [Command] {
@@ -1033,6 +1039,11 @@ fn web_tasks(call: &Call, editor: &Editor) -> Vec<WebTask> {
     for (i, c) in cmds.iter().enumerate() {
         match c {
             Command::AddWebVideo { .. } => out.push(WebTask::Check(i)),
+            Command::AddVideo { path: Some(p), poster_base64, .. } | Command::ReplaceVideo { path: Some(p), poster_base64, .. }
+                if !p.trim().is_empty() && poster_base64.as_deref().is_none_or(|b| b.trim().is_empty()) =>
+            {
+                out.push(WebTask::Poster(i))
+            }
             Command::DownloadVideo { id, path: None } => {
                 if let Some(zebra_core::ElementKind::Video(zebra_core::VideoData { link: Some(l), .. })) = editor.doc.get(id).map(|e| &e.kind) {
                     if l.kind == zebra_core::LinkKind::File {
@@ -1044,6 +1055,19 @@ fn web_tasks(call: &Call, editor: &Editor) -> Vec<WebTask> {
         }
     }
     out
+}
+
+/// The poster the person's Insert › Video makes (media_ui.rs): the frame
+/// at 1 s, at most 1280 pixels on its longer side, as PNG. Only for a
+/// plain file whose first bytes say video: anything else is refused by
+/// the command itself, never opened here. None when no frame comes (the
+/// video still goes in, with no poster, as the person's would).
+fn video_poster(backend: &std::sync::Arc<dyn zebra_media::Backend>, path: &std::path::Path) -> Option<Vec<u8>> {
+    let (meta, head) = zebra_core::media::read_head(path).ok()?;
+    if !meta.is_file() || zebra_core::media::sniff_kind(&head) != Some(zebra_core::MediaKind::Video) {
+        return None;
+    }
+    backend.poster_png(path, 1.0, 1280).ok()
 }
 
 fn link_error(e: zebra_media::link::LinkError) -> RpcError {
@@ -1077,6 +1101,12 @@ fn fetch_web(call: &mut Call, tasks: &[WebTask], files: &mut Vec<std::path::Path
                 }
                 if alt.trim().is_empty() {
                     *alt = c.title.clone().unwrap_or_default();
+                }
+            }
+            WebTask::Poster(i) => {
+                let (Some(Command::AddVideo { path: Some(p), poster_base64, .. }) | Some(Command::ReplaceVideo { path: Some(p), poster_base64, .. })) = cmds.get_mut(*i) else { continue };
+                if let Some(png) = video_poster(&backend, std::path::Path::new(p.as_str())) {
+                    *poster_base64 = Some(base64::engine::general_purpose::STANDARD.encode(png));
                 }
             }
             WebTask::Download(i, url) => {

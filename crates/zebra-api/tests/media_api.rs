@@ -29,6 +29,22 @@ fn poster_from_a_frame_and_play_needs_a_window() {
     let b64 = base64::engine::general_purpose::STANDARD.encode(mp4);
     let out = c.call("apply", json!({"command":{"op":"add_video","data_base64":b64}})).unwrap();
     let id = out["created"][0].as_str().unwrap().to_string();
+    let el = c.call("query", json!({"query":{"q":"element","id":id}})).unwrap();
+    assert!(!el.to_string().contains("poster"), "no poster yet: {el}");
+
+    // M7 (Mac pass 21 Nov): a video an agent added by path had no poster;
+    // the person's Insert makes one (frame at 1 s, 1280 px) on a worker.
+    // The agent's gets the same.
+    let clip = dir.join("clip.mp4");
+    std::fs::write(&clip, zebra_core::media::fixtures::tiny_mp4(640, 360, 10, true)).unwrap();
+    let out = c.call("apply", json!({"command":{"op":"add_video","path":clip}})).unwrap();
+    let by_path = out["created"][0].as_str().unwrap().to_string();
+    let el = c.call("query", json!({"query":{"q":"element","id":by_path}})).unwrap();
+    assert!(el.to_string().contains("poster"), "the poster is made: {el}");
+    // Not a video (a picture named .mp4, a folder): no poster tried, the
+    // command refuses it as before.
+    let e = rpc_err(c.call("apply", json!({"command":{"op":"add_video","path":dir}})));
+    assert_ne!(e.kind(), "internal", "{e}");
 
     let r = c.call("apply", json!({"command":{"op":"set_poster","id":id,"at":2.5}})).unwrap();
     assert!(r["revision"].as_u64().unwrap() > 0, "{r}");
