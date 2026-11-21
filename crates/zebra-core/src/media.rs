@@ -718,11 +718,13 @@ impl PictureHeader {
 /// * JPEG: every 8x8 block of the least-sampled component (at most 4x
 ///   subsampled, so 32x32 pixels) takes at least one bit of entropy-coded
 ///   data;
-/// * GIF: an LZW code is at least 3 bits and gives at most 4,096 pixels;
 /// * WebP: at least one bit per 1,048,576 pixels (its arithmetic coder can
 ///   make a near-certain bit cost far less than one, so the bound is loose).
 ///
-/// TIFF, BMP and HEIC say nothing here: their whole-decode bounds apply.
+/// GIF, TIFF, BMP and HEIC say nothing here: a GIF's screen can be far
+/// bigger than its frames (a 65,535² screen with 1x1 frames is a valid
+/// GIF, and its screen bound applies instead), and the others' whole-decode
+/// bounds apply.
 pub fn header_lies(head: &PictureHeader, file_len: u64) -> bool {
     let (w, h) = (head.width as u64, head.height as u64);
     let pixels = w.saturating_mul(h);
@@ -734,9 +736,8 @@ pub fn header_lies(head: &PictureHeader, file_len: u64) -> bool {
             row.saturating_mul(h) / 1032
         }
         PictureFormat::Jpeg => w.div_ceil(32).saturating_mul(h.div_ceil(32)) / 8,
-        PictureFormat::Gif => pixels / 4096 * 3 / 8,
         PictureFormat::WebP => pixels >> 23,
-        PictureFormat::Tiff | PictureFormat::Bmp | PictureFormat::Heic => 0,
+        PictureFormat::Gif | PictureFormat::Tiff | PictureFormat::Bmp | PictureFormat::Heic => 0,
     };
     file_len < least
 }
