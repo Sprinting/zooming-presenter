@@ -2821,8 +2821,8 @@ impl Editor {
             // What it is, from its first bytes, before any of it is
             // copied: a disk image or a log named .png costs 256 KB.
             let (meta, head) = crate::media::read_head(p).map_err(ioe)?;
-            let unknown = || ZError::invalid("unrecognised media format").hint("use PNG, JPEG, HEIC, TIFF, BMP, WebP, GIF, SVG, MP4, MOV, MP3, M4A, AAC or WAV");
-            let kind = crate::media::sniff_kind(&head).ok_or_else(unknown)?;
+            // Empty, or named as media but not: it says so.
+            let kind = crate::media::sniff_kind(&head).ok_or_else(|| crate::media::refusal(&head, &ext))?;
             // A picture where a video or sound was asked for (or the other
             // way round) is turned away before the copy. Video and audio
             // can't always be told apart from the head (an .mp4 with only
@@ -4034,6 +4034,7 @@ pub fn image_info(bytes: &[u8]) -> ZResult<(String, u32, u32)> {
             Ok((h.format.ext().into(), w, h2))
         }
         Some(_) => Err(ZError::invalid("cannot read image: it says it has no pixels")),
+        None if crate::media::iso_picture(bytes) == Some(crate::media::IsoPicture::Avif) => Err(ZError::invalid("AVIF pictures aren't supported").hint(HINT)),
         None => match image::guess_format(bytes) {
             // A header Zebra's own reader can't follow: the decoder's.
             Ok(fmt @ (image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP | image::ImageFormat::Gif | image::ImageFormat::Tiff | image::ImageFormat::Bmp)) => {

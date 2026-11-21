@@ -29,7 +29,7 @@ pub fn info(bytes: &[u8]) -> ZResult<MediaInfo> {
     }
     let (ext, w, h) = crate::editor::image_info(bytes).map_err(|e| {
         if e.message.starts_with("unrecognised") {
-            ZError::invalid("unrecognised media format").hint("use PNG, JPEG, HEIC, TIFF, BMP, WebP, GIF, SVG, MP4, MOV, MP3, M4A, AAC or WAV")
+            ZError::invalid("unrecognised media format").hint(FORMATS_HINT)
         } else {
             e
         }
@@ -40,6 +40,11 @@ pub fn info(bytes: &[u8]) -> ZResult<MediaInfo> {
 fn sniff_av(b: &[u8]) -> Option<MediaInfo> {
     let audio = |ext: &str, duration: f64| MediaInfo { ext: ext.into(), kind: MediaKind::Audio, width: 0, height: 0, duration };
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
+        // HEIC and AVIF pictures (any HEIF picture brand) are pictures,
+        // whatever else the file holds.
+        if iso_picture(b).is_some() {
+            return None;
+        }
         let brand = &b[8..12];
         let mov = parse_mov(b);
         // A movie header with no tracks in it holds nothing to play: not
@@ -883,20 +888,72 @@ fn bmp_header(b: &[u8]) -> Option<PictureHeader> {
     Some(PictureHeader { format: PictureFormat::Bmp, width, height, interlaced: false, orientation: 1 })
 }
 
-/// Whether a file is a HEIC/HEIF still picture, from its `ftyp` brands
-/// (not AVIF, which shares the container).
+/// Whether a file is a HEIC/HEIF picture, from its `ftyp` brands (not
+/// AVIF, which shares the container). A HEIF image sequence counts: it
+/// shows its primary still picture.
 pub fn is_heic(head: &[u8]) -> bool {
-    if head.len() < 16 || &head[4..8] != b"ftyp" {
-        return false;
+    iso_picture(head) == Some(IsoPicture::Heif)
+}
+
+/// What kind of picture an ISO media file (HEIF, AVIF and MP4 share the
+/// container) says it is, from the brands in its `ftyp` box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IsoPicture {
+    /// HEIC and the other HEIF pictures and image sequences.
+    Heif,
+    /// AVIF, which Zebra doesn't take.
+    Avif,
+}
+
+/// The picture an ISO media file's `ftyp` brands name, if any: any HEIF
+/// (ISO/IEC 23008-12) or MIAF (ISO/IEC 23000-22) picture brand makes it
+/// a picture, an AVIF one if any brand is AVIF's (AVIF files name `mif1`
+/// too; HEIC files never name `avif`). Movie and sound brands (`isom`,
+/// `mp42`, `qt  `, `M4A `…) name none. Brands are read from the box,
+/// clipped to the bytes given and to the first 256 KB, one at a time.
+pub fn iso_picture(head: &[u8]) -> Option<IsoPicture> {
+    let (mut heif, mut avif) = (false, false);
+    for b in ftyp_brands(head) {
+        match b {
+            b"avif" | b"avis" | b"avio" => avif = true,
+            b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1" | b"mif2" | b"msf1" | b"miaf" | b"MiHE" | b"MiHB" | b"MiPr" | b"MiHA" => heif = true,
+            _ => {}
+        }
     }
-    let len = (u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize).clamp(16, head.len());
-    let major = &head[8..12];
-    let brands: Vec<&[u8]> = std::iter::once(major).chain(head[16..len].chunks_exact(4)).collect();
-    if brands.iter().any(|b| *b == b"avif" || *b == b"avis") {
-        return false;
+    if avif {
+        Some(IsoPicture::Avif)
+    } else if heif {
+        Some(IsoPicture::Heif)
+    } else {
+        None
     }
-    brands.iter().any(|b| matches!(*b, b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx"))
-        || matches!(major, b"mif1" | b"msf1") && brands.iter().any(|b| *b == b"miaf" || *b == b"MiHE")
+}
+
+/// The brands of the `ftyp` box `head` starts with: the major brand, then
+/// the compatible ones (the minor version between them is skipped). As
+/// far as the box and `head` go, never past the first 256 KB; none if
+/// `head` doesn't start with an `ftyp` box.
+fn ftyp_brands(head: &[u8]) -> impl Iterator<Item = &[u8; 4]> {
+    let head = &head[..head.len().min(256 << 10)];
+    let body: &[u8] = (|| {
+        if head.get(4..8)? != b"ftyp" {
+            return None;
+        }
+        let (start, size) = match u32::from_be_bytes(head.get(0..4)?.try_into().ok()?) {
+            0 => (8, head.len() as u64),
+            1 => (16, u64::from_be_bytes(head.get(8..16)?.try_into().ok()?)),
+            n => (8, n as u64),
+        };
+        if size < start as u64 {
+            return None;
+        }
+        let end = size.min(head.len() as u64) as usize;
+        head.get(start..end.max(start))
+    })()
+    .unwrap_or(&[]);
+    let major = body.get(..4);
+    let compatible = body.get(8..).unwrap_or(&[]).chunks_exact(4);
+    major.into_iter().chain(compatible).filter_map(|b| b.try_into().ok())
 }
 
 /// The boxes inside `b` (an ISO media box's body): (type, body). Stops at
@@ -1091,6 +1148,13 @@ fn jpeg_header(b: &[u8]) -> Option<PictureHeader> {
 /// anything Zebra can't show. Used before copying a file in, so dropping
 /// an 8 GB disk image or a log file costs a read of 256 KB, not 8 GB.
 pub fn sniff_kind(head: &[u8]) -> Option<MediaKind> {
+    // Before the movie sniffer: HEIC shares MP4's container. An AVIF is
+    // a picture Zebra doesn't take.
+    match iso_picture(head) {
+        Some(IsoPicture::Heif) => return Some(MediaKind::Image),
+        Some(IsoPicture::Avif) => return None,
+        None => {}
+    }
     if let Some(m) = sniff_av(head) {
         return Some(m.kind);
     }
@@ -1100,14 +1164,37 @@ pub fn sniff_kind(head: &[u8]) -> Option<MediaKind> {
     if crate::symbols::starts_as_svg(head) {
         return Some(MediaKind::Image);
     }
-    if is_heic(head) {
-        return Some(MediaKind::Image);
-    }
     match image::guess_format(head) {
         Ok(image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP | image::ImageFormat::Gif | image::ImageFormat::Tiff | image::ImageFormat::Bmp) => Some(MediaKind::Image),
         _ => None,
     }
 }
+
+/// The names (lower case, no dot) of the files [`sniff_kind`] knows: a
+/// file named so that isn't one is damaged (or misnamed), not a kind
+/// Zebra doesn't take. (PowerPoint files are told by their name and a
+/// zip's first bytes, see `zebra_import`.)
+pub const MEDIA_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "bmp", "gif", "webp", "svg", "mp4", "mov", "m4v", "mp3", "m4a", "aac", "wav", "pdf"];
+
+/// Why a file [`sniff_kind`] doesn't know is refused, from its first
+/// bytes and its name's extension (`ext`, any case): it is empty; it is
+/// an AVIF; it is named as a kind Zebra takes but isn't one ("damaged",
+/// as an import says); or it is a kind Zebra doesn't take.
+pub fn refusal(head: &[u8], ext: &str) -> ZError {
+    let ext = ext.to_ascii_lowercase();
+    if head.is_empty() {
+        ZError::new("damaged", "the file is empty")
+    } else if iso_picture(head) == Some(IsoPicture::Avif) {
+        ZError::invalid("AVIF pictures aren't supported").hint(FORMATS_HINT)
+    } else if MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+        ZError::new("damaged", format!("the file is damaged or isn't a .{ext} file"))
+    } else {
+        ZError::invalid("unrecognised media format").hint(FORMATS_HINT)
+    }
+}
+
+/// The formats Zebra takes, for a refusal's hint.
+const FORMATS_HINT: &str = "use PNG, JPEG, HEIC, TIFF, BMP, WebP, GIF, SVG, MP4, MOV, MP3, M4A, AAC or WAV";
 
 /// A private copy of `path`, mapped, that nothing else can change: the
 /// copy's name is removed at once (the mapping keeps its bytes until it

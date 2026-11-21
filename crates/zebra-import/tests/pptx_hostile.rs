@@ -573,7 +573,8 @@ fn a_two_gigabyte_non_deck_is_refused_without_reading_it() {
     let t = Instant::now();
     let (r, grew) = peak(|| zebra_import::open(&path).err());
     eprintln!("2 GB sparse non-deck: {:.2} s, heap +{} MB", t.elapsed().as_secs_f64(), grew / MB);
-    assert_eq!(r, Some(ImportError::NotSupported));
+    // Named .pptx, so damaged, not "not a kind Zebra imports" (M9).
+    assert_eq!(r, Some(ImportError::Damaged("PowerPoint")));
     assert!(grew < 64 * MB);
     let _ = std::fs::remove_dir_all(&dir);
 }

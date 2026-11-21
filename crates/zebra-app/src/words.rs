@@ -119,6 +119,7 @@ pub fn error(e: &zebra_core::ZError) -> String {
         "locked" => t!("app-error-locked"),
         "busy" => t!("app-error-busy"),
         "io" => t!("app-error-io"),
+        "damaged" => t!("app-error-damaged"),
         "not_empty" => t!("app-error-not-empty"),
         "not_found" => t!("app-error-not-found"),
         "too_big" | "too_large" => t!("app-error-too-big"),

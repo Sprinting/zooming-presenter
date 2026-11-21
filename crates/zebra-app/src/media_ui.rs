@@ -931,8 +931,7 @@ pub fn dropped_kind(p: &std::path::Path) -> std::io::Result<Dropped> {
     }
     // Named as something Zebra takes, but it isn't: say so, rather than
     // ask for the kind of file it already claims to be.
-    let known = slides
-        || matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "heic" | "heif" | "tif" | "tiff" | "bmp" | "gif" | "webp" | "svg" | "mp4" | "mov" | "m4v" | "mp3" | "m4a" | "aac" | "wav" | "pdf");
+    let known = slides || zebra_core::media::MEDIA_EXTENSIONS.contains(&ext.as_str());
     Ok(if known { Dropped::Damaged } else { Dropped::Other })
 }
 
