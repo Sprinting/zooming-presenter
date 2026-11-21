@@ -59,6 +59,16 @@ fn import_adds_pages_as_one_undo_step() {
     let txt = dir.join("notes.txt");
     std::fs::write(&txt, "hello").unwrap();
     assert_eq!(rpc_err(c.call("import", json!({"path": txt}))).kind(), "unsupported");
+    // An empty .pptx is empty, not "Zebra can't import this kind of
+    // file" (Mac pass 21 Nov, M9); a text file named .pptx is damaged.
+    let empty = dir.join("empty.pptx");
+    std::fs::write(&empty, b"").unwrap();
+    let e = rpc_err(c.call("import", json!({"path": empty})));
+    assert_eq!((e.kind(), e.message.as_str()), ("damaged", "the file is empty"));
+    assert!(e.hint_text().is_none(), "{e}");
+    let named = dir.join("notes.pptx");
+    std::fs::write(&named, "hello").unwrap();
+    assert_eq!(rpc_err(c.call("import", json!({"path": named}))).kind(), "damaged");
     assert_eq!(rpc_err(c.call("import", json!({"path": dir.join("missing.pdf")}))).kind(), "io");
     if !pdf_ok {
         return;

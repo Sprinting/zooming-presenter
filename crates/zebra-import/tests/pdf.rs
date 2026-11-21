@@ -250,7 +250,7 @@ fn damaged_files_give_an_error_not_a_panic() {
     if !engine() {
         return;
     }
-    assert_eq!(zebra_import::open_bytes(vec![], "x".into()).err(), Some(ImportError::NotSupported));
+    assert_eq!(zebra_import::open_bytes(vec![], "x".into()).err(), Some(ImportError::Empty));
     assert_eq!(zebra_import::open_bytes(b"PK\x03\x04 not a pdf".to_vec(), "x".into()).err(), Some(ImportError::NotSupported));
     assert!(zebra_import::open_bytes(b"%PDF-1.7\n garbage".to_vec(), "x".into()).is_err());
     let good = sample_pdf();

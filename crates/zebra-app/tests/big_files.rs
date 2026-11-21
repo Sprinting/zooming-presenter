@@ -293,3 +293,29 @@ fn a_document_over_the_limit_is_too_large_not_damaged() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Mac pass 21 Nov. M9: an empty picture chosen with Insert › Image…
+/// said "Couldn't do that."; it says the file is empty or damaged, as a
+/// drop of it does. M20: an iPhone photo (HEIC) dropped or chosen goes
+/// the picture way, not the video way.
+#[test]
+fn an_empty_picture_says_so_and_a_heic_is_a_picture() {
+    use zebra_app::media_ui::{dropped_kind, Dropped};
+    let mut h = harness();
+    let dir = data_dir().join("m9-m20");
+    std::fs::create_dir_all(&dir).unwrap();
+    let empty = dir.join("empty.png");
+    std::fs::write(&empty, b"").unwrap();
+    let at = h.state().canvas_center_world();
+    h.state_mut().insert_image_file(&empty, at);
+    h.run_steps(1);
+    assert_eq!(h.state().toast.as_ref().map(|t| t.text.clone()), Some(zebra_app::t!("app-error-damaged")));
+    assert_eq!(dropped_kind(&empty).unwrap(), Dropped::Damaged);
+    // The `ftyp` box of an iPhone photo, then its `meta` and `mdat`.
+    let heic = dir.join("IMG_0001.HEIC");
+    let mut f = b"\0\0\0\x2cftypheic\0\0\0\0mif1MiHEMiPrmiafMiHBheic".to_vec();
+    f.extend(b"\0\0\0\x08meta\0\0\0\x08mdat");
+    std::fs::write(&heic, &f).unwrap();
+    assert_eq!(dropped_kind(&heic).unwrap(), Dropped::Media(zebra_core::MediaKind::Image));
+    let _ = std::fs::remove_dir_all(&dir);
+}

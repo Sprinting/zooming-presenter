@@ -73,6 +73,7 @@ fn failed(app: &mut ZebraApp, path: &Path, e: ImportError) {
         ImportError::NotSupported => crate::t!("import-error-unsupported"),
         ImportError::Damaged("PowerPoint") => crate::t!("import-error-damaged-pptx"),
         ImportError::Damaged(_) => crate::t!("import-error-damaged"),
+        ImportError::Empty => crate::t!("import-error-empty"),
         ImportError::Encrypted => crate::t!("import-error-encrypted"),
         ImportError::OldPowerPoint => crate::t!("import-error-old-ppt"),
         ImportError::AllHidden => crate::t!("import-error-all-hidden"),

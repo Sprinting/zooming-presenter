@@ -33,6 +33,9 @@ pub enum ImportError {
     /// The file is damaged or not what its name says.
     #[error("the file is damaged or isn't a {0} file")]
     Damaged(&'static str),
+    /// The file has nothing in it (0 bytes).
+    #[error("the file is empty")]
+    Empty,
     #[error("the file is protected with a password")]
     Encrypted,
     /// A PowerPoint 97–2003 file (.ppt), which Zebra can't read.
@@ -141,7 +144,19 @@ pub fn open(path: &Path) -> Result<Box<dyn Reader>, ImportError> {
 pub fn open_with(path: &Path, ctl: &Control) -> Result<Box<dyn Reader>, ImportError> {
     let map = zebra_core::io::map_document(path).map_err(|e| ImportError::Read(e.to_string()))?;
     let title = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-    open_source_with(map.into(), title, ctl)
+    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    open_source_with(map.into(), title, ctl).map_err(|e| named(e, &ext))
+}
+
+/// What's wrong with a file Zebra can't import, now that its name is
+/// known: one named as a PDF or a PowerPoint file that isn't one is
+/// damaged, not a kind Zebra doesn't import.
+fn named(e: ImportError, ext: &str) -> ImportError {
+    match (e, ext) {
+        (ImportError::NotSupported, "pdf") => ImportError::Damaged("PDF"),
+        (ImportError::NotSupported, "pptx" | "pptm" | "ppsx" | "potx") => ImportError::Damaged("PowerPoint"),
+        (e, _) => e,
+    }
 }
 
 /// Open a file's bytes; `title` names the import (the file name without
@@ -156,6 +171,9 @@ pub fn open_source(bytes: zebra_core::AssetBytes, title: String) -> Result<Box<d
 }
 
 fn open_source_with(bytes: zebra_core::AssetBytes, title: String, ctl: &Control) -> Result<Box<dyn Reader>, ImportError> {
+    if bytes.is_empty() {
+        return Err(ImportError::Empty);
+    }
     if zebra_core::import::is_pdf(&bytes) {
         return Ok(Box::new(pdf::PdfReader::new(bytes, title, ctl)?));
     }

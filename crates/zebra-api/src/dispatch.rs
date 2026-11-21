@@ -800,7 +800,7 @@ fn import_error(e: zebra_import::ImportError) -> RpcError {
     use zebra_import::ImportError as E;
     let code = match &e {
         E::NotSupported => "unsupported",
-        E::Damaged(_) => "damaged",
+        E::Damaged(_) | E::Empty => "damaged",
         E::Encrypted => "encrypted",
         E::OldPowerPoint => "unsupported",
         E::AllHidden => "empty",

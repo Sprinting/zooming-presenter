@@ -532,7 +532,7 @@ fn damaged_and_other_files_give_an_error_never_a_panic() {
     let ed = editor();
     let good = fixture("deck16x9.pptx");
     let err = |bytes: Vec<u8>| zebra_import::open_bytes(bytes, "x".into()).err();
-    assert_eq!(err(vec![]), Some(ImportError::NotSupported));
+    assert_eq!(err(vec![]), Some(ImportError::Empty));
     assert_eq!(err(b"hello".to_vec()), Some(ImportError::NotSupported));
     // A zip that isn't a presentation.
     assert_eq!(err(zip(&[("word/document.xml", b"<w:document/>")])), Some(ImportError::NotSupported));
