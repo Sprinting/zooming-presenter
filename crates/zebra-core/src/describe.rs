@@ -52,6 +52,28 @@ fn steps_by_element(d: &Document) -> std::collections::HashMap<&str, Vec<usize>>
     m
 }
 
+/// `t` in double quotes for a one-line listing: only `"`, `\`, control
+/// characters and bidi overrides are escaped, so every script reads as written (Rust's `{:?}`
+/// escaped Devanagari's combining marks as `\u{94d}`).
+pub fn quoted(t: &str) -> String {
+    let mut out = String::with_capacity(t.len() + 2);
+    out.push('"');
+    for ch in t.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // Bidi overrides would reorder the rest of the line.
+            c if c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
     let t = &e.transform;
     let (w, h) = e.world_size();
@@ -64,11 +86,11 @@ fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
             let _ = write!(s, " {}", serde_json::to_value(d.style).unwrap().as_str().unwrap());
             if d.spans.is_empty() && d.paras.is_empty() {
                 let txt = truncate(&d.text.replace('\n', " / "), 60);
-                let _ = write!(s, " {:?}", txt);
+                let _ = write!(s, " {}", quoted(&txt));
             } else {
                 // Rich text reads back as Markdown (format_text and format_paragraphs set it).
                 let txt = truncate(&crate::rich::to_markdown(d).replace('\n', " / "), 90);
-                let _ = write!(s, " md{:?}", txt);
+                let _ = write!(s, " md{}", quoted(&txt));
             }
         }
         ElementKind::Shape(d) => {
@@ -98,7 +120,7 @@ fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
                 let _ = write!(s, " {}", c.look.key());
             }
             if !c.title.is_empty() {
-                let _ = write!(s, " title={:?}", truncate(&c.title, 40));
+                let _ = write!(s, " title={}", quoted(&truncate(&c.title, 40)));
             }
             let p = c.plot(&ed.doc);
             let _ = write!(s, " {} series x {} categories", p.series.len(), p.categories.len());
@@ -119,12 +141,12 @@ fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
             let end = |e: &crate::model::Endpoint| e.element.clone().unwrap_or_else(|| "point".into());
             let _ = write!(s, " {} -> {}", end(&c.from), end(&c.to));
             if !c.label.is_empty() {
-                let _ = write!(s, " label={:?}", truncate(&c.label, 30));
+                let _ = write!(s, " label={}", quoted(&truncate(&c.label, 30)));
             }
         }
         ElementKind::Image(i) => {
             if !i.alt.is_empty() {
-                let _ = write!(s, " alt={:?}", truncate(&i.alt, 40));
+                let _ = write!(s, " alt={}", quoted(&truncate(&i.alt, 40)));
             }
             if i.crop.is_some() {
                 s.push_str(" cropped");
@@ -136,10 +158,10 @@ fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
         ElementKind::Video(v) => {
             if let Some(l) = &v.link {
                 let kind = serde_json::to_value(l.kind).ok().and_then(|k| k.as_str().map(str::to_string)).unwrap_or_default();
-                let _ = write!(s, " {} link={:?}", if l.kind.is_card() { format!("{kind} card") } else { format!("web {kind}") }, l.url);
+                let _ = write!(s, " {} link={}", if l.kind.is_card() { format!("{kind} card") } else { format!("web {kind}") }, quoted(&l.url));
             }
             if !v.alt.is_empty() {
-                let _ = write!(s, " alt={:?}", truncate(&v.alt, 40));
+                let _ = write!(s, " alt={}", quoted(&truncate(&v.alt, 40)));
             }
             if v.duration > 0.0 {
                 let _ = write!(s, " {}s", r(v.duration));
@@ -157,7 +179,7 @@ fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
         _ => {}
     }
     if !e.name.is_empty() {
-        let _ = write!(s, " name={:?}", e.name);
+        let _ = write!(s, " name={}", quoted(&e.name));
     }
     let _ = write!(s, " @({},{}) {}x{}", r(t.x), r(t.y), r(w), r(h));
     if (t.scale - 1.0).abs() > 1e-9 {
@@ -223,7 +245,7 @@ pub fn describe(ed: &Editor) -> String {
                 let _ = write!(out, " builds: {}", s.builds.join(", "));
             }
             if !s.notes.is_empty() {
-                let _ = write!(out, " notes: {:?}", truncate(&s.notes, 50));
+                let _ = write!(out, " notes: {}", quoted(&truncate(&s.notes, 50)));
             }
             if s.voiceover.is_some() {
                 out.push_str(" voice-over");
@@ -658,3 +680,17 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
     })
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::quoted;
+
+    #[test]
+    fn quoted_text_reads_as_written_in_every_script() {
+        assert_eq!(quoted("क्षत्रिय"), "\"क्षत्रिय\"");
+        assert_eq!(quoted("👨\u{200d}👩\u{200d}👧"), "\"👨\u{200d}👩\u{200d}👧\"");
+        assert_eq!(quoted("say \"hi\"\\now"), r#""say \"hi\"\\now""#);
+        assert_eq!(quoted("a\nb\tc\u{7}"), r#""a\nb\tc\u{7}""#);
+        assert_eq!(quoted("abc\u{202e}def"), r#""abc\u{202e}def""#);
+    }
+}

@@ -204,14 +204,16 @@ fn revert_agent_and_history_cap_still_work_with_deltas() {
     for _ in 0..520 {
         ed.apply(cmd(serde_json::json!({"op":"move","ids":["f1"],"dx":1,"dy":0})), Origin::Human).unwrap();
     }
-    assert_eq!(ed.history().len(), 500);
+    // Undo keeps every step that fits in memory (it stopped at 500).
+    let kept = ed.history().len();
+    assert!(kept > 520, "{kept}");
     let mut n = 0;
     while ed.undo(Origin::Human).unwrap().is_some() {
         n += 1;
     }
-    assert_eq!(n, 500);
-    // The oldest 20 moves fell off the cap; the rest unwound exactly.
-    assert_eq!(ed.doc.elements["f1"].transform.x, before.elements["f1"].transform.x + 20.0);
+    assert_eq!(n, kept);
+    // Everything unwound, the sample's own build too.
+    assert!(ed.doc.elements.is_empty());
 }
 
 fn tiny_png(seed: u8) -> Vec<u8> {

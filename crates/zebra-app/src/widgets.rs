@@ -983,16 +983,22 @@ pub fn swatch_grid(ui: &mut Ui, swatches: &[Swatch], selected: &str) -> Option<S
             let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
             resp.widget_info(|| WidgetInfo::selected(Role::Button, true, s.key == selected, s.tip));
             let painter = ui.painter();
+            // The ring stays inside the swatch's own square (outside it, the
+            // first swatch's ring was cut off by the inspector's edge), so
+            // a picked chip is drawn smaller to leave room for it.
+            let on = s.key == selected;
+            let chip = r.shrink(if on { 3.5 } else { 1.0 });
             if s.color == Color32::TRANSPARENT {
-                painter.rect(r.shrink(1.0), 3.0, p.field, Stroke::new(0.6, p.control_edge), StrokeKind::Inside);
-                painter.line_segment([r.left_bottom() + Vec2::new(3.0, -3.0), r.right_top() + Vec2::new(-3.0, 3.0)], Stroke::new(1.3, Color32::from_rgb(0xff, 0x3b, 0x30)));
+                painter.rect(chip, 3.0, p.field, Stroke::new(0.6, p.control_edge), StrokeKind::Inside);
+                let d = if on { 5.0 } else { 3.0 };
+                painter.line_segment([r.left_bottom() + Vec2::new(d, -d), r.right_top() + Vec2::new(-d, d)], Stroke::new(1.3, Color32::from_rgb(0xff, 0x3b, 0x30)));
             } else {
-                painter.rect(r.shrink(1.0), 3.0, s.color, Stroke::new(0.6, Color32::from_black_alpha(45)), StrokeKind::Inside);
+                painter.rect(chip, if on { 2.0 } else { 3.0 }, s.color, Stroke::new(0.6, Color32::from_black_alpha(45)), StrokeKind::Inside);
             }
-            if s.key == selected {
-                painter.rect_stroke(r.expand(1.0), 4.5, Stroke::new(2.0, accent()), StrokeKind::Inside);
+            if on {
+                painter.rect_stroke(r, 4.5, Stroke::new(2.0, accent()), StrokeKind::Inside);
             } else if resp.hovered() {
-                painter.rect_stroke(r.expand(0.5), 4.0, Stroke::new(1.0, p.weak), StrokeKind::Inside);
+                painter.rect_stroke(r, 4.0, Stroke::new(1.0, p.weak), StrokeKind::Inside);
             }
             if resp.on_hover_text(s.tip).clicked() {
                 picked = Some(s.key.to_string());

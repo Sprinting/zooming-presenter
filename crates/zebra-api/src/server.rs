@@ -220,6 +220,9 @@ impl Drop for ServerInner {
 
 const MAX_LINE: usize = 128 * 1024 * 1024;
 
+/// How long a new connection has to authenticate with `hello`.
+pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+
 fn connection(id: u64, stream: UnixStream, shared: Arc<Shared>, tx: Sender<Inbound>) {
     let (out_tx, out_rx) = channel::<String>();
     let Ok(write_half) = stream.try_clone() else { return };
@@ -246,8 +249,17 @@ fn connection(id: u64, stream: UnixStream, shared: Arc<Shared>, tx: Sender<Inbou
     let mut reader = BufReader::new(stream);
     let mut buf = String::new();
     let mut origin: Option<Origin> = None;
+    // A client that hasn't said `hello` (with the token) within this long
+    // is dropped, so silent connections can't pile up (test drive O4).
+    let deadline = std::time::Instant::now() + HELLO_TIMEOUT;
     loop {
         buf.clear();
+        if origin.is_none() {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() || reader.get_ref().set_read_timeout(Some(left)).is_err() {
+                break;
+            }
+        }
         match (&mut reader).take(MAX_LINE as u64).read_line(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
@@ -348,6 +360,9 @@ fn connection(id: u64, stream: UnixStream, shared: Arc<Shared>, tx: Sender<Inbou
                     c.name = Some(name.clone());
                 }
                 origin = Some(Origin::Agent { name: name.clone() });
+                // Known now: it may sit quietly as long as it likes (waiting
+                // for events).
+                let _ = reader.get_ref().set_read_timeout(None);
                 (shared.waker)(); // status bar: a client connected
                 respond(Ok(json!({
                     "server": "zebra",

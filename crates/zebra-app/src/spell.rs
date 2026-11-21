@@ -61,6 +61,31 @@ pub fn char_index(text: &str, utf16: usize) -> usize {
     text.chars().count()
 }
 
+/// UTF-16 offsets → char indexes for offsets asked in increasing order:
+/// one pass over the text for all of them ([`char_index`] per misspelling
+/// walked from the start each time, O(n x m) per keystroke).
+pub struct Utf16Cursor<'a> {
+    chars: std::str::Chars<'a>,
+    at: usize,
+    u: usize,
+}
+
+impl<'a> Utf16Cursor<'a> {
+    pub fn new(text: &'a str) -> Self {
+        Utf16Cursor { chars: text.chars(), at: 0, u: 0 }
+    }
+
+    /// As [`char_index`], for `utf16` no smaller than the last one asked.
+    pub fn char_index(&mut self, utf16: usize) -> usize {
+        while self.u < utf16 {
+            let Some(c) = self.chars.next() else { break };
+            self.u += c.len_utf16();
+            self.at += 1;
+        }
+        self.at
+    }
+}
+
 /// Char index → UTF-16 offset in `text`.
 pub fn utf16_index(text: &str, chars: usize) -> usize {
     text.chars().take(chars).map(|c| c.len_utf16()).sum()
@@ -75,7 +100,7 @@ mod imp {
     use objc2_app_kit::NSSpellChecker;
     use objc2_foundation::{NSRange, NSString};
 
-    use super::{char_index, utf16_index};
+    use super::utf16_index;
 
     /// One spell "document" for Zebra, so Ignore lasts for the session.
     fn tag() -> isize {
@@ -93,6 +118,7 @@ mod imp {
         let ns = NSString::from_str(text);
         let len = ns.length();
         let mut out = vec![];
+        let mut at = super::Utf16Cursor::new(text);
         let mut start = 0usize;
         while start < len {
             // SAFETY: word_count may be null.
@@ -100,7 +126,8 @@ mod imp {
             if r.length == 0 || r.location >= isize::MAX as usize || r.location < start {
                 break;
             }
-            out.push(char_index(text, r.location)..char_index(text, r.location + r.length));
+            let a = at.char_index(r.location);
+            out.push(a..at.char_index(r.location + r.length));
             start = r.location + r.length;
         }
         out
@@ -152,5 +179,10 @@ mod tests {
         assert_eq!(utf16_index(s, 2), 3);
         assert_eq!(char_index(s, 3), 2);
         assert_eq!(char_index(s, utf16_index(s, 5)), 5);
+        // The cursor agrees with char_index at every offset, asked in order.
+        let mut cur = Utf16Cursor::new(s);
+        for u in 0..=s.encode_utf16().count() + 2 {
+            assert_eq!(cur.char_index(u), char_index(s, u), "{u}");
+        }
     }
 }

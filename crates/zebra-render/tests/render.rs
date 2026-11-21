@@ -107,9 +107,9 @@ fn culling_and_options() {
     let r = Renderer::new();
     let mut ed = Editor::default();
     ed.measure = r.measure();
-    add(&mut ed, "a", 0.0, 0.0, 100.0, 100.0, 1.0, 0.0, shape(ShapeKind::Rectangle, None, None, 0.0));
-    add(&mut ed, "far", 1.0e5, 0.0, 100.0, 100.0, 1.0, 0.0, shape(ShapeKind::Rectangle, None, None, 0.0));
-    add(&mut ed, "tiny", 0.0, 0.0, 1.0e-4, 1.0e-4, 1.0, 0.0, shape(ShapeKind::Rectangle, None, None, 0.0));
+    add(&mut ed, "a", 0.0, 0.0, 100.0, 100.0, 1.0, 0.0, shape(ShapeKind::Rectangle, Some("#336699"), None, 0.0));
+    add(&mut ed, "far", 1.0e5, 0.0, 100.0, 100.0, 1.0, 0.0, shape(ShapeKind::Rectangle, Some("#336699"), None, 0.0));
+    add(&mut ed, "tiny", 0.0, 0.0, 1.0e-4, 1.0e-4, 1.0, 0.0, shape(ShapeKind::Rectangle, Some("#336699"), None, 0.0));
     add(&mut ed, "inv", 0.0, 0.0, 200.0, 200.0, 1.0, 0.0, frame(FrameStyle::Invisible));
     let cam = Camera::default();
     let vp = [400.0, 300.0];

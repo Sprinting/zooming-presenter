@@ -723,6 +723,9 @@ fn web_poster(asset: &AVURLAsset, name: &str, at: f64, max_dim: u32, timeout: Du
     Err(format!("{name}: {last}"))
 }
 
+/// The longest side of a poster frame, in pixels (a 4K still).
+const POSTER_MAX: u32 = 4096;
+
 /// A decoded still as an RGBA frame no bigger than `max_dim`.
 fn frame_of(image: &CGImage, name: &str, max_dim: u32) -> Result<Frame, String> {
     let fail = |what: &str| format!("{name}: {what}");
@@ -730,6 +733,10 @@ fn frame_of(image: &CGImage, name: &str, max_dim: u32) -> Result<Frame, String> 
     if iw == 0 || ih == 0 || iw > 1 << 15 || ih > 1 << 15 {
         return Err(fail("the poster frame has no usable size"));
     }
+    // A poster is a still for a slide: no bigger than POSTER_MAX however
+    // it's asked for (0 used to mean full size, up to 32768 x 32768 and
+    // 4 GB; every caller asks for 640 or 1280).
+    let max_dim = if max_dim == 0 { POSTER_MAX } else { max_dim.min(POSTER_MAX) };
     let (w, h) = fit(iw as u32, ih as u32, max_dim);
     let mut rgba = vec![0u8; w as usize * h as usize * 4];
 

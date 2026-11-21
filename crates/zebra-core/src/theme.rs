@@ -340,7 +340,9 @@ impl Theme {
     }
 
     /// Text colour for writing on a shape filled with `fill`: white on a
-    /// dark fill, None (the theme's text colour) otherwise.
+    /// dark fill, None (the theme's text colour) otherwise; when neither
+    /// reads (Night's light text and white on its lime), the theme's dark
+    /// background or near-black.
     pub fn text_on(&self, fill: Option<&ColorRef>) -> Option<ColorRef> {
         let lum = |[r, g, b, _]: [u8; 4]| {
             let lin = |c: u8| {
@@ -357,7 +359,22 @@ impl Theme {
         let contrast = |a: f64, b: f64| (a.max(b) + 0.05) / (a.min(b) + 0.05);
         let lf = lum(f);
         let text = lum(self.color(&"theme:body".to_string()));
-        (contrast(1.0, lf) > contrast(text, lf)).then(|| "#ffffff".to_string())
+        let mut best = (contrast(text, lf), None);
+        let white = contrast(1.0, lf);
+        if white > best.0 {
+            best = (white, Some("#ffffff".to_string()));
+        }
+        // Neither reads (WCAG's 4.5 to 1): a dark colour, the theme's own
+        // background first.
+        if best.0 < 4.5 {
+            for c in ["theme:background", "#1d1d1f"].map(String::from) {
+                let k = contrast(lum(self.color(&c)), lf);
+                if k > best.0 + 1e-9 {
+                    best = (k, Some(c));
+                }
+            }
+        }
+        best.1
     }
 
     /// Resolve a [`ColorRef`] to `[r,g,b,a]` in 0..=255. Unknown -> magenta.
@@ -476,5 +493,22 @@ mod weight_tests {
         assert_eq!(bold_weight(800, None), 800);
         assert_eq!(weight_name(600), Some("Semibold"));
         assert_eq!(weight_name(650), None);
+    }
+}
+
+#[cfg(test)]
+mod text_on_tests {
+    use super::Theme;
+
+    /// Test drive T3: Night's light text and white were both unreadable on
+    /// its lime; the dark background reads.
+    #[test]
+    fn text_on_a_light_fill_in_a_dark_theme_is_dark() {
+        let night = Theme::resolve("night");
+        assert_eq!(night.text_on(Some(&"#b4ff39".to_string())).as_deref(), Some("theme:background"));
+        assert_eq!(night.text_on(Some(&"#111318".to_string())).as_deref(), Some("#ffffff"));
+        let classic = Theme::resolve("classic");
+        assert_eq!(classic.text_on(Some(&"#1a2b5c".to_string())).as_deref(), Some("#ffffff"));
+        assert_eq!(classic.text_on(Some(&"#f0f0f0".to_string())), None, "the theme's text already reads");
     }
 }

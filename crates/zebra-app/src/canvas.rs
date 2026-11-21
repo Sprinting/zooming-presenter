@@ -788,6 +788,12 @@ pub fn edit_canvas(app: &mut ZebraApp, ui: &mut Ui) {
     draw_overlays(app, &painter, path_mode, zoom);
     if !path_mode {
         crate::table_ui::overlay(app, ui, &painter);
+        // A formula error explains itself when the pointer rests on it.
+        if !ctx.input(|i| i.pointer.any_down()) {
+            if let Some(tip) = resp.hover_pos().and_then(|p| crate::table_ui::error_tip(app, p)) {
+                resp.clone().on_hover_text_at_pointer(tip);
+            }
+        }
     }
     if let Some(e) = pick_hover.as_ref().and_then(|id| app.editor.doc.get(id)) {
         let mut q = outline_screen(app, e);

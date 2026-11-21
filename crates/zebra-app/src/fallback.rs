@@ -96,7 +96,7 @@ pub fn paint(
                         painter.add(Shape::line(vec![local(-hw + head, -head * 0.6), local(-hw, 0.0), local(-hw + head, head * 0.6)], st));
                     }
                 } else {
-                    let fill = if s.fill.is_none() && s.stroke.is_none() { col("theme:shape1") } else { fill };
+                    // No fill and no line: nothing, as the renderer draws it.
                     let g = zebra_render::shapes::geometry(s.shape, e.size.w, e.size.h, s.corner_radius);
                     for mut pts in flatten(&g.outline, &local) {
                         // A polygon closes itself: a repeated first point

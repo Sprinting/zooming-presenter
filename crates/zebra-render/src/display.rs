@@ -694,11 +694,10 @@ impl Ctx<'_> {
             }
             ElementKind::Shape(s) => {
                 let closed = !s.shape.is_line();
-                let (fill_c, stroke_c) = match (&s.fill, &s.stroke) {
-                    (None, None) if closed => (Some(th.color(&"theme:shape1".to_string())), None),
-                    (None, None) => (None, Some(th.color(&"theme:shape1".to_string()))),
-                    (f, st) => (f.as_ref().map(|c| th.color(c)), st.as_ref().map(|c| th.color(c))),
-                };
+                // No fill and no line draws nothing, as in Keynote (a new
+                // shape gets its colour when it's added, not here: drawing
+                // the theme colour made `"fill": ""` do nothing).
+                let (fill_c, stroke_c) = (s.fill.as_ref().map(|c| th.color(c)), s.stroke.as_ref().map(|c| th.color(c)));
                 let sw = s.stroke_width.max(0.0);
                 let dashed = |st: Stroke| match s.dash {
                     Dash::Solid => st,
