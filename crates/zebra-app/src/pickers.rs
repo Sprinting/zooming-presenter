@@ -9,8 +9,8 @@ use zebra_core::{Command, ElementId, Vec2};
 
 use crate::app::ZebraApp;
 
-pub const IMAGE_TYPES: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "svg"];
-const STILL_TYPES: &[&str] = &["png", "jpg", "jpeg", "webp"];
+pub const IMAGE_TYPES: &[&str] = &["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "bmp", "webp", "gif", "svg"];
+const STILL_TYPES: &[&str] = &["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "bmp", "webp"];
 const VIDEO_TYPES: &[&str] = &["mp4", "mov", "m4v"];
 const AUDIO_TYPES: &[&str] = &["mp3", "m4a", "aac", "wav"];
 

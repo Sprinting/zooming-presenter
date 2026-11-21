@@ -29,7 +29,7 @@ pub fn info(bytes: &[u8]) -> ZResult<MediaInfo> {
     }
     let (ext, w, h) = crate::editor::image_info(bytes).map_err(|e| {
         if e.message.starts_with("unrecognised") {
-            ZError::invalid("unrecognised media format").hint("use PNG, JPEG, WebP, GIF, SVG, MP4, MOV, MP3, M4A, AAC or WAV")
+            ZError::invalid("unrecognised media format").hint("use PNG, JPEG, HEIC, TIFF, BMP, WebP, GIF, SVG, MP4, MOV, MP3, M4A, AAC or WAV")
         } else {
             e
         }
@@ -617,6 +617,12 @@ pub struct PictureHeader {
     pub height: u32,
     /// An interlaced PNG or a progressive JPEG.
     pub interlaced: bool,
+    /// How the stored pixels are turned to show it upright, as EXIF
+    /// numbers it (1 as stored, 2 to 8 flipped or turned; 5 to 8 turn it
+    /// a quarter, so it shows `height` wide). From EXIF in a JPEG, PNG,
+    /// WebP or TIFF, and from a HEIC's rotation and mirror. Keynote shows
+    /// photos upright, so Zebra does too.
+    pub orientation: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -625,9 +631,43 @@ pub enum PictureFormat {
     Jpeg,
     WebP,
     Gif,
+    Tiff,
+    Bmp,
+    Heic,
+}
+
+impl PictureFormat {
+    /// The extension Zebra keeps the file under (the file is kept as it
+    /// is, as Keynote keeps pictures in their own format).
+    pub fn ext(self) -> &'static str {
+        match self {
+            PictureFormat::Png => "png",
+            PictureFormat::Jpeg => "jpg",
+            PictureFormat::WebP => "webp",
+            PictureFormat::Gif => "gif",
+            PictureFormat::Tiff => "tiff",
+            PictureFormat::Bmp => "bmp",
+            PictureFormat::Heic => "heic",
+        }
+    }
+    /// Drawn by ImageIO on the Mac whatever its size (Zebra's own
+    /// decoders are for the rest of the formats, and for development
+    /// builds): the Mac reads every TIFF and BMP variant and HEIC, as
+    /// Keynote does.
+    pub fn mac_draws(self) -> bool {
+        matches!(self, PictureFormat::Tiff | PictureFormat::Bmp | PictureFormat::Heic)
+    }
 }
 
 impl PictureHeader {
+    /// The size it shows at: turned a quarter for orientations 5 to 8.
+    pub fn shown(&self) -> (u32, u32) {
+        if self.orientation >= 5 {
+            (self.height, self.width)
+        } else {
+            (self.width, self.height)
+        }
+    }
     pub fn pixels(&self) -> u64 {
         self.width as u64 * self.height as u64
     }
@@ -637,7 +677,13 @@ impl PictureHeader {
         if self.width == 0 || self.height == 0 {
             return false;
         }
-        if cfg!(target_os = "macos") && matches!(self.format, PictureFormat::Jpeg | PictureFormat::WebP) {
+        if cfg!(target_os = "macos") && (matches!(self.format, PictureFormat::Jpeg | PictureFormat::WebP) || self.format.mac_draws()) {
+            return true;
+        }
+        // Only the Mac decodes HEIC (there is no decoder without a new
+        // library); a development build takes it and shows the "can't be
+        // shown" placeholder. Its size is no reason to refuse it.
+        if self.format == PictureFormat::Heic {
             return true;
         }
         self.streams_or_decodes_whole()
@@ -651,6 +697,8 @@ impl PictureHeader {
             PictureFormat::Jpeg => self.pixels() <= MAX_WHOLE_PIXELS && (!self.interlaced || self.pixels() <= MAX_PROGRESSIVE_PIXELS),
             PictureFormat::WebP => self.pixels() <= MAX_WHOLE_PIXELS,
             PictureFormat::Gif => self.pixels().saturating_mul(8) <= picture_memory(),
+            PictureFormat::Tiff | PictureFormat::Bmp => self.pixels() <= MAX_WHOLE_PIXELS,
+            PictureFormat::Heic => false,
         }
     }
 }
@@ -664,15 +712,29 @@ fn picture_memory() -> u64 {
     return 1 << 31;
 }
 
-/// The header of a PNG, JPEG, WebP or GIF from its first bytes (the
-/// first 256 KB is plenty: a JPEG's size can follow 64 KB of metadata).
-pub fn picture_header(head: &[u8]) -> Option<PictureHeader> {
+/// The header of a PNG, JPEG, WebP, GIF, TIFF, BMP or HEIC from its
+/// bytes: the whole file or its start. Only what the header needs is
+/// read: the first 256 KB for most formats (a JPEG's size can follow
+/// 64 KB of metadata); a TIFF's tags and a HEIC's boxes can sit anywhere,
+/// so they are found by their offsets, never by reading the rest.
+pub fn picture_header(bytes: &[u8]) -> Option<PictureHeader> {
+    let head = &bytes[..bytes.len().min(256 << 10)];
     let be32 = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
     if head.starts_with(b"\x89PNG\r\n\x1a\n") && head.len() >= 29 && &head[12..16] == b"IHDR" {
-        return Some(PictureHeader { format: PictureFormat::Png, width: be32(&head[16..20]), height: be32(&head[20..24]), interlaced: head[28] != 0 });
+        let orientation = png_orientation(head);
+        return Some(PictureHeader { format: PictureFormat::Png, width: be32(&head[16..20]), height: be32(&head[20..24]), interlaced: head[28] != 0, orientation });
     }
     if head.starts_with(&[0xFF, 0xD8]) {
         return jpeg_header(head);
+    }
+    if let Some(t) = tiff_tags(bytes) {
+        return (t.width > 0 && t.height > 0).then_some(PictureHeader { format: PictureFormat::Tiff, width: t.width, height: t.height, interlaced: false, orientation: t.orientation });
+    }
+    if is_heic(head) {
+        return heic_header(bytes);
+    }
+    if head.starts_with(b"BM") {
+        return bmp_header(head);
     }
     let format = match image::guess_format(head).ok()? {
         image::ImageFormat::WebP => PictureFormat::WebP,
@@ -681,12 +743,278 @@ pub fn picture_header(head: &[u8]) -> Option<PictureHeader> {
     };
     let fmt = if format == PictureFormat::Gif { image::ImageFormat::Gif } else { image::ImageFormat::WebP };
     let (width, height) = image::ImageReader::with_format(std::io::Cursor::new(head), fmt).into_dimensions().ok()?;
-    Some(PictureHeader { format, width, height, interlaced: false })
+    let orientation = if format == PictureFormat::WebP { webp_orientation(head) } else { 1 };
+    Some(PictureHeader { format, width, height, interlaced: false, orientation })
+}
+
+/// What a TIFF's first image says of itself (or an EXIF block's, which
+/// is laid out as a TIFF).
+#[derive(Debug, Default)]
+struct TiffTags {
+    width: u32,
+    height: u32,
+    orientation: u8,
+}
+
+/// The size and orientation tags of a TIFF (or BigTIFF) file's first
+/// image, from its byte order mark and first directory. None if `b`
+/// isn't one. A directory past the end, or a broken entry, leaves what
+/// it can't read at 0 (orientation at 1).
+fn tiff_tags(b: &[u8]) -> Option<TiffTags> {
+    let le = match b.get(..4)? {
+        [b'I', b'I', 42 | 43, 0] => true,
+        [b'M', b'M', 0, 42 | 43] => false,
+        _ => return None,
+    };
+    let big = b[2] == 43 || b[3] == 43;
+    let rd = |o: usize, n: usize| -> Option<u64> {
+        let s = b.get(o..o.checked_add(n)?)?;
+        let mut v = 0u64;
+        for i in 0..n {
+            let x = if le { s[n - 1 - i] } else { s[i] };
+            v = v << 8 | x as u64;
+        }
+        Some(v)
+    };
+    let mut t = TiffTags { orientation: 1, ..Default::default() };
+    let (ifd, count_len, entry_len, value_at) = if big { (rd(8, 8)?, 8, 20, 12) } else { (rd(4, 4)?, 2, 12, 8) };
+    let Ok(ifd) = usize::try_from(ifd) else { return Some(t) };
+    let Some(n) = rd(ifd, count_len) else { return Some(t) };
+    // A directory with more entries than the file could hold is broken;
+    // reading stops at the file's end anyway.
+    for i in 0..n.min(65_535) as usize {
+        let Some(e) = ifd.checked_add(count_len + entry_len * i) else { break };
+        let (Some(tag), Some(ty)) = (rd(e, 2), rd(e + 2, 2)) else { break };
+        let v = match ty {
+            3 => rd(e + value_at, 2),
+            4 => rd(e + value_at, 4),
+            16 => rd(e + value_at, 8),
+            _ => None,
+        };
+        let Some(v) = v else { continue };
+        match tag {
+            256 => t.width = u32::try_from(v).unwrap_or(0),
+            257 => t.height = u32::try_from(v).unwrap_or(0),
+            274 if (1..=8).contains(&v) => t.orientation = v as u8,
+            _ => {}
+        }
+    }
+    Some(t)
+}
+
+/// The orientation in an EXIF block ("Exif\0\0" then a TIFF layout), 1
+/// if it has none.
+fn exif_orientation(exif: &[u8]) -> u8 {
+    let b = exif.strip_prefix(b"Exif\0\0").unwrap_or(exif);
+    tiff_tags(b).map_or(1, |t| t.orientation)
+}
+
+/// A PNG's EXIF orientation (its eXIf chunk), from the chunks in `head`.
+fn png_orientation(head: &[u8]) -> u8 {
+    let mut i = 8;
+    while i + 8 <= head.len() {
+        let len = u32::from_be_bytes([head[i], head[i + 1], head[i + 2], head[i + 3]]) as usize;
+        let ty = &head[i + 4..i + 8];
+        let Some(end) = (i + 8).checked_add(len) else { break };
+        if ty == b"eXIf" {
+            return head.get(i + 8..end).map_or(1, exif_orientation);
+        }
+        if ty == b"IDAT" || ty == b"IEND" {
+            break;
+        }
+        i = end + 4;
+    }
+    1
+}
+
+/// A WebP's EXIF orientation (its EXIF chunk), from the chunks in `head`.
+fn webp_orientation(head: &[u8]) -> u8 {
+    let mut i = 12;
+    while i + 8 <= head.len() {
+        let len = u32::from_le_bytes([head[i + 4], head[i + 5], head[i + 6], head[i + 7]]) as usize;
+        let Some(end) = (i + 8).checked_add(len) else { break };
+        if &head[i..i + 4] == b"EXIF" {
+            return head.get(i + 8..end).map_or(1, exif_orientation);
+        }
+        i = end + (len & 1);
+    }
+    1
+}
+
+/// A BMP's size from its header (a negative height is a top-down BMP).
+fn bmp_header(b: &[u8]) -> Option<PictureHeader> {
+    let le32 = |o: usize| b.get(o..o + 4).map(|s| i32::from_le_bytes([s[0], s[1], s[2], s[3]]));
+    let le16 = |o: usize| b.get(o..o + 2).map(|s| u16::from_le_bytes([s[0], s[1]]));
+    let dib = le32(14)?;
+    let (width, height) = if dib == 12 { (le16(18)? as u32, le16(20)? as u32) } else if dib >= 40 { (le32(18)?.unsigned_abs(), le32(22)?.unsigned_abs()) } else { return None };
+    Some(PictureHeader { format: PictureFormat::Bmp, width, height, interlaced: false, orientation: 1 })
+}
+
+/// Whether a file is a HEIC/HEIF still picture, from its `ftyp` brands
+/// (not AVIF, which shares the container).
+pub fn is_heic(head: &[u8]) -> bool {
+    if head.len() < 16 || &head[4..8] != b"ftyp" {
+        return false;
+    }
+    let len = (u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize).clamp(16, head.len());
+    let major = &head[8..12];
+    let brands: Vec<&[u8]> = std::iter::once(major).chain(head[16..len].chunks_exact(4)).collect();
+    if brands.iter().any(|b| *b == b"avif" || *b == b"avis") {
+        return false;
+    }
+    brands.iter().any(|b| matches!(*b, b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx"))
+        || matches!(major, b"mif1" | b"msf1") && brands.iter().any(|b| *b == b"miaf" || *b == b"MiHE")
+}
+
+/// The boxes inside `b` (an ISO media box's body): (type, body). Stops at
+/// the end, at a broken size, or after 4,096 boxes.
+fn iso_boxes(b: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
+    let mut i = 0usize;
+    let mut n = 0;
+    std::iter::from_fn(move || {
+        if n >= 4096 || i + 8 > b.len() {
+            return None;
+        }
+        n += 1;
+        let size = u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]) as u64;
+        let ty = &b[i + 4..i + 8];
+        let (start, size) = match size {
+            0 => (i + 8, (b.len() - i) as u64),
+            1 => (i + 16, u64::from_be_bytes(b.get(i + 8..i + 16)?.try_into().ok()?)),
+            s => (i + 8, s),
+        };
+        let end = usize::try_from(size).ok().and_then(|s| i.checked_add(s)).filter(|&e| e >= start && e <= b.len())?;
+        let body = &b[start..end];
+        i = end;
+        Some((ty, body))
+    })
+}
+
+/// A HEIC's size and turn: its primary picture's `ispe`, `irot` and
+/// `imir` properties, in the order they apply.
+fn heic_header(b: &[u8]) -> Option<PictureHeader> {
+    let meta = iso_boxes(b).find(|(t, _)| *t == b"meta")?.1.get(4..)?;
+    let mut primary = None;
+    let (mut ipco, mut ipma) = (None, None);
+    for (t, body) in iso_boxes(meta) {
+        match t {
+            b"pitm" => {
+                primary = match body.first()? {
+                    0 => body.get(4..6).map(|s| u16::from_be_bytes([s[0], s[1]]) as u32),
+                    _ => body.get(4..8).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]])),
+                }
+            }
+            b"iprp" => {
+                for (t, body) in iso_boxes(body) {
+                    match t {
+                        b"ipco" => ipco = Some(body),
+                        b"ipma" => ipma = Some(body),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let (primary, ipco, ipma) = (primary?, ipco?, ipma?);
+    let props: Vec<(&[u8], &[u8])> = iso_boxes(ipco).collect();
+    // ipma: version, flags, then entries of (item, associations).
+    let (version, flags) = (*ipma.first()?, *ipma.get(3)?);
+    let count = u32::from_be_bytes(ipma.get(4..8)?.try_into().ok()?);
+    let mut i = 8usize;
+    let mut found = None;
+    for _ in 0..count.min(65_535) {
+        let item = if version < 1 {
+            let v = u16::from_be_bytes(ipma.get(i..i + 2)?.try_into().ok()?) as u32;
+            i += 2;
+            v
+        } else {
+            let v = u32::from_be_bytes(ipma.get(i..i + 4)?.try_into().ok()?);
+            i += 4;
+            v
+        };
+        let n = *ipma.get(i)? as usize;
+        i += 1;
+        let mut idx = Vec::with_capacity(n);
+        for _ in 0..n {
+            if flags & 1 != 0 {
+                idx.push((u16::from_be_bytes(ipma.get(i..i + 2)?.try_into().ok()?) & 0x7FFF) as usize);
+                i += 2;
+            } else {
+                idx.push((*ipma.get(i)? & 0x7F) as usize);
+                i += 1;
+            }
+        }
+        if item == primary {
+            found = Some(idx);
+            break;
+        }
+    }
+    let (mut width, mut height, mut orientation) = (0, 0, 1u8);
+    for k in found? {
+        let Some((t, body)) = k.checked_sub(1).and_then(|k| props.get(k)) else { continue };
+        match *t {
+            b"ispe" => {
+                width = u32::from_be_bytes(body.get(4..8)?.try_into().ok()?);
+                height = u32::from_be_bytes(body.get(8..12)?.try_into().ok()?);
+            }
+            // A turn anticlockwise, in quarters.
+            b"irot" => {
+                let then = match body.first()? & 3 {
+                    1 => 8,
+                    2 => 3,
+                    3 => 6,
+                    _ => 1,
+                };
+                orientation = then_orient(orientation, then);
+            }
+            // A mirror about the vertical axis (0) or the horizontal (1).
+            b"imir" => orientation = then_orient(orientation, if body.first()? & 1 == 0 { 2 } else { 4 }),
+            _ => {}
+        }
+    }
+    (width > 0 && height > 0).then_some(PictureHeader { format: PictureFormat::Heic, width, height, interlaced: false, orientation })
+}
+
+/// Where the pixel at (x, y) of a picture shown with `orientation` comes
+/// from in its stored `w`x`h` pixels (EXIF's eight orientations).
+pub fn oriented_from(orientation: u8, (w, h): (u32, u32), (x, y): (u32, u32)) -> (u32, u32) {
+    let (mx, my) = (w.saturating_sub(1), h.saturating_sub(1));
+    match orientation {
+        2 => (mx - x, y),
+        3 => (mx - x, my - y),
+        4 => (x, my - y),
+        5 => (y, x),
+        6 => (y, my - x),
+        7 => (mx - y, my - x),
+        8 => (mx - y, x),
+        _ => (x, y),
+    }
+}
+
+/// `first` then `then`, as one orientation: worked out on a 3x2 grid of
+/// distinct pixels, so it is right by construction.
+fn then_orient(first: u8, then: u8) -> u8 {
+    let shown = |o: u8, (w, h): (u32, u32), at: &dyn Fn(u32, u32) -> u32| -> (Vec<u32>, (u32, u32)) {
+        let (sw, sh) = if o >= 5 { (h, w) } else { (w, h) };
+        let mut v = vec![];
+        for y in 0..sh {
+            for x in 0..sw {
+                let (a, b) = oriented_from(o, (w, h), (x, y));
+                v.push(at(a, b));
+            }
+        }
+        (v, (sw, sh))
+    };
+    let (once, size) = shown(first, (3, 2), &|x, y| y * 3 + x);
+    let (twice, _) = shown(then, size, &|x, y| once[(y * size.0 + x) as usize]);
+    (1..=8).find(|&o| shown(o, (3, 2), &|x, y| y * 3 + x).0 == twice).unwrap_or(1)
 }
 
 /// A JPEG's frame header (SOFn), walking the markers before it.
 fn jpeg_header(b: &[u8]) -> Option<PictureHeader> {
     let mut i = 2;
+    let mut orientation = 1;
     while i + 4 <= b.len() {
         if b[i] != 0xFF {
             return None;
@@ -711,10 +1039,15 @@ fn jpeg_header(b: &[u8]) -> Option<PictureHeader> {
             // Only baseline/extended (C0, C1) and progressive (C2) Huffman
             // JPEGs are read; the rest count as not fitting.
             let interlaced = m != 0xC0 && m != 0xC1;
-            return Some(PictureHeader { format: PictureFormat::Jpeg, width, height, interlaced });
+            return Some(PictureHeader { format: PictureFormat::Jpeg, width, height, interlaced, orientation });
         }
         if m == 0xDA || len < 2 {
             return None;
+        }
+        if m == 0xE1 && orientation == 1 {
+            if let Some(app1) = b.get(i + 4..i + 2 + len).filter(|a| a.starts_with(b"Exif\0\0")) {
+                orientation = exif_orientation(app1);
+            }
         }
         i += 2 + len;
     }
@@ -734,8 +1067,11 @@ pub fn sniff_kind(head: &[u8]) -> Option<MediaKind> {
     if crate::symbols::starts_as_svg(head) {
         return Some(MediaKind::Image);
     }
+    if is_heic(head) {
+        return Some(MediaKind::Image);
+    }
     match image::guess_format(head) {
-        Ok(image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP | image::ImageFormat::Gif) => Some(MediaKind::Image),
+        Ok(image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP | image::ImageFormat::Gif | image::ImageFormat::Tiff | image::ImageFormat::Bmp) => Some(MediaKind::Image),
         _ => None,
     }
 }
