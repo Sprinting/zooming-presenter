@@ -97,7 +97,8 @@ pub enum Command {
         x: f64,
         #[serde(default)]
         y: f64,
-        /// World width; height follows the aspect ratio. Default: pixel width.
+        /// World width; height follows the aspect ratio. Default: pixel width
+        /// (an SVG: the width it asks for, as Keynote places one).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         width: Option<f64>,
         #[serde(default)]
@@ -193,8 +194,8 @@ pub enum Command {
         width: Option<f64>,
         #[serde(default)]
         alt: String,
-        /// A poster picture (PNG/JPEG, at most 8 MB and 8192 pixels a
-        /// side) instead of the one Zebra takes.
+        /// A poster picture (PNG/JPEG) instead of the one Zebra takes; any
+        /// size whose pixels fit in memory (`weblink::poster_fits`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         poster_base64: Option<String>,
         /// Play by itself when its step is reached while presenting (not

@@ -64,6 +64,9 @@ pub struct SceneOptions {
     /// through: a thin line along the card's bottom shows it. Session
     /// state, never saved.
     pub card_progress: std::collections::HashMap<ElementId, f32>,
+    /// PDF export: imported PDF pages as pictures drawn from the PDF, not
+    /// as the page itself (the fallback when a page can't be embedded).
+    pub raster_pages: bool,
 }
 
 pub mod display;
@@ -118,6 +121,14 @@ pub struct Renderer {
     pub(crate) table_looks: std::sync::Mutex<display::LookCache>,
     /// Charts laid out (see `chart_draw`).
     pub(crate) charts: std::sync::Mutex<display::ChartCache>,
+    /// PDFs whose pages a PDF export embeds as vectors, read once per
+    /// asset (None: it can't be; see `pdf::embeddable`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) pdf_sources: std::sync::Mutex<std::collections::HashMap<String, Option<(usize, pdf::Source)>>>,
+    /// Per PDF page: whether the page engine could draw it (pages it
+    /// can't show as their picture on the canvas, and in exports).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) pdf_drawable: std::sync::Mutex<std::collections::HashMap<(String, u32), bool>>,
 }
 
 impl Renderer {
@@ -133,7 +144,17 @@ impl Renderer {
     }
 
     pub fn new() -> Self {
-        Renderer { fonts: text::Fonts::new(), images: images::ImageCache::default(), page_raster: Default::default(), table_looks: Default::default(), charts: Default::default() }
+        Renderer {
+            fonts: text::Fonts::new(),
+            images: images::ImageCache::default(),
+            page_raster: Default::default(),
+            table_looks: Default::default(),
+            charts: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pdf_sources: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pdf_drawable: Default::default(),
+        }
     }
 
     /// Give the renderer a way to draw PDF pages (the app draws them in

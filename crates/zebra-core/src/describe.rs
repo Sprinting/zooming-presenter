@@ -343,13 +343,27 @@ pub fn chart_lines(p: &crate::chart::Plot, max: usize) -> Vec<String> {
     out
 }
 
+/// A table's rows that hold something, up to `max_rows`, each without its
+/// empty cells at the end (a 1,000,000 x 1,000 table with one filled
+/// cell is one short line, not a page of separators). Row numbers are the
+/// table's own, so positions still read true.
 pub fn table_lines(t: &crate::table::TableData, max_rows: usize) -> Vec<String> {
     let looks: Vec<_> = (0..t.n_cols()).map(|c| t.column_look(c)).collect();
     let mut out = vec![];
     let n = t.n_rows();
-    for r in 0..n.min(max_rows) {
+    let (mut shown_rows, mut more, mut empty) = (0usize, 0usize, 0usize);
+    for r in 0..n {
+        // The last cell with something in it; none: an empty row.
+        let Some(last) = t.cells[r].filled().rev().find(|(_, x)| !x.is_empty()).map(|(c, _)| c) else {
+            empty += 1;
+            continue;
+        };
+        if shown_rows == max_rows {
+            more += 1;
+            continue;
+        }
         let mut cells = vec![];
-        for c in 0..t.n_cols() {
+        for c in 0..=last.min(t.n_cols().saturating_sub(1)) {
             if t.anchor(r, c) != (r, c) {
                 cells.push("←".to_string());
                 continue;
@@ -365,10 +379,14 @@ pub fn table_lines(t: &crate::table::TableData, max_rows: usize) -> Vec<String> 
             }
             cells.push(v);
         }
+        shown_rows += 1;
         out.push(format!("{}: {}", r + 1, cells.join(" | ")));
     }
-    if n > max_rows {
-        out.push(format!("… {} more rows (table query)", n - max_rows));
+    if more > 0 {
+        out.push(format!("… {more} more rows (table query)"));
+    }
+    if empty > 0 {
+        out.push(if shown_rows == 0 { "(every cell is empty)".to_string() } else { format!("({empty} empty rows not listed)") });
     }
     out
 }
@@ -692,5 +710,23 @@ mod tests {
         assert_eq!(quoted("say \"hi\"\\now"), r#""say \"hi\"\\now""#);
         assert_eq!(quoted("a\nb\tc\u{7}"), r#""a\nb\tc\u{7}""#);
         assert_eq!(quoted("abc\u{202e}def"), r#""abc\u{202e}def""#);
+    }
+
+    #[test]
+    fn a_big_sparse_table_lists_only_its_filled_rows() {
+        use crate::table::{Cell, CellRow, TableData};
+        let mut t = TableData::new(5000, 200, 18.0);
+        assert_eq!(super::table_lines(&t, 20), vec!["(every cell is empty)"]);
+        t.cells[3] = CellRow::from_filled(200, [(1, Cell::new("x"))]);
+        t.cells[4999] = CellRow::from_filled(200, [(0, Cell::new("last"))]);
+        let lines = super::table_lines(&t, 20);
+        assert_eq!(lines, vec!["4:  | x", "5000: last", "(4998 empty rows not listed)"]);
+        assert!(lines.iter().map(String::len).sum::<usize>() < 100);
+        for r in 0..30 {
+            t.cells[r + 10] = CellRow::from_filled(200, [(0, Cell::new("y"))]);
+        }
+        let lines = super::table_lines(&t, 20);
+        assert_eq!(lines.len(), 22);
+        assert_eq!(lines[20], "… 12 more rows (table query)");
     }
 }

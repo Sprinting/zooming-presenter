@@ -38,6 +38,9 @@ pollster = { workspace = true, optional = true }
 # Worker threads for captures; the web player (wasm32) has none.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 vello_cpu = { workspace = true, features = ["multithreading"] }
+# PDF export keeps imported PDF pages as vectors (limits audit B7): krilla
+# embeds a page of another PDF with hayro-write (approved 21 Nov).
+krilla = { workspace = true, features = ["pdf"] }
 
 [dev-dependencies]
 base64.workspace = true

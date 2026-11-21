@@ -371,8 +371,20 @@ pub fn library_error() -> Option<&'static str> {
 /// Width and height an SVG asks for: its viewBox, else its width and
 /// height, else 100 x 100. Units are ignored.
 pub fn svg_size(bytes: &[u8]) -> (f64, f64) {
+    svg_sizes(bytes).0
+}
+
+/// The size an SVG shows at when placed, as a browser or Keynote shows
+/// it: its width and height, else its viewBox's, else 100 x 100.
+pub fn svg_shown_size(bytes: &[u8]) -> (f64, f64) {
+    let (view, own) = svg_sizes(bytes);
+    own.unwrap_or(view)
+}
+
+/// (viewBox size or the fallback, width and height when both are given).
+fn svg_sizes(bytes: &[u8]) -> ((f64, f64), Option<(f64, f64)>) {
     let s = String::from_utf8_lossy(&bytes[..bytes.len().min(16384)]);
-    let Some(start) = s.find("<svg") else { return (100.0, 100.0) };
+    let Some(start) = s.find("<svg") else { return ((100.0, 100.0), None) };
     let tag = &s[start..];
     let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
     let attr = |name: &str| -> Option<&str> {
@@ -401,16 +413,17 @@ pub fn svg_size(bytes: &[u8]) -> (f64, f64) {
         }
         v[..end].parse().ok().filter(|x: &f64| x.is_finite() && *x > 0.0)
     };
+    let own = match (attr("width").and_then(num), attr("height").and_then(num)) {
+        (Some(w), Some(h)) => Some((w, h)),
+        _ => None,
+    };
     if let Some(vb) = attr("viewBox") {
         let n: Vec<f64> = vb.split([' ', ',', '\t', '\n']).filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect();
         if n.len() == 4 && n[2] > 0.0 && n[3] > 0.0 && n[2].is_finite() && n[3].is_finite() {
-            return (n[2], n[3]);
+            return ((n[2], n[3]), own);
         }
     }
-    match (attr("width").and_then(num), attr("height").and_then(num)) {
-        (Some(w), Some(h)) => (w, h),
-        _ => (100.0, 100.0),
-    }
+    (own.unwrap_or((100.0, 100.0)), own)
 }
 
 /// Pixel size recorded for an SVG asset: [`SVG_PX`] on the long side.
@@ -462,5 +475,8 @@ mod tests {
         assert_eq!(svg_size(br#"<svg width="100%" height="100%">"#), (100.0, 100.0));
         assert_eq!(svg_size(br#"<svg data-viewBox="0 0 1 1" viewBox='0,0,48,48'>"#), (48.0, 48.0));
         assert_eq!(svg_pixels(br#"<svg viewBox="0 0 24 12">"#), (4096, 2048));
+        assert_eq!(svg_shown_size(br#"<svg width="48" height="24" viewBox="0 0 24 12">"#), (48.0, 24.0));
+        assert_eq!(svg_shown_size(br#"<svg width="50%" viewBox="0 0 24 12">"#), (24.0, 12.0));
+        assert_eq!(svg_shown_size(br#"<svg>"#), (100.0, 100.0));
     }
 }

@@ -70,6 +70,8 @@ pub fn encode_scene(scene: &mut Scene, list: &DisplayList) {
                 scene.push_layer(Fill::NonZero, BlendMode::from(Mix::Normal), *a, Affine::IDENTITY, &layer_rects[i])
             }
             Item::PopOpacity | Item::PopClip => scene.pop_layer(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Item::PdfPage { .. } => {}
             Item::PushClip(path) => scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, path),
         }
     }
@@ -103,6 +105,8 @@ fn layer_bounds(items: &[Item], full: Rect) -> Vec<Rect> {
                 clips.push(Some(path.bounding_box()));
                 continue;
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            Item::PdfPage { .. } => continue,
             Item::PopClip => {
                 clips.pop();
                 continue;

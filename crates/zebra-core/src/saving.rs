@@ -77,6 +77,7 @@ impl Editor {
         mapped.extend(crate::io::rehome(&self.doc, &history_only));
         crate::io::adopt_mapped(&mut self.doc, mapped);
         self.mark_saved(Some(path.to_path_buf()));
+        self.saves_done += 1;
         Ok(())
     }
 
@@ -110,6 +111,7 @@ impl Editor {
             if self.loads == j.loads {
                 crate::io::adopt_mapped(&mut self.doc, mapped);
                 self.mark_saved_at(j.revision, Some(j.path.clone()));
+                self.saves_done += 1;
             }
         });
         self.saved.push(Saved { path: j.path, by: j.by, result });

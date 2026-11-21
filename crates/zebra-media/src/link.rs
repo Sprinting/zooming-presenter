@@ -95,6 +95,7 @@ impl Checker {
     /// `/oembed/vimeo`, `/yt/`), and `ZEBRA_TEST_WEB_TIMEOUT_MS` shortens
     /// the wait, so tests never touch the internet. Links stay https.
     pub fn from_env() -> Checker {
+        #[cfg_attr(not(debug_assertions), allow(unused_mut))]
         let mut c = Checker::default();
         #[cfg(debug_assertions)]
         if let Some(base) = std::env::var("ZEBRA_TEST_WEB").ok().filter(|b| b.starts_with("http://127.0.0.1:")) {
