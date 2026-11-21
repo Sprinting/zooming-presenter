@@ -413,3 +413,32 @@ fn close_saves_a_titled_document_in_place_without_asking() {
     assert_eq!(zebra_core::io::load(&path).unwrap().elements.len(), 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// M11 (Mac pass 21 Nov): with Settings in front, ⌘W (the menu bar's
+/// Close, which goes to the front document) asked Save Changes for the
+/// document behind. Keynote: ⌘W closes the front window, Settings too.
+#[test]
+fn close_with_settings_in_front_closes_settings_only() {
+    let mut h = harness();
+    add_frame(&mut h.state_mut().windows[0]);
+    h.state_mut().windows[0].show_settings = true;
+    h.run_steps(3);
+    let settings = egui::ViewportId::from_hash_of(zebra_app::settings::VIEWPORT);
+    let focus = |h: &mut Harness<'static, Shell>, on_settings: bool| {
+        let vps = &mut h.input_mut().viewports;
+        vps.entry(settings).or_default().focused = Some(on_settings);
+        vps.entry(egui::ViewportId::ROOT).or_default().focused = Some(!on_settings);
+    };
+    focus(&mut h, true);
+    h.state_mut().windows[0].queued.push(Action::Close);
+    h.run_steps(3);
+    assert!(!h.state().windows[0].show_settings, "Settings closed");
+    assert!(!h.state().windows[0].sheet_showing(), "nothing asked about the document behind");
+    assert_eq!(h.state().windows.len(), 1);
+
+    // The document in front: ⌘W asks about it, as before.
+    focus(&mut h, false);
+    h.state_mut().windows[0].queued.push(Action::Close);
+    h.run_steps(3);
+    assert!(h.state().windows[0].sheet_showing(), "Save Changes is asked");
+}

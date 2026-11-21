@@ -719,6 +719,10 @@ impl ZebraApp {
 
     fn perform_inner(&mut self, ctx: &Context, a: Action) {
         use Action::*;
+        // ⌘W goes to the front window: Settings or About when one of them is.
+        if a == Close && crate::panels::close_front_panel(self, ctx) {
+            return;
+        }
         // Cells selected in a table: the clipboard, Delete, Esc and Select
         // All act on the cells.
         if crate::table_ui::perform(self, &a) {

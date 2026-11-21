@@ -1045,6 +1045,25 @@ fn dialogs(app: &mut ZebraApp, ctx: &egui::Context, p: &Palette) {
     about(app, ctx);
 }
 
+/// ⌘W with Settings or About in front: close that window, as Keynote's
+/// ⌘W closes the front window (Mac pass M11: the menu bar sent Close to
+/// the document behind, which asked Save Changes). True if one closed.
+pub fn close_front_panel(app: &mut ZebraApp, ctx: &egui::Context) -> bool {
+    let in_front = |name: &str| ctx.input(|i| i.raw.viewports.get(&egui::ViewportId::from_hash_of(name)).and_then(|v| v.focused) == Some(true));
+    if app.show_settings && in_front(crate::settings::VIEWPORT) {
+        app.show_settings = false;
+        return true;
+    }
+    if app.show_about && in_front(ABOUT_VIEWPORT) {
+        app.show_about = false;
+        return true;
+    }
+    false
+}
+
+/// The About window's viewport (hashed into its id).
+pub const ABOUT_VIEWPORT: &str = "zebra-about";
+
 /// May a window of our own (Settings, About) be drawn this pass with
 /// `show_viewport_immediate`? Not the first time: eframe would have to create
 /// its native window during the pass, which it can do only inside a winit
@@ -1088,7 +1107,7 @@ pub fn about(app: &mut ZebraApp, ctx: &egui::Context) {
     }
     let size = EVec2::new(320.0, 190.0);
     let vb = egui::ViewportBuilder::default().with_title("").with_inner_size(size).with_resizable(false).with_minimize_button(false).with_maximize_button(false);
-    let vid = egui::ViewportId::from_hash_of("zebra-about");
+    let vid = egui::ViewportId::from_hash_of(ABOUT_VIEWPORT);
     if !own_window_ready(ctx, vid, &vb) {
         return;
     }

@@ -44,6 +44,9 @@ impl Pane {
     }
 }
 
+/// The Settings window's viewport (hashed into its id).
+pub const VIEWPORT: &str = "zebra-settings";
+
 pub fn show(app: &mut ZebraApp, ctx: &egui::Context) {
     if !app.show_settings {
         ctx.data_mut(|d| d.remove::<u32>(egui::Id::unique("zebra-settings-frames")));
@@ -57,7 +60,7 @@ pub fn show(app: &mut ZebraApp, ctx: &egui::Context) {
         .with_resizable(false)
         .with_minimize_button(false)
         .with_maximize_button(false);
-    let vid = egui::ViewportId::from_hash_of("zebra-settings");
+    let vid = egui::ViewportId::from_hash_of(VIEWPORT);
     if !crate::panels::own_window_ready(ctx, vid, &vb) {
         return;
     }
