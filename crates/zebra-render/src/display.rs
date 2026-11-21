@@ -545,7 +545,7 @@ impl Ctx<'_> {
         let mut out = vec![];
         let (w, h) = (src.width, src.height);
         // The web player draws in the page's own time: no detail there.
-        if cfg!(target_arch = "wasm32") || w.max(h) <= MAX_IMAGE_DIM || self.full_res_images || !(fw > 0.0 && fh > 0.0) || !matches!(src.ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+        if cfg!(target_arch = "wasm32") || w.max(h) <= MAX_IMAGE_DIM || self.full_res_images || !(fw > 0.0 && fh > 0.0) || !matches!(src.ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "tiff" | "bmp" | "heic") {
             return out;
         }
         let on_screen = fw * affine_scale(whole);

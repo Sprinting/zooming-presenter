@@ -25,6 +25,10 @@ unicode-segmentation = "1.13"
 # .zebra files. Not in the web player (wasm32): zip pulls in getrandom's
 # wasm-bindgen backend there, and the player reads document.json directly.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# TIFF and BMP pictures (as Keynote takes them). `tiff` is in the Mac app
+# already (the clipboard library uses it); `bmp` needs nothing. Not in
+# the web player, which gets them as PNG or JPEG.
+image = { workspace = true, features = ["tiff", "bmp"] }
 zip.workspace = true
 # Table formulas. Not in the web player: it draws the values files save.
 ironcalc_base = "=0.9.1"

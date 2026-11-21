@@ -14,7 +14,7 @@
 //!   (sizes are ranked deck-wide into title, subtitle and body, as the PDF
 //!   prototype did) and keeps its size on the slide through its scale;
 //!   sizes within a box become relative spans;
-//! - pictures (PNG, JPEG, GIF, SVG; EMF and WMF drawn as SVG through
+//! - pictures (PNG, JPEG, GIF, TIFF, BMP, SVG; EMF and WMF drawn as SVG through
 //!   BetterOffice's metafile player) and the basic shapes Zebra has, with
 //!   their fill, line and text; groups stay groups;
 //! - videos as Zebra videos (their pictures as posters); sounds as the

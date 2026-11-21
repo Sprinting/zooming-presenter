@@ -140,6 +140,9 @@ pub fn build(renderer: &Renderer, editor: &Editor, labels: &Labels, inline_limit
     let web = renderer.web_text(editor);
     let pictured = if web.rasterise.is_empty() { None } else { Some(text_pictures(renderer, editor, sharp.as_ref().unwrap_or(&editor.doc), &web.rasterise)) };
     let doc = pictured.as_ref().or(sharp.as_ref()).unwrap_or(&editor.doc);
+    // TIFF, BMP and HEIC pictures: as JPEG or PNG, which the player reads.
+    let converted = web_pictures(doc);
+    let doc = converted.as_ref().unwrap_or(doc);
     // Blobs: id -> base64, each in its own <script> element.
     let mut blobs: Vec<(String, String)> = vec![];
     fn add(blobs: &mut Vec<(String, String)>, data: String) -> String {
@@ -242,6 +245,27 @@ pub fn build(renderer: &Renderer, editor: &Editor, labels: &Labels, inline_limit
     html.push_str(PLAYER_JS);
     html.push_str("</script>\n</body></html>\n");
     Ok(Page { html, media, notes: web.notes, apple_ui_families: web.apple_ui_families })
+}
+
+/// `doc` with its TIFF, BMP and HEIC pictures as JPEG or PNG files the
+/// web player can decode (the document keeps the originals, as Keynote
+/// does). None if it has none. One that can't be drawn here stays, and
+/// shows as the player's "picture can't be shown".
+fn web_pictures(doc: &zebra_core::Document) -> Option<zebra_core::Document> {
+    let used = doc.used_assets();
+    let todo: Vec<String> = doc.assets.iter().filter(|(k, a)| matches!(a.ext.as_str(), "tiff" | "bmp" | "heic") && used.contains(k.as_str())).map(|(k, _)| k.clone()).collect();
+    if todo.is_empty() {
+        return None;
+    }
+    let mut out = doc.clone();
+    for key in todo {
+        let Some(a) = out.assets.get_mut(&key) else { continue };
+        if let Some((ext, file)) = zebra_render::images::for_web(a.bytes.as_ref()) {
+            a.ext = ext.into();
+            a.bytes = file.into();
+        }
+    }
+    Some(out)
 }
 
 /// `doc` with the text elements `ids` turned into pictures of themselves,

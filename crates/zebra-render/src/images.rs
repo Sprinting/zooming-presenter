@@ -907,7 +907,7 @@ fn decode_job_inner(job: &Job) -> Vec<(u8, Decoded)> {
 /// can avoid it), as a PNG: for a picture inside an SVG, which resvg
 /// would decode whole. None if it can't be read.
 pub(crate) fn scaled_png(bytes: &[u8], most: u64) -> Option<Vec<u8>> {
-    let head = zebra_core::media::picture_header(&bytes[..bytes.len().min(256 << 10)])?;
+    let head = zebra_core::media::picture_header(bytes)?;
     let (w, h) = (head.width, head.height);
     let last = last_level(w, h);
     let mut level = 0;
@@ -938,6 +938,36 @@ pub(crate) fn scaled_png(bytes: &[u8], most: u64) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// A picture the web player can't decode (TIFF, BMP, HEIC) as one it
+/// can: the top level (up to 8,192 pixels, as the player shows), turned
+/// upright, as a JPEG (quality 92) or, with any transparency, a PNG.
+/// (extension, file). None if it can't be drawn here.
+pub fn for_web(bytes: &[u8]) -> Option<(&'static str, Vec<u8>)> {
+    let (_, img) = decode_still("", bytes, 0).into_iter().find(|(l, _)| *l == 0)?;
+    let Decoded::Still(img) = img else { return None };
+    let (w, h) = (img.width, img.height);
+    let mut px = img.pixmap().data_as_u8_slice().to_vec();
+    let opaque = px.chunks_exact(4).all(|p| p[3] == 255);
+    let mut out = vec![];
+    if opaque {
+        let rgb: Vec<u8> = px.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92).encode(&rgb, w, h, image::ExtendedColorType::Rgb8).ok()?;
+        return Some(("jpg", out));
+    }
+    for p in px.chunks_exact_mut(4) {
+        let a = p[3] as u32;
+        if a != 0 && a != 255 {
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+    let mut e = png::Encoder::new(&mut out, w, h);
+    e.set_color(png::ColorType::Rgba);
+    e.write_header().ok()?.write_image_data(&px).ok()?;
+    Some(("png", out))
+}
+
 /// A still picture at `want` (and its smallest level), sized from its
 /// header before anything is decoded, and never held at full size when it
 /// is big (the rules are `zebra_core::media::PictureHeader::fits`):
@@ -954,7 +984,7 @@ pub(crate) fn scaled_png(bytes: &[u8], most: u64) -> Option<Vec<u8>> {
 /// picture only gives that much (a scaled JPEG, a PNG's first pass).
 fn decode_still(asset: &str, bytes: &[u8], want: u8) -> Vec<(u8, Decoded)> {
     use zebra_core::media::PictureFormat;
-    let Some(head) = zebra_core::media::picture_header(&bytes[..bytes.len().min(256 << 10)]).filter(|h| h.fits()) else { return vec![] };
+    let Some(head) = zebra_core::media::picture_header(bytes).filter(|h| h.fits()) else { return vec![] };
     let (iw, ih) = (head.width, head.height);
     let last = last_level(iw, ih);
     let level = want.min(last);
@@ -974,7 +1004,7 @@ fn decode_still(asset: &str, bytes: &[u8], want: u8) -> Vec<(u8, Decoded)> {
     if head.format == PictureFormat::Png {
         let _permit = DecodeBytes::acquire(out_bytes + iw as u64 * 16);
         done = stream_png(bytes, &shrinks, pixels > MAX_WHOLE_PIXELS);
-    } else if head.format == PictureFormat::Jpeg && (pixels > SCALED_JPEG_FROM || iw.max(ih) > WHOLE_JPEG_SIDE) || !head.streams_or_decodes_whole() {
+    } else if head.format == PictureFormat::Jpeg && (pixels > SCALED_JPEG_FROM || iw.max(ih) > WHOLE_JPEG_SIDE) || !head.streams_or_decodes_whole() || cfg!(target_os = "macos") && head.format.mac_draws() {
         // On the Mac, ImageIO draws it at the level's size, as Keynote
         // does (a JPEG straight from its DCT at a smaller size). Elsewhere
         // (development builds) it decodes whole if it can.
@@ -1018,15 +1048,37 @@ fn decode_still(asset: &str, bytes: &[u8], want: u8) -> Vec<(u8, Decoded)> {
             out
         }
     };
+    // Every decoder above gives the stored pixels; the levels are turned
+    // upright last, small (see `PictureHeader::orientation`).
+    let o = head.orientation;
     let mut it = shrinks.into_iter();
     let mut out = vec![];
     if let Some(s) = it.next() {
-        out.push((want, Decoded::Still(Arc::new(s.finish(asset)))));
+        out.push((want, Decoded::Still(Arc::new(s.finish_oriented(asset, o)))));
     }
     if let Some(s) = it.next() {
-        out.push((last, Decoded::Still(Arc::new(s.finish(asset)))));
+        out.push((last, Decoded::Still(Arc::new(s.finish_oriented(asset, o)))));
     }
     out
+}
+
+/// `px` (`w`x`h`, 4 bytes a pixel) shown with `orientation`: the pixels
+/// and their new size (5 to 8 turn it a quarter).
+pub fn orient_pixels(px: Vec<u8>, (w, h): (u32, u32), orientation: u8) -> (Vec<u8>, (u32, u32)) {
+    if !(2..=8).contains(&orientation) || px.len() < w as usize * h as usize * 4 {
+        return (px, (w, h));
+    }
+    let (ow, oh) = if orientation >= 5 { (h, w) } else { (w, h) };
+    let mut out = vec![0u8; ow as usize * oh as usize * 4];
+    for y in 0..oh {
+        let row = &mut out[y as usize * ow as usize * 4..(y as usize + 1) * ow as usize * 4];
+        for x in 0..ow {
+            let (sx, sy) = zebra_core::media::oriented_from(orientation, (w, h), (x, y));
+            let at = (sy as usize * w as usize + sx as usize) * 4;
+            row[x as usize * 4..x as usize * 4 + 4].copy_from_slice(&px[at..at + 4]);
+        }
+    }
+    (out, (ow, oh))
 }
 
 /// Largest picture decoded whole (pixels); see `zebra_core::media`.
@@ -1104,13 +1156,39 @@ fn stream_png(bytes: &[u8], make: &dyn Fn(u32, u32) -> Vec<Shrink>, first_pass_o
 /// of the part are kept; on the Mac, ImageIO draws a JPEG or WebP's part
 /// if the whole picture fits in memory; else the picture decodes whole
 /// as its top level does. None if it can't be drawn.
+///
+/// Sizes are as shown (a photo turned upright); the part is read from the
+/// stored pixels it comes from and turned the same way.
 pub fn picture_region(bytes: &[u8], (w, h): (u32, u32), (dw, dh): (u32, u32), (x, y, rw, rh): (u32, u32, u32, u32)) -> Option<Vec<u8>> {
-    use zebra_core::media::PictureFormat;
     if w == 0 || h == 0 || dw == 0 || dh == 0 || dw > w || dh > h || rw == 0 || rh == 0 || x.checked_add(rw)? > dw || y.checked_add(rh)? > dh {
         return None;
     }
-    let head = zebra_core::media::picture_header(&bytes[..bytes.len().min(256 << 10)])?;
-    if (head.width, head.height) != (w, h) || head.format == PictureFormat::Gif {
+    let head = zebra_core::media::picture_header(bytes)?;
+    if head.shown() != (w, h) {
+        return None;
+    }
+    let o = head.orientation;
+    // The same part of the stored pixels (in the stored detail grid).
+    let (x0, x1, y0, y1) = (x, dw - x - rw, y, dh - y - rh);
+    let (grid, part) = match o {
+        2 => ((dw, dh), (x1, y0, rw, rh)),
+        3 => ((dw, dh), (x1, y1, rw, rh)),
+        4 => ((dw, dh), (x0, y1, rw, rh)),
+        5 => ((dh, dw), (y0, x0, rh, rw)),
+        6 => ((dh, dw), (y0, x1, rh, rw)),
+        7 => ((dh, dw), (y1, x1, rh, rw)),
+        8 => ((dh, dw), (y1, x0, rh, rw)),
+        _ => ((dw, dh), (x, y, rw, rh)),
+    };
+    let px = stored_region(bytes, &head, grid, part)?;
+    Some(orient_pixels(px, (part.2, part.3), o).0)
+}
+
+/// [`picture_region`] in the stored pixels' own terms.
+fn stored_region(bytes: &[u8], head: &zebra_core::media::PictureHeader, (dw, dh): (u32, u32), (x, y, rw, rh): (u32, u32, u32, u32)) -> Option<Vec<u8>> {
+    use zebra_core::media::PictureFormat;
+    let (w, h) = (head.width, head.height);
+    if head.format == PictureFormat::Gif || dw > w || dh > h {
         return None;
     }
     // The picture's own pixels the part covers.
@@ -1141,7 +1219,7 @@ pub fn picture_region(bytes: &[u8], (w, h): (u32, u32), (dw, dh): (u32, u32), (x
         return Some(s.pixels());
     }
     #[cfg(target_os = "macos")]
-    if matches!(head.format, PictureFormat::Jpeg | PictureFormat::WebP) {
+    if matches!(head.format, PictureFormat::Jpeg | PictureFormat::WebP) || head.format.mac_draws() {
         let _permit = DecodeBytes::acquire(head.pixels() * 4);
         if let Some(px) = crate::imageio::region(bytes, (sx0, sy0, cw, ch), (rw.min(cw), rh.min(ch)), gif_memory()) {
             return Some(px);
@@ -1384,11 +1462,17 @@ impl Shrink {
     }
 
     /// Premultiplied RGBA8, `dw`x`dh` (rows never pushed stay clear).
-    fn finish(mut self, asset: &str) -> ImageLevel {
+    fn finish(self, asset: &str) -> ImageLevel {
+        self.finish_oriented(asset, 1)
+    }
+
+    /// The level, turned upright by `orientation`.
+    fn finish_oriented(mut self, asset: &str, orientation: u8) -> ImageLevel {
         self.flush();
         self.out.resize(self.dw as usize * self.dh as usize * 4, 0);
         let _ = self.sw;
-        ImageLevel::from_premultiplied(asset, self.dw, self.dh, self.out)
+        let (px, (w, h)) = orient_pixels(self.out, (self.dw, self.dh), orientation);
+        ImageLevel::from_premultiplied(asset, w, h, px)
     }
 }
 

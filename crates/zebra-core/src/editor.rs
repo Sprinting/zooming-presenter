@@ -2807,7 +2807,7 @@ impl Editor {
             // What it is, from its first bytes, before any of it is
             // copied: a disk image or a log named .png costs 256 KB.
             let (_, head) = crate::media::read_head(p).map_err(ioe)?;
-            let unknown = || ZError::invalid("unrecognised media format").hint("use PNG, JPEG, WebP, GIF, SVG, MP4, MOV, MP3, M4A, AAC or WAV");
+            let unknown = || ZError::invalid("unrecognised media format").hint("use PNG, JPEG, HEIC, TIFF, BMP, WebP, GIF, SVG, MP4, MOV, MP3, M4A, AAC or WAV");
             let kind = crate::media::sniff_kind(&head).ok_or_else(unknown)?;
             // A picture where a video or sound was asked for (or the other
             // way round) is turned away before the copy. Video and audio
@@ -2826,7 +2826,7 @@ impl Editor {
             // The copy is what is kept: check its header too (the file may
             // have changed while it was copied).
             if kind == MediaKind::Image {
-                picture_fits(&bytes[..bytes.len().min(256 << 10)])?;
+                picture_fits(&bytes)?;
             }
             let info = crate::media::info(&bytes)?;
             check(&info)?;
@@ -2843,7 +2843,7 @@ impl Editor {
         let info = crate::media::info(&bytes)?;
         check(&info)?;
         if info.kind == MediaKind::Image {
-            picture_fits(&bytes[..bytes.len().min(256 << 10)])?;
+            picture_fits(&bytes)?;
         }
         let key = content_key(&bytes);
         if !self.doc.assets.contains_key(&key) {
@@ -3995,23 +3995,35 @@ pub fn image_info(bytes: &[u8]) -> ZResult<(String, u32, u32)> {
         let (w, h) = crate::symbols::svg_pixels(bytes);
         return Ok(("svg".into(), w, h));
     }
-    let fmt = image::guess_format(bytes).map_err(|_| ZError::invalid("unrecognised image format").hint("use PNG, JPEG, WebP, GIF or SVG"))?;
-    let ext = match fmt {
-        image::ImageFormat::Png => "png",
-        image::ImageFormat::Jpeg => "jpg",
-        image::ImageFormat::WebP => "webp",
-        image::ImageFormat::Gif => "gif",
-        _ => return Err(ZError::invalid("unsupported image format").hint("use PNG, JPEG, WebP, GIF or SVG")),
-    };
-    // Read straight from the header where Zebra can (any size), so a huge
-    // picture's size never depends on a decoder's own limits.
-    if let Some(h) = crate::media::picture_header(&bytes[..bytes.len().min(256 << 10)]).filter(|h| h.width > 0 && h.height > 0) {
-        return Ok((ext.into(), h.width, h.height));
+    // The size it shows at (a photo turned upright, as Keynote shows
+    // it), from the header, at any size: never from a decoder's limits.
+    // The file is kept as it is.
+    const HINT: &str = "use PNG, JPEG, HEIC, TIFF, BMP, WebP, GIF or SVG";
+    match crate::media::picture_header(bytes) {
+        Some(h) if h.width > 0 && h.height > 0 => {
+            let (w, h2) = h.shown();
+            Ok((h.format.ext().into(), w, h2))
+        }
+        Some(_) => Err(ZError::invalid("cannot read image: it says it has no pixels")),
+        None => match image::guess_format(bytes) {
+            // A header Zebra's own reader can't follow: the decoder's.
+            Ok(fmt @ (image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP | image::ImageFormat::Gif | image::ImageFormat::Tiff | image::ImageFormat::Bmp)) => {
+                let (w, h) = image::ImageReader::with_format(std::io::Cursor::new(bytes), fmt).into_dimensions().map_err(|e| ZError::invalid(format!("cannot read image: {e}")))?;
+                let ext = match fmt {
+                    image::ImageFormat::Png => "png",
+                    image::ImageFormat::Jpeg => "jpg",
+                    image::ImageFormat::WebP => "webp",
+                    image::ImageFormat::Gif => "gif",
+                    image::ImageFormat::Tiff => "tiff",
+                    _ => "bmp",
+                };
+                Ok((ext.into(), w, h))
+            }
+            Ok(_) => Err(ZError::invalid("unsupported image format").hint(HINT)),
+            Err(_) if crate::media::is_heic(bytes) => Err(ZError::invalid("cannot read image: its header is broken")),
+            Err(_) => Err(ZError::invalid("unrecognised image format").hint(HINT)),
+        },
     }
-    let (w, h) = image::ImageReader::with_format(std::io::Cursor::new(bytes), fmt)
-        .into_dimensions()
-        .map_err(|e| ZError::invalid(format!("cannot read image: {e}")))?;
-    Ok((ext.into(), w, h))
 }
 
 /// Apply `(patch, inverse)` pairs in order. If one fails, roll back the ones

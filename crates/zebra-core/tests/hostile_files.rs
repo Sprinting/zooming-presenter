@@ -311,7 +311,7 @@ fn a_huge_picture_comes_in_and_only_unscalable_ones_are_refused() {
     assert_eq!(h(&lying_jpeg(65_000, 65_000, false)).fits(), cfg!(target_os = "macos"), "a baseline JPEG is read scaled at any size on the Mac");
     assert_eq!(h(&lying_jpeg(65_000, 65_000, true)).fits(), cfg!(target_os = "macos"));
     assert!(h(&lying_png(70_000, 70_000, true)).fits(), "interlaced: drawn from its first pass");
-    assert_eq!(h(&lying_png(3, 4, true)), media::PictureHeader { format: media::PictureFormat::Png, width: 3, height: 4, interlaced: true });
+    assert_eq!(h(&lying_png(3, 4, true)), media::PictureHeader { format: media::PictureFormat::Png, width: 3, height: 4, interlaced: true, orientation: 1 });
     // (A shadowed editor lives to the end of the scope: its copy of the
     // 150,000-pixel picture would still be spilled.)
     drop(ed);
