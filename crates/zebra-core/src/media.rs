@@ -703,6 +703,39 @@ impl PictureHeader {
     }
 }
 
+/// Whether a picture's file is too small to hold the pixels its header
+/// claims, so the header lies (a 74-byte PNG saying it is 200,000 x
+/// 200,000, M17). Each bound is the format's own best case, so a real
+/// picture always passes, however plain:
+///
+/// * PNG: deflate can't beat 1032:1 (zlib's documented limit for the
+///   deflate format), so the file holds at least the filtered rows / 1032;
+/// * JPEG: every 8x8 block of the least-sampled component (at most 4x
+///   subsampled, so 32x32 pixels) takes at least one bit of entropy-coded
+///   data;
+/// * GIF: an LZW code is at least 3 bits and gives at most 4,096 pixels;
+/// * WebP: at least one bit per 1,048,576 pixels (its arithmetic coder can
+///   make a near-certain bit cost far less than one, so the bound is loose).
+///
+/// TIFF, BMP and HEIC say nothing here: their whole-decode bounds apply.
+pub fn header_lies(head: &PictureHeader, file_len: u64) -> bool {
+    let (w, h) = (head.width as u64, head.height as u64);
+    let pixels = w.saturating_mul(h);
+    let least: u64 = match head.format {
+        PictureFormat::Png => {
+            // Filtered rows at one byte per pixel (the least any colour
+            // type takes, but 1, 2 and 4-bit greys and palettes).
+            let row = 1 + w.div_ceil(8);
+            row.saturating_mul(h) / 1032
+        }
+        PictureFormat::Jpeg => w.div_ceil(32).saturating_mul(h.div_ceil(32)) / 8,
+        PictureFormat::Gif => pixels / 4096 * 3 / 8,
+        PictureFormat::WebP => pixels >> 23,
+        PictureFormat::Tiff | PictureFormat::Bmp | PictureFormat::Heic => 0,
+    };
+    file_len < least
+}
+
 /// The memory one picture's decoding may take where nothing smaller
 /// applies (a GIF's screen): what a document may take.
 fn picture_memory() -> u64 {
