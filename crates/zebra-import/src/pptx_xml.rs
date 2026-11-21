@@ -312,10 +312,17 @@ impl Elem {
     }
 }
 
-/// Parsing stops (and gives up) past this many elements or this depth: the
-/// parser has read the part within its own limits already, so only a part
-/// far outside them gets here.
-const MAX_ELEMENTS: usize = 4_000_000;
+/// Parsing gives up past what the tree would take in memory (at least
+/// [`ELEMENT_COST`] bytes an element, against the memory Zebra may use;
+/// no fixed count), or past this depth. The part has already been read
+/// within the XML size the memory allows, so only a part made of tiny
+/// empty elements gets near it.
+fn max_elements() -> usize {
+    usize::try_from(zebra_core::io::memory_budget() / ELEMENT_COST).unwrap_or(usize::MAX)
+}
+/// An empty element's share of the tree: its name, attribute list,
+/// children list and text (4 x 24 bytes) and their smallest allocations.
+const ELEMENT_COST: u64 = 160;
 const MAX_DEPTH: usize = 256;
 /// A SmartArt data or layout part is read only up to this many elements:
 /// [`MAX_ITEMS`] items take far fewer, and 1.5 million empty points took a
@@ -324,7 +331,7 @@ const MAX_SMARTART_ELEMENTS: usize = 200_000;
 
 /// The root element of an XML document; None when it isn't well formed.
 pub(crate) fn parse(bytes: &[u8]) -> Option<Elem> {
-    parse_within(bytes, MAX_ELEMENTS)
+    parse_within(bytes, max_elements())
 }
 
 /// [`parse`], giving up past `max` elements.
@@ -402,8 +409,9 @@ pub(crate) struct SmartArt {
     pub items: Vec<Item>,
 }
 
-/// At most this many items are read from a data model.
-const MAX_ITEMS: usize = 4_096;
+/// Items deeper than this are listed under their ancestor at this depth
+/// (nothing is left out; the diagram code walks item trees recursively).
+const MAX_ITEM_DEPTH: usize = 32;
 
 /// Read a SmartArt data part, and its layout part when there is one. None
 /// when the data part isn't a data model.
@@ -449,12 +457,31 @@ pub(crate) fn smart_art(data: &[u8], layout: Option<&[u8]>) -> Option<SmartArt> 
         roots = pts.iter().filter_map(|p| p.attr("modelId")).filter(|id| words.contains_key(id) && !has_parent.contains(id)).collect();
     }
     let mut seen = std::collections::BTreeSet::new();
+    // Every item comes in (the part's element count bounds how many there
+    // are); a cycle is read once.
     fn build<'x>(id: &'x str, words: &BTreeMap<&'x str, String>, kids: &BTreeMap<&'x str, Vec<(i64, usize, &'x str)>>, seen: &mut std::collections::BTreeSet<&'x str>, depth: usize) -> Option<Item> {
-        if depth > 32 || seen.len() >= MAX_ITEMS || !seen.insert(id) {
+        if !seen.insert(id) {
             return None;
         }
         let text = words.get(id)?.clone();
-        let children = kids.get(id).into_iter().flatten().filter_map(|k| build(k.2, words, kids, seen, depth + 1)).collect();
+        let children = if depth + 2 < MAX_ITEM_DEPTH {
+            kids.get(id).into_iter().flatten().filter_map(|k| build(k.2, words, kids, seen, depth + 1)).collect()
+        } else {
+            // Deeper ones, in order, as this item's children, without
+            // recursion.
+            let mut flat = vec![];
+            let mut todo: Vec<&str> = kids.get(id).into_iter().flatten().rev().map(|k| k.2).collect();
+            while let Some(k) = todo.pop() {
+                if !seen.insert(k) {
+                    continue;
+                }
+                if let Some(t) = words.get(k) {
+                    flat.push(Item { text: t.clone(), children: vec![] });
+                }
+                todo.extend(kids.get(k).into_iter().flatten().rev().map(|c| c.2));
+            }
+            flat
+        };
         Some(Item { text, children })
     }
     let items = roots.into_iter().filter_map(|r| build(r, &words, &kids, &mut seen, 0)).collect();
@@ -505,5 +532,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(branch(&alt).map(Elem::local), Some("Choice"));
+    }
+
+    /// A SmartArt data model with `flat` items under the document and a
+    /// chain `deep` items long under the first.
+    fn model(flat: usize, deep: usize) -> Vec<u8> {
+        let pt = |id: &str, t: &str| format!(r#"<dgm:pt modelId="{id}"><dgm:t><a:p><a:r><a:t>{t}</a:t></a:r></a:p></dgm:t></dgm:pt>"#);
+        let mut pts = r#"<dgm:pt modelId="doc" type="doc"/>"#.to_string();
+        let mut cxns = String::new();
+        for i in 0..flat {
+            pts += &pt(&format!("f{i}"), &format!("item {i}"));
+            cxns += &format!(r#"<dgm:cxn modelId="c{i}" srcId="doc" destId="f{i}" srcOrd="{i}"/>"#);
+        }
+        for i in 0..deep {
+            pts += &pt(&format!("d{i}"), &format!("deep {i}"));
+            let parent = if i == 0 { "f0".to_string() } else { format!("d{}", i - 1) };
+            cxns += &format!(r#"<dgm:cxn modelId="e{i}" srcId="{parent}" destId="d{i}" srcOrd="0"/>"#);
+        }
+        format!(r#"<dgm:dataModel xmlns:dgm="d" xmlns:a="a"><dgm:ptLst>{pts}</dgm:ptLst><dgm:cxnLst>{cxns}</dgm:cxnLst></dgm:dataModel>"#).into_bytes()
+    }
+
+    fn count(items: &[Item]) -> usize {
+        items.iter().map(|i| 1 + count(&i.children)).sum()
+    }
+
+    fn depth(items: &[Item]) -> usize {
+        items.iter().map(|i| 1 + depth(&i.children)).max().unwrap_or(0)
+    }
+
+    /// Every SmartArt item comes in (was: the first 4,096, and nothing
+    /// deeper than 32 levels, without a word). Deeper items are listed
+    /// in order under the item at the deepest level.
+    #[test]
+    fn every_smartart_item_comes_in() {
+        let s = smart_art(&model(6000, 0), None).unwrap();
+        assert_eq!(count(&s.items), 6000);
+        assert_eq!(s.items[5999].text, "item 5999");
+        let s = smart_art(&model(2, 100), None).unwrap();
+        assert_eq!(count(&s.items), 102);
+        assert_eq!(depth(&s.items), MAX_ITEM_DEPTH);
+        let mut at = &s.items[0];
+        while let Some(c) = at.children.first().filter(|_| at.children.len() == 1) {
+            at = c;
+        }
+        let texts: Vec<&str> = at.children.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts.len(), 100 - (MAX_ITEM_DEPTH - 2));
+        assert_eq!(texts.last(), Some(&"deep 99"));
+        assert!(texts.windows(2).all(|w| w[0].trim_start_matches("deep ").parse::<u32>().unwrap() < w[1].trim_start_matches("deep ").parse::<u32>().unwrap()));
     }
 }

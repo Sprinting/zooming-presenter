@@ -261,8 +261,10 @@ impl Renderer {
         if !(bw > 0.0 && bh > 0.0 && bw.is_finite() && bh.is_finite()) {
             return None;
         }
-        let w = px.clamp(16, cpu::MAX_CAPTURE);
-        let zoom = w as f64 / bw;
+        // About `px` wide; a box taller than a capture tile is drawn
+        // smaller so all of it fits (never cut).
+        let zoom = (px.clamp(16, cpu::MAX_CAPTURE) as f64 / bw).min(cpu::MAX_CAPTURE as f64 / bh);
+        let w = ((bw * zoom).round() as u32).clamp(1, cpu::MAX_CAPTURE);
         let h = ((bh * zoom).ceil() as u32).clamp(1, cpu::MAX_CAPTURE);
         let mut ed = Editor::default();
         ed.measure = self.measure();
