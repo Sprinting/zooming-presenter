@@ -75,9 +75,19 @@ fn gif_bomb(side: u16) -> Vec<u8> {
     g
 }
 
-/// C1: the audit's 89-byte GIF asked for 17 GB and aborted the app.
+/// C1: the audit's 89-byte GIF asked for 17 GB and aborted the app. Its
+/// screen (and the copy for "restore previous" frames) is now bounded only
+/// by memory: on a Mac with 16 GB it doesn't fit, so it is a placeholder.
 #[test]
 fn gif_with_giant_screen_does_not_allocate_it() {
+    zebra_core::io::set_memory_budget(Some(8 << 30));
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            zebra_core::io::set_memory_budget(None);
+        }
+    }
+    let _reset = Reset;
     for bytes in [gif_bomb(0xffff), std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/gif-bomb-65535.gif")).unwrap()] {
         let ed = with_picture(&bytes);
         let (png, peak) = measure(|| Renderer::new().capture(&ed, &CaptureTarget::Overview, 320, 200));
@@ -86,8 +96,8 @@ fn gif_with_giant_screen_does_not_allocate_it() {
     }
 }
 
-/// C1: a screen inside the size limit but with many frames is decoded at a
-/// level (and frame count) that fits the per-GIF budget, reusing one canvas.
+/// C1: a big screen with many frames is decoded at the level drawn,
+/// reusing one canvas.
 #[test]
 fn big_gif_screen_with_many_frames_stays_in_budget() {
     let ed = with_picture(&{
@@ -103,8 +113,8 @@ fn big_gif_screen_with_many_frames_stays_in_budget() {
     });
     let (png, peak) = measure(|| Renderer::new().capture(&ed, &CaptureTarget::Overview, 320, 200));
     assert!(png.is_ok());
-    // One 2000x2000 canvas (16 MB) plus the frames' budget (48 MB); all
-    // 30 frames at full size would be 480 MB.
+    // One 2000x2000 canvas (16 MB) plus 30 small frames; all 30 frames at
+    // full size would be 480 MB.
     assert!(peak < 80 * MB, "peak {} MB", peak / MB);
 }
 

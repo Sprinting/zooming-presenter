@@ -592,8 +592,10 @@ const HEAD: u64 = 256 << 10;
 //   Elsewhere (development builds) they decode whole, so they are bounded
 //   by `MAX_WHOLE_PIXELS`, and a progressive JPEG, which keeps every
 //   coefficient while its scans arrive, by `MAX_PROGRESSIVE_PIXELS`.
-// * GIF has no streaming decoder: its frames are composited at full
-//   screen size, so its screen is bounded by `MAX_GIF_PIXELS`.
+// * GIF: its frames are composited on a full-size screen (and a copy for
+//   "restore previous" frames), so its screen is bounded only by the
+//   memory a document may take; frames are decoded as they play, so its
+//   length has no bound (B4).
 //
 // Pictures within these come in whatever their file size; the renderer
 // keeps to the same numbers (zebra_render::images).
@@ -606,8 +608,6 @@ pub const MAX_WHOLE_PIXELS: u64 = 128 << 20;
 /// Largest progressive (or lossless) JPEG (pixels): its coefficients, 2
 /// bytes a sample and up to 3 samples a pixel, fit in 384 MB.
 pub const MAX_PROGRESSIVE_PIXELS: u64 = 64 << 20;
-/// Largest GIF screen (pixels): composited at full size, 256 MB as RGBA.
-pub const MAX_GIF_PIXELS: u64 = 64 << 20;
 
 /// A picture's format and size from its header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -650,9 +650,18 @@ impl PictureHeader {
             PictureFormat::Png => self.width as u64 <= MAX_STREAM_WIDTH,
             PictureFormat::Jpeg => self.pixels() <= MAX_WHOLE_PIXELS && (!self.interlaced || self.pixels() <= MAX_PROGRESSIVE_PIXELS),
             PictureFormat::WebP => self.pixels() <= MAX_WHOLE_PIXELS,
-            PictureFormat::Gif => self.pixels() <= MAX_GIF_PIXELS,
+            PictureFormat::Gif => self.pixels().saturating_mul(8) <= picture_memory(),
         }
     }
+}
+
+/// The memory one picture's decoding may take where nothing smaller
+/// applies (a GIF's screen): what a document may take.
+fn picture_memory() -> u64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    return crate::io::memory_budget();
+    #[cfg(target_arch = "wasm32")]
+    return 1 << 31;
 }
 
 /// The header of a PNG, JPEG, WebP or GIF from its first bytes (the

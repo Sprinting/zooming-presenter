@@ -15,8 +15,10 @@
 //! take up to its deadline on a bad page) have a worker of their own: a
 //! slow page never holds up the pictures, and never the UI thread.
 //!
-//! Animated GIFs decode every frame at the chosen level, capped at
-//! [`GIF_BUDGET`] bytes per GIF by stepping down a level.
+//! Animated GIFs: a short one decodes every frame at the chosen level once
+//! and keeps them ([`GIF_BUDGET`]); a longer or bigger one is decoded as it
+//! plays, about a second of frames ahead, on the same workers (B4). Either
+//! way every frame plays, whatever the GIF's length.
 //!
 //! [`SceneOptions::async_images`]: crate::SceneOptions::async_images
 
@@ -141,29 +143,297 @@ impl ImageLevel {
 }
 
 /// Frames of an animated GIF at one level.
-#[derive(Debug)]
 pub struct Animation {
-    pub frames: Vec<Arc<ImageLevel>>,
     /// End time of each frame, seconds, cumulative.
     pub ends: Vec<f64>,
+    /// The first frame (thumbnails, paths, anything not playing).
+    pub first: Arc<ImageLevel>,
+    frames: Frames,
+}
+
+enum Frames {
+    /// Every frame, decoded once and kept (a short GIF).
+    All(Vec<Arc<ImageLevel>>),
+    /// Decoded as it plays (a long or big GIF): see [`Player`].
+    Played(Player),
+}
+
+/// A GIF decoded as it plays, like a video: its decoder and the screen it
+/// composites on, and about a second of frames decoded ahead at this
+/// level. Nothing it holds grows with the GIF's length.
+struct Player {
+    asset: String,
+    bytes: AssetBytes,
+    /// The level's size.
+    size: (u32, u32),
+    /// Bytes of the GIF's screen (and its "restore previous" copy).
+    screen_bytes: usize,
+    state: Mutex<PlayState>,
+    /// Bytes held now (for the cache's budget).
+    held: AtomicUsize,
+}
+
+#[derive(Default)]
+struct PlayState {
+    /// None before it starts, after a rest, or while a worker has it.
+    screen: Option<Screen>,
+    /// A worker is decoding on.
+    busy: bool,
+    /// The frame the next worker run starts from.
+    want: usize,
+    /// Frames decoded and not yet shown, in the order decoded.
+    queue: std::collections::VecDeque<(usize, Arc<ImageLevel>)>,
+    /// The frame shown last.
+    shown: Option<(usize, Arc<ImageLevel>)>,
+    /// No frame past the first can be decoded.
+    broken: bool,
+}
+
+impl std::fmt::Debug for Animation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Animation({} frames, {})", self.ends.len(), if self.is_played() { "played" } else { "kept" })
+    }
 }
 
 impl Animation {
     pub fn total(&self) -> f64 {
         self.ends.last().copied().unwrap_or(0.0)
     }
+
+    /// Frames in the GIF.
+    pub fn len(&self) -> usize {
+        self.ends.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ends.is_empty()
+    }
+
+    /// Whether it is decoded as it plays (not kept whole).
+    pub fn is_played(&self) -> bool {
+        matches!(self.frames, Frames::Played(_))
+    }
+
     /// The frame showing at time `t` (looping) and seconds until the next.
-    pub fn frame_at(&self, t: f64) -> (&Arc<ImageLevel>, f64) {
+    pub fn index_at(&self, t: f64) -> (usize, f64) {
         let total = self.total();
-        if total <= 0.0 || self.frames.len() < 2 {
-            return (&self.frames[0], f64::INFINITY);
+        if total <= 0.0 || self.ends.len() < 2 || !t.is_finite() {
+            return (0, f64::INFINITY);
         }
         let t = t.rem_euclid(total);
-        let i = self.ends.partition_point(|e| *e <= t).min(self.frames.len() - 1);
-        (&self.frames[i], self.ends[i] - t)
+        let i = self.ends.partition_point(|e| *e <= t).min(self.ends.len() - 1);
+        (i, self.ends[i] - t)
     }
-    fn bytes(&self) -> usize {
-        self.frames.iter().map(|f| f.bytes()).sum()
+
+    /// Bytes it holds now.
+    pub fn bytes(&self) -> usize {
+        match &self.frames {
+            Frames::All(f) => f.iter().map(|f| f.bytes()).sum(),
+            Frames::Played(p) => p.held.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Frames decoded ahead of frame `i`: about [`AHEAD_SECONDS`] of them,
+    /// within [`AHEAD_BYTES`], at least one, never a whole loop.
+    fn ahead(&self, i: usize, frame_bytes: usize) -> usize {
+        let n = self.ends.len();
+        let most = (AHEAD_BYTES / frame_bytes.max(1)).max(2).min(n.saturating_sub(1)).max(1);
+        let dur = |k: usize| self.ends[k] - if k == 0 { 0.0 } else { self.ends[k - 1] };
+        let (mut k, mut t) = (1, dur(i % n));
+        while k < most && t < AHEAD_SECONDS {
+            t += dur((i + k) % n);
+            k += 1;
+        }
+        k
+    }
+
+    /// Frame `i`, and whether a worker should decode on. See
+    /// [`ImageCache::frame`].
+    fn frame(&self, i: usize, sync: bool) -> (Arc<ImageLevel>, bool) {
+        let p = match &self.frames {
+            Frames::All(f) => return (f[i.min(f.len() - 1)].clone(), false),
+            Frames::Played(p) => p,
+        };
+        let n = self.ends.len();
+        let ahead = self.ahead(i, p.frame_bytes());
+        let mut s = lock_play(&p.state);
+        // How far frame `k` is past `i`; within `ahead` it is still to
+        // come, else it has been passed.
+        let fwd = |k: usize| (k + n - i % n) % n;
+        if let Some(pos) = s.queue.iter().position(|(k, _)| *k == i) {
+            // Everything decoded before it has been passed.
+            let f = s.queue.drain(..=pos).last().map(|(_, f)| f);
+            s.shown = f.map(|f| (i, f));
+        } else if s.shown.as_ref().map(|(k, _)| *k) != Some(i) {
+            // The newest frame decoded before `i`, if a worker is behind.
+            let passed = |k: usize| fwd(k) >= ahead;
+            if let Some(pos) = s.queue.iter().rposition(|(k, _)| passed(*k)) {
+                let f = s.queue.drain(..=pos).last();
+                s.shown = f;
+            }
+            if sync && !s.broken {
+                drop(s);
+                let f = p.decode_now(i);
+                s = lock_play(&p.state);
+                if let Some(f) = f {
+                    s.shown = Some((i, f));
+                }
+            }
+        }
+        let shown = s.shown.as_ref().map(|(_, f)| f.clone()).unwrap_or_else(|| self.first.clone());
+        let to_come = s.queue.iter().filter(|(k, _)| (1..ahead).contains(&fwd(*k))).count();
+        let work = !sync && !s.busy && !s.broken && to_come + 1 < ahead.max(2);
+        if work {
+            s.busy = true;
+            s.want = i;
+        }
+        p.recount(&s);
+        (shown, work)
+    }
+
+    /// Decode on from the frame asked for last, about a second ahead (on
+    /// a picture worker).
+    fn work(&self) {
+        let Frames::Played(p) = &self.frames else { return };
+        let n = self.ends.len();
+        let (screen, want) = {
+            let mut s = lock_play(&p.state);
+            (s.screen.take(), s.want)
+        };
+        let ahead = self.ahead(want, p.frame_bytes());
+        let mut screen = screen;
+        let mut made = 0;
+        // Where the screen is: within the frames wanted, before them in
+        // this loop, or past them (start again).
+        let plan = |pos: usize| -> (bool, usize) {
+            let past_want = (pos + n - want) % n;
+            if pos < n && past_want < ahead {
+                (false, ahead - past_want)
+            } else if pos <= want {
+                (false, ahead)
+            } else {
+                (true, ahead)
+            }
+        };
+        let mut todo = match &screen {
+            Some(sc) => {
+                let (restart, k) = plan(sc.pos);
+                if restart {
+                    screen = None;
+                }
+                k
+            }
+            None => ahead,
+        };
+        let mut restarts = 0;
+        while todo > 0 {
+            let sc = match &mut screen {
+                Some(sc) => sc,
+                None => match Screen::open(&p.bytes) {
+                    Some(sc) => screen.insert(sc),
+                    None => break,
+                },
+            };
+            let k = sc.pos;
+            let wanted = (k + n - want) % n < ahead;
+            match sc.step(wanted.then_some((p.asset.as_str(), p.size.0, p.size.1))) {
+                Some(f) => {
+                    if let Some(f) = f {
+                        let mut s = lock_play(&p.state);
+                        s.queue.push_back((k, Arc::new(f.as_moving())));
+                        p.recount(&s);
+                        todo -= 1;
+                        made += 1;
+                    }
+                }
+                None => {
+                    // The end: loop.
+                    restarts += 1;
+                    let empty = sc.pos == 0;
+                    screen = None;
+                    if empty || restarts > 2 {
+                        break;
+                    }
+                }
+            }
+        }
+        let mut s = lock_play(&p.state);
+        if made == 0 {
+            // Nothing past what was shown decodes: stay on it.
+            s.broken = true;
+        }
+        s.screen = screen;
+        s.busy = false;
+        p.recount(&s);
+    }
+
+    /// Give back the screen and the frames ahead (nobody has drawn this
+    /// GIF for a while); it starts again when it is drawn.
+    fn rest(&self) {
+        let Frames::Played(p) = &self.frames else { return };
+        let mut s = lock_play(&p.state);
+        if !s.busy {
+            s.screen = None;
+        }
+        s.queue.clear();
+        s.shown = None;
+        p.recount(&s);
+    }
+}
+
+fn lock_play(m: &Mutex<PlayState>) -> std::sync::MutexGuard<'_, PlayState> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Player {
+    fn frame_bytes(&self) -> usize {
+        self.size.0 as usize * self.size.1 as usize * 4
+    }
+
+    fn recount(&self, s: &PlayState) {
+        let screen = if s.screen.is_some() || s.busy { self.screen_bytes } else { 0 };
+        let frames: usize = s.queue.iter().map(|(_, f)| f.bytes()).sum::<usize>() + s.shown.as_ref().map_or(0, |(_, f)| f.bytes());
+        self.held.store(self.frame_bytes() + screen + frames, Ordering::Relaxed);
+    }
+
+    /// Frame `i` decoded on this thread (captures and export): on from the
+    /// player's screen when it is before `i` and free, else from the start.
+    fn decode_now(&self, i: usize) -> Option<Arc<ImageLevel>> {
+        // The player's own screen when no worker has it (started again if
+        // it is past `i`), so frames asked for in turn cost one step each.
+        let shared = {
+            let mut s = lock_play(&self.state);
+            if s.busy {
+                None
+            } else {
+                s.busy = true;
+                Some(s.screen.take())
+            }
+        };
+        let is_shared = shared.is_some();
+        let sc = match shared.flatten() {
+            Some(sc) if sc.pos <= i => Some(sc),
+            _ => Screen::open(&self.bytes),
+        };
+        let mut out = None;
+        let sc = sc.map(|mut sc| {
+            while sc.pos <= i {
+                let keep = sc.pos == i;
+                match sc.step(keep.then_some((self.asset.as_str(), self.size.0, self.size.1))) {
+                    Some(Some(f)) => out = Some(Arc::new(f.as_moving())),
+                    Some(None) => {}
+                    None => break,
+                }
+            }
+            sc
+        });
+        if is_shared {
+            let mut s = lock_play(&self.state);
+            s.screen = sc;
+            s.busy = false;
+            self.recount(&s);
+        }
+        out
     }
 }
 
@@ -183,7 +453,7 @@ impl Decoded {
     pub fn width(&self) -> u32 {
         match self {
             Decoded::Still(l) => l.width,
-            Decoded::Animated(a) => a.frames[0].width,
+            Decoded::Animated(a) => a.first.width,
         }
     }
 }
@@ -194,10 +464,14 @@ pub const MAX_IMAGE_DIM: u32 = 8192;
 const MIN_LEVEL_DIM: u32 = 64;
 /// Default budget for all decoded pictures.
 pub const DEFAULT_BUDGET: usize = 256 << 20;
-/// Most bytes one animated GIF may decode to (all frames).
+/// A GIF whose frames all fit in this many bytes at the level drawn (and
+/// [`GIF_WORK`]) is decoded once and kept; a bigger one is decoded as it
+/// plays. Not a limit: every frame plays either way.
 pub const GIF_BUDGET: usize = 48 << 20;
-/// Most frames kept per GIF.
-const GIF_MAX_FRAMES: usize = 600;
+/// About this much of a GIF played as it decodes is decoded ahead.
+const AHEAD_SECONDS: f64 = 1.0;
+/// At most this many bytes of frames are decoded ahead (at least one).
+const AHEAD_BYTES: usize = 32 << 20;
 
 /// Size of `level` for a picture of `w`x`h` pixels.
 pub fn level_size(w: u32, h: u32, level: u8) -> (u32, u32) {
@@ -271,6 +545,8 @@ struct Job {
     svg: Option<crate::svg::SvgStyle>,
     /// Pictures made rather than decoded (tiles of a PDF page).
     make: Option<Make>,
+    /// Other work for the picture workers (decoding a playing GIF on).
+    task: Option<Box<dyn FnOnce() + Send>>,
 }
 
 /// Makes a picture on a worker (None when it can't).
@@ -352,6 +628,11 @@ impl ImageCache {
             *l = (*l).max(k.1);
         }
         let before: usize = i.map.values().map(|e| e.img.bytes()).sum();
+        for e in i.map.values().filter(|e| now.duration_since(e.at) >= idle) {
+            if let Decoded::Animated(a) = &e.img {
+                a.rest();
+            }
+        }
         i.map.retain(|k, e| smallest.get(&k.0) == Some(&k.1) || now.duration_since(e.at) < idle);
         i.bytes = i.map.values().map(|e| e.img.bytes()).sum();
         let more = i.map.iter().any(|(k, _)| smallest.get(&k.0) != Some(&k.1));
@@ -398,7 +679,7 @@ impl ImageCache {
                 if !i.pending.contains(&key) {
                     i.pending.insert(key.clone());
                     drop(i);
-                    self.enqueue(Job { key, ext: ext.to_string(), bytes: bytes.clone(), size, svg, make: None });
+                    self.enqueue(Job { key, ext: ext.to_string(), bytes: bytes.clone(), size, svg, make: None, task: None });
                     i = lock(&self.shared.inner);
                 }
                 // Nearest cached level: prefer sharper, then blurrier.
@@ -414,7 +695,7 @@ impl ImageCache {
                 });
             }
         }
-        let out = decode_job(&Job { key: key.clone(), ext: ext.to_string(), bytes: bytes.clone(), size, svg, make: None });
+        let out = decode_job(&Job { key: key.clone(), ext: ext.to_string(), bytes: bytes.clone(), size, svg, make: None, task: None });
         insert(&self.shared, key, out, g)
     }
 
@@ -436,12 +717,12 @@ impl ImageCache {
             if !sync {
                 if i.pending.insert(key.clone()) {
                     drop(i);
-                    self.enqueue(Job { key, ext: String::new(), bytes: AssetBytes::from(Vec::new()), size: (0, 0), svg: None, make: Some(make) });
+                    self.enqueue(Job { key, ext: String::new(), bytes: AssetBytes::from(Vec::new()), size: (0, 0), svg: None, make: Some(make), task: None });
                 }
                 return None;
             }
         }
-        let out = decode_job(&Job { key: key.clone(), ext: String::new(), bytes: AssetBytes::from(Vec::new()), size: (0, 0), svg: None, make: Some(make) });
+        let out = decode_job(&Job { key: key.clone(), ext: String::new(), bytes: AssetBytes::from(Vec::new()), size: (0, 0), svg: None, make: Some(make), task: None });
         insert(&self.shared, key, out, g)
     }
 
@@ -454,6 +735,20 @@ impl ImageCache {
         e.used = g;
         e.at = Instant::now();
         Some(e.img.clone())
+    }
+
+    /// The frame of `anim` showing at time `t` (it loops) and the seconds
+    /// until the next one. A GIF played as it decodes gives the newest
+    /// frame decoded at or before `t` and has a worker decode on; with
+    /// `sync` (captures, export) the frame at `t` is decoded now.
+    pub fn frame(&self, anim: &Arc<Animation>, t: f64, sync: bool) -> (Arc<ImageLevel>, f64) {
+        let (i, next) = anim.index_at(t);
+        let (img, work) = anim.frame(i, sync);
+        if work {
+            let a = anim.clone();
+            self.enqueue(Job { key: (String::new(), 0), ext: String::new(), bytes: AssetBytes::from(Vec::new()), size: (0, 0), svg: None, make: None, task: Some(Box::new(move || a.work())) });
+        }
+        (img, next)
     }
 
     fn enqueue(&self, job: Job) {
@@ -473,9 +768,14 @@ impl ImageCache {
                             Err(_) => return,
                         };
                         let Some(shared) = weak.upgrade() else { return };
-                        let out = decode_job(&job);
-                        let g = shared.generation.load(Ordering::Relaxed);
-                        insert(&shared, job.key, out, g.saturating_sub(1));
+                        let mut job = job;
+                        if let Some(task) = job.task.take() {
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(task));
+                        } else {
+                            let out = decode_job(&job);
+                            let g = shared.generation.load(Ordering::Relaxed);
+                            insert(&shared, job.key, out, g.saturating_sub(1));
+                        }
                         let waker = shared.waker.lock().unwrap_or_else(|e| e.into_inner()).clone();
                         if let Some(w) = waker {
                             w();
@@ -766,9 +1066,9 @@ fn svg_size((w, h): (u32, u32)) -> (u32, u32) {
 
 /// Most bytes one decoder may allocate for its pixels.
 pub const MAX_DECODE_ALLOC: u64 = 256 << 20;
-/// Most screen pixels a GIF's frames may cover in all (screen area times
-/// frames kept): each frame is composited on a full screen, so this bounds
-/// the time a GIF takes. 1920x1080 keeps 517 frames.
+/// A GIF whose frames cover more screen pixels than this in all (screen
+/// area times frames) is decoded as it plays rather than all at once, so
+/// its first frame shows at once. Not a limit.
 pub const GIF_WORK: u64 = 1 << 30;
 
 /// Most bytes a JPEG or WebP decode may allocate: they decode whole, and a
@@ -889,66 +1189,55 @@ impl Shrink {
     }
 }
 
-/// An animated (or still) GIF at `level` of its logical screen, decoded
-/// with the `gif` crate: one screen-sized canvas is reused for every
-/// frame, and the screen size and frame count are checked against the
-/// limits before any pixels are decoded. None if it is unreadable or too
-/// big.
-fn decode_gif(asset: &str, bytes: &[u8], level: u8) -> Option<Decoded> {
-    let options = || {
-        let mut o = gif::DecodeOptions::new();
-        o.set_color_output(gif::ColorOutput::RGBA);
-        o.set_memory_limit(gif::MemoryLimit::Bytes(std::num::NonZeroU64::new(MAX_DECODE_ALLOC).unwrap_or(std::num::NonZeroU64::MIN)));
-        o
-    };
-    // The header: the logical screen everything is drawn on.
-    let mut dec = options().read_info(std::io::Cursor::new(bytes)).ok()?;
-    let (w, h) = (dec.width() as u32, dec.height() as u32);
-    let area = w as u64 * h as u64;
-    if w == 0 || h == 0 || area > zebra_core::media::MAX_GIF_PIXELS || area * 4 > MAX_DECODE_ALLOC {
-        return None;
-    }
-    // Count frames without decoding them (their compressed data is only
-    // copied), so the level is chosen before any pixels exist.
-    let count = {
-        let mut o = options();
-        o.skip_frame_decoding(true);
-        let mut d = o.read_info(std::io::Cursor::new(bytes)).ok()?;
-        let mut n = 0usize;
-        while n < GIF_MAX_FRAMES && matches!(d.read_next_frame(), Ok(Some(_))) {
-            n += 1;
-        }
-        n
-    };
-    let mut keep = count.min((GIF_WORK / area).max(1) as usize);
-    if keep == 0 {
-        return None;
-    }
-    // Step down levels until all frames kept fit the per-GIF budget; at
-    // the smallest level, keep fewer frames instead.
-    let last = last_level(w, h);
-    let mut level = level.min(last);
-    let level_bytes = |l: u8| {
-        let (lw, lh) = level_size(w, h, l);
-        lw as usize * lh as usize * 4
-    };
-    while level < last && keep * level_bytes(level) > GIF_BUDGET {
-        level += 1;
-    }
-    keep = keep.min((GIF_BUDGET / level_bytes(level)).max(1));
-    let (lw, lh) = level_size(w, h, level);
+/// The memory a GIF's screen may take: the memory a document may take
+/// (`zebra_core::io::memory_budget`), as for any picture.
+fn gif_memory() -> u64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    return zebra_core::io::memory_budget();
+    #[cfg(target_arch = "wasm32")]
+    return 1 << 31;
+}
 
-    let (cw, ch) = (w as usize, h as usize);
-    let _permit = DecodeBytes::acquire(area * 8 + (keep * level_bytes(level)) as u64);
-    let mut canvas = vec![0u8; cw * ch * 4];
-    let mut saved: Vec<u8> = vec![];
-    let mut frames: Vec<Arc<ImageLevel>> = vec![];
-    let mut ends = vec![];
-    let mut t = 0.0;
-    while frames.len() < keep {
-        let f = match dec.read_next_frame() {
+fn gif_options() -> gif::DecodeOptions {
+    let mut o = gif::DecodeOptions::new();
+    o.set_color_output(gif::ColorOutput::RGBA);
+    o.set_memory_limit(gif::MemoryLimit::Bytes(std::num::NonZeroU64::new(gif_memory()).unwrap_or(std::num::NonZeroU64::MIN)));
+    o
+}
+
+/// A GIF's logical screen, with the decoder that draws its frames on it in
+/// turn.
+struct Screen {
+    dec: gif::Decoder<std::io::Cursor<AssetBytes>>,
+    w: usize,
+    h: usize,
+    canvas: Vec<u8>,
+    /// What a "restore previous" frame covered.
+    saved: Vec<u8>,
+    /// The frame `dec` gives next.
+    pos: usize,
+}
+
+impl Screen {
+    /// None if it is unreadable, or its screen needs more memory than a
+    /// document may take.
+    fn open(bytes: &AssetBytes) -> Option<Screen> {
+        let dec = gif_options().read_info(std::io::Cursor::new(bytes.clone())).ok()?;
+        let (w, h) = (dec.width() as usize, dec.height() as usize);
+        if !gif_fits(w as u32, h as u32) {
+            return None;
+        }
+        Some(Screen { dec, w, h, canvas: vec![0u8; w * h * 4], saved: vec![], pos: 0 })
+    }
+
+    /// Draw the next frame on the screen; with `shrink` (asset, width,
+    /// height) also give it at that size. None at the end (or where the
+    /// file breaks off).
+    fn step(&mut self, shrink: Option<(&str, u32, u32)>) -> Option<Option<ImageLevel>> {
+        let (cw, ch) = (self.w, self.h);
+        let f = match self.dec.read_next_frame() {
             Ok(Some(f)) => f,
-            _ => break,
+            _ => return None,
         };
         // The frame's rectangle, clipped to the screen.
         let (fx, fy, fw, fh) = (f.left as usize, f.top as usize, f.width as usize, f.height as usize);
@@ -957,13 +1246,14 @@ fn decode_gif(asset: &str, bytes: &[u8], level: u8) -> Option<Decoded> {
         let y0 = fy.min(ch);
         let y1 = (fy + fh).min(ch);
         if f.buffer.len() < fw * fh * 4 {
-            break;
+            return None;
         }
+        let canvas = &mut self.canvas;
         let dispose = f.dispose;
         if dispose == gif::DisposalMethod::Previous {
-            saved.clear();
+            self.saved.clear();
             for y in y0..y1 {
-                saved.extend_from_slice(&canvas[(y * cw + x0) * 4..(y * cw + x1) * 4]);
+                self.saved.extend_from_slice(&canvas[(y * cw + x0) * 4..(y * cw + x1) * 4]);
             }
         }
         for y in y0..y1 {
@@ -975,15 +1265,13 @@ fn decode_gif(asset: &str, bytes: &[u8], level: u8) -> Option<Decoded> {
                 }
             }
         }
-        // Browsers treat delays under 20 ms as 100 ms.
-        let d = f.delay as f64 / 100.0;
-        t += if d < 0.02 { 0.1 } else { d };
-        ends.push(t);
-        let mut s = Shrink::new(w, h, lw, lh);
-        for row in canvas.chunks_exact(cw * 4) {
-            s.push(row, 4);
-        }
-        frames.push(Arc::new(s.finish(asset).as_moving()));
+        let out = shrink.map(|(asset, lw, lh)| {
+            let mut s = Shrink::new(cw as u32, ch as u32, lw, lh);
+            for row in canvas.chunks_exact(cw * 4) {
+                s.push(row, 4);
+            }
+            s.finish(asset)
+        });
         match dispose {
             gif::DisposalMethod::Background => {
                 for y in y0..y1 {
@@ -993,20 +1281,82 @@ fn decode_gif(asset: &str, bytes: &[u8], level: u8) -> Option<Decoded> {
             gif::DisposalMethod::Previous => {
                 let n = (x1 - x0) * 4;
                 for (i, y) in (y0..y1).enumerate() {
-                    canvas[(y * cw + x0) * 4..(y * cw + x1) * 4].copy_from_slice(&saved[i * n..(i + 1) * n]);
+                    canvas[(y * cw + x0) * 4..(y * cw + x1) * 4].copy_from_slice(&self.saved[i * n..(i + 1) * n]);
                 }
             }
             _ => {}
         }
+        self.pos += 1;
+        Some(out)
     }
-    ends.truncate(frames.len());
-    if frames.len() == 1 {
-        return frames.pop().map(Decoded::Still);
+}
+
+/// Whether a GIF screen of `w`x`h` fits in memory: the screen and its
+/// "restore previous" copy.
+fn gif_fits(w: u32, h: u32) -> bool {
+    w > 0 && h > 0 && (w as u64 * h as u64).saturating_mul(8) <= gif_memory()
+}
+
+/// When each frame of a GIF ends (seconds, cumulative), read without
+/// decoding any pixels (their compressed data is only copied).
+fn gif_timing(bytes: &[u8]) -> Vec<f64> {
+    let mut o = gif_options();
+    o.skip_frame_decoding(true);
+    let Ok(mut d) = o.read_info(std::io::Cursor::new(bytes)) else { return vec![] };
+    let mut ends = vec![];
+    let mut t = 0.0;
+    while let Ok(Some(f)) = d.read_next_frame() {
+        // Browsers treat delays under 20 ms as 100 ms.
+        let d = f.delay as f64 / 100.0;
+        t += if d < 0.02 { 0.1 } else { d };
+        ends.push(t);
     }
-    if frames.is_empty() {
-        return None;
+    ends
+}
+
+/// An animated (or still) GIF at `level` of its logical screen, decoded
+/// with the `gif` crate on one screen-sized canvas. Every frame plays: a
+/// GIF whose frames fit [`GIF_BUDGET`] at this level (and [`GIF_WORK`]) is
+/// decoded whole now; a bigger one gets a player that decodes it as it
+/// plays. Its screen's only bound is memory. None if it is unreadable or
+/// its screen doesn't fit in memory.
+fn decode_gif(asset: &str, bytes: &AssetBytes, level: u8) -> Option<Decoded> {
+    let mut screen = Screen::open(bytes)?;
+    let (w, h) = (screen.w as u32, screen.h as u32);
+    let area = w as u64 * h as u64;
+    let mut ends = gif_timing(bytes);
+    let n = ends.len();
+    let level = level.min(last_level(w, h));
+    let (lw, lh) = level_size(w, h, level);
+    let level_bytes = lw as usize * lh as usize * 4;
+    let keep_all = n <= 1 || (n.saturating_mul(level_bytes) <= GIF_BUDGET && (n as u64).saturating_mul(area) <= GIF_WORK);
+    if keep_all {
+        let _permit = DecodeBytes::acquire(area * 8 + (n.max(1) * level_bytes) as u64);
+        let mut frames: Vec<Arc<ImageLevel>> = vec![];
+        while frames.len() < n.max(1) {
+            match screen.step(Some((asset, lw, lh))) {
+                Some(Some(f)) => frames.push(Arc::new(f.as_moving())),
+                _ => break,
+            }
+        }
+        ends.truncate(frames.len());
+        if frames.len() <= 1 {
+            return frames.pop().map(Decoded::Still);
+        }
+        let first = frames[0].clone();
+        return Some(Decoded::Animated(Arc::new(Animation { ends, first, frames: Frames::All(frames) })));
     }
-    Some(Decoded::Animated(Arc::new(Animation { frames, ends })))
+    let first = Arc::new(screen.step(Some((asset, lw, lh)))??.as_moving());
+    let player = Player {
+        asset: asset.to_string(),
+        bytes: bytes.clone(),
+        size: (lw, lh),
+        screen_bytes: (area * 8) as usize,
+        state: Mutex::new(PlayState { screen: Some(screen), ..Default::default() }),
+        held: AtomicUsize::new(0),
+    };
+    player.recount(&lock_play(&player.state));
+    Some(Decoded::Animated(Arc::new(Animation { ends, first, frames: Frames::Played(player) })))
 }
 
 #[cfg(test)]
@@ -1110,12 +1460,16 @@ mod tests {
         }
         let c = ImageCache::default();
         let Some(Decoded::Animated(a)) = c.get("g", "gif", &out.into(), (40, 30), 0, true) else { panic!("not animated") };
-        assert_eq!(a.frames.len(), 3);
+        assert_eq!(a.len(), 3);
+        assert!(!a.is_played(), "a short GIF is kept whole");
         assert!((a.total() - 0.6).abs() < 1e-9);
-        let (f, next) = a.frame_at(0.25);
-        assert!(Arc::ptr_eq(f, &a.frames[1]));
+        let (i, next) = a.index_at(0.25);
+        assert_eq!(i, 1);
         assert!((next - 0.15).abs() < 1e-9);
-        assert!(Arc::ptr_eq(a.frame_at(0.65).0, &a.frames[0]));
+        assert_eq!(a.index_at(0.65).0, 0);
+        let (f, _) = c.frame(&a, 0.25, true);
+        assert_eq!(f.pixmap().data_as_u8_slice()[0], 80);
+        assert!(Arc::ptr_eq(&c.frame(&a, 0.65, true).0, &a.first));
     }
 
     #[test]

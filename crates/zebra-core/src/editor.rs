@@ -3978,6 +3978,9 @@ pub(crate) fn content_key(bytes: &[u8]) -> String {
 /// size doesn't matter.
 fn picture_fits(head: &[u8]) -> ZResult<()> {
     match crate::media::picture_header(head) {
+        Some(h) if !h.fits() && h.format == crate::media::PictureFormat::Gif => Err(ZError::new("too_big", format!("this GIF is {}x{} pixels, which needs more memory than this Mac has", h.width, h.height))
+            .hint("save it smaller")
+            .about(crate::error::About::Picture)),
         Some(h) if !h.fits() => Err(ZError::new("too_big", format!("this picture is {}x{} pixels{}; Zebra can't scale it down to show it", h.width, h.height, if h.interlaced { " (interlaced/progressive)" } else { "" }))
             .hint("save it smaller, or as a non-progressive JPEG or a PNG, which Zebra reads at any size")
             .about(crate::error::About::Picture)),

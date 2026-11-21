@@ -354,7 +354,7 @@ impl Ctx<'_> {
         let sync = !self.o.async_images || self.full_res_images;
         match self.r.images.get(key, &src.ext, &src.bytes, (src.width, src.height), level, sync) {
             Some(Decoded::Still(l)) => Some(l),
-            Some(Decoded::Animated(a)) => Some(a.frames[0].clone()),
+            Some(Decoded::Animated(a)) => Some(a.first.clone()),
             None => {
                 self.pending.set(true);
                 None
@@ -392,11 +392,11 @@ impl Ctx<'_> {
             Decoded::Still(l) => l,
             Decoded::Animated(anim) => match self.o.time {
                 Some(t) => {
-                    let (f, next) = anim.frame_at(t);
+                    let (f, next) = self.r.images.frame(&anim, t, sync);
                     self.anim.set(Some(self.anim.get().map_or(next, |n: f64| n.min(next))));
-                    f.clone()
+                    f
                 }
-                None => anim.frames[0].clone(),
+                None => anim.first.clone(),
             },
         };
         let lr = local_rect(e);
