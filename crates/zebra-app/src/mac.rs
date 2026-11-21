@@ -209,9 +209,6 @@ mod imp {
         let focused = app.ctx.input(|i| i.viewport().focused);
         let presenting = app.editor.view.mode == zebra_core::Mode::Present;
         let working = app.import.is_some() || app.opening.is_some() || app.editor.saving().is_some() || app.agent_connected();
-        let title = app.window_title();
-        let edited = app.editor.dirty();
-        let url = app.editor.file_path.clone();
         let s = &mut app.mac_sync;
         if s.focused != focused {
             s.focused = focused;
@@ -243,6 +240,17 @@ mod imp {
             }
             s.activity_reason = want;
         }
+        sync_document(app, frame);
+    }
+
+    /// The window's title, edited dot and file (proxy icon). Also run while
+    /// the window is out of sight (M6: hidden behind a full-screen app it
+    /// draws no frame, and the Window menu and Dock showed a stale name).
+    pub fn sync_document(app: &mut ZebraApp, frame: Option<&eframe::Frame>) {
+        let title = app.window_title();
+        let edited = app.editor.dirty();
+        let url = app.editor.file_path.clone();
+        let s = &mut app.mac_sync;
         if s.title == title && s.edited == edited && s.url == url {
             return;
         }

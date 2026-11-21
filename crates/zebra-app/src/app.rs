@@ -1315,6 +1315,13 @@ impl ZebraApp {
         self.insert_image(String::new(), Some(p.to_string_lossy().to_string()), at, alt);
     }
 
+    /// Insert a pasted picture's scratch PNG by path (copied and mapped,
+    /// like a dropped file), then remove the scratch file (M22).
+    pub fn insert_pasted_file(&mut self, file: &std::path::Path, at: Vec2, alt: String) {
+        self.insert_image(String::new(), Some(file.to_string_lossy().to_string()), at, alt);
+        let _ = std::fs::remove_file(file);
+    }
+
     pub fn insert_image_bytes(&mut self, bytes: Vec<u8>, at: Vec2, alt: String) {
         let data_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
         drop(bytes);
@@ -1682,6 +1689,19 @@ impl ZebraApp {
         self.background_work(ctx);
     }
 
+    /// Send the window's title when it changes (to this window's own
+    /// viewport, so it also works from `logic`, where the current viewport
+    /// is the root window's).
+    fn sync_title(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        crate::mac::sync_document(self, None);
+        let title = self.window_title();
+        if title != self.last_title && ctx.input(|i| i.raw.viewports.contains_key(&self.viewport)) {
+            ctx.send_viewport_cmd_to(self.viewport, egui::ViewportCommand::Title(title.clone()));
+            self.last_title = title;
+        }
+    }
+
     /// The window is minimised, a tab in the background, or fully covered:
     /// no frame is drawn for it.
     pub fn out_of_sight(&self, ctx: &egui::Context) -> bool {
@@ -1714,9 +1734,28 @@ impl ZebraApp {
                 ctx.request_repaint_after(std::time::Duration::from_secs_f64(IMAGE_TRIM_EVERY));
             }
         }
+        // M14: files the system asked to open (Finder, `open -g`) while this
+        // window is covered, say by a full-screen app, or before its own
+        // native window exists. macOS draws no frame for a covered window,
+        // so eframe runs only `logic` and asking for a hidden paint never
+        // gets one: they open now, as Keynote opens a document whether or
+        // not it's in front. Only a leading run of them, so nothing queued
+        // before them is overtaken.
+        let undrawn = self.out_of_sight(ctx) || !ctx.input(|i| i.raw.viewports.contains_key(&self.viewport));
+        if undrawn && matches!(self.queued.first(), Some(Action::OpenPath(_))) {
+            let n = self.queued.iter().take_while(|a| matches!(a, Action::OpenPath(_))).count();
+            let open: Vec<Action> = self.queued.drain(..n).collect();
+            for a in open {
+                self.perform(ctx, a);
+            }
+            ctx.request_repaint();
+        }
         if !self.out_of_sight(ctx) {
             return;
         }
+        // M6: the title (and on the Mac the edited dot and file) follow the
+        // document while no frame is drawn.
+        self.sync_title(ctx);
         #[cfg(target_os = "macos")]
         if self.front {
             crate::menu_mac::poll(self, ctx);
@@ -1819,11 +1858,7 @@ impl ZebraApp {
         }
 
         crate::files::autosave_tick(self);
-        let title = self.window_title();
-        if title != self.last_title {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
-            self.last_title = title;
-        }
+        self.sync_title(&ctx);
         // agent flashes fade over ~1 s
         if self.editor.flashes.iter().any(|(_, t)| self.editor.view.now - *t < 1.2) {
             ctx.request_repaint();

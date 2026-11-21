@@ -82,4 +82,34 @@ fn files_from_finder_open_at_launch_and_later() {
     assert_eq!(s.windows.len(), 1);
     assert_eq!(s.windows[0].editor.file_path.as_deref(), Some(b.as_path()));
     assert!(s.windows[0].welcome.is_none(), "the chooser gave way to the file");
+    drop(h2);
+
+    // M14 (Mac pass, 21 Nov): Zebra's window covered by a full-screen app.
+    // macOS draws no frame for a covered window, so eframe runs only
+    // `logic`. A file Finder sends then (`open -g`) opens anyway, in a
+    // window of its own, as Keynote opens it whether or not it's in front;
+    // before, it waited for the window to be shown and an Untitled showed.
+    let mut h3 = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_step_dt(0.02)
+        .build_eframe(|cc| Shell::new(ZebraApp::new(&cc.egui_ctx, None, None, AppOptions::default())));
+    h3.run_steps(3);
+    h3.state_mut().windows[0].editor.apply(Command::AddFrame { style: Default::default(), x: 0.0, y: 0.0, w: 800.0, h: 600.0, rotation: 0.0, name: None, id: None, add_to_path: true, find_space: false }, Origin::Human).unwrap();
+    h3.input_mut().viewports.get_mut(&egui::ViewportId::ROOT).unwrap().occluded = Some(true);
+    h3.run_steps(1);
+    open_events::push([c.clone()]);
+    let ctx = h3.ctx.clone();
+    let mut frame = eframe::Frame::_new_kittest();
+    for _ in 0..4 {
+        eframe::App::logic(h3.state_mut(), &ctx, &mut frame);
+    }
+    let s = h3.state();
+    assert_eq!(s.windows.len(), 2, "c.zebra got a window with no frame drawn");
+    assert_eq!(s.windows[1].editor.file_path.as_deref(), Some(c.as_path()), "and it is open, not an Untitled");
+    assert_eq!(s.windows[1].editor.doc.elements.len(), 3);
+    // M6: the covered window's title follows its document with no frame
+    // drawn (the Window menu and Dock read it).
+    h3.state_mut().windows[0].editor.file_path = Some(a.clone());
+    eframe::App::logic(h3.state_mut(), &ctx, &mut frame);
+    assert!(h3.state().windows[0].last_title.starts_with('a'), "the covered window's title was sent: {}", h3.state().windows[0].last_title);
 }
