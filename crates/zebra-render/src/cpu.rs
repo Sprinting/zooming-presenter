@@ -7,8 +7,12 @@ use zebra_core::{Camera, Editor, Mode, ZError};
 use crate::display::{affine_scale, DisplayList, Item, Rgba};
 use crate::{CaptureTarget, Renderer, SceneOptions};
 
-/// Largest capture side in pixels.
+/// Largest side drawn in one piece; a bigger capture is drawn in tiles
+/// of this size (B6: there is no limit on a capture's size but memory).
 pub const MAX_CAPTURE: u32 = 8192;
+/// Most bytes of a capture's pixels held at once while it is drawn in
+/// tiles (one band of rows).
+const BAND_BYTES: u64 = 256 << 20;
 
 pub(crate) fn color(c: Rgba) -> Color {
     Color::from_rgba8(c[0], c[1], c[2], c[3])
@@ -16,13 +20,20 @@ pub(crate) fn color(c: Rgba) -> Color {
 
 /// Rasterise a display list to a premultiplied pixmap.
 pub fn render_pixmap(list: &DisplayList) -> Pixmap {
-    let (w, h) = (list.width_px.clamp(1, u16::MAX as u32) as u16, list.height_px.clamp(1, u16::MAX as u32) as u16);
+    render_tile(list, 0, 0, list.width_px, list.height_px)
+}
+
+/// Rasterise the `w` x `h` pixels of a display list whose top-left is at
+/// (`x0`, `y0`) to a premultiplied pixmap.
+fn render_tile(list: &DisplayList, x0: u32, y0: u32, w: u32, h: u32) -> Pixmap {
+    let (w, h) = (w.clamp(1, u16::MAX as u32) as u16, h.clamp(1, u16::MAX as u32) as u16);
+    let origin = Affine::translate((-(x0 as f64), -(y0 as f64)));
     let mut ctx = RenderContext::new_with(w, h, RenderSettings::default());
     let mut res = Resources::new();
     ctx.set_paint(color(list.background));
     ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w as f64, h as f64));
     for item in &list.items {
-        ctx.reset_transform();
+        ctx.set_transform(origin);
         match item {
             Item::Fill { path, color: c } => {
                 ctx.set_paint(color(*c));
@@ -35,7 +46,7 @@ pub fn render_pixmap(list: &DisplayList) -> Pixmap {
             }
             Item::Text { layout, transform, color: c, run_colors } => {
                 let (s, rest) = split_scale(transform);
-                ctx.set_transform(rest);
+                ctx.set_transform(origin * rest);
                 for (ri, run) in layout.runs.iter().enumerate() {
                     ctx.set_paint(color(run_colors.get(ri).copied().unwrap_or(*c)));
                     let glyphs = run.glyphs.iter().map(|g| vello_cpu::Glyph {
@@ -65,7 +76,7 @@ pub fn render_pixmap(list: &DisplayList) -> Pixmap {
                         alpha: 1.0,
                     },
                 };
-                ctx.set_transform(*transform);
+                ctx.set_transform(origin * *transform);
                 ctx.set_paint(img);
                 ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, image.width as f64, image.height as f64));
             }
@@ -184,13 +195,58 @@ pub(crate) fn capture_view(editor: &Editor, target: &CaptureTarget, w: u32, h: u
 
 pub(crate) fn capture(r: &Renderer, editor: &Editor, target: &CaptureTarget, w: u32, h: u32) -> Result<Vec<u8>, ZError> {
     let list = capture_list(r, editor, target, w, h)?;
-    let pixmap = render_pixmap(&list);
-    pixmap.into_png().map_err(|e| ZError::new("render_failed", format!("PNG encoding failed: {e}")))
+    if w <= MAX_CAPTURE && h <= MAX_CAPTURE {
+        let pixmap = render_pixmap(&list);
+        return pixmap.into_png().map_err(|e| ZError::new("render_failed", format!("PNG encoding failed: {e}")));
+    }
+    png_in_tiles(&list).map_err(|e| ZError::new("render_failed", format!("PNG encoding failed: {e}")))
+}
+
+/// A capture bigger than one piece, drawn a band of rows at a time (each
+/// band in tiles at most [`MAX_CAPTURE`] wide) and written to the PNG as
+/// it goes, so only one band's pixels are held.
+fn png_in_tiles(list: &DisplayList) -> Result<Vec<u8>, png::EncodingError> {
+    let (w, h) = (list.width_px, list.height_px);
+    let band = ((BAND_BYTES / (w as u64 * 4)) as u32).clamp(1, MAX_CAPTURE);
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, w, h);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header()?;
+        let mut rows = writer.stream_writer()?;
+        let mut y0 = 0;
+        while y0 < h {
+            let bh = band.min(h - y0);
+            let mut px = vec![0u8; w as usize * bh as usize * 4];
+            let mut x0 = 0;
+            while x0 < w {
+                let tw = MAX_CAPTURE.min(w - x0);
+                let tile = render_tile(list, x0, y0, tw, bh).take_rgba8(vello_cpu::peniko::ImageAlphaType::Alpha);
+                for y in 0..bh as usize {
+                    let from = y * tw as usize * 4;
+                    let to = (y * w as usize + x0 as usize) * 4;
+                    px[to..to + tw as usize * 4].copy_from_slice(&tile[from..from + tw as usize * 4]);
+                }
+                x0 += tw;
+            }
+            std::io::Write::write_all(&mut rows, &px)?;
+            y0 += bh;
+        }
+        rows.finish()?;
+    }
+    Ok(out)
 }
 
 pub(crate) fn capture_list(r: &Renderer, editor: &Editor, target: &CaptureTarget, w: u32, h: u32) -> Result<DisplayList, ZError> {
-    if w == 0 || h == 0 || w > MAX_CAPTURE || h > MAX_CAPTURE {
-        return Err(ZError::new("invalid", format!("capture size must be 1..={MAX_CAPTURE} pixels per side, got {w}x{h}")));
+    if w == 0 || h == 0 {
+        return Err(ZError::new("invalid", format!("a capture is at least 1 pixel a side, got {w}x{h}")));
+    }
+    // Any size the PNG format takes, its pixels within memory (it is drawn
+    // in tiles, but the PNG it makes is held whole).
+    #[cfg(not(target_arch = "wasm32"))]
+    if w > i32::MAX as u32 || h > i32::MAX as u32 || (w as u64) * (h as u64) * 4 > zebra_core::io::memory_budget() {
+        return Err(ZError::new("too_large", format!("a {w}x{h} picture needs more memory than this Mac has")));
     }
     let cv = capture_view(editor, target, w, h)?;
     let mut list = r.build_display_list(editor, &cv.camera, cv.viewport, cv.ppp, &cv.opts);

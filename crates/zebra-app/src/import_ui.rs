@@ -125,6 +125,8 @@ pub fn note_lines(notes: &BTreeMap<ImportNote, usize>, slides: &BTreeMap<ImportN
                 (ImportNote::Gradient, _) => crate::t!("import-note-gradient", count = c),
                 (ImportNote::Other, _) => crate::t!("import-note-other", count = c),
                 (ImportNote::Placeholder, _) => crate::t!("import-note-placeholder", count = c),
+                (ImportNote::Notes, Some(s)) => crate::t!("import-note-notes", count = c, slides = s),
+                (ImportNote::Notes, None) => crate::t!("import-note-notes-count", count = c),
             }
         })
         .collect()

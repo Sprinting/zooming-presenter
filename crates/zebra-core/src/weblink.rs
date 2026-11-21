@@ -208,15 +208,16 @@ pub fn classify(s: &str) -> Result<(Url, Site), LinkError> {
     Ok((u, site))
 }
 
-/// Most pixels a side of a web video's poster or size.
-pub const POSTER_MAX_SIDE: u32 = 8192;
-/// Most pixels in all of a poster (8192 x 4883): bigger is refused
-/// before it is decoded.
-pub const POSTER_MAX_PIXELS: u64 = 40_000_000;
-
-/// A poster (or a size a link claims) within the limits, and not empty.
+/// A poster (or a size a link claims) that isn't empty and whose pixels
+/// fit in the memory a document may take ([`crate::io::memory_budget`]).
+/// There is no other limit: a poster is a picture, and pictures have none
+/// (B10).
 pub fn poster_fits(w: u32, h: u32) -> bool {
-    w > 0 && h > 0 && w <= POSTER_MAX_SIDE && h <= POSTER_MAX_SIDE && w as u64 * h as u64 <= POSTER_MAX_PIXELS
+    #[cfg(not(target_arch = "wasm32"))]
+    let budget = crate::io::memory_budget();
+    #[cfg(target_arch = "wasm32")]
+    let budget = 1u64 << 31;
+    w > 0 && h > 0 && (w as u64) * (h as u64) * 4 <= budget
 }
 
 /// A link with a user name or password before its host

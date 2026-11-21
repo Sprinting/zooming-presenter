@@ -140,10 +140,11 @@ fn web_videos_over_the_api() {
     assert!(s.contains("youtube") && s.contains("Launch talk") && s.contains("poster"), "{s}");
     assert!(log.lock().unwrap().iter().any(|p| p.starts_with("/oembed/youtube?format=json&url=")));
 
-    // A poster over 8 MB is refused before it is read.
+    // A poster has no size limit but memory (B10): 9 MB of something
+    // that isn't a picture is refused as that, not as too big.
     let big = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 9 << 20]);
     let e = rpc_err(c.call("apply", json!({"command":{"op":"add_web_video","url":format!("{web}/talk.mp4"),"poster_base64":big}})));
-    assert_eq!(e.kind(), "too_large", "{e}");
+    assert_ne!(e.kind(), "too_large", "{e}");
 
     // Download keeps the clip in the deck: an ordinary video now.
     c.call("apply", json!({"command":{"op":"download_video","id":id}})).unwrap();

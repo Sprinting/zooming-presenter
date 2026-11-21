@@ -19,8 +19,12 @@ use zebra_core::{Asset, AssetBytes};
 use crate::ImportError;
 
 /// Pictures that are turned into something else (EMF, WMF, SVG) are read
-/// into memory to be converted; bigger ones are left out.
-pub const MAX_CONVERTED: u64 = 64 * 1024 * 1024;
+/// into memory to be converted: as big as memory allows (the conversion
+/// and drawing take several times the file), with no other limit (B9).
+/// Bigger ones are left out with a note.
+pub fn max_converted() -> u64 {
+    zebra_core::io::memory_budget() / 16
+}
 
 /// Is this part a media part (never given to the parser)?
 pub(crate) fn is_media(name: &str) -> bool {
