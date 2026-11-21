@@ -283,6 +283,9 @@ pub enum ElementKind {
     Connector(ConnectorData),
     /// A table of cells, with formulas (see [`crate::table`]).
     Table(crate::table::TableData),
+    /// A chart drawn from its own data or a linked table (see
+    /// [`crate::chart`]).
+    Chart(crate::chart::ChartData),
 }
 
 impl ElementKind {
@@ -297,6 +300,7 @@ impl ElementKind {
             ElementKind::Icon(_) => "icon",
             ElementKind::Connector(_) => "connector",
             ElementKind::Table(_) => "table",
+            ElementKind::Chart(_) => "chart",
         }
     }
     pub fn id_prefix(&self) -> &'static str {
@@ -310,6 +314,7 @@ impl ElementKind {
             ElementKind::Icon(_) => "n",
             ElementKind::Connector(_) => "c",
             ElementKind::Table(_) => "b",
+            ElementKind::Chart(_) => "h",
         }
     }
 }
@@ -1020,6 +1025,7 @@ impl Element {
                 let words: Vec<&str> = t.cells.first().into_iter().flatten().map(|c| c.input.trim()).filter(|s| !s.is_empty() && !s.starts_with('=')).collect();
                 (!words.is_empty()).then(|| truncate(&words.join(" · "), 40))
             }
+            ElementKind::Chart(c) if !c.title.trim().is_empty() => Some(truncate(c.title.trim(), 40)),
             _ => None,
         }
     }

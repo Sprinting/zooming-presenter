@@ -720,6 +720,189 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "is_false")]
         descending: bool,
     },
+    /// Add a chart centred at `x`,`y`. Its data: `data` (rows of values;
+    /// row 1 names the series, column A the categories), or `csv`, or the
+    /// cells of table `from_table` (`range`, default the whole table but
+    /// its footer rows). With `link`, the chart follows that table as it
+    /// changes; without, it takes a copy. With none of these, sample data.
+    /// Scatter reads each series from two columns (X, Y), bubble from three
+    /// (X, Y, size); pie and donut draw the first series.
+    AddChart {
+        /// Default `column`. See [`crate::chart::ChartType`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chart_type: Option<crate::chart::ChartType>,
+        /// Default `flat`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        look: Option<crate::chart::ChartLook>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<Vec<Vec<crate::table::CellInput>>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        csv: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_table: Option<ElementId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        range: Option<crate::table::CellRange>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        link: bool,
+        /// Default `columns`: each column is a series.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        series_in: Option<crate::chart::SeriesIn>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
+        /// Default 640 by 440 local units.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<f64>,
+        /// Default: sized to read well at the given `place` (or 1).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        place: Option<Placement>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<ElementId>,
+    },
+    /// Type into a chart's own data: `values` written from cell `at` ("B2")
+    /// rightwards and down, growing the data to fit; or `data`, replacing
+    /// all of it. `rows` and `columns` set its size (cells past it go).
+    /// Refused while the chart is linked to a table: edit the table, or
+    /// `unlink_chart` first.
+    SetChartData {
+        id: ElementId,
+        #[serde(default = "d_a1")]
+        at: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        values: Option<Vec<Vec<crate::table::CellInput>>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<Vec<Vec<crate::table::CellInput>>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        columns: Option<usize>,
+    },
+    /// Change how a chart looks. Unset fields stay.
+    FormatChart {
+        id: ElementId,
+        #[serde(flatten)]
+        format: ChartFormat,
+    },
+    /// Make a chart follow table `table`: its cells `range` (default the
+    /// whole table but its footer rows, growing with it). The chart's own
+    /// data is kept, and comes back on `unlink_chart`.
+    LinkChart {
+        id: ElementId,
+        table: ElementId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        range: Option<crate::table::CellRange>,
+    },
+    /// Stop following the table, keeping the values the chart shows as its
+    /// own data.
+    UnlinkChart { id: ElementId },
+}
+
+/// An axis bound or step: a number, or `"auto"` (worked out from the data).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum AxisValue {
+    Value(f64),
+    Auto(AxisAuto),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AxisAuto {
+    Auto,
+}
+
+impl AxisValue {
+    pub fn get(self) -> Option<f64> {
+        match self {
+            AxisValue::Value(v) => Some(v),
+            AxisValue::Auto(_) => None,
+        }
+    }
+}
+
+/// The fields of `format_chart` (all optional).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ChartFormat {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_type: Option<crate::chart::ChartType>,
+    /// `flat`, `rounded`, `outline`, `tints`, `labelled` or `framed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<crate::chart::ChartLook>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_in: Option<crate::chart::SeriesIn>,
+    /// "" for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<bool>,
+    /// Text size relative to the chart's own, 0.25 to 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_labels: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gridlines: Option<bool>,
+    /// Between the bars of a category, as a share of a bar, 0 to 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap: Option<f64>,
+    /// Between categories, as a share of a bar, 0 to 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_sets: Option<f64>,
+    /// Donut hole, as a share of the radius, 0.1 to 0.9.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hole: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_min: Option<AxisValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_max: Option<AxisValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_step: Option<AxisValue>,
+    /// How the value axis and labels show numbers (as a column's format).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<crate::table::DataFormat>,
+    /// "" for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y_title: Option<String>,
+    /// Waterfall: the categories (0-based) that stand from zero as totals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totals: Option<Vec<usize>>,
+    /// Per series (by 0-based index).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub series: Vec<SeriesPatch>,
+}
+
+/// One series' format in `format_chart`. Unset fields stay.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct SeriesPatch {
+    pub index: usize,
+    /// A theme slot or #rrggbb; "" for the theme's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<bool>,
+    /// 0 for the look's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markers: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smooth: Option<bool>,
+    /// Combo: draw this series as a line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_line: Option<bool>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1166,6 +1349,10 @@ pub enum Query {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         range: Option<crate::table::CellRange>,
     },
+    /// A chart: its type, look and options, where its data comes from (its
+    /// own, or a linked table's range), and the series and categories it
+    /// draws.
+    Chart { id: ElementId },
 }
 
 /// Result of a [`Query`].

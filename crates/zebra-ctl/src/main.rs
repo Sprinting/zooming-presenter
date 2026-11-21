@@ -122,6 +122,14 @@ enum Cmd {
     /// comma-separated rows read from FILE ("-" for stdin). The table
     /// grows to take them. Formulas start with =.
     SetCells { id: String, at: String, file: PathBuf },
+    /// A chart: its type, look, data (or the table range it follows) and
+    /// the values it shows.
+    Chart { id: String },
+    /// Fill a chart's own data from AT (e.g. B2) with tab- or
+    /// comma-separated rows read from FILE ("-" for stdin). The data grows
+    /// to take them. A chart linked to a table is changed through the
+    /// table instead.
+    ChartData { id: String, at: String, file: PathBuf },
     /// Take characters START..END (counted in characters, END not
     /// included) out of text ID into a new box of their own, as dragging
     /// selected words out of a box does. The new box's centre is --x,--y;
@@ -384,6 +392,36 @@ enum Add {
         header_rows: Option<u8>,
         #[arg(long)]
         footer_rows: Option<u8>,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        x: f64,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        y: f64,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Add a chart: column (default), stacked_column, percent_column, bar,
+    /// stacked_bar, line, area, stacked_area, pie, donut, scatter, bubble,
+    /// combo, radar, waterfall or step. Its data comes from a CSV or
+    /// tab-separated file (--csv FILE, "-" for stdin; row 1 names the
+    /// series, column A the categories), or from a table (--from-table ID,
+    /// optionally --range A1:C5); --link makes it follow the table.
+    Chart {
+        #[arg(default_value = "column")]
+        chart_type: String,
+        #[arg(long)]
+        csv: Option<PathBuf>,
+        #[arg(long)]
+        from_table: Option<String>,
+        #[arg(long)]
+        range: Option<String>,
+        #[arg(long)]
+        link: bool,
+        #[arg(long)]
+        look: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
         #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
         x: f64,
         #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
@@ -677,6 +715,18 @@ fn run(cli: Cli) -> Result<()> {
                     if let Some(v) = id { m["id"] = json!(v) }
                     m
                 }
+                Add::Chart { chart_type, csv, from_table, range, link, look, title, x, y, name, id } => {
+                    let mut m = json!({ "op": "add_chart", "chart_type": chart_type, "x": x, "y": y });
+                    if let Some(f) = csv { m["csv"] = json!(read_cells(&f)?) }
+                    if let Some(v) = from_table { m["from_table"] = json!(v) }
+                    if let Some(v) = range { m["range"] = json!(v) }
+                    if link { m["link"] = json!(true) }
+                    if let Some(v) = look { m["look"] = json!(v) }
+                    if let Some(v) = title { m["title"] = json!(v) }
+                    if let Some(v) = name { m["name"] = json!(v) }
+                    if let Some(v) = id { m["id"] = json!(v) }
+                    m
+                }
                 Add::Shape { shape, x, y, w, h, fill } => {
                     let mut m = json!({ "op": "add_shape", "shape": shape, "x": x, "y": y, "w": w, "h": h });
                     if let Some(f) = fill { m["fill"] = json!(f) }
@@ -722,6 +772,12 @@ fn run(cli: Cli) -> Result<()> {
             let text = read_cells(&file)?;
             let rows = zebra_core::table::parse_delimited(&text).map_err(|l| anyhow!(l.message()))?;
             print(&call(c, "apply", json!({ "command": { "op": "set_cells", "id": id, "at": at, "values": rows } }))?)
+        }
+        Cmd::Chart { id } => print(&call(c, "query", json!({ "query": { "q": "chart", "id": id } }))?),
+        Cmd::ChartData { id, at, file } => {
+            let text = read_cells(&file)?;
+            let rows = zebra_core::table::parse_delimited(&text).map_err(|l| anyhow!(l.message()))?;
+            print(&call(c, "apply", json!({ "command": { "op": "set_chart_data", "id": id, "at": at, "values": rows } }))?)
         }
         Cmd::SetText { id, text } => print(&call(c, "apply", json!({ "command": { "op": "update", "id": id, "patch": { "text": text } } }))?),
         Cmd::Undo => print(&call(c, "undo", json!({}))?),

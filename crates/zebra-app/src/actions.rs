@@ -52,6 +52,9 @@ pub enum Action {
     InsertImage,
     /// Insert › Table: a table in the default style.
     InsertTable,
+    /// Insert › Chart › …: a chart of the type with sample data, or of the
+    /// selected table, linked.
+    InsertChart(zebra_core::chart::ChartType),
     InsertLayout,
     /// Insert › Diagram…: the diagram gallery.
     InsertDiagram,
@@ -167,6 +170,7 @@ impl Action {
             SetFrameStyle(s) => crate::t!("action-set-frame-style", style = frame_name(*s)),
             InsertImage => crate::t!("action-insert-image"),
             InsertTable => crate::t!("action-insert-table"),
+            InsertChart(t) => crate::t!("action-insert-chart", kind = crate::chart_ui::type_name(*t)),
             InsertLayout => crate::t!("action-insert-layout"),
             InsertDiagram => crate::t!("action-insert-diagram"),
             InsertSymbols => crate::t!("action-insert-symbols"),
@@ -253,6 +257,7 @@ impl Action {
         for t in zebra_core::Theme::ids() {
             v.push(SetTheme(t));
         }
+        v.extend(zebra_core::chart::ChartType::ALL.iter().map(|t| InsertChart(*t)));
         v
     }
 }

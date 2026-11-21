@@ -55,6 +55,12 @@ pub enum Tab {
     Table,
     /// Tables: the selected cells' Data Format, fill and border.
     Cell,
+    /// Charts: style, options, type and gaps.
+    Chart,
+    /// Charts: the value axis, number format and axis titles.
+    Axis,
+    /// Charts: one series' colour, labels and line.
+    Series,
 }
 
 impl Tab {
@@ -66,6 +72,9 @@ impl Tab {
             Tab::Path => crate::t!("inspector-tab-path"),
             Tab::Table => crate::t!("inspector-tab-table"),
             Tab::Cell => crate::t!("inspector-tab-cell"),
+            Tab::Chart => crate::t!("inspector-tab-chart"),
+            Tab::Axis => crate::t!("inspector-tab-axis"),
+            Tab::Series => crate::t!("inspector-tab-series"),
         }
     }
 }
@@ -93,6 +102,7 @@ pub fn tabs_for(kind: Option<&ElementKind>, multi: bool) -> Vec<Tab> {
     match kind {
         Some(ElementKind::Text(_)) => vec![Tab::Text, Tab::Arrange, Tab::Path],
         Some(ElementKind::Table(_)) => crate::table_ui::tabs(),
+        Some(ElementKind::Chart(_)) => crate::chart_ui::tabs(),
         Some(_) => vec![Tab::Style, Tab::Arrange, Tab::Path],
         None => vec![],
     }
@@ -173,7 +183,8 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
         let mut insp = Insp { app, el: el.clone(), sel: sel.clone(), theme, patch: None, gesture: false };
         // A table's own tabs start with their sections, as in the mockups:
         // "Table" over the Table tab would say it twice.
-        let table_tab = matches!(el.kind, ElementKind::Table(_)) && matches!(tab, Tab::Table | Tab::Cell | Tab::Text);
+        let table_tab = matches!(el.kind, ElementKind::Table(_)) && matches!(tab, Tab::Table | Tab::Cell | Tab::Text)
+            || matches!(el.kind, ElementKind::Chart(_)) && matches!(tab, Tab::Chart | Tab::Axis | Tab::Series);
         if !(table_tab && sel.len() == 1) {
             header(&mut insp, ui, &p);
         } else {
@@ -192,6 +203,9 @@ pub fn ui(app: &mut ZebraApp, ui: &mut Ui) {
                 Tab::Text => text_tab(&mut insp, ui),
                 Tab::Table => crate::table_ui::table_tab(&mut insp, ui),
                 Tab::Cell => crate::table_ui::cell_tab(&mut insp, ui),
+                Tab::Chart => crate::chart_ui::chart_tab(&mut insp, ui),
+                Tab::Axis => crate::chart_ui::axis_tab(&mut insp, ui),
+                Tab::Series => crate::chart_ui::series_tab(&mut insp, ui),
                 Tab::Arrange => arrange_tab(&mut insp, ui, &p),
                 Tab::Path => path_tab(&mut insp, ui, &p),
             }
@@ -246,6 +260,7 @@ fn kind_name(e: &Element) -> String {
         ElementKind::Image(_) => crate::t!("inspector-kind-image"),
         ElementKind::Ink(_) => crate::t!("inspector-kind-drawing"),
         ElementKind::Table(_) => crate::t!("inspector-kind-table"),
+        ElementKind::Chart(_) => crate::chart_ui::kind_name(),
         #[allow(unreachable_patterns)]
         _ => crate::t!("inspector-kind-object"),
     }

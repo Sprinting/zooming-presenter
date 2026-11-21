@@ -279,6 +279,8 @@ impl Editor {
             _ => unreachable!("apply_table takes table commands"),
         };
         self.table_settled(&id, &theme);
+        // Charts that follow it draw it afresh.
+        out.changed.extend(self.charts_on(&id));
         if !out.created.contains(&id) {
             out.changed.push(id);
         }
@@ -298,11 +300,21 @@ impl Editor {
     /// 100,000-cell cap (4,999 x 20), makes a step of about 1.2 MB for an
     /// insert or delete at the top. That is bounded by the cell cap and
     /// accepted (review of 19a); plain tables make steps of a few KB.
+    ///
+    /// Ranges of charts linked to it move with their cells; a chart whose
+    /// cells all go keeps the values it showed.
     fn reshape_table(&mut self, id: &str, op: &Reshape) -> ZResult<()> {
-        match self.doc.elements.get_mut(id).map(|e| &mut e.kind) {
-            Some(ElementKind::Table(t)) => crate::calc::reshape(t, op).map_err(ZError::invalid),
-            _ => Err(ZError::invalid(format!("'{id}' is not a table"))),
+        if !matches!(self.doc.elements.get(id).map(|e| &e.kind), Some(ElementKind::Table(_))) {
+            return Err(ZError::invalid(format!("'{id}' is not a table")));
         }
+        // (A refused change is rolled back with the batch, charts too.)
+        let moves = self.links_before_reshape(id, op);
+        match self.doc.elements.get_mut(id).map(|e| &mut e.kind) {
+            Some(ElementKind::Table(t)) => crate::calc::reshape(t, op).map_err(ZError::invalid)?,
+            _ => unreachable!("checked above"),
+        }
+        self.links_moved(moves, &mut Outcome::default());
+        Ok(())
     }
 
     /// The table to change (noted for undo), unlocked.

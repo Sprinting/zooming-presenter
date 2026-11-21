@@ -7,6 +7,7 @@
 
 pub mod beta;
 pub mod camera;
+pub mod chart;
 pub mod check;
 pub mod clip;
 pub mod command;
@@ -57,6 +58,7 @@ pub use view::{Mode, Tool, ViewState};
 ///
 /// 2: web videos (a video with a `link` and no `asset`), tables
 /// (`type: "table"`, ids `b1`...) and theme colours shape5 and shape6.
-pub const FORMAT_VERSION: u32 = 2;
+/// 3: charts (`type: "chart"`, ids `h1`...).
+pub const FORMAT_VERSION: u32 = 3;
 /// Bumped whenever the command/query/API schema changes incompatibly.
 pub const API_VERSION: u32 = 1;

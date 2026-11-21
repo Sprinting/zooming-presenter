@@ -92,6 +92,29 @@ fn one_line(ed: &Editor, e: &Element, steps: &[usize]) -> String {
                 let _ = write!(s, " merged {}", m.join(","));
             }
         }
+        ElementKind::Chart(c) => {
+            let _ = write!(s, " {}", c.chart_type.key());
+            if c.look != crate::chart::ChartLook::Flat {
+                let _ = write!(s, " {}", c.look.key());
+            }
+            if !c.title.is_empty() {
+                let _ = write!(s, " title={:?}", truncate(&c.title, 40));
+            }
+            let p = c.plot(&ed.doc);
+            let _ = write!(s, " {} series x {} categories", p.series.len(), p.categories.len());
+            if p.cut {
+                let _ = write!(s, " (of {} x {}: draws the first part)", p.all_series, p.all_categories);
+            }
+            if let Some(l) = &c.link {
+                let _ = write!(s, " linked to {}", l.table);
+                if let Some(r) = &l.range {
+                    let _ = write!(s, " {}", r.a1());
+                }
+            }
+            if c.series_in == crate::chart::SeriesIn::Rows {
+                s.push_str(" series in rows");
+            }
+        }
         ElementKind::Connector(c) => {
             let end = |e: &crate::model::Endpoint| e.element.clone().unwrap_or_else(|| "point".into());
             let _ = write!(s, " {} -> {}", end(&c.from), end(&c.to));
@@ -230,6 +253,11 @@ pub fn describe(ed: &Editor) -> String {
                         let _ = writeln!(out, "{}{line}", "  ".repeat(depth + 2));
                     }
                 }
+                if let ElementKind::Chart(c) = &e.kind {
+                    for line in chart_lines(&c.plot(&ed.doc), DESCRIBE_VALUES) {
+                        let _ = writeln!(out, "{}{line}", "  ".repeat(depth + 2));
+                    }
+                }
                 if e.is_frame() {
                     walk(ed, children, steps, Some(id), depth + 1, out);
                 }
@@ -264,6 +292,35 @@ const DESCRIBE_ROWS: usize = 20;
 /// A table as lines of text: row number, then each cell as it shows,
 /// with a formula after its value (`£2,220,000 =SUM(B2:B3)`) and merged
 /// cells shown once.
+/// Values per series a chart's description shows.
+pub const DESCRIBE_VALUES: usize = 20;
+
+/// A chart's data as lines: the categories, then each series' values (the
+/// first `max` of each, then how many more).
+pub fn chart_lines(p: &crate::chart::Plot, max: usize) -> Vec<String> {
+    let more = |n: usize| if n > max { format!(" …and {} more", n - max) } else { String::new() };
+    let num = |v: f64| if v.is_finite() { crate::table::plain_number(v) } else { "-".into() };
+    let mut out = vec![];
+    if !p.categories.is_empty() {
+        let cats: Vec<String> = p.categories.iter().take(max).map(|c| truncate(c, 24)).collect();
+        out.push(format!("categories: {}{}", cats.join(", "), more(p.categories.len())));
+    }
+    for s in &p.series {
+        let vals: Vec<String> = (0..s.values.len().min(max))
+            .map(|i| match (s.x.get(i), s.sizes.get(i)) {
+                (Some(x), Some(z)) => format!("({}, {}, {})", num(*x), num(s.values[i]), num(*z)),
+                (Some(x), None) => format!("({}, {})", num(*x), num(s.values[i])),
+                _ => num(s.values[i]),
+            })
+            .collect();
+        out.push(format!("{}: {}{}", truncate(&s.name, 30), vals.join(", "), more(s.values.len())));
+    }
+    if p.cut {
+        out.push(format!("(draws the first {} of {} series and {} of {} categories)", p.series.len(), p.all_series, p.categories.len(), p.all_categories));
+    }
+    out
+}
+
 pub fn table_lines(t: &crate::table::TableData, max_rows: usize) -> Vec<String> {
     let looks: Vec<_> = (0..t.n_cols()).map(|c| t.column_look(c)).collect();
     let mut out = vec![];
@@ -373,6 +430,73 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                 "font_size": t.font_size, "banded": t.banded, "gridlines": t.gridlines, "show_name": t.show_name,
             })
         }
+        Query::Chart { id } => {
+            let e = d.get(&id).ok_or_else(|| ZError::not_found(&id, d.elements.keys().cloned()))?;
+            let ElementKind::Chart(c) = &e.kind else {
+                return Err(ZError::invalid(format!("'{id}' is a {}, not a chart", e.kind.type_name())));
+            };
+            let p = c.plot(d);
+            let src = c.source(d);
+            let series: Vec<Value> = p
+                .series
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let num = |v: &f64| if v.is_finite() { json!(v) } else { Value::Null };
+                    let mut o = json!({"index": i, "name": s.name, "values": s.values.iter().map(num).collect::<Vec<_>>()});
+                    if !s.x.is_empty() {
+                        o["x"] = json!(s.x.iter().map(num).collect::<Vec<_>>());
+                    }
+                    if !s.sizes.is_empty() {
+                        o["sizes"] = json!(s.sizes.iter().map(num).collect::<Vec<_>>());
+                    }
+                    if let Some(f) = c.series.get(i).filter(|f| !f.is_empty()) {
+                        o["format"] = serde_json::to_value(f).unwrap();
+                    }
+                    o
+                })
+                .collect();
+            let mut v = serde_json::to_value(c).unwrap();
+            let o = v.as_object_mut().unwrap();
+            o.remove("data");
+            o.remove("series");
+            o.insert("id".into(), json!(id));
+            o.insert("chart_type_code".into(), json!(c.chart_type.code()));
+            // What is drawn, of how much: a chart draws at most
+            // MAX_SERIES series, MAX_CATEGORIES categories, MAX_VALUES values.
+            o.insert(
+                "drawn".into(),
+                json!({"series": p.series.len(), "categories": p.categories.len(), "of_series": p.all_series, "of_categories": p.all_categories, "cut": p.cut,
+                       "limits": {"series": crate::chart::MAX_SERIES, "categories": crate::chart::MAX_CATEGORIES, "values": crate::chart::MAX_VALUES}}),
+            );
+            if c.axis_step.is_some() && c.step_ignored(&p) {
+                o.insert("axis_step_ignored".into(), json!(format!("that step draws more than {} gridlines, so the axis steps automatically", crate::chart::MAX_AXIS_STEPS)));
+            }
+            o.insert("look_code".into(), json!(c.look.code()));
+            o.insert(
+                "source".into(),
+                if src.linked { json!({"table": c.link.as_ref().map(|l| l.table.clone()), "range": src.range.a1()}) } else { json!({"own": true, "rows": c.data.n_rows(), "columns": c.data.n_cols()}) },
+            );
+            if !src.linked {
+                o.insert("data".into(), json!(c.data.shown_rows(&c.data.whole())));
+                let formulas: serde_json::Map<String, Value> = c
+                    .data
+                    .cells
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(r, row)| row.iter().enumerate().filter(|(_, x)| x.is_formula()).map(move |(cc, x)| (crate::table::cell_name(r, cc), json!(x.input))))
+                    .collect();
+                if !formulas.is_empty() {
+                    o.insert("formulas".into(), Value::Object(formulas));
+                }
+            }
+            o.insert("categories".into(), json!(p.categories));
+            o.insert("series".into(), json!(series));
+            if p.cut {
+                o.insert("cut".into(), json!(true));
+            }
+            v
+        }
         Query::Element { id } => {
             let e = d.get(&id).ok_or_else(|| ZError::not_found(&id, d.elements.keys().cloned()))?;
             element_json(ed, e)
@@ -403,6 +527,10 @@ pub fn query(ed: &Editor, q: Query) -> ZResult<Value> {
                             ElementKind::Image(i) => i.alt.to_lowercase(),
                             ElementKind::Video(v) => v.alt.to_lowercase(),
                             ElementKind::Table(t) => t.cells.iter().flatten().map(|c| c.input.to_lowercase()).collect::<Vec<_>>().join("\n"),
+                            ElementKind::Chart(c) => {
+                                let p = c.plot(d);
+                                std::iter::once(c.title.to_lowercase()).chain(p.categories.iter().chain(p.series.iter().map(|s| &s.name)).map(|s| s.to_lowercase())).collect::<Vec<_>>().join("\n")
+                            }
                             _ => String::new(),
                         };
                         hay.contains(n.as_str()) || e.name.to_lowercase().contains(n.as_str())

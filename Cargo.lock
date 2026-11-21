@@ -7221,6 +7221,7 @@ name = "zebra-render"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "betteroffice-drawingml",
  "eframe",
  "egui",
  "egui-wgpu",
@@ -7236,6 +7237,7 @@ dependencies = [
  "serde_json",
  "skrifa 0.49.0",
  "unicode-script",
+ "unicode-segmentation",
  "vello",
  "vello_cpu 0.4.0",
  "zebra-core",
