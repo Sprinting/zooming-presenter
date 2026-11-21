@@ -365,6 +365,12 @@ pub fn hit(app: &ZebraApp, p: Pos2, frames_inside: bool) -> Option<ElementId> {
 // Content
 
 /// Draw the document into `rect`. Uses the GPU renderer when available.
+/// Whether the window being drawn can't be seen: covered, on a Space
+/// that isn't showing, or minimised.
+fn hidden(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.viewport().occluded == Some(true) || i.viewport().minimized == Some(true))
+}
+
 pub fn paint_content(app: &mut ZebraApp, ui: &mut Ui, rect: ERect, presenting: bool) {
     let ed = &app.editor;
     let mut opts = zebra_render::SceneOptions { presenting, ..Default::default() };
@@ -408,8 +414,11 @@ pub fn paint_content(app: &mut ZebraApp, ui: &mut Ui, rect: ERect, presenting: b
                 app.editor.perf.record_part("vello_encode", enc);
                 app.editor.perf.record_part("vello_submit", submit);
                 app.editor.perf.record_part("vello_scope_wait", wait);
-                // Animated GIFs on screen: repaint for their next frame only.
-                if let Some(t) = list.next_frame_in {
+                // Animated GIFs on screen: repaint for their next frame only,
+                // and not at all while nobody can see this window (covered,
+                // on another Space behind a full-screen app, or minimised,
+                // M23). Showing it again repaints it, and the GIF goes on.
+                if let Some(t) = list.next_frame_in.filter(|_| !hidden(ui.ctx())) {
                     ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(t.clamp(0.01, 10.0)));
                 }
                 return;
