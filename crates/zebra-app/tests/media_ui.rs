@@ -176,3 +176,45 @@ fn base64_encode(b: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(b)
 }
+
+/// M12 (Mac pass 21 Nov): a file dropped from Finder at the bottom left
+/// landed near the top centre. winit's drop carries no position and no
+/// pointer moves arrive during a drag, so egui's pointer is stale; the
+/// platform's drop point (AppKit's pointer location on the Mac) is used.
+/// Keynote places a dropped file where it is dropped.
+#[test]
+fn a_dropped_file_lands_where_it_is_dropped() {
+    let mut h = harness();
+    // The pointer egui last saw: near the top centre, before the drag.
+    h.event(Event::PointerMoved(Pos2::new(640.0, 140.0)));
+    h.step();
+    h.state_mut().drop_point = |_| Some(Pos2::new(260.0, 640.0));
+    let mut png = vec![];
+    image::RgbaImage::new(40, 30).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let p = file("dropped.png", &png);
+    /// A file dropped from Finder, as the window system hands it over.
+    #[derive(Debug)]
+    struct Dropped(std::path::PathBuf);
+    impl egui::DroppedFile for Dropped {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            std::fs::read(&self.0).map_err(|e| e.to_string())
+        }
+    }
+    h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped(p.into())));
+    h.step();
+    h.step();
+    let app = h.state();
+    let want = app.canvas.s2w(&app.editor, Pos2::new(260.0, 640.0));
+    let e = app.editor.doc.elements.values().find(|e| matches!(e.kind, ElementKind::Image(_))).expect("the picture came in");
+    assert!((e.transform.x - want.x).abs() < 0.5 && (e.transform.y - want.y).abs() < 0.5, "at ({}, {}), dropped at ({}, {})", e.transform.x, e.transform.y, want.x, want.y);
+
+    // The conversion from AppKit's view points: origin bottom left unless
+    // flipped, egui points are AppKit's over the zoom factor.
+    assert_eq!(zebra_app::mac::view_to_egui(100.0, 50.0, 800.0, false, 1.0), Some(Pos2::new(100.0, 750.0)));
+    assert_eq!(zebra_app::mac::view_to_egui(100.0, 50.0, 800.0, true, 1.0), Some(Pos2::new(100.0, 50.0)));
+    assert_eq!(zebra_app::mac::view_to_egui(100.0, 50.0, 800.0, false, 2.0), Some(Pos2::new(50.0, 375.0)));
+    assert_eq!(zebra_app::mac::view_to_egui(f64::NAN, 50.0, 800.0, false, 1.0), None);
+}

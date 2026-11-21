@@ -84,6 +84,9 @@ pub struct ZebraApp {
     /// (File › Open, Finder). The window is made only once a document is
     /// in, so a file that can't be opened leaves just the alert (M10).
     pub opened_for_window: Vec<(PathBuf, zebra_core::Prepared)>,
+    /// Where a file being dropped now is, in the window (see
+    /// `mac::drop_point`); tests give their own.
+    pub drop_point: fn(&ZebraApp) -> Option<egui::Pos2>,
     /// For the shell: close this window (its document is saved or discarded).
     pub close_me: bool,
     /// For the shell: the person chose Quit.
@@ -401,6 +404,7 @@ impl ZebraApp {
             last_image_trim: 0.0,
             open_elsewhere: vec![],
             opened_for_window: vec![],
+            drop_point: crate::mac::drop_point,
             renderer: renderer.clone(),
             gpu_canvas: wgpu.as_ref().map(zebra_render::gpu::VelloCanvas::new),
             wgpu,
@@ -2060,7 +2064,9 @@ impl ZebraApp {
             }
             return;
         }
-        let pos = ctx.input(|i| i.pointer.hover_pos());
+        // Where it was dropped (Keynote places it there): the platform's
+        // drop point, else egui's pointer, else the middle of the canvas.
+        let pos = (self.drop_point)(self).or_else(|| ctx.input(|i| i.pointer.hover_pos()));
         let at = pos.map(|p| self.canvas.s2w(&self.editor, p)).unwrap_or_else(|| self.canvas_center_world());
         for (i, f) in files.iter().enumerate() {
             let p = f.path().to_path_buf();
