@@ -76,24 +76,33 @@ fn a_pasted_picture_holds_its_pixels_once() {
     let (w, hh) = (4000u32, 4000u32);
     let rgba = noise(w, hh);
     let pixels = rgba.len();
+    // What the paste worker does, then what the window does with it, with
+    // no frame drawn in between (drawing the picture decodes it for the
+    // screen, which isn't the paste's doing).
     let base = NOW.load(Relaxed);
     PEAK.store(base, Relaxed);
-    zebra_app::media_ui::paste_picture_with(h.state_mut(), move || Some((w, hh, rgba)));
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(120);
-    while h.state().editor.doc.elements.is_empty() && std::time::Instant::now() < until {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        h.run_steps(1);
-    }
+    let file = zebra_app::media_ui::pasted_png_file(w, hh, rgba).expect("a picture");
+    let at = h.state().canvas_center_world();
+    h.state_mut().insert_pasted_file(&file, at, "Pasted image".into());
+    let extra = PEAK.load(Relaxed).saturating_sub(base);
     let app = h.state();
     assert_eq!(app.editor.doc.elements.len(), 1, "the picture landed");
     let a = app.editor.doc.assets.values().next().unwrap();
     assert_eq!((a.width, a.height), (w, hh), "at its full size");
-    // Over what was held before the paste (which counts the pixels): the
-    // PNG, its base64 and its decoded copy were each about the pixels'
-    // size again. Now only the encoder's buffers and the scratch file's
-    // writer are, a few MB.
-    let extra = PEAK.load(Relaxed).saturating_sub(base);
+    // Over what was held before (which counts the pixels): the PNG, its
+    // base64 and its decoded copy were each about the pixels' size again
+    // (3.5x in all). Now only the encoder's buffers are, a few MB.
     assert!(extra < pixels / 4, "paste held {} MB over the {} MB of pixels", extra / MB, pixels / MB);
+    // The old way, for the record: the PNG in memory, then its base64 and
+    // a decoded copy (with today's encoder; the old one also held about 3x
+    // the pixels while it encoded).
+    let rgba = noise(w, hh);
+    let base = NOW.load(Relaxed);
+    PEAK.store(base, Relaxed);
+    let png = zebra_app::media_ui::pasted_png(w, hh, rgba).unwrap();
+    h.state_mut().insert_image_bytes(png, at, "Pasted image".into());
+    let old = PEAK.load(Relaxed).saturating_sub(base);
+    assert!(old > pixels, "the old way held {} MB over", old / MB);
     // The scratch file is gone once the picture is in.
     let left: Vec<_> = walk(&dir).into_iter().filter(|p| p.to_string_lossy().contains("-paste-")).collect();
     assert!(left.is_empty(), "scratch files left: {left:?}");

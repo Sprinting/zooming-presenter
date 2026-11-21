@@ -1132,12 +1132,25 @@ fn pixels_add_up(w: u32, h: u32, rgba: &[u8]) -> bool {
     w != 0 && h != 0 && (w as u128) * (h as u128) * 4 == rgba.len() as u128
 }
 
+/// Rows are filtered and compressed as they go (png's stream writer), so
+/// the encoder holds a few rows, never a second copy of the picture (the
+/// whole-image writer filtered it all into one buffer and compressed that
+/// into another: about 3x the pixels again).
 fn encode_png(w: u32, h: u32, rgba: &[u8], out: impl std::io::Write) -> Option<()> {
-    use image::ImageEncoder;
+    use std::io::Write;
     if !pixels_add_up(w, h, rgba) {
         return None;
     }
-    image::codecs::png::PngEncoder::new(out).write_image(rgba, w, h, image::ExtendedColorType::Rgba8).ok()
+    let mut e = png::Encoder::new(out, w, h);
+    e.set_color(png::ColorType::Rgba);
+    e.set_depth(png::BitDepth::Eight);
+    let mut writer = e.write_header().ok()?;
+    let mut stream = writer.stream_writer().ok()?;
+    // A row at a time (a row of a 20,000-pixel picture is 80 KB).
+    for row in rgba.chunks(w as usize * 4) {
+        stream.write_all(row).ok()?;
+    }
+    stream.finish().ok()
 }
 
 // ----------------------------------------------------------------------
