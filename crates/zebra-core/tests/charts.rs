@@ -356,7 +356,7 @@ fn a_table_without_names_gets_numbered_categories_and_series() {
 #[test]
 fn a_link_to_a_huge_table_draws_the_first_part() {
     let mut ed = Editor::default();
-    // 5,001 rows x 20 columns: 100,020 cells is over a table's limit, so 4,999.
+    // 4,999 rows x 20 columns: about 100,000 cells.
     let rows: Vec<Vec<serde_json::Value>> = (0..4999).map(|r| (0..20).map(|c| json!(r * 20 + c)).collect()).collect();
     run(&mut ed, json!({"op": "add_table", "id": "b1", "header_rows": 0, "cells": rows})).unwrap();
     let id = run(&mut ed, json!({"op": "add_chart", "from_table": "b1", "link": true})).unwrap().created[0].clone();
