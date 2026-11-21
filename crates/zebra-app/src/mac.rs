@@ -86,7 +86,7 @@ pub fn refresh_accent() -> bool {
 }
 
 #[cfg(target_os = "macos")]
-pub use imp::{NsParent, adopt_root, adopt_window, sync_window};
+pub use imp::{NsParent, adopt_root, adopt_window, sync_document, sync_window};
 
 #[cfg(target_os = "macos")]
 mod imp {
