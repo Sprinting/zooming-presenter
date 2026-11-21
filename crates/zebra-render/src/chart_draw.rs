@@ -117,7 +117,7 @@ fn signature(e: &Element, c: &ChartData, doc: &zebra_core::Document, th: &Theme)
         t.n_cols().hash(h);
         (t.header_rows, t.header_columns, t.footer_rows).hash(h);
         for row in &t.cells {
-            (&**row as *const Vec<zebra_core::table::Cell> as usize).hash(h);
+            row.identity().hash(h);
         }
     };
     rows(&c.data, &mut h);

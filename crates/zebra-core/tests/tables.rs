@@ -153,7 +153,7 @@ fn set_cells_grows_the_table_above_the_footer() {
 fn files_round_trip_and_save_the_lowest_version_they_need() {
     let ed = sales();
     let json = io::to_json(&ed.doc);
-    assert!(json.starts_with("{\n  \"format_version\": 2,"));
+    assert!(json.starts_with("{\n  \"format_version\": 4,"));
     let back = io::from_json(&json).unwrap();
     let mut ed2 = Editor::default();
     ed2.load(back, None);
@@ -167,7 +167,7 @@ fn files_round_trip_and_save_the_lowest_version_they_need() {
     run(&mut plain, json!({"op": "add_shape", "shape": "rectangle", "fill": "theme:shape5"})).unwrap();
     assert_eq!(required_version(&plain.doc), 2);
     // A version from the future is refused with a message.
-    let future = json.replacen("\"format_version\": 2", &format!("\"format_version\": {}", FORMAT_VERSION + 1), 1);
+    let future = json.replacen("\"format_version\": 4", &format!("\"format_version\": {}", FORMAT_VERSION + 1), 1);
     let e = io::from_json(&future).unwrap_err();
     assert_eq!(e.code, "bad_file");
     assert!(e.message.contains("newer than this app"), "{}", e.message);
@@ -324,12 +324,13 @@ fn over_the_limits_is_refused_with_a_message_and_changes_nothing() {
     assert_eq!(e.code, "too_big");
     let e = run(&mut ed, json!({"op": "insert_rows", "id": "b1", "index": 0, "count": usize::MAX})).unwrap_err();
     assert_eq!(e.code, "too_big");
-    // Cells: as many as fit in memory (half the Mac's), refused before
-    // any is made.
-    let rows = table::max_cells() / 1000 + 1;
-    assert!(rows <= table::MAX_ROWS, "this machine's memory sets the cells before the rows");
-    let e = run(&mut ed, json!({"op": "add_table", "rows": rows, "columns": 1000})).unwrap_err();
-    assert!(e.message.contains("memory"), "{}", e.message);
+    // Empty cells take no memory (as in Numbers): a full-size table is
+    // made, and only its rows and columns cost anything.
+    let mut big = Editor::default();
+    run(&mut big, json!({"op": "add_table", "id": "t", "rows": table::MAX_ROWS, "columns": table::MAX_COLUMNS})).unwrap();
+    assert_eq!(table(&big, "t").n_rows(), table::MAX_ROWS);
+    assert!(!table::fits_memory(usize::MAX / 2, 1000));
+    assert_eq!(table::Limit::of_size(usize::MAX / 2, 1000), Some(table::Limit::Rows));
     let e = run(&mut ed, json!({"op": "delete_rows", "id": "b1", "index": usize::MAX, "count": 2})).unwrap_err();
     assert_eq!(e.code, "invalid_params");
     assert_eq!(ed.doc, before);
@@ -349,9 +350,9 @@ fn huge_pastes_are_refused_before_they_become_a_grid() {
     assert_eq!(parse_delimited(&many), Err(Limit::Columns));
     let tall = "1\n".repeat(1_000_001);
     assert_eq!(parse_delimited(&tall), Err(Limit::Rows));
-    // Ragged: one long row makes every row that wide, and the grid must
-    // fit in memory.
-    assert_eq!(Limit::of_size(table::max_cells() / 1000 + 1, 1000), Some(Limit::Cells));
+    // Filled cells must fit in memory: the count is checked as fields
+    // are read (no Mac in the cloud runs out at 3,000,000).
+    assert!(table::max_cells() > 3_000_000);
     let long_field = format!("a\t{}", "z".repeat(table::MAX_INPUT + 2));
     assert_eq!(parse_delimited(&long_field), Err(Limit::Input));
     assert_eq!(parse_delimited("").unwrap(), Vec::<Vec<String>>::new());
@@ -551,7 +552,7 @@ fn the_kept_formula_sheet_agrees_with_a_fresh_one() {
         let kept = table(&ed, "b1");
         let mut fresh = kept.clone();
         for row in fresh.cells.iter_mut() {
-            for cell in row.iter_mut() {
+            for (_, cell) in row.filled_mut() {
                 cell.value = None;
                 cell.format = None;
             }

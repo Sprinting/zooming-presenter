@@ -288,3 +288,36 @@ fn numbers_sized_tables_stay_usable() {
     std::fs::write(out_dir().join("table_sizes.txt"), &report).unwrap();
     eprintln!("{report}");
 }
+
+/// Frames of a full-size (1,000,000 x 1,000) table with a few filled
+/// cells and a formula column, timed (release builds: `cargo test
+/// --release -p zebra-render --test tables -- --ignored full_size --nocapture`).
+#[test]
+#[ignore]
+fn full_size_table_frames() {
+    let r = Renderer::new();
+    let mut ed = editor(&r, "classic");
+    run(&mut ed, json!({"op": "add_table", "id": "b1", "rows": table::MAX_ROWS, "columns": table::MAX_COLUMNS, "scale": 1.0}));
+    for i in 0..100 {
+        run(&mut ed, json!({"op": "set_cells", "id": "b1", "at": table::cell_name(1 + i * 9_973, i % 5), "values": [[format!("£{i}")]]}));
+    }
+    run(&mut ed, json!({"op": "set_cells", "id": "b1", "at": "B2", "values": [["=SUM(A3:A1000000)"]]}));
+    let opts = SceneOptions::default();
+    let vp = [1280.0, 800.0];
+    let e = ed.doc.get("b1").unwrap().clone();
+    let (w, h) = e.world_size();
+    let corner = Camera { cx: e.transform.x - w / 2.0 + 640.0, cy: e.transform.y - h / 2.0 + 400.0, zoom: 1.0, rotation: 0.0 };
+    let middle = Camera { cx: e.transform.x - w / 2.0 + 640.0, cy: e.transform.y, zoom: 1.0, rotation: 0.0 };
+    let whole = Camera { cx: e.transform.x, cy: e.transform.y, zoom: 700.0 / h, rotation: 0.0 };
+    for (name, cam) in [("corner", corner), ("middle", middle), ("whole", whole)] {
+        let t0 = Instant::now();
+        let list = r.build_display_list(&ed, &cam, vp, 2.0, &opts);
+        let first = t0.elapsed();
+        let t0 = Instant::now();
+        let n = if std::env::var("ZEBRA_SPIN").is_ok() { 400 } else { 1 };
+        for _ in 0..n {
+            r.build_display_list(&ed, &cam, vp, 2.0, &opts);
+        }
+        eprintln!("{name}: {} items, first frame {first:?}, next {:?}", list.items.len(), t0.elapsed() / n);
+    }
+}

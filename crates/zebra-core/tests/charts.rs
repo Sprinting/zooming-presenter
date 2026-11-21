@@ -71,23 +71,24 @@ fn a_new_chart_has_sample_data_and_one_undo_step() {
 }
 
 #[test]
-fn charts_are_format_3_and_older_builds_refuse_them() {
-    assert_eq!(FORMAT_VERSION, 3);
+fn charts_and_tables_are_format_4_and_older_builds_refuse_them() {
+    // Charts took 3, tables held sparsely 4.
+    assert_eq!(FORMAT_VERSION, 4);
     let mut ed = sales();
-    assert_eq!(io::required_version(&ed.doc), 2);
+    assert_eq!(io::required_version(&ed.doc), 4);
     let id = run(&mut ed, json!({"op": "add_chart", "title": "Sales"})).unwrap().created[0].clone();
-    assert_eq!(io::required_version(&ed.doc), 3);
+    assert_eq!(io::required_version(&ed.doc), 4);
     let json = io::to_json(&ed.doc);
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(v["format_version"], 3);
+    assert_eq!(v["format_version"], 4);
     let back = io::from_json(&json).unwrap();
     assert_eq!(back.elements[&id], ed.doc.elements[&id]);
-    // A build that knows format 2 refuses it as newer.
+    // A build that knows an older format refuses it as newer.
     let mut future = v.clone();
     future["format_version"] = json!(FORMAT_VERSION + 1);
     assert_eq!(io::from_json(&future.to_string()).unwrap_err().code, "bad_file");
     ed.apply(cmd(json!({"op": "delete", "ids": [id]})), Origin::Human).unwrap();
-    assert_eq!(io::required_version(&ed.doc), 2);
+    assert_eq!(io::required_version(&ed.doc), 4, "the table still needs 4");
     // Defaults stay out of the file.
     let mut ed = Editor::default();
     let id = run(&mut ed, json!({"op": "add_chart"})).unwrap().created[0].clone();

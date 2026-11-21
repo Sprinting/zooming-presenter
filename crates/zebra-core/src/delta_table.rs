@@ -107,6 +107,15 @@ impl TableChange {
         let col_src = sources(a.n_cols(), &columns);
         let row_src = sources(a.n_rows(), &row_order);
         let blank = Cell::default();
+        // Where each column before went (None: deleted).
+        let mut col_dst: Vec<Option<usize>> = vec![None; a.n_cols()];
+        for (j, s) in col_src.iter().enumerate() {
+            if let Some(aj) = s {
+                if let Some(d) = col_dst.get_mut(*aj) {
+                    *d = Some(j);
+                }
+            }
+        }
         let mut cells = vec![];
         for (i, src) in row_src.iter().enumerate() {
             let (Some(ai), Some(brow)) = (*src, b.cells.get(i)) else { continue };
@@ -114,13 +123,24 @@ impl TableChange {
             if columns.is_none() && arow.same(brow) {
                 continue;
             }
-            for (j, bc) in brow.iter().enumerate() {
+            // Only filled cells can differ: those filled after, and those
+            // filled before that are empty now.
+            for (j, bc) in brow.filled() {
                 let ac = col_src.get(j).copied().flatten().and_then(|aj| arow.get(aj)).unwrap_or(&blank);
                 if ac != bc {
                     cells.push((i as u32, j as u32, bc.clone()));
                 }
             }
+            for (aj, ac) in arow.filled() {
+                let Some(j) = col_dst.get(aj).copied().flatten() else { continue };
+                let bc = brow.get(j).unwrap_or(&blank);
+                if *bc == blank && *ac != blank {
+                    cells.push((i as u32, j as u32, blank.clone()));
+                }
+            }
         }
+        cells.sort_by_key(|(i, j, _)| (*i, *j));
+        cells.dedup_by_key(|(i, j, _)| (*i, *j));
         let column_values = col_src
             .iter()
             .enumerate()
@@ -212,19 +232,24 @@ impl TableChange {
         match &self.columns {
             None => {}
             Some(AxisChange::Permute(order)) => {
+                let mut new_of = vec![0usize; order.len()];
+                for (i, &o) in order.iter().enumerate() {
+                    new_of[o as usize] = i;
+                }
                 for row in &mut t.cells {
-                    let moved: Vec<Cell> = order.iter().map(|&o| row[o as usize].clone()).collect();
-                    row.set(moved);
+                    row.remap(|c| new_of[c]);
                 }
                 let cols = std::mem::take(&mut t.columns);
                 t.columns = order.iter().map(|&o| cols[o as usize].clone()).collect();
             }
             Some(AxisChange::Splices(sp)) => {
+                // Splices are in order, at positions before: last first
+                // keeps the earlier positions right.
                 for row in &mut t.cells {
-                    let mut v: Vec<Cell> = row.to_vec();
-                    let blanks: Vec<Splice<Cell>> = sp.iter().map(|s| Splice { at: s.at, remove: s.remove, insert: vec![Cell::default(); s.insert.len()] }).collect();
-                    crate::delta::splice_in_place(&mut v, &blanks);
-                    row.set(v);
+                    for s in sp.iter().rev() {
+                        row.remove_cols(s.at..s.at + s.remove);
+                        row.insert_empty(s.at, s.insert.len());
+                    }
                 }
                 crate::delta::splice_in_place(&mut t.columns, sp);
             }

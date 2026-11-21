@@ -59,6 +59,8 @@ pub use view::{Mode, Tool, ViewState};
 /// 2: web videos (a video with a `link` and no `asset`), tables
 /// (`type: "table"`, ids `b1`...) and theme colours shape5 and shape6.
 /// 3: charts (`type: "chart"`, ids `h1`...).
-pub const FORMAT_VERSION: u32 = 3;
+/// 4: tables write only their filled cells (`{"n": columns, "c": [[column,
+/// cell]]}`) and runs of alike or empty rows once (plan-21nov/27).
+pub const FORMAT_VERSION: u32 = 4;
 /// Bumped whenever the command/query/API schema changes incompatibly.
 pub const API_VERSION: u32 = 1;

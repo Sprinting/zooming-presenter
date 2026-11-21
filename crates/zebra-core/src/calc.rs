@@ -31,7 +31,7 @@ pub enum Reshape {
 
 /// Whether any cell holds a formula.
 pub fn has_formulas(t: &TableData) -> bool {
-    t.cells.iter().flatten().any(|c| c.is_formula())
+    t.cells.iter().any(|r| r.filled().any(|(_, c)| c.is_formula()))
 }
 
 /// Functions Zebra never runs, whatever the formula engine offers: ones
@@ -111,8 +111,8 @@ impl Calc {
             let mut changed = false;
             for row in t.cells.iter_mut() {
                 // Only rows that hold a stale value are written (and so copied).
-                if row.iter().any(|c| c.value.is_some() || c.format.is_some()) {
-                    for c in row.iter_mut() {
+                if row.filled().any(|(_, c)| c.value.is_some() || c.format.is_some()) {
+                    for (_, c) in row.filled_mut() {
                         c.value = None;
                         c.format = None;
                     }
@@ -173,7 +173,7 @@ pub fn reshape(t: &mut TableData, op: &Reshape) -> Result<(), String> {
         .cells
         .iter()
         .enumerate()
-        .flat_map(|(r, row)| row.iter().enumerate().filter(|(_, c)| c.is_formula()).map(move |(c, cell)| (r, c, cell.input.clone())))
+        .flat_map(|(r, row)| row.filled().filter(|(_, c)| c.is_formula()).map(move |(c, cell)| (r, c, cell.input.clone())))
         .collect();
     let body_end = t.body_rows().end;
     let has_footer = t.footer_rows > 0;
@@ -456,7 +456,11 @@ mod imp {
             if now.same(was) {
                 continue;
             }
-            for c in 0..now.len().max(was.len()) {
+            // Only columns filled now or before can differ.
+            let mut cols: Vec<usize> = now.filled().map(|(c, _)| c).chain(was.filled().map(|(c, _)| c)).collect();
+            cols.sort_unstable();
+            cols.dedup();
+            for c in cols {
                 let n = now.get(c).map(|x| x.input.as_str()).unwrap_or("");
                 let w = was.get(c).map(|x| x.input.as_str()).unwrap_or("");
                 if n == w {
@@ -471,8 +475,7 @@ mod imp {
             // Work out the row's values first; write (and so copy the row)
             // only when one differs.
             let new: Vec<(usize, Option<CellValue>, Option<String>)> = row
-                .iter()
-                .enumerate()
+                .filled()
                 .filter_map(|(c, cell)| {
                     let (value, format) = if !cell.is_formula() {
                         (None, None)

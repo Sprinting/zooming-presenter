@@ -8,7 +8,6 @@
 //! contrast enforced cell by cell ([`zebra_core::table_style`]).
 
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 
 use super::*;
 use zebra_core::table::{self, BorderEdges, CellRange, LineStyle, NumLook, Role, TableData, VAlign};
@@ -34,13 +33,15 @@ impl LookCache {
 /// What a table's column looks depend on: its rows (by identity: an
 /// edited row is a new one) and how many are headers.
 fn signature(t: &TableData) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    t.header_rows.hash(&mut h);
-    t.n_cols().hash(&mut h);
+    // A plain multiply-and-rotate mix: a million rows in about a
+    // millisecond (a keyed hash took ten).
+    let mix = |h: u64, x: u64| (h.rotate_left(5) ^ x).wrapping_mul(0x517c_c1b7_2722_0a95);
+    let mut h = mix(mix(0, t.header_rows as u64), t.n_cols() as u64);
     for row in &t.cells {
-        (&**row as *const Vec<table::Cell> as usize).hash(&mut h);
+        let (p, n) = row.identity();
+        h = mix(mix(h, p as u64), n as u64);
     }
-    h.finish()
+    h
 }
 
 /// A line along a row or column edge, in table units.
@@ -259,15 +260,20 @@ impl Ctx<'_> {
         self.rules(t, &l, &look, &tl, v, &merged, row_px, &owners, items);
         self.borders(t, &l, &tl, &owners, items);
 
-        let mut looks = self.column_looks(e, t);
+        // Column looks only when a formula in view shows as its column's
+        // numbers (working out the signature walks every row).
+        let needs_looks = cells.iter().any(|(s, _)| t.cell(s.r0, s.c0).is_some_and(|c| c.is_formula() && c.format.is_none()));
+        let mut looks = if needs_looks { self.column_looks(e, t) } else { (0, vec![]) };
         for (span, paint) in &cells {
             self.cell_text(t, &l, &tl, *span, paint, bars, &mut looks, items);
         }
-        if let Ok(mut cache) = self.r.table_looks.lock() {
-            if cache.tables.len() >= LookCache::MAX_TABLES {
-                cache.tables.clear();
+        if needs_looks {
+            if let Ok(mut cache) = self.r.table_looks.lock() {
+                if cache.tables.len() >= LookCache::MAX_TABLES {
+                    cache.tables.clear();
+                }
+                cache.tables.insert(e.id.clone(), looks);
             }
-            cache.tables.insert(e.id.clone(), looks);
         }
     }
 
