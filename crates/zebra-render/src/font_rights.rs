@@ -167,6 +167,19 @@ fn is_apple_file(file: &[u8]) -> bool {
 
 /// What a web page may do with face `index` of `file`.
 pub fn web_use(file: &[u8], index: u32) -> WebUse {
+    rights(file, index, false)
+}
+
+/// What an exported PDF may do with face `index` of `file`: the same as a
+/// web page, except that a font whose embedding permissions are "preview
+/// & print" may go in (that is what they are for). Apple's fonts and
+/// fonts that don't say they are open never do: their text is drawn as
+/// pictures.
+pub fn pdf_use(file: &[u8], index: u32) -> WebUse {
+    rights(file, index, true)
+}
+
+fn rights(file: &[u8], index: u32, print: bool) -> WebUse {
     // Family names (typographic and legacy).
     if let Some(f) = names(file, index, &[16, 1]).into_iter().find(|f| apple_ui_family(f)) {
         return WebUse::Rasterise(Reason::AppleUiFont(f.trim_start_matches('.').to_string()));
@@ -178,7 +191,8 @@ pub fn web_use(file: &[u8], index: u32) -> WebUse {
     // OS/2 fsType: 2 restricted, 4 preview & print, 0x200 bitmap only.
     if let Some(fs) = table(file, index, b"OS/2").and_then(|t| u16_at(t, 8)) {
         let kind = fs & 0x000f;
-        if kind & 0x0002 != 0 || (kind & 0x0004 != 0 && kind & 0x0008 == 0) || fs & 0x0200 != 0 {
+        let preview_only = kind & 0x0004 != 0 && kind & 0x0008 == 0;
+        if kind & 0x0002 != 0 || (preview_only && !print) || fs & 0x0200 != 0 {
             return WebUse::Rasterise(Reason::NoWebEmbedding);
         }
     }

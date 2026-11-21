@@ -13,6 +13,8 @@
 # it to Contents/Frameworks); Zebra binds it by full path from there and
 # never from the system's search paths. Debug builds and tests also take
 # ZEBRA_PDFIUM=<path to the library>.
+#
+# When and how to move to a newer build: docs/PDFIUM.md.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION=8125
