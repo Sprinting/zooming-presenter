@@ -1113,7 +1113,9 @@ pub fn pasted_png_file(w: u32, h: u32, rgba: Vec<u8>) -> Option<PathBuf> {
     let dir = zebra_core::media::spill_dir().unwrap_or_else(|| std::env::temp_dir().join("Zebra-media"));
     std::fs::create_dir_all(&dir).ok()?;
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let path = dir.join(format!("{}-paste-{n}.png", std::process::id()));
+    // Named as a spill file (`<pid>-<n>-<rest>`), so a crash's leftover is
+    // collected at the next launch like any other (M19).
+    let path = dir.join(format!("{}-{n}-paste.png", std::process::id()));
     let written = (|| {
         let mut out = std::io::BufWriter::new(std::fs::File::create(&path).ok()?);
         encode_png(w, h, &rgba, &mut out)?;

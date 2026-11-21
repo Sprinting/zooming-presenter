@@ -104,7 +104,7 @@ fn a_pasted_picture_holds_its_pixels_once() {
     let old = PEAK.load(Relaxed).saturating_sub(base);
     assert!(old > pixels, "the old way held {} MB over", old / MB);
     // The scratch file is gone once the picture is in.
-    let left: Vec<_> = walk(&dir).into_iter().filter(|p| p.to_string_lossy().contains("-paste-")).collect();
+    let left: Vec<_> = walk(&dir).into_iter().filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().ends_with("-paste.png"))).collect();
     assert!(left.is_empty(), "scratch files left: {left:?}");
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
