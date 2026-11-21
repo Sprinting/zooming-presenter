@@ -420,6 +420,31 @@ pub fn svg_pixels(bytes: &[u8]) -> (u32, u32) {
     (((w * k).round() as u32).max(1), ((h * k).round() as u32).max(1))
 }
 
+/// True when the bytes start as an SVG document: after a byte-order mark,
+/// white space, an XML declaration, comments and a doctype, the first tag
+/// is `<svg`. (An HTML page with an SVG in it is not one.) Pictures
+/// inserted from SVG files are told by this, as Keynote takes them.
+fn skip_past<'a>(s: &'a str, open: &str, close: &str) -> Option<&'a str> {
+    s.strip_prefix(open).and_then(|r| r.find(close).map(|i| &r[i + close.len()..]))
+}
+
+pub fn starts_as_svg(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(64 << 10)];
+    let mut s = String::from_utf8_lossy(head).into_owned();
+    if let Some(r) = s.strip_prefix('\u{feff}') {
+        s = r.to_string();
+    }
+    let mut s = s.as_str();
+    loop {
+        s = s.trim_start();
+        if let Some(r) = skip_past(s, "<?", "?>").or_else(|| skip_past(s, "<!--", "-->")).or_else(|| skip_past(s, "<!DOCTYPE", ">")) {
+            s = r;
+            continue;
+        }
+        return s.starts_with("<svg") && s[4..].starts_with(|c: char| c.is_whitespace() || c == '>' || c == '/');
+    }
+}
+
 /// True when the bytes look like an SVG document.
 pub fn is_svg(bytes: &[u8]) -> bool {
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]);
