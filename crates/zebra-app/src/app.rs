@@ -1401,7 +1401,7 @@ impl ZebraApp {
     /// A sheet or the template chooser is over the document (see
     /// [`works_under_a_sheet`]).
     pub fn sheet_up(&self) -> bool {
-        self.welcome.is_some() || self.sheet_showing()
+        self.welcome.is_some() || self.sheet_showing() || crate::media_ui::inserting_sheet_up(self)
     }
 
     /// A Save Changes or other sheet is up (or waiting to go up).
