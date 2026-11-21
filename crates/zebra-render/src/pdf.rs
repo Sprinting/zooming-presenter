@@ -63,6 +63,67 @@ struct Resources {
     /// Bytes the originals embedded so far take decoded (PNG, GIF and
     /// WebP are decoded to be embedded; JPEG goes in as it is).
     decoded: u64,
+    /// Per font face: whether the PDF may carry it (`font_rights::pdf_use`).
+    may_embed: HashMap<(u64, u32), bool>,
+}
+
+/// Pixels per point text in a font the PDF can't carry is drawn at (about
+/// 300 dots per inch on paper).
+const TEXT_PICTURE_SCALE: f64 = 300.0 / 72.0;
+/// Most pixels one run of such text is drawn with (a huge heading at a
+/// close zoom is drawn coarser rather than taking all memory).
+const TEXT_PICTURE_PIXELS: f64 = (64u64 << 20) as f64;
+
+/// A run of text in a font the PDF may not carry (Apple's, or one that
+/// doesn't say it is open), drawn as a picture where it stands (fonts in
+/// export rule: such fonts are never embedded).
+fn text_as_picture(s: &mut Surface<'_>, layout: &crate::text::TextLayout, ri: usize, color: Rgba, transform: &Affine) {
+    let run = &layout.runs[ri];
+    if run.glyphs.is_empty() {
+        return;
+    }
+    let size = run.font_size as f64;
+    let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    for g in &run.glyphs {
+        x0 = x0.min(g.x as f64 - size * 0.3);
+        x1 = x1.max((g.x + g.advance) as f64 + size * 0.3);
+        y0 = y0.min(g.y as f64 - size * 1.2);
+        y1 = y1.max(g.y as f64 + size * 0.5);
+    }
+    let (bw, bh) = (x1 - x0, y1 - y0);
+    if !(bw > 0.0 && bh > 0.0 && bw.is_finite() && bh.is_finite()) {
+        return;
+    }
+    let on_page = crate::display::affine_scale(transform);
+    let mut k = on_page * TEXT_PICTURE_SCALE;
+    if bw * bh * k * k > TEXT_PICTURE_PIXELS {
+        k = (TEXT_PICTURE_PIXELS / (bw * bh)).sqrt();
+    }
+    let (pw, ph) = ((bw * k).ceil().max(1.0) as u32, (bh * k).ceil().max(1.0) as u32);
+    let one = crate::text::TextLayout { runs: vec![run.clone()], decorations: vec![], links: vec![], ..layout.clone() };
+    let list = DisplayList {
+        width_px: pw,
+        height_px: ph,
+        background: [0, 0, 0, 0],
+        items: vec![Item::Text { layout: Arc::new(one), transform: Affine::scale(k) * Affine::translate((-x0, -y0)), color, run_colors: Arc::from(vec![color]) }],
+        next_frame_in: None,
+        images_pending: false,
+    };
+    let mut px = crate::cpu::render_pixmap(&list).data_as_u8_slice().to_vec();
+    for p in px.chunks_exact_mut(4) {
+        let a = p[3] as u32;
+        if a != 0 && a != 255 {
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+    let img = krilla::image::Image::from_rgba8(px, pw, ph);
+    if let Some(sz) = Size::from_wh(bw as f32, bh as f32) {
+        s.push_transform(&tf(&(Affine::translate((x0, y0)))));
+        s.draw_image(img, sz);
+        s.pop();
+    }
 }
 
 /// Decoded bytes of original PNG, GIF and WebP files one PDF export may
@@ -149,7 +210,14 @@ fn draw_list(s: &mut Surface<'_>, list: &DisplayList, editor: &Editor, res: &mut
                 s.set_stroke(None);
                 s.push_transform(&tf(transform));
                 for (ri, run) in layout.runs.iter().enumerate() {
-                    s.set_fill(Some(fill_of(run_colors.get(ri).copied().unwrap_or(*color))));
+                    let run_color = run_colors.get(ri).copied().unwrap_or(*color);
+                    let face = (run.font.data.id(), run.font.index);
+                    let may = *res.may_embed.entry(face).or_insert_with(|| crate::font_rights::pdf_use(run.font.data.data(), run.font.index) == crate::font_rights::WebUse::Ship);
+                    if !may {
+                        text_as_picture(s, layout, ri, run_color, transform);
+                        continue;
+                    }
+                    s.set_fill(Some(fill_of(run_color)));
                     let at: Vec<([u8; 4], u32)> = run.variations.iter().map(|(t, v)| (*t, v.to_bits())).collect();
                     let key = (run.font.data.id(), run.font.index, at);
                     let font = res
