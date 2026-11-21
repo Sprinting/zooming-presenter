@@ -72,9 +72,10 @@ fn a_16_by_9_deck_comes_in_as_slides_of_zebra_objects() {
     }
     let notes: Vec<&str> = deck.pages.iter().map(|p| p.notes.as_str()).collect();
     assert_eq!(notes, ["Opening notes", "Talk about bullets", "Runs and sizes", "Pictures and shapes", "", "", ""]);
-    // What came in differently: the hidden slide, the chart and table, the
-    // gear, and the theme's gradient fill on python-pptx's shapes.
-    let want = BTreeMap::from([(ImportNote::HiddenSlide, 1), (ImportNote::Chart, 1), (ImportNote::Table, 1), (ImportNote::Shape, 1), (ImportNote::Gradient, 7)]);
+    // What came in differently: the hidden slide, the gear, and the theme's
+    // gradient fill on python-pptx's shapes. The chart and the table come
+    // in as Zebra's own.
+    let want = BTreeMap::from([(ImportNote::HiddenSlide, 1), (ImportNote::Shape, 1), (ImportNote::Gradient, 7)]);
     assert_eq!(deck.notes, want);
 
     // Every slide has its background at the back: white, or its own colour.
@@ -157,8 +158,8 @@ fn a_16_by_9_deck_comes_in_as_slides_of_zebra_objects() {
     assert_eq!(tri.transform.rotation, 180.0);
     assert!(items.iter().any(|e| (e.transform.rotation - 45.0).abs() < 1e-6));
 
-    // 6. The chart and the table are left out; the title stays.
-    assert_eq!(kinds(&deck, 5), count(&[("shape:Rectangle", 1), ("text", 1)]));
+    // 6. The chart and the table come in, editable, beside the title.
+    assert_eq!(kinds(&deck, 5), count(&[("shape:Rectangle", 1), ("text", 1), ("chart", 1), ("table", 1)]));
 }
 
 #[test]

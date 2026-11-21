@@ -5,7 +5,7 @@
 
 Needs python-pptx (1.0.2), Pillow, and ffmpeg (with libx264 and aac) for
 the tiny playable video and music. Writes deck16x9.pptx, deck4x3.pptx,
-extras.pptx and smartart.pptx to OUT_DIR; copy them next to this script. Run it from a scratch directory,
+extras.pptx, smartart.pptx and tables_charts.pptx to OUT_DIR; copy them next to this script. Run it from a scratch directory,
 not from here, so nothing else lands in the fixtures folder.
 """
 import copy
@@ -602,6 +602,99 @@ def smartart(out):
     prs.save(out)
 
 
+def tables_charts(out):
+    """Tables and charts that come in as Zebra's own (plan-21nov/28)."""
+    from pptx.chart.data import BubbleChartData, XyChartData
+
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+
+    # 1. A table: header row and banded rows (python-pptx's defaults, in
+    #    the deck's default style, Medium Style 2 - Accent 1), a merged
+    #    header, a cell filled by hand, runs of their own, a total row, and
+    #    text that looks like a formula.
+    s = blank(prs)
+    shape = s.shapes.add_table(5, 3, Inches(1), Inches(1), Inches(6), Inches(3))
+    t = shape.table
+    t.last_row = True
+    rows = [["Region", "", "Q3"], ["North", "1240", "1410"], ["South", "980", "=SUM(B2:B3)"], ["East", "760", "702"], ["Total", "2980", "3162"]]
+    for r, row in enumerate(rows):
+        for c, v in enumerate(row):
+            t.cell(r, c).text = v
+    t.cell(0, 0).merge(t.cell(0, 1))
+    t.cell(0, 0).text = "Region and Q2"
+    t.cell(2, 0).fill.solid()
+    t.cell(2, 0).fill.fore_color.rgb = RGBColor(0xFF, 0xEE, 0x00)
+    p = t.cell(3, 0).text_frame.paragraphs[0]
+    p.text = ""
+    r1 = p.add_run()
+    r1.text = "Ea"
+    r2 = p.add_run()
+    r2.text = "st"
+    r2.font.bold = True
+    r2.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+    t.cell(1, 1).text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
+    t.cell(1, 2).text_frame.paragraphs[0].runs[0].font.size = Pt(28)
+
+    # 2. A table with no style: the cells' own lines only, and a big one.
+    s = blank(prs)
+    shape = s.shapes.add_table(2, 2, Inches(1), Inches(1), Inches(4), Inches(1))
+    tbl = shape._element.graphic.graphicData.tbl
+    tbl.tblPr.set("firstRow", "0")
+    tbl.tblPr.set("bandRow", "0")
+    sid = tbl.tblPr.find(qn("a:tableStyleId"))
+    sid.text = "{5940675A-B579-460E-94D1-54222C63F5DA}"
+    shape.table.cell(0, 0).text = "Grid"
+    big = s.shapes.add_table(200, 8, Inches(6), Inches(1), Inches(6), Inches(6)).table
+    for r in range(200):
+        big.cell(r, 0).text = f"Row {r + 1}"
+    # An unknown style id: the plain look.
+    shape = s.shapes.add_table(1, 1, Inches(1), Inches(3), Inches(2), Inches(1))
+    shape._element.graphic.graphicData.tbl.tblPr.find(qn("a:tableStyleId")).text = "{00000000-1111-2222-3333-444444444444}"
+    shape.table.cell(0, 0).text = "Unknown"
+
+    # 3. Charts of each kind.
+    s = blank(prs)
+    cat = CategoryChartData()
+    cat.categories = ["North", "South", "East"]
+    cat.add_series("Q2", (1240, 980, 760))
+    cat.add_series("Q3", (1410, 1050, 702))
+    kinds = [
+        XL_CHART_TYPE.BAR_STACKED, XL_CHART_TYPE.LINE_MARKERS, XL_CHART_TYPE.AREA_STACKED,
+        XL_CHART_TYPE.RADAR, XL_CHART_TYPE.BAR_STACKED_100, XL_CHART_TYPE.COLUMN_CLUSTERED,
+        XL_CHART_TYPE.COLUMN_STACKED_100,
+    ]
+    for i, k in enumerate(kinds):
+        gf = s.shapes.add_chart(k, Inches(0.2 + (i % 4) * 3.2), Inches(0.2 + (i // 4) * 2.4), Inches(3), Inches(2.2), cat)
+        if i == 0:
+            gf.chart.has_title = True
+            gf.chart.chart_title.text_frame.text = "Stacked"
+            gf.chart.has_legend = True
+            gf.chart.value_axis.maximum_scale = 3000
+            gf.chart.value_axis.minimum_scale = 0
+        if i == 5:
+            # A 3D column chart: comes in flat.
+            bar = gf.chart._chartSpace.find(".//" + qn("c:barChart"))
+            bar.tag = qn("c:bar3DChart")
+    pie = CategoryChartData()
+    pie.categories = ["A", "B", "C"]
+    pie.add_series("Share", (50, 30, 20))
+    s.shapes.add_chart(XL_CHART_TYPE.PIE, Inches(0.2), Inches(5), Inches(3), Inches(2.2), pie)
+    s.shapes.add_chart(XL_CHART_TYPE.DOUGHNUT, Inches(3.4), Inches(5), Inches(3), Inches(2.2), pie)
+    xy = XyChartData()
+    sx = xy.add_series("Points")
+    for x, y in [(1, 2), (2, 4), (3, 5)]:
+        sx.add_data_point(x, y)
+    s.shapes.add_chart(XL_CHART_TYPE.XY_SCATTER, Inches(6.6), Inches(5), Inches(3), Inches(2.2), xy)
+    bub = BubbleChartData()
+    sb = bub.add_series("Bubbles")
+    for x, y, z in [(1, 2, 3), (2, 3, 1), (3, 1, 2)]:
+        sb.add_data_point(x, y, z)
+    s.shapes.add_chart(XL_CHART_TYPE.BUBBLE, Inches(9.8), Inches(5), Inches(3), Inches(2.2), bub)
+
+    prs.save(out)
+
+
 if __name__ == "__main__":
     out = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     out.mkdir(parents=True, exist_ok=True)
@@ -609,3 +702,4 @@ if __name__ == "__main__":
     deck4x3(out / "deck4x3.pptx")
     extras(out / "extras.pptx")
     smartart(out / "smartart.pptx")
+    tables_charts(out / "tables_charts.pptx")

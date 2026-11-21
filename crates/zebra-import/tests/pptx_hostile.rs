@@ -592,3 +592,107 @@ fn the_biggest_slide_read_costs_a_bounded_heap() {
     assert_eq!(d.pages.len(), 1);
     assert!(grew < 512 * MB, "heap +{} MB", grew / MB);
 }
+
+// Tables and charts (plan-21nov/28): hostile spans, a big table, a chart
+// whose part is missing, values that aren't numbers.
+
+const CHART_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+
+/// A graphic frame `id` holding `data` (graphicData's child) of `uri`.
+fn frame(id: u32, uri: &str, data: &str) -> String {
+    format!(r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="{id}" name="F{id}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="100000" y="100000"/><a:ext cx="6000000" cy="3000000"/></p:xfrm><a:graphic><a:graphicData uri="{uri}">{data}</a:graphicData></a:graphic></p:graphicFrame>"#)
+}
+
+fn table_frame(id: u32, grid: usize, rows: &str) -> String {
+    let cols: String = (0..grid).map(|_| "<a:gridCol w=\"600000\"/>").collect();
+    frame(id, "http://schemas.openxmlformats.org/drawingml/2006/table", &format!("<a:tbl><a:tblPr firstRow=\"1\" bandRow=\"1\"/><a:tblGrid>{cols}</a:tblGrid>{rows}</a:tbl>"))
+}
+
+fn cell(attrs: &str, text: &str) -> String {
+    format!("<a:tc {attrs}><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-GB\" sz=\"1400\"/><a:t>{text}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>")
+}
+
+fn tables_of(deck: &ImportedDeck) -> Vec<&zebra_core::table::TableData> {
+    deck.pages.iter().flat_map(|p| &p.items).filter_map(|i| if let ElementKind::Table(t) = &i.element.kind { Some(t) } else { None }).collect()
+}
+
+fn charts_of(deck: &ImportedDeck) -> Vec<&zebra_core::chart::ChartData> {
+    deck.pages.iter().flat_map(|p| &p.items).filter_map(|i| if let ElementKind::Chart(c) = &i.element.kind { Some(c) } else { None }).collect()
+}
+
+/// Spans past the grid, rows of too many or no cells, a merge inside a
+/// merge, a style id nobody knows: the table comes in, its text whole,
+/// and goes on a canvas.
+#[test]
+fn a_table_with_spans_outside_its_grid_comes_in() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let rows = [
+        format!("<a:tr h=\"300000\">{}{}</a:tr>", cell("gridSpan=\"9\" rowSpan=\"40\"", "Wide"), cell("", "B")),
+        format!("<a:tr h=\"300000\">{}{}{}{}</a:tr>", cell("hMerge=\"1\" vMerge=\"1\"", "x"), cell("rowSpan=\"-3\" gridSpan=\"0\"", "=1+1"), cell("gridSpan=\"4294967295\"", "C"), cell("", "D")),
+        "<a:tr h=\"-5\"></a:tr>".to_string(),
+        format!("<a:tr h=\"99999999999\">{}</a:tr>", cell("vMerge=\"1\"", "E")),
+    ]
+    .concat();
+    let sl = slide(&table_frame(4, 2, &rows).replace("<a:tblPr firstRow=\"1\" bandRow=\"1\"/>", "<a:tblPr firstRow=\"1\" bandRow=\"1\"><a:tableStyleId>{00000000-DEAD-BEEF-0000-000000000000}</a:tableStyleId></a:tblPr>"));
+    let deck = read(deck(&[s(sl)], &[], &[])).unwrap();
+    let t = tables_of(&deck);
+    assert_eq!(t.len(), 1, "{:?}", deck.notes);
+    let t = t[0];
+    assert!(t.n_rows() >= 4 && t.n_cols() >= 2, "{} x {}", t.n_rows(), t.n_cols());
+    let all: Vec<&str> = t.cells.iter().flat_map(|r| r.iter().map(|c| c.input.as_str())).collect();
+    for w in ["Wide", "B", "'=1+1"] {
+        assert!(all.contains(&w), "{w} in {all:?}");
+    }
+    assert!(t.merges.iter().all(|m| m.r1 < t.n_rows() && m.c1 < t.n_cols()), "{:?}", t.merges);
+    assert!(deck.notes.contains_key(&ImportNote::TableStyle));
+    import(&deck);
+}
+
+/// A 1,000 x 100 table comes in whole, quickly.
+#[test]
+fn a_big_table_comes_in_whole() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let row: String = format!("<a:tr h=\"200000\">{}</a:tr>", (0..100).map(|c| cell("", &c.to_string())).collect::<String>());
+    let rows = row.repeat(1000);
+    let sl = slide(&table_frame(4, 100, &rows));
+    let start = Instant::now();
+    let deck = read(deck(&[s(sl)], &[], &[])).unwrap();
+    let t = tables_of(&deck);
+    assert_eq!(t.len(), 1, "{:?}", deck.notes);
+    assert_eq!((t[0].n_rows(), t[0].n_cols()), (1000, 100));
+    assert_eq!(t[0].cells[999][99].input, "99");
+    import(&deck);
+    assert!(start.elapsed() < Duration::from_secs(60), "{:?}", start.elapsed());
+}
+
+fn chart_part(values: &str) -> Vec<u8> {
+    format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="{CHART_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="{REL}"><c:chart><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>S</c:v></c:tx><c:cat><c:strLit><c:ptCount val="4"/><c:pt idx="0"><c:v>a</c:v></c:pt><c:pt idx="1"><c:v>b</c:v></c:pt><c:pt idx="2"><c:v>c</c:v></c:pt><c:pt idx="3"><c:v>d</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:ptCount val="4"/>{values}</c:numLit></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:crossAx val="1"/><c:scaling><c:min val="NaN"/><c:max val="-1e400"/></c:scaling><c:majorUnit val="0"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#).into_bytes()
+}
+
+fn chart_frame(id: u32, rid: &str) -> String {
+    frame(id, CHART_NS, &format!("<c:chart xmlns:c=\"{CHART_NS}\" r:id=\"{rid}\"/>"))
+}
+
+/// A chart whose part is missing is noted (it has no picture to fall back
+/// on); one whose values are NaN, text, past f64 or at a far index comes
+/// in with what reads as numbers, and draws.
+#[test]
+fn charts_with_missing_parts_or_bad_values_come_in() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let vals = r#"<c:pt idx="0"><c:v>NaN</c:v></c:pt><c:pt idx="1"><c:v>abc</c:v></c:pt><c:pt idx="2"><c:v>1e400</c:v></c:pt><c:pt idx="3"><c:v>7</c:v></c:pt><c:pt idx="4000000000"><c:v>5</c:v></c:pt>"#;
+    let rels = format!("<Relationship Id=\"rIdC\" Type=\"{REL}/chart\" Target=\"../charts/chart1.xml\"/><Relationship Id=\"rIdM\" Type=\"{REL}/chart\" Target=\"../charts/chart9.xml\"/>");
+    let sl = S { xml: Some(slide(&format!("{}{}", chart_frame(4, "rIdC"), chart_frame(5, "rIdM"))).into_bytes()), rels };
+    let deck = read(deck(&[sl], &[("ppt/charts/chart1.xml", chart_part(vals))], &[])).unwrap();
+    let c = charts_of(&deck);
+    assert_eq!(c.len(), 1, "{:?}", deck.notes);
+    assert_eq!(c[0].chart_type, zebra_core::chart::ChartType::Column);
+    assert!(deck.notes.contains_key(&ImportNote::Chart), "{:?}", deck.notes);
+    let opts = (c[0].axis_min, c[0].axis_max, c[0].axis_step);
+    assert!([opts.0, opts.1, opts.2].iter().all(|v| v.is_none_or(|v| v.is_finite())), "{opts:?}");
+    let r = zebra_render::Renderer::new();
+    let mut ed = Editor::default();
+    ed.measure = r.measure();
+    ed.import_deck(&deck, "Import".into(), Origin::Human).unwrap();
+    let id = ed.doc.elements.values().find(|e| e.kind.type_name() == "chart").unwrap().id.clone();
+    assert!(r.capture(&ed, &zebra_render::CaptureTarget::Element { id }, 400, 300).is_ok());
+}
