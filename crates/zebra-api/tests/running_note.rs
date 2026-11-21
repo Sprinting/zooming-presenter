@@ -40,5 +40,25 @@ fn an_open_zebra_with_ai_off_says_so() {
     let age = std::time::SystemTime::now().duration_since(started).unwrap();
     assert!(age < std::time::Duration::from_secs(600), "started {age:?} ago");
     assert_eq!(discovery::process_started(0), None);
+
+    // M19 (Mac pass 21 Nov): a 6 GB spill file stayed in Autosave/Media.
+    // The launch sweep kept any file whose pid was running, even when the
+    // pid had come back as another process. What made a file must have
+    // started before it was written. (The file rules: zebra-core's
+    // tests/spill.rs.)
+    let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+    let now = std::time::SystemTime::now();
+    assert!(discovery::made_by_live(child.id(), Some(now)), "written after it started: its own");
+    assert!(!discovery::made_by_live(child.id(), Some(now - std::time::Duration::from_secs(3600))), "written before it started: a reused pid");
+    assert!(discovery::made_by_live(child.id(), None), "time unknown: running is enough");
+    let media = dir.join("Media");
+    std::fs::create_dir_all(&media).unwrap();
+    std::fs::write(media.join(format!("{}-0-abc.png", child.id())), b"live").unwrap();
+    std::fs::write(media.join("999999999-0-abc.png"), b"gone").unwrap();
+    let c = zebra_core::media::collect_spill(&media, discovery::made_by_live);
+    assert_eq!(c.files, 1);
+    assert!(media.join(format!("{}-0-abc.png", child.id())).exists());
+    let _ = child.kill();
+    let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);
 }

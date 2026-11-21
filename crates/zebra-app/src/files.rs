@@ -141,10 +141,21 @@ pub fn untitled_dir() -> PathBuf {
 /// and media folders whose untitled autosave is gone.
 pub fn start_spilling() {
     zebra_core::media::set_spill_dir(Some(untitled_dir().join("Media")));
-    zebra_core::media::sweep_spill(zebra_api::discovery::pid_alive);
+    zebra_core::media::sweep_spill(zebra_api::discovery::made_by_live);
     zebra_core::media::sweep_cache(zebra_api::discovery::pid_alive);
     sweep_autosave_media(&untitled_dir());
     zebra_core::io::sweep_temp(&untitled_dir(), zebra_api::discovery::pid_alive);
+}
+
+/// Media no running Zebra needs any more, collected on a worker (Mac pass
+/// M19: a 6 GB picture stayed in `Autosave/Media` after its documents were
+/// closed with Don't Save). Run after an autosave is discarded; the launch
+/// does the same in [`start_spilling`]. See `zebra_core::media::collect_spill`
+/// for what is (never) removed.
+pub fn collect_media() {
+    let _ = std::thread::Builder::new().name("zebra-media-gc".into()).spawn(|| {
+        zebra_core::media::sweep_spill(zebra_api::discovery::made_by_live);
+    });
 }
 
 /// Remove `<x>.autosave.media` folders in `dir` whose autosave `<x>.autosave`
@@ -222,6 +233,7 @@ pub fn discard_autosave(app: &ZebraApp) {
         Some(f) => remove_autosave(f),
         None => remove_autosave_untitled(app),
     }
+    collect_media();
 }
 
 /// Untitled documents left from the last run (it crashed, or was killed

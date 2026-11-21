@@ -1170,17 +1170,88 @@ fn file_owner(name: &str) -> Option<u32> {
     name.split('-').next()?.parse().ok()
 }
 
-/// Spill files a crashed run left: those of processes that aren't running.
-/// `alive` says whether a pid is.
-pub fn sweep_spill(alive: impl Fn(u32) -> bool) {
+/// Spill files no running Zebra needs (Mac pass M19: a 6 GB picture
+/// outlived its documents in `Autosave/Media`), from the spill folder and
+/// the temporary one: see [`collect_spill`].
+pub fn sweep_spill(made_by_live: impl Fn(u32, Option<std::time::SystemTime>) -> bool) -> Collected {
+    let mut all = Collected::default();
     for dir in spill_dir().into_iter().chain(std::iter::once(std::env::temp_dir().join("Zebra-media"))) {
-        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if file_owner(&name).is_some_and(|p| !alive(p)) && e.path().is_file() {
-                let _ = std::fs::remove_file(e.path());
+        let c = collect_spill(&dir, &made_by_live);
+        all.files += c.files;
+        all.bytes += c.bytes;
+    }
+    all
+}
+
+/// What [`collect_spill`] removed.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Collected {
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// Remove the spill files in `dir` whose maker is gone. A spill file
+/// (`<pid>-<n>-<rest>`) is needed only by the process that made it: an
+/// autosave keeps its media in its own folder, as hard links or copies,
+/// and recovery never reads the spill folder. So a file goes when
+/// `made_by_live(pid, t)` says no live Zebra made it, `t` being when the
+/// file was made (its status-change time: a copy keeps the original's
+/// modified time, and the status time can't be set back). Never:
+/// - anything of this process (its mappings remove their own files, and
+///   one may be half written);
+/// - anything not named as a spill file, nor anything but a plain file
+///   (a link, a folder, a pipe), nor another user's file;
+/// - anything through a link: `dir` itself must be a real folder.
+///
+/// Errors are skipped (the next run tries again).
+pub fn collect_spill(dir: &Path, made_by_live: impl Fn(u32, Option<std::time::SystemTime>) -> bool) -> Collected {
+    let mut out = Collected::default();
+    if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+        return out;
+    }
+    let me = std::process::id();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(spill_owner) else { continue };
+        if pid == me {
+            continue;
+        }
+        // Neither follows a link.
+        let (Ok(kind), Ok(meta)) = (e.file_type(), e.metadata()) else { continue };
+        if !kind.is_file() {
+            continue;
+        }
+        #[cfg(unix)]
+        let made = {
+            use std::os::unix::fs::MetadataExt;
+            // SAFETY: getuid never fails.
+            if meta.uid() != unsafe { libc::getuid() } {
+                continue;
             }
+            u64::try_from(meta.ctime()).ok().map(|s| std::time::UNIX_EPOCH + std::time::Duration::from_secs(s))
+        };
+        #[cfg(not(unix))]
+        let made = meta.modified().ok();
+        if made_by_live(pid, made) {
+            continue;
+        }
+        if std::fs::remove_file(e.path()).is_ok() {
+            out.files += 1;
+            out.bytes += meta.len();
         }
     }
+    out
+}
+
+/// The process named by a spill file's name, `<pid>-<n>-<rest>` (digits,
+/// digits, then anything). None for every other name.
+fn spill_owner(name: &str) -> Option<u32> {
+    let mut parts = name.splitn(3, '-');
+    let (pid, n, rest) = (parts.next()?, parts.next()?, parts.next()?);
+    let digits = |s: &str| !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(pid) || !digits(n) || rest.is_empty() {
+        return None;
+    }
+    pid.parse().ok()
 }
 
 // ----------------------------------------------------------------------
