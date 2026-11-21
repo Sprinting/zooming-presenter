@@ -13,6 +13,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use base64::Engine;
@@ -107,6 +108,8 @@ struct Pending {
     since: std::time::Instant,
     /// How far the work is, 0..=1000, set by the worker at each stage.
     stage: Arc<std::sync::atomic::AtomicU32>,
+    /// Set by Cancel: the worker stops at its next check and sends nothing.
+    cancel: Arc<AtomicBool>,
 }
 
 /// How long an insert or paste runs before its sheet shows (Kartik's
@@ -115,11 +118,12 @@ pub const SHEET_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// A channel and stage for a worker, and what adds it to the window's
 /// pending work once the worker has started.
-fn pending() -> (std::sync::mpsc::Sender<Inserted>, Arc<std::sync::atomic::AtomicU32>, impl FnOnce(&mut ZebraApp)) {
+fn pending() -> (std::sync::mpsc::Sender<Inserted>, Arc<std::sync::atomic::AtomicU32>, Arc<AtomicBool>, impl FnOnce(&mut ZebraApp)) {
     let (tx, rx) = channel();
     let stage = Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let p = Pending { rx, since: std::time::Instant::now(), stage: stage.clone() };
-    (tx, stage, move |app: &mut ZebraApp| {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let p = Pending { rx, since: std::time::Instant::now(), stage: stage.clone(), cancel: cancel.clone() };
+    (tx, stage, cancel, move |app: &mut ZebraApp| {
         app.media.inserting.push(p);
         app.ctx.request_repaint();
     })
@@ -168,9 +172,11 @@ pub fn inserting_ui(app: &mut ZebraApp, ctx: &egui::Context) {
         });
     });
     if cancel {
-        // The workers finish on their own; what they send then goes
-        // nowhere, and a pasted picture's scratch file with it.
+        // The workers stop at their next check (between rows of a picture
+        // being written); anything already sent goes nowhere, and a pasted
+        // picture's scratch file with it.
         for p in app.media.inserting.drain(..) {
+            p.cancel.store(true, Ordering::Relaxed);
             while let Ok(i) = p.rx.try_recv() {
                 discard(i);
             }
@@ -797,7 +803,7 @@ fn make_poster_then(app: &mut ZebraApp, p: &std::path::Path, at: Vec2, replace: 
     let width = app.editor.view.viewport.x / app.editor.view.camera.zoom * 0.5;
     let backend = app.media.backend.clone();
     let path = p.to_path_buf();
-    let (tx, stage, add) = pending();
+    let (tx, stage, _, add) = pending();
     let ctx = app.ctx.clone();
     let spawned = std::thread::Builder::new().name("zebra-poster".into()).spawn(move || {
         set_stage(&stage, 0.3);
@@ -1015,36 +1021,99 @@ pub fn paste_from_system(app: &mut ZebraApp) -> bool {
     // took 2 s on the window's thread). Whether there is one is only known
     // there, so Zebra's own copy is pasted from there too if there isn't.
     drop(c);
-    paste_picture_with(app, || {
+    paste_read_with(app, || {
+        // On the Mac, the picture file the copying app put there, as is
+        // (as Keynote pastes the original): never decoded or encoded again.
+        #[cfg(target_os = "macos")]
+        if let Some(file) = pasteboard_original() {
+            return Some(Pasted::File(file));
+        }
         let img = arboard::Clipboard::new().ok()?.get_image().ok()?;
-        Some((img.width as u32, img.height as u32, img.bytes.into_owned()))
+        Some(Pasted::Pixels(img.width as u32, img.height as u32, img.bytes.into_owned()))
     });
     true
+}
+
+/// What a paste read off the clipboard.
+enum Pasted {
+    /// Width, height and RGBA pixels, to be written as a PNG.
+    Pixels(u32, u32, Vec<u8>),
+    /// A picture file already written to a scratch file (the Mac's
+    /// pasteboard original).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    File(PathBuf),
+}
+
+/// The clipboard's picture as the file the copying app put there (M22):
+/// the first of PNG, JPEG, HEIC, GIF, WebP and TIFF on the pasteboard,
+/// written as is to a scratch file and then added by path, held to the
+/// same checks as any inserted picture. TIFF comes last: it is usually
+/// uncompressed. None if none of them is there (or it can't be written).
+#[cfg(target_os = "macos")]
+fn pasteboard_original() -> Option<PathBuf> {
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
+    const TYPES: [(&str, &str); 6] = [
+        ("public.png", "png"),
+        ("public.jpeg", "jpg"),
+        ("public.heic", "heic"),
+        ("com.compuserve.gif", "gif"),
+        ("org.webmproject.webp", "webp"),
+        ("public.tiff", "tiff"),
+    ];
+    objc2::rc::autoreleasepool(|_| {
+        let pb = NSPasteboard::generalPasteboard();
+        let types = pb.types()?;
+        let (uti, ext) = TYPES.iter().find(|(uti, _)| types.containsObject(&NSString::from_str(uti)))?;
+        // Waits for the copying app to hand it over (Preview can take
+        // seconds for a big picture).
+        let data = pb.dataForType(&NSString::from_str(uti))?;
+        if data.length() == 0 {
+            return None;
+        }
+        let path = scratch_file(ext)?;
+        let to = NSString::from_str(path.to_str()?);
+        if data.writeToFile_atomically(&to, false) {
+            Some(path)
+        } else {
+            let _ = std::fs::remove_file(&path);
+            None
+        }
+    })
 }
 
 /// Paste the picture `read` gives (width, height, RGBA), read, scaled and
 /// encoded on a worker so the window never waits for it. None from `read`
 /// pastes Zebra's own copied objects instead.
 pub fn paste_picture_with(app: &mut ZebraApp, read: impl FnOnce() -> Option<(u32, u32, Vec<u8>)> + Send + 'static) {
+    paste_read_with(app, move || read().map(|(w, h, rgba)| Pasted::Pixels(w, h, rgba)));
+}
+
+fn paste_read_with(app: &mut ZebraApp, read: impl FnOnce() -> Option<Pasted> + Send + 'static) {
     let at = app.canvas_center_world();
-    let (tx, stage, add) = pending();
+    let (tx, stage, cancel, add) = pending();
     let ctx = app.ctx.clone();
     let spawned = std::thread::Builder::new().name("zebra-paste".into()).spawn(move || {
         // Reading the clipboard (the app that copied may take seconds to
-        // hand it over), then writing the picture.
+        // hand it over, and that can't be cut short), then writing the
+        // picture, which Cancel stops between rows.
         set_stage(&stage, 0.1);
         let got = match read() {
-            Some((w, h, rgba)) => {
+            Some(Pasted::Pixels(..)) if cancel.load(Ordering::Relaxed) => None,
+            Some(Pasted::Pixels(w, h, rgba)) => {
                 set_stage(&stage, 0.5);
-                pasted_png_file(w, h, rgba).map(|file| Inserted::Picture(file, at))
+                pasted_png_file_until(w, h, rgba, &cancel).map(|file| Inserted::Picture(file, at))
             }
+            Some(Pasted::File(file)) => Some(Inserted::Picture(file, at)),
             None => Some(Inserted::NoPicture),
         };
         set_stage(&stage, 1.0);
-        if let Some(i) = got
-            && let Err(e) = tx.send(i)
-        {
-            discard(e.0);
+        if let Some(i) = got {
+            if cancel.load(Ordering::Relaxed) {
+                discard(i);
+            } else if let Err(e) = tx.send(i) {
+                discard(e.0);
+            }
         }
         ctx.request_repaint();
     });
@@ -1057,36 +1126,17 @@ pub fn paste_picture_with(app: &mut ZebraApp, read: impl FnOnce() -> Option<(u32
 /// encoded on a worker: a pasted 20000 x 20000 screenshot would otherwise
 /// hold the window for seconds.
 pub fn paste_rgba(app: &mut ZebraApp, w: u32, h: u32, rgba: Vec<u8>) {
-    paste_with(app, move || pasted_png_file(w, h, rgba));
+    paste_read_with(app, move || Some(Pasted::Pixels(w, h, rgba)));
 }
 
 /// [`paste_rgba`] for egui's pasted picture, converted on the worker too.
 pub fn paste_color_image(app: &mut ZebraApp, img: Arc<egui::ColorImage>) {
-    paste_with(app, move || {
+    paste_read_with(app, move || {
         let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
         let (w, h) = (img.size[0] as u32, img.size[1] as u32);
         drop(img);
-        pasted_png_file(w, h, rgba)
+        Some(Pasted::Pixels(w, h, rgba))
     });
-}
-
-fn paste_with(app: &mut ZebraApp, make: impl FnOnce() -> Option<PathBuf> + Send + 'static) {
-    let at = app.canvas_center_world();
-    let (tx, stage, add) = pending();
-    let ctx = app.ctx.clone();
-    let spawned = std::thread::Builder::new().name("zebra-paste".into()).spawn(move || {
-        set_stage(&stage, 0.5);
-        if let Some(file) = make()
-            && let Err(e) = tx.send(Inserted::Picture(file, at))
-        {
-            discard(e.0);
-        }
-        set_stage(&stage, 1.0);
-        ctx.request_repaint();
-    });
-    if spawned.is_ok() {
-        add(app);
-    }
 }
 
 /// A pasted picture as PNG, at its full size: None if the pixels don't
@@ -1094,7 +1144,7 @@ fn paste_with(app: &mut ZebraApp, make: impl FnOnce() -> Option<PathBuf> + Send 
 /// scaled down: like any picture it comes in whole and shows scaled.
 pub fn pasted_png(w: u32, h: u32, rgba: Vec<u8>) -> Option<Vec<u8>> {
     let mut png = vec![];
-    encode_png(w, h, &rgba, &mut png)?;
+    encode_png(w, h, &rgba, &mut png, &AtomicBool::new(false))?;
     Some(png)
 }
 
@@ -1106,19 +1156,30 @@ pub fn pasted_png(w: u32, h: u32, rgba: Vec<u8>) -> Option<Vec<u8>> {
 /// None (and no file left) if the pixels don't make a picture or the
 /// file can't be written.
 pub fn pasted_png_file(w: u32, h: u32, rgba: Vec<u8>) -> Option<PathBuf> {
+    pasted_png_file_until(w, h, rgba, &AtomicBool::new(false))
+}
+
+/// A new scratch file's path for a paste, in Zebra's media folder. Named
+/// as a spill file (`<pid>-<n>-<rest>`), so a crash's leftover is
+/// collected at the next launch like any other (M19).
+fn scratch_file(ext: &str) -> Option<PathBuf> {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = zebra_core::media::spill_dir().unwrap_or_else(|| std::env::temp_dir().join("Zebra-media"));
+    std::fs::create_dir_all(&dir).ok()?;
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    Some(dir.join(format!("{}-{n}-paste.{ext}", std::process::id())))
+}
+
+/// [`pasted_png_file`], stopped between rows once `cancel` is set (and
+/// then None, with no file left).
+fn pasted_png_file_until(w: u32, h: u32, rgba: Vec<u8>, cancel: &AtomicBool) -> Option<PathBuf> {
     if !pixels_add_up(w, h, &rgba) {
         return None;
     }
-    let dir = zebra_core::media::spill_dir().unwrap_or_else(|| std::env::temp_dir().join("Zebra-media"));
-    std::fs::create_dir_all(&dir).ok()?;
-    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    // Named as a spill file (`<pid>-<n>-<rest>`), so a crash's leftover is
-    // collected at the next launch like any other (M19).
-    let path = dir.join(format!("{}-{n}-paste.png", std::process::id()));
+    let path = scratch_file("png")?;
     let written = (|| {
         let mut out = std::io::BufWriter::new(std::fs::File::create(&path).ok()?);
-        encode_png(w, h, &rgba, &mut out)?;
+        encode_png(w, h, &rgba, &mut out, cancel)?;
         out.into_inner().ok()?.sync_all().ok()
     })();
     drop(rgba);
@@ -1137,7 +1198,7 @@ fn pixels_add_up(w: u32, h: u32, rgba: &[u8]) -> bool {
 /// the encoder holds a few rows, never a second copy of the picture (the
 /// whole-image writer filtered it all into one buffer and compressed that
 /// into another: about 3x the pixels again).
-fn encode_png(w: u32, h: u32, rgba: &[u8], out: impl std::io::Write) -> Option<()> {
+fn encode_png(w: u32, h: u32, rgba: &[u8], out: impl std::io::Write, cancel: &AtomicBool) -> Option<()> {
     use std::io::Write;
     if !pixels_add_up(w, h, rgba) {
         return None;
@@ -1149,6 +1210,9 @@ fn encode_png(w: u32, h: u32, rgba: &[u8], out: impl std::io::Write) -> Option<(
     let mut stream = writer.stream_writer().ok()?;
     // A row at a time (a row of a 20,000-pixel picture is 80 KB).
     for row in rgba.chunks(w as usize * 4) {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
         stream.write_all(row).ok()?;
     }
     stream.finish().ok()

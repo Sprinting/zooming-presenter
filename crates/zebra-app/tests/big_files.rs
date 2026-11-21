@@ -319,3 +319,59 @@ fn an_empty_picture_says_so_and_a_heic_is_a_picture() {
     assert_eq!(dropped_kind(&heic).unwrap(), Dropped::Media(zebra_core::MediaKind::Image));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// M22 follow-up (Mac recheck, 21 Nov): Cancel took the sheet down, but
+/// the paste kept writing its picture for about 9 s. Now the worker stops
+/// between rows, and its scratch file goes at once.
+#[test]
+fn cancelling_a_paste_stops_writing_it() {
+    use egui_kittest::kittest::Queryable;
+    use zebra_app::media_ui::{SHEET_AFTER, inserting_sheet_up, paste_picture_with};
+    let mut h = harness();
+    // Noise, so the PNG takes a while to write (several seconds here).
+    let (w, hh) = (6000u32, 6000u32);
+    let mut x = 0x2545_f491_4f6c_dd1du64;
+    let rgba: Vec<u8> = (0..w as usize * hh as usize * 4)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x as u8
+        })
+        .collect();
+    let big = |dir: &std::path::Path| -> Vec<std::path::PathBuf> {
+        let mut out = vec![];
+        let mut todo = vec![dir.to_path_buf()];
+        while let Some(d) = todo.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    todo.push(p);
+                } else if p.file_name().is_some_and(|n| n.to_string_lossy().ends_with("-paste.png")) && e.metadata().is_ok_and(|m| m.len() > 1 << 20) {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    };
+    let dirs = [data_dir(), std::env::temp_dir().join("Zebra-media")];
+    let writing = || dirs.iter().flat_map(|d| big(d)).collect::<Vec<_>>();
+    paste_picture_with(h.state_mut(), move || Some((w, hh, rgba)));
+    std::thread::sleep(SHEET_AFTER + std::time::Duration::from_millis(100));
+    h.run_steps(2);
+    assert!(inserting_sheet_up(h.state()), "the sheet is up");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while writing().is_empty() {
+        assert!(std::time::Instant::now() < until, "the picture was never being written");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    let t = std::time::Instant::now();
+    while !writing().is_empty() {
+        assert!(t.elapsed() < std::time::Duration::from_millis(1500), "still writing {:?} after Cancel", writing());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    h.run_steps(3);
+    assert!(h.state().editor.doc.elements.is_empty(), "the cancelled picture never came in");
+}
