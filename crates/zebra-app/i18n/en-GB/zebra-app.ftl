@@ -1646,6 +1646,18 @@ import-note-table = { $count ->
     [one] 1 table was left out.
    *[other] { $count } tables were left out.
 }
+import-note-chart-nearest = { $count ->
+    [one] 1 chart is shown as the nearest type Zebra has.
+   *[other] { $count } charts are shown as the nearest type Zebra has.
+}
+import-note-table-text = { $count ->
+    [one] 1 table had text of several sizes and now has one.
+   *[other] { $count } tables had text of several sizes and now have one.
+}
+import-note-table-style = { $count ->
+    [one] 1 table's style couldn't be read, so it's shown plainly.
+   *[other] { $count } tables' styles couldn't be read, so they're shown plainly.
+}
 import-note-equation = { $count ->
     [one] 1 equation was left out.
    *[other] { $count } equations were left out.

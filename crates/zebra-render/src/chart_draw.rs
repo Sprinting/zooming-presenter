@@ -34,8 +34,7 @@ pub const TEXT_PIXELS: f64 = 48.0;
 pub const BLOCK_PIXELS: f64 = 4.0;
 /// Label text in the design space (px), as the layout is made for.
 const DESIGN_LABEL: f64 = 10.0;
-/// Label text as a share of the theme's body text.
-const LABEL_OF_BODY: f64 = 0.8;
+use zebra_core::chart::LABEL_OF_BODY;
 /// One design px in EMU (line widths).
 const EMU_PX: f64 = 9525.0;
 
@@ -248,7 +247,7 @@ impl Ctx<'_> {
         let rect = PlotRect { x: 0.0, y: 0.0, w: (w / k).clamp(1.0, 1e6), h: (h / k).clamp(1.0, 1e6) };
         let plot = c.plot(doc);
         let paint = self.paint(c, &plot);
-        let mut sink = Sink { ctx: self, c, paint: &paint, marks: vec![], bytes: 0, body };
+        let mut sink = Sink { ctx: self, c, paint: &paint, marks: vec![], bytes: 0, body, placed: vec![] };
         let big = plot.series.iter().flat_map(|s| s.values.iter()).any(|v| v.abs() >= 1000.0);
         let pool = Pool::new(&plot, number_code(&c.number, big));
         if c.chart_type == ChartType::Waterfall {
@@ -534,6 +533,8 @@ struct Sink<'s, 'c> {
     marks: Vec<Mark>,
     bytes: usize,
     body: f64,
+    /// Level text placed so far: its box, baseline and centre.
+    placed: Vec<(Rect, f64, f64)>,
 }
 
 impl Sink<'_, '_> {
@@ -588,7 +589,16 @@ impl Sink<'_, '_> {
                 axes[1].major_unit = axes[1].major_unit.or(Some(step));
             }
         }
+        // A percent axis runs to 100%, as PowerPoint's does.
+        if c.chart_type == ChartType::PercentColumn && c.axis_max.is_none() {
+            axes[1].range.max = Some(1.0);
+        }
         let title = (!c.title.trim().is_empty()).then_some(c.title.as_str());
+        // No step set: one the axis has room to label (PowerPoint's
+        // automatic step also widens as the chart gets smaller).
+        if axes[1].major_unit.is_none() && !axes[1].hidden {
+            axes[1].major_unit = self.roomy_step(rect, DESIGN_LABEL * fs, title.is_some(), input.legend);
+        }
         let chart = PlotChart {
             chart_type: input.groups.first().and_then(|g| g.chart_type).unwrap_or("column"),
             title,
@@ -614,6 +624,56 @@ impl Sink<'_, '_> {
             let p = Rect::new(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h).inset(-0.5).to_path(0.1);
             self.marks.push(Mark::Stroke(p, self.paint.axis, 1.0));
         }
+    }
+
+    /// A value-axis step coarse enough that its labels don't run into one
+    /// another in `rect` (labels `px` high), or None when the layout's own
+    /// step already fits.
+    fn roomy_step(&self, rect: PlotRect, px: f64, title: bool, legend: bool) -> Option<f64> {
+        let c = self.c;
+        let plot = c.plot(&self.ctx.editor.doc);
+        let n = plot.series.iter().map(|s| s.values.len()).max().unwrap_or(0);
+        let (mut lo, mut hi) = (0.0f64, 0.0f64);
+        match c.chart_type {
+            ChartType::Pie | ChartType::Donut | ChartType::Radar | ChartType::Waterfall => return None,
+            ChartType::PercentColumn => hi = 1.0,
+            ChartType::StackedColumn | ChartType::StackedBar | ChartType::StackedArea => {
+                for i in 0..n {
+                    let (mut up, mut down) = (0.0, 0.0);
+                    for v in plot.series.iter().filter_map(|s| s.values.get(i)).filter(|v| v.is_finite()) {
+                        if *v > 0.0 {
+                            up += v;
+                        } else {
+                            down += v;
+                        }
+                    }
+                    (lo, hi) = (lo.min(down), hi.max(up));
+                }
+            }
+            _ => {
+                for v in plot.series.iter().flat_map(|s| s.values.iter()).filter(|v| v.is_finite()) {
+                    (lo, hi) = (lo.min(*v), hi.max(*v));
+                }
+            }
+        }
+        lo = c.axis_min.filter(|v| v.is_finite()).unwrap_or(lo);
+        hi = c.axis_max.filter(|v| v.is_finite()).unwrap_or(hi);
+        let span = (hi - lo) * 1.1;
+        if !(span.is_finite() && span > 0.0 && px > 0.0) {
+            return None;
+        }
+        let wide = |t: &str| self.text_layout(t, false).width * px / self.body;
+        let (room, pitch) = if matches!(c.chart_type, ChartType::Bar | ChartType::StackedBar) {
+            let names = plot.categories.iter().take(200).map(|t| wide(t)).fold(0.0, f64::max).min(rect.w * 0.4);
+            let widest = [lo, hi].iter().map(|v| wide(&grouped(*v))).fold(0.0, f64::max);
+            (rect.w - names - px * 2.0, widest + px)
+        } else {
+            let lines = 2.5 + if title { 2.0 } else { 0.0 } + if legend { 1.5 } else { 0.0 };
+            (rect.h - lines * px * 1.4, px * 1.6)
+        };
+        let fit = (room / pitch).floor().max(1.0);
+        let step = nice_step(span / fit)?;
+        (step > excel_unit(span)).then_some(step)
     }
 
     /// The lowest and highest value a combo chart draws.
@@ -689,6 +749,49 @@ fn nice_span(lo: f64, hi: f64) -> Option<(f64, f64, f64)> {
     let min = (lo / step).floor() * step;
     let max = (hi / step).ceil() * step;
     (min.is_finite() && max.is_finite()).then_some((min, max, step))
+}
+
+/// The smallest step of 1, 2 or 5 times a power of ten that is at least
+/// `raw`.
+fn nice_step(raw: f64) -> Option<f64> {
+    if !(raw.is_finite() && raw > 0.0) {
+        return None;
+    }
+    let p = 10f64.powf(raw.log10().floor());
+    [1.0, 2.0, 5.0, 10.0].iter().map(|m| m * p).find(|s| *s >= raw * (1.0 - 1e-9))
+}
+
+/// The step the layout picks for a value axis spanning `range` (as Excel
+/// does: 10 to 20 steps of a power of ten, else 2 or 5 times it).
+fn excel_unit(range: f64) -> f64 {
+    if !(range.is_finite() && range > 0.0) {
+        return 1.0;
+    }
+    let major = 10f64.powf(range.log10().round() - 1.0);
+    let steps = range / major;
+    if steps >= 20.0 {
+        major * 5.0
+    } else if steps >= 10.0 {
+        major * 2.0
+    } else {
+        major
+    }
+}
+
+/// `v` rounded, with thousands grouped (to measure an axis label).
+fn grouped(v: f64) -> String {
+    let digits = format!("{:.0}", v.abs());
+    let mut out = String::new();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    if v < 0.0 {
+        out.insert(0, '-');
+    }
+    out
 }
 
 /// A stand-in for the framed ground.
@@ -843,6 +946,23 @@ impl PlotSink for Sink<'_, '_> {
                 // Two plot groups on one axis label it twice.
                 if ty == ChartType::Combo && self.marks.iter().any(|m| matches!(m, Mark::Text(l, a, _) if l.text == layout.text && (a.translation() - at.translation()).hypot() < 0.5)) {
                     return true;
+                }
+                // Labels in one row or column that would run into one
+                // another: the later one is left out (PowerPoint skips
+                // crowded category labels the same way).
+                if !(rotation_deg.is_finite() && rotation_deg != 0.0) {
+                    let h = layout.height * s;
+                    let r = Rect::new(left, top, left + lw, top + h);
+                    let pad = h * 0.25;
+                    let near = |a: f64, b: f64| (a - b).abs() < 0.5;
+                    let crowded = self.placed.iter().any(|(p, b, c)| {
+                        let lined_up = near(*b, baseline_y) || near(p.x0, r.x0) || near(p.x1, r.x1) || near(*c, r.center().x);
+                        lined_up && r.x0 < p.x1 + pad && p.x0 < r.x1 + pad && r.y0 < p.y1 && p.y0 < r.y1
+                    });
+                    if crowded {
+                        return true;
+                    }
+                    self.placed.push((r, baseline_y, r.center().x));
                 }
                 self.push(Mark::Text(layout, at, col));
             }

@@ -48,6 +48,9 @@ use crate::{Control, ImportError, Options, Reader};
 
 /// Long side of a slide on the canvas, world units (the same as a PDF's
 /// largest page, [`crate::pdf::PAGE_UNITS`]).
+#[path = "pptx_tables.rs"]
+mod tables;
+
 pub const SLIDE_UNITS: f64 = crate::pdf::PAGE_UNITS;
 const EMU_PER_PT: f64 = 12_700.0;
 /// PowerPoint's default slide, 13.333 x 7.5 inches.
@@ -370,6 +373,10 @@ struct Cascade<'a> {
     master: Option<&'a TextBody>,
     placeholder: Option<&'a Placeholder>,
     style_color: Option<&'a ColorValue>,
+    /// Bold and italic a table style gives a cell's text, unless its runs
+    /// say otherwise.
+    style_bold: Option<bool>,
+    style_italic: Option<bool>,
     /// The strike-through `primary`, `layout` and `master` say (which
     /// the parser's model leaves out).
     strike: [Option<&'a TextStrike>; 3],
@@ -571,8 +578,16 @@ impl<'a> SlideReader<'a> {
                         continue;
                     }
                     match &f.data {
-                        GraphicFrameData::Table(_) => self.note(ImportNote::Table),
-                        GraphicFrameData::Chart { .. } => self.note(ImportNote::Chart),
+                        GraphicFrameData::Table(t) => {
+                            let at = place(&f.base.transform, parents);
+                            self.table(at, t, group);
+                        }
+                        GraphicFrameData::Chart { part_path, .. } => {
+                            let at = place(&f.base.transform, parents);
+                            if !self.chart(at, part_path.as_deref(), group) {
+                                self.note(ImportNote::Chart);
+                            }
+                        }
                         GraphicFrameData::Diagram { relationship_ids, drawing_part_path } => {
                             let at = place(&f.base.transform, parents);
                             if !self.smart_art(at, &f.base.transform, relationship_ids, drawing_part_path.as_deref(), parents, group) {
@@ -1121,6 +1136,8 @@ impl<'a> SlideReader<'a> {
             master: inherited.1.and_then(node_text),
             placeholder: s.base.placeholder.as_ref(),
             style_color: s.style.as_ref().and_then(|st| st.font_color.as_ref()),
+            style_bold: None,
+            style_italic: None,
             strike: [
                 self.text_strike(self.part, s.base.id),
                 inherited.0.zip(self.layout).and_then(|(n, l)| self.text_strike(&l.part_path, n.id())),
@@ -1379,6 +1396,12 @@ impl<'a> SlideReader<'a> {
         }
         if let Some(col) = c.style_color {
             out.default_run.get_or_insert_with(RunProperties::default).color = Some(col.clone());
+        }
+        if c.style_bold.is_some() {
+            out.default_run.get_or_insert_with(RunProperties::default).bold = c.style_bold;
+        }
+        if c.style_italic.is_some() {
+            out.default_run.get_or_insert_with(RunProperties::default).italic = c.style_italic;
         }
         for (body, own) in [(c.master, false), (c.layout, false), (c.primary, true)] {
             let Some(body) = body else { continue };

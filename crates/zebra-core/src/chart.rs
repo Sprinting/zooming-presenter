@@ -37,6 +37,8 @@ pub const MAX_AXIS_STEPS: usize = 64;
 /// inspector says so under Legend when there are more.
 pub const LEGEND_ENTRIES: usize = 8;
 /// A new chart's size (the mockup's 4:3, a third of a frame).
+/// Label text as a share of the theme's body text, at the chart's scale.
+pub const LABEL_OF_BODY: f64 = 0.8;
 pub const DEFAULT_W: f64 = 640.0;
 pub const DEFAULT_H: f64 = 440.0;
 /// Longest label drawn, in characters a person sees (grapheme clusters).

@@ -104,6 +104,15 @@ pub enum ImportNote {
     SmartArt,
     /// Tables were left out.
     Table,
+    /// Charts of a type Zebra doesn't have (stock, surface, pie of pie,
+    /// percent bar…) came in as the nearest type it has.
+    ChartNearest,
+    /// Tables whose cells had text of different sizes came in with one
+    /// size (a Zebra table has one text size).
+    TableText,
+    /// Tables whose style couldn't be read came in with the look their
+    /// cells set themselves, in a plain style.
+    TableStyle,
     /// Equations with no picture of them in the file were left out.
     Equation,
     /// Videos and sounds that could not be taken out of the file, or that
@@ -142,12 +151,15 @@ pub enum ImportNote {
 pub const MAX_IMPORT_SPANS: usize = 60_000;
 
 impl ImportNote {
-    pub const ALL: [ImportNote; 17] = [
+    pub const ALL: [ImportNote; 20] = [
         ImportNote::PageSkipped,
         ImportNote::HiddenSlide,
         ImportNote::Chart,
         ImportNote::SmartArt,
         ImportNote::Table,
+        ImportNote::ChartNearest,
+        ImportNote::TableText,
+        ImportNote::TableStyle,
         ImportNote::Equation,
         ImportNote::Media,
         ImportNote::AsPicture,
@@ -171,6 +183,9 @@ impl ImportNote {
             ImportNote::Chart => ("chart left out", "charts left out"),
             ImportNote::SmartArt => ("SmartArt graphic left out", "SmartArt graphics left out"),
             ImportNote::Table => ("table left out", "tables left out"),
+            ImportNote::ChartNearest => ("chart shown as the nearest type Zebra has", "charts shown as the nearest type Zebra has"),
+            ImportNote::TableText => ("table with text of several sizes given one size", "tables with text of several sizes given one size"),
+            ImportNote::TableStyle => ("table whose style couldn't be read shown plainly", "tables whose style couldn't be read shown plainly"),
             ImportNote::Equation => ("equation left out", "equations left out"),
             ImportNote::Media => ("video or sound imported as its poster picture", "videos and sounds imported as their poster pictures"),
             ImportNote::AsPicture => ("embedded object imported as a picture", "embedded objects imported as pictures"),
