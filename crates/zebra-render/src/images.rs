@@ -726,6 +726,11 @@ impl ImageCache {
         insert(&self.shared, key, out, g)
     }
 
+    /// A handle for work that makes several pictures at once.
+    pub fn handle(&self) -> CacheHandle {
+        CacheHandle(Arc::downgrade(&self.shared))
+    }
+
     /// `key` if it is already cached (made by [`ImageCache::get_made`]);
     /// never starts any work.
     pub fn peek(&self, key: &str) -> Option<Decoded> {
@@ -771,6 +776,9 @@ impl ImageCache {
                         let mut job = job;
                         if let Some(task) = job.task.take() {
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(task));
+                        } else if job.make.is_some() && made_already(&shared, &job.key) {
+                            // Made along with another (a picture's tiles
+                            // are made together).
                         } else {
                             let out = decode_job(&job);
                             let g = shared.generation.load(Ordering::Relaxed);
@@ -786,6 +794,38 @@ impl ImageCache {
             Mutex::new(tx)
         });
         let _ = tx.lock().unwrap_or_else(|e| e.into_inner()).send(job);
+    }
+}
+
+/// Whether `key` is cached already; if so it is no longer pending.
+fn made_already(shared: &Shared, key: &Key) -> bool {
+    let mut i = lock(&shared.inner);
+    let have = i.map.contains_key(key);
+    if have {
+        i.pending.remove(key);
+    }
+    have
+}
+
+/// The cache, for work on a worker that makes several pictures at once
+/// (the tiles of a picture's detail, [`make_tiles`]).
+#[derive(Clone)]
+pub struct CacheHandle(std::sync::Weak<Shared>);
+
+impl CacheHandle {
+    /// Cache `img` as the made picture `key`.
+    pub fn put(&self, key: &str, img: ImageLevel) {
+        if let Some(s) = self.0.upgrade() {
+            let g = s.generation.load(Ordering::Relaxed);
+            insert(&s, (key.to_string(), 0), vec![(0, Decoded::Still(Arc::new(img)))], g);
+        }
+    }
+
+    /// `key` can't be made (it isn't asked for again).
+    pub fn fail(&self, key: &str) {
+        if let Some(s) = self.0.upgrade() {
+            insert(&s, (key.to_string(), 0), vec![], 0);
+        }
     }
 }
 
@@ -1021,6 +1061,126 @@ fn stream_png(bytes: &[u8], make: &dyn Fn(u32, u32) -> Vec<Shrink>, first_pass_o
 }
 
 
+/// The part `rect` (x, y, width, height) of a `w`x`h` picture drawn at
+/// `dw`x`dh` pixels (no bigger than the picture), as premultiplied RGBA
+/// rows: the detail of a picture bigger than [`MAX_IMAGE_DIM`] seen closer
+/// than its top level (P6). A PNG streams, so only the rows and columns
+/// of the part are kept; on the Mac, ImageIO draws a JPEG or WebP's part
+/// if the whole picture fits in memory; else the picture decodes whole
+/// as its top level does. None if it can't be drawn.
+pub fn picture_region(bytes: &[u8], (w, h): (u32, u32), (dw, dh): (u32, u32), (x, y, rw, rh): (u32, u32, u32, u32)) -> Option<Vec<u8>> {
+    use zebra_core::media::PictureFormat;
+    if w == 0 || h == 0 || dw == 0 || dh == 0 || dw > w || dh > h || rw == 0 || rh == 0 || x.checked_add(rw)? > dw || y.checked_add(rh)? > dh {
+        return None;
+    }
+    let head = zebra_core::media::picture_header(&bytes[..bytes.len().min(256 << 10)])?;
+    if (head.width, head.height) != (w, h) || head.format == PictureFormat::Gif {
+        return None;
+    }
+    // The picture's own pixels the part covers.
+    let span = |a: u32, n: u32, d: u32, s: u32| {
+        let a0 = (a as u64 * s as u64 / d as u64) as u32;
+        let a1 = (((a + n) as u64 * s as u64).div_ceil(d as u64) as u32).clamp(a0 + 1, s);
+        (a0, a1)
+    };
+    let (sx0, sx1) = span(x, rw, dw, w);
+    let (sy0, sy1) = span(y, rh, dh, h);
+    let (cw, ch) = (sx1 - sx0, sy1 - sy0);
+    let mut s = Shrink::new(cw, ch, rw.min(cw), rh.min(ch));
+    let crop = |row: &[u8], c: usize| row.get(sx0 as usize * c..sx1 as usize * c).map(<[u8]>::to_vec);
+    if head.format == PictureFormat::Png && !head.interlaced {
+        let _permit = DecodeBytes::acquire(w as u64 * 16 + rw as u64 * rh as u64 * 4);
+        let mut d = png::Decoder::new_with_limits(std::io::Cursor::new(bytes), png::Limits { bytes: MAX_DECODE_ALLOC as usize });
+        d.set_transformations(png::Transformations::normalize_to_color8());
+        let mut r = d.read_info().ok()?;
+        let c = png_channels(&r)?;
+        let mut y = 0;
+        while y < sy1 {
+            let Ok(Some(row)) = r.next_row() else { break };
+            if y >= sy0 {
+                s.push(&crop(row.data(), c)?, c);
+            }
+            y += 1;
+        }
+        return Some(s.pixels());
+    }
+    #[cfg(target_os = "macos")]
+    if matches!(head.format, PictureFormat::Jpeg | PictureFormat::WebP) {
+        let _permit = DecodeBytes::acquire(head.pixels() * 4);
+        if let Some(px) = crate::imageio::region(bytes, (sx0, sy0, cw, ch), (rw.min(cw), rh.min(ch)), gif_memory()) {
+            return Some(px);
+        }
+    }
+    let pixels = head.pixels();
+    if pixels > MAX_WHOLE_PIXELS {
+        return None;
+    }
+    let _permit = DecodeBytes::acquire(pixels * 4 + rw as u64 * rh as u64 * 4);
+    let img = decode_limited(bytes)?;
+    if (img.width(), img.height()) != (w, h) {
+        return None;
+    }
+    let (raw, c): (std::borrow::Cow<[u8]>, usize) = match &img {
+        image::DynamicImage::ImageLuma8(b) => (b.as_raw().into(), 1),
+        image::DynamicImage::ImageLumaA8(b) => (b.as_raw().into(), 2),
+        image::DynamicImage::ImageRgb8(b) => (b.as_raw().into(), 3),
+        image::DynamicImage::ImageRgba8(b) => (b.as_raw().into(), 4),
+        other => (other.to_rgba8().into_raw().into(), 4),
+    };
+    for row in raw.chunks_exact(w as usize * c).skip(sy0 as usize).take(ch as usize) {
+        s.push(&crop(row, c)?, c);
+    }
+    Some(s.pixels())
+}
+
+/// Bytes per pixel of a PNG reader's rows (normalised to 8 bits).
+fn png_channels<R: std::io::BufRead + std::io::Seek>(r: &png::Reader<R>) -> Option<usize> {
+    match r.output_color_type() {
+        (png::ColorType::Grayscale, png::BitDepth::Eight) => Some(1),
+        (png::ColorType::GrayscaleAlpha, png::BitDepth::Eight) => Some(2),
+        (png::ColorType::Rgb, png::BitDepth::Eight) => Some(3),
+        (png::ColorType::Rgba, png::BitDepth::Eight) => Some(4),
+        _ => None,
+    }
+}
+
+/// A tile of a picture's detail, and the others on screen still to make:
+/// all are made from one [`picture_region`] of the part they cover (one
+/// pass over a PNG), the others cached through `handle`. Each tile is
+/// (cache key, x, y, width, height) at `detail` size.
+pub type DetailTile = (String, (u32, u32, u32, u32));
+
+/// Make the tiles `tiles` of a `size` picture drawn at `detail`, caching
+/// all but `me`, which is returned.
+pub fn make_tiles(bytes: &[u8], size: (u32, u32), detail: (u32, u32), tiles: &[DetailTile], me: &str, handle: &CacheHandle) -> Option<ImageLevel> {
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+    for (_, (x, y, w, h)) in tiles {
+        (x0, y0, x1, y1) = (x0.min(*x), y0.min(*y), x1.max(x + w), y1.max(y + h));
+    }
+    let Some(px) = (x1 > x0 && y1 > y0).then(|| picture_region(bytes, size, detail, (x0, y0, x1 - x0, y1 - y0))).flatten() else {
+        for (k, _) in tiles.iter().filter(|(k, _)| k != me) {
+            handle.fail(k);
+        }
+        return None;
+    };
+    let bw = (x1 - x0) as usize;
+    let mut mine = None;
+    for (k, (x, y, w, h)) in tiles {
+        let mut out = Vec::with_capacity(*w as usize * *h as usize * 4);
+        for row in 0..*h as usize {
+            let at = ((*y - y0) as usize + row) * bw + (*x - x0) as usize;
+            out.extend_from_slice(px.get(at * 4..(at + *w as usize) * 4)?);
+        }
+        let img = ImageLevel::from_premultiplied(k, *w, *h, out);
+        if k == me {
+            mine = Some(img);
+        } else {
+            handle.put(k, img);
+        }
+    }
+    mine
+}
+
 /// Most bytes all decodes in flight may be estimated to need at once
 /// (header size times the pixel formats, plus the levels made). One
 /// decode bigger than this runs alone.
@@ -1178,6 +1338,13 @@ impl Shrink {
             }
         }
         self.nrow = 0;
+    }
+
+    /// Premultiplied RGBA8 rows, `dw`x`dh` (rows never pushed stay clear).
+    fn pixels(mut self) -> Vec<u8> {
+        self.flush();
+        self.out.resize(self.dw as usize * self.dh as usize * 4, 0);
+        self.out
     }
 
     /// Premultiplied RGBA8, `dw`x`dh` (rows never pushed stay clear).
